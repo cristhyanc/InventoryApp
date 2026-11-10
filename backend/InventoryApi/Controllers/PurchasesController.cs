@@ -1,8 +1,10 @@
 using Inventory.Application.Access;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
@@ -49,6 +51,20 @@ public class PurchasesController : ControllerBase
     /// </summary>
     private const string InvalidFileOrSupplierMessage = "Invalid file or supplier";
 
+    /// <summary>
+    /// The cap on a receipt scan upload (issue #1163), deliberately tighter than the 10 MB ceiling
+    /// the purchase document endpoints above carry. A scanned receipt is not a stored business
+    /// document: it is read into memory, sent once to the reader and dropped, and the reader's own
+    /// documented image limit (5 MB by default) is lower again, so nothing an operator can
+    /// legitimately scan comes near this. Eight million bytes is also the cap the evidence-export
+    /// upload settled on for the same reason - it sits inside SonarCloud S5693's
+    /// <c>fileUploadSizeLimit</c>, which reads a 10 MB limit as an excessive content length rather
+    /// than as the mitigation it is (<c>NayaxSaleTimestampRepairsController</c>). Raising it is a
+    /// human decision; both attributes below carry it and
+    /// <c>ReceiptScanUploadLimitTests</c> pins them.
+    /// </summary>
+    private const long MaxScanUploadBytes = 8_000_000;
+
     private readonly ListPurchases _listPurchases;
     private readonly GetPurchase _getPurchase;
     private readonly GetPurchaseFile _getPurchaseFile;
@@ -58,6 +74,7 @@ public class PurchasesController : ControllerBase
     private readonly DeletePurchase _deletePurchase;
     private readonly ComputePurchaseTotalValidation _computeValidation;
     private readonly ComputePurchaseGstSummary _computeGstSummary;
+    private readonly ScanReceipt _scanReceipt;
     private readonly CurrentCapabilities _capabilities;
 
     public PurchasesController(
@@ -70,9 +87,11 @@ public class PurchasesController : ControllerBase
         DeletePurchase deletePurchase,
         ComputePurchaseTotalValidation computeValidation,
         ComputePurchaseGstSummary computeGstSummary,
+        ScanReceipt scanReceipt,
         CurrentCapabilities capabilities)
     {
         _capabilities = capabilities;
+        _scanReceipt = scanReceipt;
         _listPurchases = listPurchases;
         _getPurchase = getPurchase;
         _getPurchaseFile = getPurchaseFile;
@@ -193,6 +212,54 @@ public class PurchasesController : ControllerBase
             // refused purchase: the purchase keeps having none, which it is allowed to.
             AttachPurchaseDocumentOutcome.StorageFull => BadRequest(result.Message),
             _ => NotFound(),
+        };
+    }
+
+    /// <summary>
+    /// Reads a receipt image or PDF into a suggested purchase draft, and stores nothing (issue
+    /// #1163, child of #975).
+    ///
+    /// <para><strong>It is this controller's existing <c>Purchasing.Operate</c> capability plus one
+    /// plan requirement</strong> - the same permission as creating a purchase, which is what the
+    /// draft is for - and the plan feature <c>ReceiptScanning</c>, which only Pro includes.
+    /// <c>[RequirePlan]</c> runs before model binding, so a refused request never has its file read
+    /// and never costs anything; it is also the one feature that is refused while plan enforcement is
+    /// off, because every scan spends money at the reader (see
+    /// <c>Inventory.Domain.Subscriptions.PlanFeaturePolicy.FailsClosedWhileUnenforced</c>).</para>
+    ///
+    /// <para><strong>Nothing is written.</strong> No file is stored, no draft is persisted and no
+    /// purchase is created: the operator edits the suggestion and submits it through
+    /// <c>POST /api/purchases</c>, which is where a purchase is created and validated.</para>
+    /// </summary>
+    // multipart/form-data: file
+    [HttpPost("scan")]
+    [Consumes("multipart/form-data")]
+    [RequirePlan(PlanFeature.ReceiptScanning)]
+    // Both limits, as Upload and AddFile above need: RequestSizeLimit caps the raw body through the
+    // host's max-request-body-size feature, and RequestFormLimits caps what the multipart reader
+    // buffers in process, which otherwise defaults to FormOptions' 128 MB. Both carry the scan cap,
+    // so neither is the one that is left open; ReceiptScanUploadLimitTests pins them.
+    [RequestSizeLimit(MaxScanUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxScanUploadBytes)]
+    public async Task<ActionResult<PurchaseScanResponseDto>> Scan(IFormFile? file)
+    {
+        var result = await _scanReceipt.Handle(ToFileInput(file), CancellationToken.None);
+
+        return result.Outcome switch
+        {
+            ScanReceiptOutcome.Draft => Ok(ReceiptScanResponseMapper.ToResponse(result.Draft!)),
+            ScanReceiptOutcome.InvalidFile => BadRequest(result.Message),
+            // No reader is configured in this deployment: the feature is off rather than broken, and
+            // nothing was sent anywhere.
+            ScanReceiptOutcome.SwitchedOff => StatusCode(
+                StatusCodes.Status503ServiceUnavailable, result.Message),
+            // The request was understood and the receipt was not. Unprocessable rather than a bad
+            // request: there is nothing wrong with what the caller sent.
+            ScanReceiptOutcome.Unreadable => StatusCode(
+                StatusCodes.Status422UnprocessableEntity, result.Message),
+            ScanReceiptOutcome.TimedOut => StatusCode(
+                StatusCodes.Status504GatewayTimeout, result.Message),
+            _ => StatusCode(StatusCodes.Status502BadGateway, result.Message),
         };
     }
 

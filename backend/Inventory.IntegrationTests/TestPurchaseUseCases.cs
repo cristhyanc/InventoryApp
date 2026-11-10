@@ -1,10 +1,13 @@
 using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Attachments;
+using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.ReceiptScanning;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 
@@ -40,6 +43,26 @@ internal static class TestPurchaseUseCases
     public static AttachPurchaseDocument Attach(
         IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard? quota = null) =>
         new(store, documents, quota ?? FakeAttachmentQuota.NotEnforced());
+
+    /// <summary>
+    /// Issue #1163's receipt scan, for the controller tests that construct the controller directly.
+    /// It defaults to the shipped state - no reader configured - so a test about something else
+    /// cannot accidentally exercise a scan, and no test ever reaches a live reader.
+    /// </summary>
+    public static ScanReceipt Scan(
+        IReceiptScanSettings? settings = null,
+        IReceiptScanCatalogueStore? catalogue = null,
+        IPdfPageCounter? pages = null,
+        IReceiptReader? reader = null,
+        IReceiptScanLog? log = null,
+        ICurrentBusinessProvider? business = null) =>
+        new(
+            settings ?? FakeReceiptScanSettings.SwitchedOff(),
+            catalogue ?? new FakeReceiptScanCatalogueStore(),
+            pages ?? new FakePdfPageCounter(),
+            reader ?? FakeReceiptReader.Unavailable(),
+            log ?? new RecordingReceiptScanLog(),
+            business ?? new FakeCurrentBusinessProvider(1));
 
     private static ActorIdentity Actor(string objectId)
     {

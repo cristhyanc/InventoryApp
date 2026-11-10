@@ -67,9 +67,14 @@ public class CurrentPlanTests
     }
 
     /// <summary>
-    /// The shipped state: with the rollout setting off every feature is included and nothing about
-    /// the business is read at all, so a deployment that has switched nothing on pays nothing for
-    /// this check.
+    /// The shipped state: with the rollout setting off every feature a business could already use is
+    /// included and nothing about the business is read at all, so a deployment that has switched
+    /// nothing on pays nothing for this check.
+    ///
+    /// <para>The one exception is a feature that fails closed (issue #1163), which is refused in this
+    /// state - and still without reading anything, which is the half of this rule that is about cost
+    /// rather than about entitlement. It is excluded here by asking the Domain's own table rather
+    /// than by naming a feature, so a second fail-closed feature cannot slip past this rule.</para>
     /// </summary>
     [Fact]
     public async Task With_enforcement_off_every_feature_is_included_and_nothing_is_read()
@@ -84,7 +89,9 @@ public class CurrentPlanTests
 
         foreach (var feature in PlanFeatures.All)
         {
-            Assert.True(await plan.AllowsAsync(feature, CancellationToken.None));
+            Assert.Equal(
+                !PlanFeaturePolicy.FailsClosedWhileUnenforced(feature),
+                await plan.AllowsAsync(feature, CancellationToken.None));
         }
 
         Assert.Equal(0, grandfathering.Reads);

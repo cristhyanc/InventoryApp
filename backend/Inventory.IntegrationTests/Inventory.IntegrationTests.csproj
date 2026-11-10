@@ -89,6 +89,10 @@
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeProductCatalogStore.cs" Link="Application\Products\FakeProductCatalogStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Providers\FakeProviderDataCoverageStore.cs" Link="Application\Providers\FakeProviderDataCoverageStore.cs" />
+    <!-- The receipt scanning doubles (issue #1163). Shared because the use case's own tests are
+         unit tests and the endpoint's are integration tests, and both have to run against the same
+         substituted reader: issue #1163 excludes live calls to the reader in CI and in tests. -->
+    <Compile Include="..\Inventory.UnitTests\Application\ReceiptScanning\FakeReceiptScanning.cs" Link="Application\ReceiptScanning\FakeReceiptScanning.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" Link="Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" Link="Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" Link="Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" />

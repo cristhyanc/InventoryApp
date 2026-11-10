@@ -16,6 +16,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxReconciliation;
 using Inventory.Infrastructure.NayaxSqs;
+using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
@@ -459,6 +460,17 @@ else
 builder.Services.AddNayaxTokenProtection(
     builder.Configuration.GetSection(NayaxTokenProtectionOptions.SectionName).Get<NayaxTokenProtectionOptions>()
         ?? new NayaxTokenProtectionOptions());
+
+// Receipt scanning (issue #1163, child of #975). Registered for every environment: with no
+// ReceiptScanning:ApiKey the feature is simply off - POST /api/purchases/scan answers 503 and
+// nothing leaves the process - which is the shipped state, so deploying without the key is safe.
+// The production key is set only after issue #1164's monthly cap is deployed and plan enforcement
+// is on (the launch gate recorded on #1163). The key is read here, as every secret is, and is never
+// reachable from Inventory.Application or Inventory.Domain. See
+// Inventory.Infrastructure.ReceiptScanning.ReceiptScanningOptions and README.md § Receipt scanning.
+builder.Services.AddReceiptScanning(
+    builder.Configuration.GetSection(ReceiptScanningOptions.SectionName).Get<ReceiptScanningOptions>()
+        ?? new ReceiptScanningOptions());
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
