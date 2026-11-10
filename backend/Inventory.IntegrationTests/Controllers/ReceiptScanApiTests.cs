@@ -176,6 +176,50 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         Assert.Equal(2, _factory.Reader.LastRequest!.File.PageCount);
     }
 
+    /// <summary>
+    /// The second repair of 10 November 2026, over HTTP: an incremental update replaces the page tree
+    /// through a cross-reference stream and keeps the replacement - one page more than the limit -
+    /// in a compressed object stream, so the plain bytes still hold only the old two-page tree. The
+    /// counter resolves the active graph or refuses it; this format it refuses, with the unreadable
+    /// message, and <strong>the reader is not called</strong>.
+    /// </summary>
+    [Fact]
+    public async Task A_page_tree_replaced_through_a_cross_reference_stream_is_refused()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        var replaced = PdfFixture.CrossReferenceStreamUpdate(
+            originalPages: 2,
+            activePages: ReceiptScanningConfiguration.DefaultMaxPdfPages + 1);
+
+        var response = await _factory.AsOwner().PostAsync(
+            "/api/purchases/scan", File("receipt.pdf", "application/pdf", replaced));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ReceiptScanFilePolicy.PdfUnreadableMessage, await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, _factory.Reader.Calls);
+    }
+
+    /// <summary>
+    /// The supported half of the same rule: an ordinary incremental update (a classic table with
+    /// <c>/Prev</c>) whose active page tree is one page over the limit is refused with the page-limit
+    /// message - the active tree is what the limit judges - and the reader is not called.
+    /// </summary>
+    [Fact]
+    public async Task An_incremental_updates_active_page_tree_is_what_the_page_limit_judges()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        var updated = PdfFixture.Updated(original: 2, active: ReceiptScanningConfiguration.DefaultMaxPdfPages + 1);
+
+        var response = await _factory.AsOwner().PostAsync(
+            "/api/purchases/scan", File("receipt.pdf", "application/pdf", updated));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            ReceiptScanFilePolicy.PdfTooManyPagesMessage(ReceiptScanningConfiguration.DefaultMaxPdfPages),
+            await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, _factory.Reader.Calls);
+    }
+
     /// <summary>A request with no file part is refused, and nothing is called.</summary>
     [Fact]
     public async Task A_request_with_no_file_is_refused()

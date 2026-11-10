@@ -66,8 +66,11 @@ public interface IReceiptScanSettings
 /// <para><strong>The number must be the pages the document can actually reach, never a count it
 /// declares about itself.</strong> A page count read from the file's own claim is a limit the file
 /// sets for itself: a document declaring one page while holding two hundred would pass the limit and
-/// be uploaded whole (the repair of 10 November 2026). An implementation that cannot verify the
-/// structure answers <see langword="null"/>, which is a refusal.</para>
+/// be uploaded whole (the repair of 10 November 2026). The pages counted must be those of the
+/// document's <strong>active</strong> object graph, resolved through its own cross-reference
+/// information - an incremental update can replace the page tree, and an older definition still in
+/// the bytes is history. An implementation that cannot verify the structure or resolve the active
+/// graph answers <see langword="null"/>, which is a refusal.</para>
 /// </summary>
 public interface IPdfPageCounter
 {

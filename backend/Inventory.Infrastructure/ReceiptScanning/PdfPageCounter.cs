@@ -6,45 +6,57 @@ namespace Inventory.Infrastructure.ReceiptScanning;
 /// Verifies how many pages a PDF really has (issue #1163), so a document over the reader's page limit
 /// is refused before anything is uploaded.
 ///
-/// <para><strong>It counts the pages the document can actually reach, and trusts nothing the document
-/// declares.</strong> The count is the number of <c>/Type /Page</c> leaves reachable from the
-/// catalogue the trailer's <c>/Root</c> names, through the <c>/Kids</c> of each <c>/Type /Pages</c>
-/// node. A <c>/Count</c> written on a page-tree node is <strong>not read at all</strong>: it is the
-/// document's own claim about itself, and a file that declares <c>/Count 1</c> while reaching two
-/// hundred pages would otherwise be forwarded to the reader whole - the page limit bypassed by a
-/// number anybody can type (the repair of 10 November 2026).</para>
+/// <para><strong>It counts the pages the document's current version can actually reach, and trusts
+/// nothing the document declares.</strong> The count is the number of <c>/Type /Page</c> leaves
+/// reachable from the catalogue the active trailer's <c>/Root</c> names, through the <c>/Kids</c> of
+/// each <c>/Type /Pages</c> node. A <c>/Count</c> written on a page-tree node is <strong>not read at
+/// all</strong>: it is the document's own claim about itself (the first repair of 10 November
+/// 2026).</para>
 ///
-/// <para><strong>It is a bounded structural parser, not a PDF library.</strong> This application has
-/// no PDF library and does not need one: the only question is "is this a PDF, and how many pages can
-/// it reach?". Every step has a ceiling - how many objects are indexed, how far into one object its
-/// dictionary is read, how deep and how wide the page tree may be, and how many pages may be counted -
-/// so a hostile file cannot turn the count into unbounded work or unbounded memory. A tree that
-/// exceeds any of those ceilings is refused, never truncated into a smaller count.</para>
+/// <para><strong>Which definition of an object is current is the cross-reference table's answer, never
+/// the bytes'.</strong> The parser starts at the file's last <c>startxref</c>, reads that
+/// cross-reference section, and follows its <c>/Prev</c> chain backwards, the newest entry for an
+/// object number winning - which is exactly the object a conforming reader resolves. Every reference is
+/// resolved through that table alone, and an entry must point at the object header it claims (number
+/// and generation) or it resolves to nothing. Scanning the bytes for object headers instead would let an
+/// incremental update replace the page tree somewhere the scan cannot see - in a compressed object
+/// stream named by a cross-reference stream - while the scan walks the stale, smaller tree (the second
+/// repair of 10 November 2026).</para>
+///
+/// <para><strong>One format is supported: a classic cross-reference table.</strong> A cross-reference
+/// stream (PDF 1.5's compressed form), a hybrid-reference file (<c>/XRefStm</c>) and an encrypted
+/// document (<c>/Encrypt</c>) are refused, because their active objects cannot be verified without
+/// decompressing or decrypting, which this parser deliberately does not do.</para>
+///
+/// <para><strong>It is a bounded structural parser, not a PDF library.</strong> Every step has a
+/// ceiling - cross-reference entries, revisions, subsections, the bytes of one dictionary, the tree's
+/// depth and width, the nodes visited and the pages counted - so a hostile file cannot turn the count
+/// into unbounded work or memory. A document past any ceiling is refused, never truncated into a
+/// smaller count.</para>
 ///
 /// <para><strong>Anything it cannot verify counts as nothing, and
-/// <c>Inventory.Domain.ReceiptScanning.ReceiptScanFilePolicy.CheckPdfPages</c> refuses it.</strong>
-/// That covers a file that is not a PDF, one with no trailer or no readable catalogue, one that keeps
-/// its catalogue or page tree in a compressed object stream, one whose page tree reaches an object the
-/// file does not define exactly once, a page-tree node with no <c>/Type</c> or no readable
-/// <c>/Kids</c>, and a tree that revisits a node. A file named <c>.pdf</c> that is not one must not be
-/// sent to the reader whole, and a PDF nobody can count must not be assumed to be one page. The
-/// refusal says "try a photo of the receipt instead", which is a refusal the operator can work
-/// around - the conservative direction, never a page limit silently bypassed.</para>
+/// <c>Inventory.Domain.ReceiptScanning.ReceiptScanFilePolicy.CheckPdfPages</c> refuses it</strong> with
+/// "try a photo of the receipt instead" - a refusal the operator can work around, never a page limit
+/// silently bypassed.</para>
 /// </summary>
 public sealed class PdfPageCounter : IPdfPageCounter
 {
     /// <summary>
-    /// How many numbered objects this parser will index. Far above a receipt PDF - a hundred-page
-    /// document runs to a few thousand objects - and small enough that a hostile file cannot make the
-    /// index itself expensive. A file with more is refused rather than indexed in part, so the answer
-    /// never depends on where the index stopped.
+    /// How many cross-reference entries this parser will read across every revision. Far above a
+    /// receipt PDF, and small enough that a hostile file cannot make the table itself expensive.
     /// </summary>
-    private const int MaxObjects = 20_000;
+    private const int MaxEntries = 20_000;
+
+    /// <summary>How many cross-reference sections (revisions) the <c>/Prev</c> chain may hold.</summary>
+    private const int MaxRevisions = 32;
+
+    /// <summary>How many subsections one cross-reference section may hold.</summary>
+    private const int MaxSubsections = 1_024;
 
     /// <summary>
-    /// How far past an object's <c>obj</c> keyword its dictionary is read. Generous for a dictionary,
-    /// including a page-tree node whose <c>/Kids</c> array lists thousands of children, and bounded
-    /// so the scan cannot become quadratic on a file full of <c>obj</c> tokens.
+    /// How far past an object's <c>obj</c> keyword its dictionary is read, and how far past
+    /// <c>trailer</c> the trailer dictionary is. Generous for a dictionary, including a page-tree node
+    /// listing thousands of children, and bounded so no scan becomes quadratic.
     /// </summary>
     private const int MaxDictionaryBytes = 64 * 1024;
 
@@ -64,7 +76,7 @@ public sealed class PdfPageCounter : IPdfPageCounter
     /// </summary>
     private const int MaxPages = 4_096;
 
-    /// <summary>How far past a key a reference - <c>N G R</c> - is looked for.</summary>
+    /// <summary>How far past <c>startxref</c> its offset is looked for.</summary>
     private const int MaxReferenceBytes = 64;
 
     /// <inheritdoc />
@@ -77,117 +89,35 @@ public sealed class PdfPageCounter : IPdfPageCounter
             return null;
         }
 
-        var objects = Index(content);
-        if (objects is null || !TryPageTreeRoot(content, objects, out var root))
+        var table = CrossReferenceTable.Read(content);
+        if (table is null || !TryPageTreeRoot(content, table, out var root))
         {
             return null;
         }
 
-        var pages = ReachablePages(content, objects, root);
+        var pages = ReachablePages(content, table, root);
 
         return pages > 0 ? pages : null;
     }
 
     /// <summary>
-    /// Every object the file defines in plain bytes, as the byte range of its dictionary, or
-    /// <see langword="null"/> when it defines more than <see cref="MaxObjects"/>.
+    /// The page tree's root, taken from the catalogue the active trailer's <c>/Root</c> names and
+    /// resolved through the cross-reference table.
     /// </summary>
-    private static ObjectIndex? Index(ReadOnlySpan<byte> content)
+    private static bool TryPageTreeRoot(ReadOnlySpan<byte> content, CrossReferenceTable table, out ObjectReference root)
     {
-        var objects = new ObjectIndex();
-        var offset = 0;
+        root = default;
 
-        while (offset < content.Length)
-        {
-            var at = content[offset..].IndexOf("obj"u8);
-            if (at < 0)
-            {
-                break;
-            }
-
-            var keyword = offset + at;
-            offset = keyword + 3;
-
-            // "endobj" also contains the keyword; reading the object and generation numbers
-            // backwards is what tells the two apart, because "end" is neither.
-            if (!TryObjectNumber(content, keyword, out var number) || !IsDelimited(content, offset))
-            {
-                continue;
-            }
-
-            if (objects.Count >= MaxObjects)
-            {
-                return null;
-            }
-
-            objects.Add(number, offset, DictionaryLength(content, offset));
-        }
-
-        return objects;
-    }
-
-    /// <summary>
-    /// The page tree's root object, taken from the catalogue the trailer's <c>/Root</c> names.
-    ///
-    /// <para>The trailer is what decides which object is the catalogue, so a file that plants a
-    /// second, smaller <c>/Type /Catalog</c> object cannot have it counted instead. Trailers that
-    /// name different catalogues - an incremental update this parser cannot order - are refused.</para>
-    /// </summary>
-    private static bool TryPageTreeRoot(ReadOnlySpan<byte> content, ObjectIndex objects, out int root)
-    {
-        root = 0;
-
-        return TryTrailerRoot(content, out var catalogue)
-            && objects.TryDictionary(content, catalogue, out var dictionary)
+        return table.TryDictionary(content, table.Root, out var dictionary)
             && HasTypeName(dictionary, "Catalog"u8)
             && TryReference(dictionary, "/Pages"u8, out root);
-    }
-
-    /// <summary>
-    /// The one object number every <c>/Root</c> in the file points at, or <see langword="false"/>
-    /// when there is none or they disagree.
-    /// </summary>
-    private static bool TryTrailerRoot(ReadOnlySpan<byte> content, out int catalogue)
-    {
-        catalogue = 0;
-        var found = false;
-        var offset = 0;
-
-        while (offset < content.Length)
-        {
-            var at = content[offset..].IndexOf("/Root"u8);
-            if (at < 0)
-            {
-                break;
-            }
-
-            var position = offset + at;
-            offset = position + 5;
-
-            // A "/Root" that is not followed by a reference is not a trailer's: compressed stream
-            // bytes can spell anything, and skipping it only ever leaves the real trailer to decide.
-            if (!TryReference(Window(content, position), "/Root"u8, out var number))
-            {
-                continue;
-            }
-
-            if (found && number != catalogue)
-            {
-                return false;
-            }
-
-            catalogue = number;
-            found = true;
-        }
-
-        return found;
     }
 
     /// <summary>
     /// How many <c>/Type /Page</c> leaves <paramref name="root"/> reaches, or <see langword="null"/>
     /// when the tree cannot be walked to the end within this parser's bounds.
     /// </summary>
-    private static int? ReachablePages(ReadOnlySpan<byte> content, ObjectIndex objects, int root)
+    private static int? ReachablePages(ReadOnlySpan<byte> content, CrossReferenceTable table, ObjectReference root)
     {
         var pages = 0;
         var visited = new HashSet<int>();
@@ -200,12 +130,12 @@ public sealed class PdfPageCounter : IPdfPageCounter
 
             // A node visited twice is a cycle or a shared page; either way the tree is not one this
             // parser can count, so it is refused rather than counted once or counted for ever.
-            if (node.Depth > MaxDepth || visited.Count >= MaxNodes || !visited.Add(node.Number))
+            if (node.Depth > MaxDepth || visited.Count >= MaxNodes || !visited.Add(node.Reference.Number))
             {
                 return null;
             }
 
-            if (!objects.TryDictionary(content, node.Number, out var dictionary))
+            if (!table.TryDictionary(content, node.Reference, out var dictionary))
             {
                 return null;
             }
@@ -239,7 +169,7 @@ public sealed class PdfPageCounter : IPdfPageCounter
     /// </summary>
     private static bool TryPushKids(ReadOnlySpan<byte> dictionary, Stack<PageNode> pending, int depth)
     {
-        var at = dictionary.IndexOf("/Kids"u8);
+        var at = FindKey(dictionary, "/Kids"u8);
         if (at < 0)
         {
             return false;
@@ -268,73 +198,105 @@ public sealed class PdfPageCounter : IPdfPageCounter
                 return true;
             }
 
-            if (kids >= MaxKids || !TryReferenceAt(dictionary, ref index, out var number))
+            if (kids >= MaxKids || !TryReferenceAt(dictionary, ref index, out var reference))
             {
                 return false;
             }
 
-            pending.Push(new PageNode(number, depth));
+            pending.Push(new PageNode(reference, depth));
             kids++;
         }
     }
 
     /// <summary>
-    /// The object number the reference beside <paramref name="key"/> names, or
-    /// <see langword="false"/> when there is no such key or its value is not a reference.
+    /// The reference beside <paramref name="key"/>, or <see langword="false"/> when there is no such
+    /// key or its value is not a reference.
     /// </summary>
-    private static bool TryReference(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key, out int number)
+    private static bool TryReference(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key, out ObjectReference reference)
     {
-        number = 0;
-        var at = window.IndexOf(key);
+        reference = default;
+        var at = FindKey(window, key);
         if (at < 0)
         {
             return false;
         }
 
         var index = at + key.Length;
-        if (!SkipWhitespace(window, ref index))
+        SkipWhitespace(window, ref index);
+
+        return TryReferenceAt(window, ref index, out reference);
+    }
+
+    /// <summary>
+    /// The non-negative integer beside <paramref name="key"/>, or <see langword="false"/> when there
+    /// is no such key or its value is not one.
+    /// </summary>
+    private static bool TryIntegerValue(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key, out int value)
+    {
+        value = 0;
+        var at = FindKey(window, key);
+        if (at < 0)
         {
             return false;
         }
 
-        return TryReferenceAt(window, ref index, out number);
+        var index = at + key.Length;
+        SkipWhitespace(window, ref index);
+
+        return TryInteger(window, ref index, out value);
+    }
+
+    /// <summary>
+    /// Where the name <paramref name="key"/> first appears in <paramref name="window"/> as a whole
+    /// name - so <c>/Prev</c> is not found inside <c>/PrevX</c> - or -1.
+    /// </summary>
+    private static int FindKey(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key)
+    {
+        var offset = 0;
+
+        while (offset < window.Length)
+        {
+            var at = window[offset..].IndexOf(key);
+            if (at < 0)
+            {
+                return -1;
+            }
+
+            var position = offset + at;
+            if (IsDelimited(window, position + key.Length))
+            {
+                return position;
+            }
+
+            offset = position + key.Length;
+        }
+
+        return -1;
     }
 
     /// <summary>
     /// Reads the reference - <c>N G R</c> - at <paramref name="index"/> and leaves
     /// <paramref name="index"/> just past it.
     /// </summary>
-    private static bool TryReferenceAt(ReadOnlySpan<byte> window, ref int index, out int number)
+    private static bool TryReferenceAt(ReadOnlySpan<byte> window, ref int index, out ObjectReference reference)
     {
-        if (!TryInteger(window, ref index, out number)
+        reference = default;
+
+        if (!TryInteger(window, ref index, out var number)
             || !SkipWhitespace(window, ref index)
-            || !TryInteger(window, ref index, out _)
+            || !TryInteger(window, ref index, out var generation)
             || !SkipWhitespace(window, ref index)
             || index >= window.Length
-            || window[index] != (byte)'R')
+            || window[index] != (byte)'R'
+            || !IsDelimited(window, index + 1))
         {
             return false;
         }
 
         index++;
+        reference = new ObjectReference(number, generation);
 
         return true;
-    }
-
-    /// <summary>
-    /// The object number written before the <c>obj</c> keyword at <paramref name="keyword"/>, read
-    /// backwards through the generation number, or <see langword="false"/> when the bytes before it
-    /// are not <c>N G</c>.
-    /// </summary>
-    private static bool TryObjectNumber(ReadOnlySpan<byte> content, int keyword, out int number)
-    {
-        number = 0;
-        var index = keyword - 1;
-
-        return SkipWhitespaceBackwards(content, ref index)
-            && TryIntegerBackwards(content, ref index, out _)
-            && SkipWhitespaceBackwards(content, ref index)
-            && TryIntegerBackwards(content, ref index, out number);
     }
 
     /// <summary>
@@ -405,16 +367,11 @@ public sealed class PdfPageCounter : IPdfPageCounter
         }
 
         // A PDF name ends at whitespace or a delimiter. Without this, /Page matches /Pages.
-        var after = index + expected.Length;
-
-        return after >= window.Length || IsNameBoundary(window[after]);
+        return IsDelimited(window, index + expected.Length);
     }
 
     /// <summary>At most <paramref name="length"/> bytes of <paramref name="content"/> from <paramref name="start"/>.</summary>
-    private static ReadOnlySpan<byte> Window(
-        ReadOnlySpan<byte> content,
-        int start,
-        int length = MaxReferenceBytes) =>
+    private static ReadOnlySpan<byte> Window(ReadOnlySpan<byte> content, int start, int length) =>
         content.Slice(start, Math.Min(length, content.Length - start));
 
     /// <summary>Whether the byte at <paramref name="index"/> ends the token before it.</summary>
@@ -423,49 +380,36 @@ public sealed class PdfPageCounter : IPdfPageCounter
 
     /// <summary>
     /// Reads the non-negative integer at <paramref name="index"/>, leaves <paramref name="index"/>
-    /// just past it, and refuses one too long to be an object number.
+    /// just past it, and refuses one with more than <paramref name="maxDigits"/> digits.
     /// </summary>
-    private static bool TryInteger(ReadOnlySpan<byte> window, ref int index, out int value)
+    private static bool TryInteger(ReadOnlySpan<byte> window, ref int index, out int value, int maxDigits = 9)
     {
         value = 0;
         var digits = 0;
+        long total = 0;
 
-        while (index < window.Length && IsDigit(window[index]) && digits < 9)
+        while (index < window.Length && IsDigit(window[index]))
         {
-            value = (value * 10) + (window[index] - (byte)'0');
+            if (++digits > maxDigits)
+            {
+                return false;
+            }
+
+            total = (total * 10) + (window[index] - (byte)'0');
             index++;
-            digits++;
         }
 
-        return digits > 0 && IsDelimited(window, index);
-    }
-
-    /// <summary>
-    /// Reads the non-negative integer ending at <paramref name="index"/> and leaves
-    /// <paramref name="index"/> just before it.
-    /// </summary>
-    private static bool TryIntegerBackwards(ReadOnlySpan<byte> content, ref int index, out int value)
-    {
-        value = 0;
-        var last = index;
-
-        while (index >= 0 && IsDigit(content[index]) && last - index < 9)
-        {
-            index--;
-        }
-
-        var digits = last - index;
-        if (digits is 0)
+        if (digits is 0 || total > int.MaxValue || !IsDelimited(window, index))
         {
             return false;
         }
 
-        var at = 0;
+        value = (int)total;
 
-        return TryInteger(content.Slice(index + 1, digits), ref at, out value);
+        return true;
     }
 
-    /// <summary>Whether any whitespace was skipped, forwards.</summary>
+    /// <summary>Whether any whitespace was skipped.</summary>
     private static bool SkipWhitespace(ReadOnlySpan<byte> window, ref int index)
     {
         var start = index;
@@ -475,18 +419,6 @@ public sealed class PdfPageCounter : IPdfPageCounter
         }
 
         return index > start;
-    }
-
-    /// <summary>Whether any whitespace was skipped, backwards.</summary>
-    private static bool SkipWhitespaceBackwards(ReadOnlySpan<byte> content, ref int index)
-    {
-        var start = index;
-        while (index >= 0 && IsWhitespace(content[index]))
-        {
-            index--;
-        }
-
-        return index < start;
     }
 
     private static bool IsDigit(byte value) => value is >= (byte)'0' and <= (byte)'9';
@@ -503,48 +435,233 @@ public sealed class PdfPageCounter : IPdfPageCounter
         || value is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'[' or (byte)']'
             or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%';
 
+    /// <summary>An indirect reference: <c>N G R</c>.</summary>
+    private readonly record struct ObjectReference(int Number, int Generation);
+
     /// <summary>One page-tree node still to visit, and how deep it sits.</summary>
-    private readonly record struct PageNode(int Number, int Depth);
+    private readonly record struct PageNode(ObjectReference Reference, int Depth);
+
+    /// <summary>One cross-reference entry: where an in-use object starts, or that it is free.</summary>
+    private readonly record struct Entry(int Offset, int Generation, bool InUse);
 
     /// <summary>
-    /// Where each numbered object's dictionary is, and which numbers the file defines more than once.
-    ///
-    /// <para>A number defined twice is an object this parser cannot resolve: which definition is
-    /// current is the cross-reference table's answer, and an incremental update can replace a page
-    /// tree node. It is treated as undefined, so the page tree that reaches it is refused rather than
-    /// counted from the wrong generation.</para>
+    /// The document's active cross-reference information: for each object number, the newest entry
+    /// any revision gives it, and the catalogue the newest trailer names.
     /// </summary>
-    private sealed class ObjectIndex
+    private sealed class CrossReferenceTable
     {
-        private readonly Dictionary<int, (int Start, int Length)> _dictionaries = new();
-        private readonly HashSet<int> _definedTwice = new();
+        private readonly Dictionary<int, Entry> _entries = new();
+        private int _entriesRead;
 
-        /// <summary>How many distinct object numbers have been indexed.</summary>
-        public int Count => _dictionaries.Count;
-
-        /// <summary>Records object <paramref name="number"/>'s dictionary range.</summary>
-        public void Add(int number, int start, int length)
+        private CrossReferenceTable()
         {
-            if (!_dictionaries.TryAdd(number, (start, length)))
+        }
+
+        /// <summary>The catalogue the active (newest) trailer names.</summary>
+        public ObjectReference Root { get; private set; }
+
+        /// <summary>
+        /// Reads the cross-reference sections from the last <c>startxref</c> back along the
+        /// <c>/Prev</c> chain, or answers <see langword="null"/> when any of them is not a classic
+        /// table this parser can verify.
+        /// </summary>
+        public static CrossReferenceTable? Read(ReadOnlySpan<byte> content)
+        {
+            if (!TryLastStartXref(content, out var section))
             {
-                _definedTwice.Add(number);
+                return null;
             }
+
+            var table = new CrossReferenceTable();
+            var visited = new HashSet<int>();
+            int? next = section;
+
+            while (next is { } offset)
+            {
+                // A chain that loops, or runs longer than any real document's, is refused.
+                if (offset >= content.Length
+                    || visited.Count >= MaxRevisions
+                    || !visited.Add(offset)
+                    || !table.TryReadSection(content, offset, out var trailer))
+                {
+                    return null;
+                }
+
+                // A hybrid file keeps part of its active graph in a cross-reference stream, and an
+                // encrypted one cannot be read without decrypting it: neither can be verified here.
+                if (FindKey(trailer, "/XRefStm"u8) >= 0 || FindKey(trailer, "/Encrypt"u8) >= 0)
+                {
+                    return null;
+                }
+
+                if (visited.Count == 1)
+                {
+                    // Only the active trailer names the catalogue; an older one is history.
+                    if (!TryReference(trailer, "/Root"u8, out var root))
+                    {
+                        return null;
+                    }
+
+                    table.Root = root;
+                }
+
+                next = null;
+                if (FindKey(trailer, "/Prev"u8) >= 0)
+                {
+                    if (!TryIntegerValue(trailer, "/Prev"u8, out var previous))
+                    {
+                        return null;
+                    }
+
+                    next = previous;
+                }
+            }
+
+            return table;
         }
 
         /// <summary>
-        /// The dictionary of object <paramref name="number"/>, or <see langword="false"/> when the
-        /// file does not define it exactly once.
+        /// The dictionary of the object <paramref name="reference"/> names, resolved through this
+        /// table: its entry must be in use, inside the file, of the same generation, and point at the
+        /// header <c>N G obj</c> of that very object. Anything else resolves to nothing.
         /// </summary>
-        public bool TryDictionary(ReadOnlySpan<byte> content, int number, out ReadOnlySpan<byte> dictionary)
+        public bool TryDictionary(ReadOnlySpan<byte> content, ObjectReference reference, out ReadOnlySpan<byte> dictionary)
         {
             dictionary = default;
 
-            if (_definedTwice.Contains(number) || !_dictionaries.TryGetValue(number, out var range))
+            if (!_entries.TryGetValue(reference.Number, out var entry)
+                || !entry.InUse
+                || entry.Generation != reference.Generation
+                || entry.Offset >= content.Length)
             {
                 return false;
             }
 
-            dictionary = content.Slice(range.Start, range.Length);
+            var index = entry.Offset;
+            if (!TryInteger(content, ref index, out var number)
+                || number != reference.Number
+                || !SkipWhitespace(content, ref index)
+                || !TryInteger(content, ref index, out var generation)
+                || generation != reference.Generation
+                || !SkipWhitespace(content, ref index)
+                || !content[index..].StartsWith("obj"u8)
+                || !IsDelimited(content, index + 3))
+            {
+                return false;
+            }
+
+            var start = index + 3;
+            dictionary = content.Slice(start, DictionaryLength(content, start));
+
+            return true;
+        }
+
+        /// <summary>The offset the file's last <c>startxref</c> gives, when it is inside the file.</summary>
+        private static bool TryLastStartXref(ReadOnlySpan<byte> content, out int offset)
+        {
+            offset = 0;
+            var at = content.LastIndexOf("startxref"u8);
+            if (at < 0)
+            {
+                return false;
+            }
+
+            var window = Window(content, at + 9, MaxReferenceBytes);
+            var index = 0;
+
+            return SkipWhitespace(window, ref index)
+                && TryInteger(window, ref index, out offset)
+                && offset < content.Length;
+        }
+
+        /// <summary>
+        /// Reads the classic cross-reference section at <paramref name="offset"/> - the <c>xref</c>
+        /// keyword, its subsections and the trailer after them - recording each entry unless a newer
+        /// revision already gave that object number one. A cross-reference stream (an object where
+        /// <c>xref</c> should be) is not read and answers <see langword="false"/>.
+        /// </summary>
+        private bool TryReadSection(ReadOnlySpan<byte> content, int offset, out ReadOnlySpan<byte> trailer)
+        {
+            trailer = default;
+            var index = offset;
+            SkipWhitespace(content, ref index);
+
+            if (!content[index..].StartsWith("xref"u8) || !IsDelimited(content, index + 4))
+            {
+                return false;
+            }
+
+            index += 4;
+
+            for (var subsections = 0; ; subsections++)
+            {
+                SkipWhitespace(content, ref index);
+                if (content[index..].StartsWith("trailer"u8))
+                {
+                    index += 7;
+                    break;
+                }
+
+                if (subsections >= MaxSubsections || !TryReadSubsection(content, ref index))
+                {
+                    return false;
+                }
+            }
+
+            SkipWhitespace(content, ref index);
+            if (!content[index..].StartsWith("<<"u8))
+            {
+                return false;
+            }
+
+            // A trailer is followed by the startxref of its own revision, which bounds it.
+            var window = Window(content, index, MaxDictionaryBytes);
+            var end = window.IndexOf("startxref"u8);
+            if (end < 0)
+            {
+                return false;
+            }
+
+            trailer = window[..end];
+
+            return true;
+        }
+
+        /// <summary>
+        /// Reads one subsection - <c>first count</c>, then <c>count</c> entries of
+        /// <c>offset generation n|f</c> - leaving <paramref name="index"/> just past it.
+        /// </summary>
+        private bool TryReadSubsection(ReadOnlySpan<byte> content, ref int index)
+        {
+            if (!TryInteger(content, ref index, out var first)
+                || !SkipWhitespace(content, ref index)
+                || !TryInteger(content, ref index, out var count)
+                || count > MaxEntries - _entriesRead)
+            {
+                return false;
+            }
+
+            for (var position = 0; position < count; position++)
+            {
+                SkipWhitespace(content, ref index);
+                if (!TryInteger(content, ref index, out var objectOffset, maxDigits: 10)
+                    || !SkipWhitespace(content, ref index)
+                    || !TryInteger(content, ref index, out var generation, maxDigits: 5)
+                    || !SkipWhitespace(content, ref index)
+                    || index >= content.Length
+                    || (content[index] != (byte)'n' && content[index] != (byte)'f')
+                    || !IsDelimited(content, index + 1))
+                {
+                    return false;
+                }
+
+                var inUse = content[index] == (byte)'n';
+                index++;
+                _entriesRead++;
+
+                // Newer revisions are read first, so an entry already recorded is the current one.
+                _entries.TryAdd(first + position, new Entry(objectOffset, generation, inUse));
+            }
 
             return true;
         }

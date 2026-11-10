@@ -2346,10 +2346,11 @@ and record it through Add Purchase as usual, which is still where a purchase is 
 - **A HEIC photo is refused with "Convert the photo to JPEG and try again."** iPhones often save photos in a
   format the reader cannot read, even though you can perfectly well attach one to a purchase.
 - **A PDF is only read if it is within the page limit** (100 pages by default), and the pages are counted from
-  the document itself rather than from the count it declares, so a long document cannot slip past by claiming
-  to be one page. A PDF whose pages cannot be counted — an encrypted one, or one built in a way this
-  application cannot read — is refused with "This PDF could not be read. Try a photo of the receipt instead."
-  rather than being sent off anyway.
+  the document's current version itself rather than from the count it declares, so a long document cannot slip
+  past by claiming to be one page, and an edited PDF is judged by its pages after the edit. A PDF whose pages
+  cannot be counted — an encrypted one, or one saved in the newer compressed PDF layout (a cross-reference
+  stream), which this application deliberately does not read — is refused with "This PDF could not be read.
+  Try a photo of the receipt instead." rather than being sent off anyway.
 - **Quantities are what was delivered, not what was ordered**, and a line delivered as nothing is left out.
 - **A pack size that is not printed on the receipt stays unknown** — never 1. A carton whose size the receipt
   does not state comes back with no units and asks you for the pack size, rather than quietly recording a
