@@ -1,6 +1,7 @@
-import { Page, Route, expect, test } from '@playwright/test';
+import { Page, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { expectNoHorizontalOverflow, openProductsPage, supplierOffer as offer } from './support/products-page';
 
 /**
  * The desktop and mobile browser evidence for issue #1183: the supplier comparison's
@@ -50,24 +51,6 @@ const EXPLAINER =
 
 const LOWEST_UNIT_PRICE = 'Lowest unit price';
 
-const OWNER_CAPABILITIES = [
-  'Dashboard.View',
-  'Dashboard.ViewFinancials',
-  'PickList.View',
-  'Inventory.Operate',
-  'Purchasing.Operate',
-  'Suppliers.ManageGstDefaults',
-  'Expenses.Manage',
-  'Reports.View',
-  'Imports.Run',
-  'SiteCommissions.Manage',
-  'Integration.Manage',
-  'Data.Repair',
-  'Members.Manage',
-  'Roles.View',
-  'Business.Manage'
-];
-
 const categories = [
   { id: 1, name: 'Snacks' },
   { id: 2, name: 'Drinks' }
@@ -110,29 +93,6 @@ const INELIGIBLE_ONLY = 'Sample Hazelnut Wafer 43g';
 
 const products = [product(1, FOUR_OFFERS, 'SMP-ICD-237', 2), product(2, TIED, 'SMP-CHC-38', 1), product(3, INELIGIBLE_ONLY, 'SMP-HZW-43', 1)];
 
-function offer(supplierId: number, supplierName: string, packQuantity: number | null, packPrice: number | null, unitPrice: number | null, extra: Record<string, unknown> = {}) {
-  return {
-    supplierId,
-    supplierName,
-    hasListing: true,
-    hasPrice: unitPrice !== null || packPrice !== null,
-    packQuantity,
-    packPrice,
-    packPriceBasis: packPrice === null ? null : 2,
-    unitPrice,
-    unitPriceExGst: unitPrice === null ? null : Math.round((unitPrice / 1.1) * 10000) / 10000,
-    unitPriceIncGst: unitPrice,
-    isSpecial: false,
-    promotionEndsAtUtc: null,
-    stockStatus: 1,
-    lastCheckedAtUtc: '2026-11-04T02:00:00Z',
-    productUrl: `https://example.test/${supplierId}/${packQuantity ?? 0}`,
-    ineligibility: null,
-    isCheapest: false,
-    ...extra
-  };
-}
-
 const MATCHED = 3;
 /** `SupplierOfferIneligibility.Stale`: rendered as "Last check is too old to compare". */
 const STALE = 6;
@@ -172,35 +132,8 @@ const cheapestSuppliers = {
   ]
 };
 
-function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-}
-
-async function answerApi(page: Page): Promise<void> {
-  await page.route('**/api/**', (route: Route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/me/access')) {
-      return json(route, { role: 'Owner', capabilities: OWNER_CAPABILITIES, businessName: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    }
-    if (path.endsWith('/me/account-state')) return json(route, { state: 'Member', onboardingEnabled: false, rejectionReason: null });
-    if (path.endsWith('/business/current')) return json(route, { name: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
-    if (path.endsWith('/api/products')) return json(route, products);
-    if (path.endsWith('/categories')) return json(route, categories);
-    if (path.endsWith('/products/purchase-cost-summary')) return json(route, []);
-    if (path.endsWith('/cheapest-suppliers/summary')) return json(route, cheapestSuppliers);
-    if (route.request().method() !== 'GET') return route.fulfill({ status: 204, body: '' });
-    return json(route, []);
-  });
-}
-
-async function openProducts(page: Page, width: number): Promise<void> {
-  await page.setViewportSize({ width, height: width >= 1024 ? 1000 : 844 });
-  await answerApi(page);
-  await page.goto('/products');
-  await page.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
-  await expect(page.getByRole('heading', { name: 'Products', level: 1 })).toBeVisible();
-  await expect(page.locator('[data-testid="cheapest-supplier-compare"]:visible').first()).toBeVisible();
+function openProducts(page: Page, width: number): Promise<void> {
+  return openProductsPage(page, width, { products, categories, purchaseCosts: [], cheapestSuppliers });
 }
 
 /** Opens one product's comparison and leaves it untouched - nothing scrolled, nothing hovered. */
@@ -216,11 +149,6 @@ async function openComparison(page: Page, width: number, productName: string, su
   return { dialog, compare };
 }
 
-async function expectNoHorizontalOverflow(page: Page): Promise<void> {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 /**
  * Measures the one thing a screenshot cannot prove on its own: that the notice is already fully
  * readable, above the results, in the dialog as it opens.
@@ -228,7 +156,7 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
  * The notice is a direct child of the dialog's scrollable content, so that element is its
  * `parentElement`; a scroller still at `scrollTop === 0` has not been scrolled past anything.
  */
-async function measureNotice(page: Page) {
+function measureNotice(page: Page) {
   return page.evaluate(() => {
     const notice = document.querySelector('[data-testid="supplier-comparison-notice"]');
     const row = document.querySelector('[data-testid="cheapest-supplier-row"]');
@@ -278,7 +206,7 @@ function expectReadable(element: { lines: number; scrollWidth: number; clientWid
   expect(element.right).toBeLessThanOrEqual(viewport);
 }
 
-async function measureExplainer(page: Page) {
+function measureExplainer(page: Page) {
   return page.evaluate(() => {
     const explainer = document.querySelector('[data-testid="supplier-comparison-badge-explainer"]');
     if (explainer === null) throw new Error('The comparison did not render its badge explainer.');
