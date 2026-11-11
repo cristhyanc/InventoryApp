@@ -50,7 +50,7 @@ describe('ineligibilityLabel (issues #925 and #1200)', () => {
       (value): value is SupplierOfferIneligibility => typeof value === 'number'
     );
 
-    expect(reasons.length).toBe(7);
+    expect(reasons).toHaveLength(7);
     for (const reason of reasons) {
       expect(ineligibilityLabel(reason)).not.toBeNull();
     }
