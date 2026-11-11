@@ -7675,8 +7675,9 @@ without asking. `/expenses/new` is a two-segment path and `/expenses/:id/edit` a
 so neither can shadow the other or the single-segment `/expenses` in any declaration order, and the
 page loads its expense from the route id through `OperatingExpenseService.getById` rather than from
 navigation state — a bookmarked edit URL and a refresh both work, a non-numeric id is the same
-"not found" as a missing expense, and the register keeps no form of its own. Rendered geometry is
-checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
+"not found" as a missing expense, and the register keeps no form of its own. Both pages use the
+full content width inside the standard `.page` gutters, with no max-width cap (issue #1187).
+Rendered geometry is checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
 `docs/screenshots/issue-1167/` at 1440px and 390px, overflow measured down to 360px, Tab order and
 touch-target heights); like every visual run it is human-invoked and runs in neither
 `scripts/validate.sh` nor CI.
