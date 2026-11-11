@@ -1,205 +1,331 @@
-<div class="page">
-  <header class="page-header">
-    <div>
-      <h1 class="page-title">Suppliers</h1>
+<!--
+  The Suppliers register (issue #1175), on the Products list's (#1093) `rr` scale: the title with a
+  supplier count, then one card holding the toolbar and the table (or, below `md`, the supplier
+  cards). The table and the cards render the same `filteredSuppliers`, from the same search and
+  usage filter, so the two layouts can never show different suppliers.
+-->
+<div class="page font-rr text-rr-navy">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex flex-wrap items-baseline gap-3">
+      <h1 class="page-title m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Suppliers</h1>
+      @if (loadState.loaded) {
+        <span class="text-sm text-rr-muted" data-testid="suppliers-count">{{ supplierCountLabel }}</span>
+      }
     </div>
     <!-- Hidden rather than disabled while a support session is active (issue #657): a session
          grants PurchasingOperate, so this create would otherwise still render, and the server
          refuses it by its read-only method rule whatever this page shows. The row's Edit stays,
          because opening a stored supplier's details issues no request. -->
-    <div class="page-actions">
-      @if (canAddSupplier) {
-        <button type="button" class="btn btn-primary min-h-11" data-testid="add-supplier" (click)="addSupplier()">
-          <app-icon name="add" [size]="16" />
-          Add supplier
-        </button>
-      }
-    </div>
+    @if (canAddSupplier) {
+      <button type="button" class="rr-button-primary min-h-11 md:min-h-10" data-testid="add-supplier" (click)="addSupplier()">
+        <app-icon name="add" [size]="18" />
+        Add supplier
+      </button>
+    }
   </header>
 
   @if (error) {
     <p class="field-error" role="alert">{{ error }}</p>
   }
 
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">All Suppliers</h2>
-    </div>
-    <div class="card-body p-0">
-      @if (suppliers.length === 0) {
-        <p class="p-4 text-md-body value-muted">No suppliers yet.</p>
-      } @else {
-        <div class="overflow-x-auto">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Name</th>
-                <th scope="col" class="table-cell">Contact</th>
-                <th scope="col" class="table-cell">Phone</th>
-                <th scope="col" class="table-cell">Email</th>
-                <th scope="col" class="table-cell">Website</th>
-                <th scope="col" class="table-cell">Not used</th>
-                <th scope="col" class="table-cell"></th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (s of suppliers; track s.id) {
-                <tr class="table-row">
-                  <td class="table-cell">
-                    {{ s.name }}
-                    <!-- The lock state, from the server's own answer (issue #934). -->
-                    @if (isLinked(s)) {
-                      <span
-                        class="badge badge-neutral"
-                        [attr.data-testid]="'supplier-linked-' + s.id"
-                        title="This supplier came from the platform's supplier list. Its name and website cannot be changed and it cannot be deleted."
-                      >Platform list</span>
-                    }
-                  </td>
-                  <td class="table-cell">{{ s.contactName }}</td>
-                  <td class="table-cell">{{ s.phone }}</td>
-                  <td class="table-cell">{{ s.email }}</td>
-                  <!-- Only an http(s) address the client rule also accepts becomes a link
-                       (issue #847); anything else shows as plain text, so a value that reached
-                       the database without passing the server rule is never clickable. -->
-                  <td class="table-cell">
-                    @if (canLinkTo(s)) {
-                      <a [href]="s.url" target="_blank" rel="noopener noreferrer">{{ s.url }}</a>
-                    } @else {
-                      {{ s.url }}
-                    }
-                  </td>
-                  <td class="table-cell">
-                    <!-- Offered only for a supplier that came from the platform's list, which is
-                         what it is for: a supplier the business added itself can be deleted.
-                         Hidden in a support session, like every other write on this page. -->
-                    @if (isLinked(s) && !sessionActive) {
-                      <label class="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          [checked]="s.isHidden === true"
-                          [attr.data-testid]="'supplier-not-used-' + s.id"
-                          (change)="setNotUsed(s, !(s.isHidden === true))"
-                        />
-                        <span class="text-md-body value-muted">Not used</span>
-                      </label>
-                    } @else if (s.isHidden === true) {
-                      <span class="text-md-body value-muted">Not used</span>
-                    }
-                  </td>
-                  <td class="table-cell">
-                    <div class="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-secondary min-h-11"
-                        [attr.data-testid]="'supplier-edit-' + s.id"
-                        [attr.aria-label]="'Edit ' + s.name"
-                        (click)="editSupplier(s)"
-                      >
-                        <app-icon name="edit" [size]="16" />
-                        Edit
-                      </button>
-                      <!-- The supplier's own GST defaults (issue #430), from the row since issue
-                           #1174. Offered to every role the page is offered to: a role that may
-                           only read them opens the same dialog without a Save, which the panel
-                           itself decides from `Suppliers.ManageGstDefaults`. -->
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-secondary min-h-11"
-                        [attr.data-testid]="'supplier-gst-defaults-' + s.id"
-                        [attr.aria-label]="'GST defaults for ' + s.name"
-                        (click)="openGstDefaults(s)"
-                      >
-                        GST defaults
-                      </button>
-                      <!-- Hidden rather than disabled while a support session is active (issue
-                           #657): a session grants PurchasingOperate, so this write would
-                           otherwise still render. Hidden for a linked supplier too (issue #934),
-                           which the API refuses to delete at all. -->
-                      @if (!sessionActive && s.canDelete !== false) {
-                        <button
-                          type="button"
-                          class="btn btn-sm btn-danger min-h-11"
-                          [attr.data-testid]="'supplier-delete-' + s.id"
-                          [attr.aria-label]="'Delete ' + s.name"
-                          (click)="askDelete(s)"
-                        >
-                          <app-icon name="delete" [size]="16" />
-                          Delete
-                        </button>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
+  <section class="card overflow-hidden rounded-xl border-rr-line font-rr text-rr-navy" aria-label="Suppliers register">
+    <div class="flex flex-wrap items-center gap-2 border-b border-rr-line p-3 sm:gap-3 sm:p-4" data-testid="suppliers-toolbar">
+      <label class="relative flex min-w-0 basis-full items-center sm:basis-64 sm:flex-1 lg:max-w-xs">
+        <span class="sr-only">Search suppliers by name</span>
+        <span class="pointer-events-none absolute left-3 text-rr-caption" aria-hidden="true"><app-icon name="search" [size]="18" /></span>
+        <input
+          class="min-h-11 w-full rounded-lg border border-rr-line bg-white pl-9 pr-11 text-sm text-rr-navy placeholder:text-rr-caption md:min-h-10"
+          data-testid="suppliers-search"
+          name="supplierSearch"
+          [(ngModel)]="search"
+          placeholder="Search suppliers" />
+        @if (search) {
+          <button
+            type="button"
+            class="absolute right-0.5 inline-flex h-10 w-10 items-center justify-center rounded-md text-rr-caption hover:bg-rr-canvas hover:text-rr-navy md:h-9 md:w-9"
+            aria-label="Clear search"
+            data-testid="suppliers-search-clear"
+            (click)="clearSearch()"><app-icon name="close" [size]="16" /></button>
+        }
+      </label>
+
+      <!-- The selected view is the white segment, announced through aria-pressed (issue #1175). -->
+      <fieldset
+        class="m-0 grid basis-full grid-cols-3 rounded-lg border border-rr-line bg-rr-surface p-1 text-sm font-semibold sm:inline-grid sm:basis-auto"
+        data-testid="suppliers-usage-filter">
+        <legend class="sr-only">Filter by usage</legend>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
+          [ngClass]="usageFilter === 'all' ? 'bg-white text-rr-teal shadow-sm' : 'text-rr-muted hover:text-rr-navy'"
+          [attr.aria-pressed]="usageFilter === 'all'"
+          data-testid="suppliers-usage-all"
+          (click)="setUsageFilter('all')">All</button>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
+          [ngClass]="usageFilter === 'inUse' ? 'bg-white text-rr-teal shadow-sm' : 'text-rr-muted hover:text-rr-navy'"
+          [attr.aria-pressed]="usageFilter === 'inUse'"
+          data-testid="suppliers-usage-in-use"
+          (click)="setUsageFilter('inUse')">In use</button>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
+          [ngClass]="usageFilter === 'notUsed' ? 'bg-white text-rr-teal shadow-sm' : 'text-rr-muted hover:text-rr-navy'"
+          [attr.aria-pressed]="usageFilter === 'notUsed'"
+          data-testid="suppliers-usage-not-used"
+          (click)="setUsageFilter('notUsed')">Not used</button>
+      </fieldset>
+
+      @if (filtersDiffer) {
+        <button type="button" class="rr-button-ghost min-h-10 px-3" data-testid="suppliers-clear-filters" (click)="resetSearchAndFilter()">Clear filters</button>
       }
     </div>
+
+    @if (loadState.loadFailed) {
+      <p class="p-4 text-md-body value-negative" data-testid="suppliers-error">Failed to load suppliers. Reload the page to try again.</p>
+    } @else if (!loadState.loaded) {
+      <div class="space-y-3 p-4" data-testid="suppliers-loading">
+        <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+      </div>
+    } @else if (suppliers.length === 0) {
+      <p class="p-4 text-md-body value-muted" data-testid="suppliers-empty">No suppliers yet. Add your first supplier to get started.</p>
+    } @else if (filteredSuppliers.length === 0) {
+      <div class="flex flex-col items-center gap-2 p-8 text-center" data-testid="suppliers-no-match">
+        <p class="m-0 font-semibold text-rr-navy">No suppliers match your search or filter.</p>
+        <button type="button" class="rr-button-secondary min-h-11 px-4 md:min-h-10" data-testid="suppliers-reset" (click)="resetSearchAndFilter()">Clear search and usage filter</button>
+      </div>
+    } @else {
+      <div class="hidden overflow-x-auto md:block" data-testid="suppliers-table">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Supplier</th>
+              <th scope="col" class="table-cell">Contact</th>
+              <th scope="col" class="table-cell">Website</th>
+              <th scope="col" class="table-cell">Usage</th>
+              <th scope="col" class="table-cell text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (s of filteredSuppliers; track s.id) {
+              <tr class="table-row" data-testid="supplier-row">
+                <td class="table-cell">
+                  <span class="break-words font-semibold text-rr-navy">{{ s.name }}</span>
+                  <!-- The lock state, from the server's own answer (issue #934). -->
+                  @if (isLinked(s)) {
+                    <span
+                      class="badge badge-neutral ml-2"
+                      [attr.data-testid]="'supplier-linked-' + s.id"
+                      title="This supplier came from the platform's supplier list. Its name and website cannot be changed and it cannot be deleted."
+                    >Platform list</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  <ng-container *ngTemplateOutlet="contactDetails; context: { $implicit: s }"></ng-container>
+                </td>
+                <td class="table-cell">
+                  <ng-container *ngTemplateOutlet="websiteDetails; context: { $implicit: s }"></ng-container>
+                </td>
+                <td class="table-cell">
+                  <span class="badge" [ngClass]="isNotUsed(s) ? 'badge-neutral' : 'badge-success'" [attr.data-testid]="'supplier-usage-' + s.id">
+                    {{ isNotUsed(s) ? 'Not used' : 'In use' }}
+                  </span>
+                </td>
+                <td class="table-cell text-right">
+                  <div class="flex flex-nowrap items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      class="rr-button-secondary min-h-9 px-3 text-xs"
+                      [attr.data-testid]="'supplier-edit-' + s.id"
+                      [attr.aria-label]="'Edit ' + s.name"
+                      (click)="editSupplier(s)"
+                    >
+                      <app-icon name="edit" [size]="16" />
+                      Edit
+                    </button>
+                    <app-action-menu
+                      icon="more_vert"
+                      [label]="'More actions for ' + s.name"
+                      [testId]="'supplier-actions-' + s.id"
+                      triggerClass="inline-flex h-9 w-9 items-center justify-center rounded-lg text-rr-muted hover:bg-rr-canvas hover:text-rr-navy">
+                      <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" [attr.data-testid]="'supplier-gst-defaults-' + s.id" (click)="openGstDefaults(s)">GST defaults</button>
+                      <!-- Offered only for a supplier that came from the platform's list (issue #934), and
+                           hidden in a support session like every other write on this page. -->
+                      @if (isLinked(s) && !sessionActive) {
+                        <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" [attr.data-testid]="'supplier-usage-toggle-' + s.id" (click)="setNotUsed(s, !isNotUsed(s))">{{ usageToggleLabel(s) }}</button>
+                      }
+                      <!-- Offered only for a supplier that came from the business itself (issue #934) and
+                           that the API still allows deleting, and hidden in a support session. -->
+                      @if (!sessionActive && s.canDelete !== false) {
+                        <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" [attr.data-testid]="'supplier-delete-' + s.id" (click)="askDelete(s)">Delete</button>
+                      }
+                    </app-action-menu>
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <!--
+        Below `md` the same suppliers as compact cards: the name with its badges, the available
+        contact and website details, and the same Edit and overflow actions.
+      -->
+      <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="supplier-cards">
+        @for (s of filteredSuppliers; track s.id) {
+          <li class="rounded-xl border border-rr-line bg-white p-3" data-testid="supplier-card">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <span class="break-words font-semibold text-rr-navy">{{ s.name }}</span>
+                @if (isLinked(s)) {
+                  <span class="badge badge-neutral ml-2" [attr.data-testid]="'supplier-linked-' + s.id">Platform list</span>
+                }
+              </div>
+              <span class="badge shrink-0" [ngClass]="isNotUsed(s) ? 'badge-neutral' : 'badge-success'" [attr.data-testid]="'supplier-usage-' + s.id">
+                {{ isNotUsed(s) ? 'Not used' : 'In use' }}
+              </span>
+            </div>
+            <div class="m-0 mt-3 flex flex-col gap-2 rounded-lg bg-rr-surface p-3 text-sm">
+              <ng-container *ngTemplateOutlet="contactDetails; context: { $implicit: s }"></ng-container>
+              <ng-container *ngTemplateOutlet="websiteDetails; context: { $implicit: s }"></ng-container>
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                class="rr-button-secondary min-h-11 flex-1"
+                [attr.data-testid]="'supplier-edit-' + s.id"
+                [attr.aria-label]="'Edit ' + s.name"
+                (click)="editSupplier(s)"
+              >
+                <app-icon name="edit" [size]="16" />
+                Edit
+              </button>
+              <app-action-menu
+                icon="more_vert"
+                [label]="'More actions for ' + s.name"
+                [testId]="'supplier-card-actions-' + s.id"
+                triggerClass="rr-button-secondary min-h-11 w-11 px-0">
+                <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" [attr.data-testid]="'supplier-card-gst-defaults-' + s.id" (click)="openGstDefaults(s)">GST defaults</button>
+                @if (isLinked(s) && !sessionActive) {
+                  <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" [attr.data-testid]="'supplier-card-usage-toggle-' + s.id" (click)="setNotUsed(s, !isNotUsed(s))">{{ usageToggleLabel(s) }}</button>
+                }
+                @if (!sessionActive && s.canDelete !== false) {
+                  <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" [attr.data-testid]="'supplier-card-delete-' + s.id" (click)="askDelete(s)">Delete</button>
+                }
+              </app-action-menu>
+            </div>
+          </li>
+        }
+      </ul>
+    }
   </section>
 
-  <!-- The suppliers from the platform's list this business may add (issue #935). The section is
-       shown only while there is something to add: a business that has taken up every suggestion
-       for its state - the normal state after a while - is offered nothing and sees nothing. -->
+  <!-- The suppliers from the platform's list this business may add (issue #935), restyled to match
+       (issue #1175) with its own behaviour unchanged: the section is shown only while there is
+       something to add. -->
   @if (availablePresets.length > 0) {
-    <section class="card" data-testid="available-presets">
-      <div class="card-header">
-        <h2 class="card-title">Available to add</h2>
-      </div>
-      <div class="card-body p-0">
-        <p class="p-4 text-md-body value-muted">
+    <section class="card overflow-hidden rounded-xl border-rr-line font-rr text-rr-navy" aria-label="Available to add" data-testid="available-presets">
+      <div class="border-b border-rr-line p-3 sm:p-4">
+        <h2 class="m-0 text-base font-bold text-rr-navy">Available to add</h2>
+        <p class="m-0 mt-1 text-sm text-rr-muted">
           Suppliers from the platform's list that serve your state and that you have not added yet.
           Adding one creates your own supplier, with its name and website from that list.
         </p>
-        <div class="overflow-x-auto">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Name</th>
-                <th scope="col" class="table-cell">Website</th>
-                <th scope="col" class="table-cell"></th>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Name</th>
+              <th scope="col" class="table-cell">Website</th>
+              <th scope="col" class="table-cell"></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (preset of availablePresets; track preset.id) {
+              <tr class="table-row">
+                <td class="table-cell break-words font-semibold text-rr-navy">{{ preset.name }}</td>
+                <!-- Only an http(s) address the client rule also accepts becomes a link
+                     (issue #847), exactly as in the register above. -->
+                <td class="table-cell break-all">
+                  @if (canLinkToPreset(preset)) {
+                    <a class="text-rr-teal hover:underline" [href]="preset.url" target="_blank" rel="noopener noreferrer">{{ preset.url }}</a>
+                  } @else {
+                    {{ preset.url }}
+                  }
+                </td>
+                <td class="table-cell text-right">
+                  <!-- Hidden rather than disabled in a support session or a role preview
+                       (issues #657 and #721): both grant PurchasingOperate and then refuse every
+                       write, so the button would render and be refused. -->
+                  @if (canAddFromPlatformList) {
+                    <button
+                      type="button"
+                      class="rr-button-secondary min-h-9 px-3 text-xs"
+                      [attr.data-testid]="'add-preset-' + preset.id"
+                      [attr.aria-label]="'Add ' + preset.name"
+                      (click)="addFromPreset(preset)"
+                    >
+                      <app-icon name="add" [size]="16" />
+                      Add
+                    </button>
+                  }
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              @for (preset of availablePresets; track preset.id) {
-                <tr class="table-row">
-                  <td class="table-cell">{{ preset.name }}</td>
-                  <!-- Only an http(s) address the client rule also accepts becomes a link
-                       (issue #847), exactly as in the list above. -->
-                  <td class="table-cell">
-                    @if (canLinkToPreset(preset)) {
-                      <a [href]="preset.url" target="_blank" rel="noopener noreferrer">{{ preset.url }}</a>
-                    } @else {
-                      {{ preset.url }}
-                    }
-                  </td>
-                  <td class="table-cell">
-                    <!-- Hidden rather than disabled in a support session or a role preview
-                         (issues #657 and #721): both grant PurchasingOperate and then refuse every
-                         write, so the button would render and be refused. -->
-                    @if (canAddFromPlatformList) {
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-secondary"
-                        [attr.data-testid]="'add-preset-' + preset.id"
-                        [attr.aria-label]="'Add ' + preset.name"
-                        (click)="addFromPreset(preset)"
-                      >
-                        <app-icon name="add" [size]="16" />
-                        Add
-                      </button>
-                    }
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
+            }
+          </tbody>
+        </table>
       </div>
     </section>
   }
 </div>
+
+<!--
+  A supplier's available contact details (issue #1175): the name, the email as a mailto link and
+  the phone as a tel link, each shown only while stored - a missing one is left out rather than
+  filled with a placeholder - and nothing at all when none of the three is stored.
+-->
+<ng-template #contactDetails let-s>
+  @if (s.contactName || s.email || s.phone) {
+    <div class="flex flex-col gap-0.5" data-testid="supplier-contact">
+      @if (s.contactName) {
+        <span class="break-words">{{ s.contactName }}</span>
+      }
+      @if (s.email) {
+        <a class="break-all text-rr-teal hover:underline" [href]="'mailto:' + s.email">{{ s.email }}</a>
+      }
+      @if (s.phone) {
+        <a class="break-all text-rr-teal hover:underline" [href]="'tel:' + s.phone">{{ s.phone }}</a>
+      }
+    </div>
+  } @else {
+    <span class="value-muted">—</span>
+  }
+</ng-template>
+
+<!--
+  A supplier's website (issue #1175 and #847): the stored URL's short domain, linking to the full
+  address only when `isSafeSupplierUrl` allows it; anything else - including a value that reached
+  the database without passing that rule - is shown as plain text, and a supplier with no website
+  shows nothing.
+-->
+<ng-template #websiteDetails let-s>
+  @if (s.url) {
+    @if (canLinkTo(s)) {
+      <a class="inline-flex items-center gap-1 break-all text-rr-teal hover:underline" [href]="s.url" target="_blank" rel="noopener noreferrer" [attr.aria-label]="'Website for ' + s.name + ', opens in a new tab'">
+        {{ websiteDomain(s) }}
+        <app-icon class="inline-block shrink-0 -rotate-45" name="arrow_forward" [size]="12" />
+      </a>
+    } @else {
+      <span class="break-all">{{ s.url }}</span>
+    }
+  }
+</ng-template>
 
 <!--
   The three dialogs this page composes (issue #1174). Each is a child component, so the page's own
@@ -210,7 +336,7 @@
   <app-supplier-form-dialog
     [supplier]="editing"
     [sessionActive]="sessionActive"
-    (saved)="onSupplierSaved()"
+    (saved)="onSupplierSaved($event)"
     (closed)="closeForm()"
   ></app-supplier-form-dialog>
 }

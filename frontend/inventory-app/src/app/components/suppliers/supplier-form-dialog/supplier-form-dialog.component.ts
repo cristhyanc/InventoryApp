@@ -1,7 +1,6 @@
 import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Observable } from 'rxjs';
 import { Supplier } from '../../../models/models';
 import { SupplierService } from '../../../services/supplier.service';
 import { ModalDialogComponent } from '../../shared/modal-dialog/modal-dialog.component';
@@ -62,8 +61,14 @@ export class SupplierFormDialogComponent implements OnInit {
    */
   @Input() sessionActive = false;
 
-  /** Reported only after the create or update actually succeeded. */
-  @Output() readonly saved = new EventEmitter<void>();
+  /**
+   * Reported only after the create or update actually succeeded, with the resulting supplier: the
+   * server's own response for a create, or the stored supplier with the submitted fields overlaid
+   * for an update (whose `PUT` answers with nothing). The list reads it only to tell whether the
+   * save is now hidden by its own search or usage filter (issue #1175); it changes nothing about
+   * this dialog's own save, validation or discard behaviour.
+   */
+  @Output() readonly saved = new EventEmitter<Supplier>();
 
   /** Reported when the dialog should go: an unchanged form dismissed, or discarded changes. */
   @Output() readonly closed = new EventEmitter<void>();
@@ -193,21 +198,30 @@ export class SupplierFormDialogComponent implements OnInit {
     };
 
     this.saving = true;
-    const request: Observable<unknown> =
-      this.supplier === null
-        ? this.suppliers.create(payload)
-        : this.suppliers.update(this.supplier.id, payload);
+    if (this.supplier === null) {
+      this.suppliers.create(payload).subscribe({
+        next: (created: Supplier) => this.finishSave(created),
+        error: (response: HttpErrorResponse) => this.failSave(response)
+      });
+    } else {
+      // PUT answers with nothing, so the resulting supplier is the stored one with exactly the
+      // fields just submitted overlaid - every key `payload` carries is also a `Supplier` field.
+      const resulting: Supplier = { ...this.supplier, ...payload };
+      this.suppliers.update(this.supplier.id, payload).subscribe({
+        next: () => this.finishSave(resulting),
+        error: (response: HttpErrorResponse) => this.failSave(response)
+      });
+    }
+  }
 
-    request.subscribe({
-      next: () => {
-        this.saving = false;
-        this.saved.emit();
-      },
-      error: (response: HttpErrorResponse) => {
-        this.saving = false;
-        this.error = supplierRefusal(response, 'Failed to save the supplier.');
-      }
-    });
+  private finishSave(result: Supplier): void {
+    this.saving = false;
+    this.saved.emit(result);
+  }
+
+  private failSave(response: HttpErrorResponse): void {
+    this.saving = false;
+    this.error = supplierRefusal(response, 'Failed to save the supplier.');
   }
 }
 
