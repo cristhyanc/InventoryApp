@@ -1,0 +1,14 @@
+<app-modal-dialog
+  [dialogTitle]="'GST defaults - ' + supplier.name"
+  testId="supplier-gst-defaults-dialog"
+  (closeRequested)="closed.emit()"
+>
+  <!-- The existing panel, unchanged: its own read, save, messages and
+       `Suppliers.ManageGstDefaults` permission are its business. The supplier is named in the
+       dialog's own title, so the panel is not asked to name it a second time. -->
+  <app-supplier-gst-defaults [supplierId]="supplier.id"></app-supplier-gst-defaults>
+
+  <div dialog-actions>
+    <button type="button" class="btn btn-secondary min-h-11" (click)="closed.emit()">Close</button>
+  </div>
+</app-modal-dialog>

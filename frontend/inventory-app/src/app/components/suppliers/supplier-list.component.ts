@@ -5,10 +5,9 @@ import { Subscription } from 'rxjs';
 import { SupplierService } from '../../services/supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { AvailableSupplierPreset, Supplier } from '../../models/models';
-import { SupplierGstDefaultsComponent } from './supplier-gst-defaults/supplier-gst-defaults.component';
+import { SupplierGstDefaultsDialogComponent } from './supplier-gst-defaults-dialog/supplier-gst-defaults-dialog.component';
 import { SupplierFormDialogComponent } from './supplier-form-dialog/supplier-form-dialog.component';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
-import { ModalDialogComponent } from '../shared/modal-dialog/modal-dialog.component';
 import { IconComponent } from '../shared/icon.component';
 import { RolePreviewService } from '../../role-preview/role-preview.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -20,10 +19,9 @@ import { supplierRefusal } from './supplier-refusal';
   standalone: true,
   imports: [
     CommonModule,
-    SupplierGstDefaultsComponent,
+    SupplierGstDefaultsDialogComponent,
     SupplierFormDialogComponent,
     ConfirmationDialogComponent,
-    ModalDialogComponent,
     IconComponent
   ],
   templateUrl: './supplier-list.component.html'

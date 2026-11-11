@@ -213,20 +213,10 @@
 }
 
 @if (gstDefaultsFor) {
-  <app-modal-dialog
-    [dialogTitle]="'GST defaults - ' + gstDefaultsFor.name"
-    testId="supplier-gst-defaults-dialog"
-    (closeRequested)="closeGstDefaults()"
-  >
-    <!-- The existing panel, unchanged: its own read, save, messages and
-         `Suppliers.ManageGstDefaults` permission are its business. The supplier is named in the
-         dialog's own title, so the panel is not asked to name it a second time. -->
-    <app-supplier-gst-defaults [supplierId]="gstDefaultsFor.id"></app-supplier-gst-defaults>
-
-    <div dialog-actions>
-      <button type="button" class="btn btn-secondary min-h-11" (click)="closeGstDefaults()">Close</button>
-    </div>
-  </app-modal-dialog>
+  <app-supplier-gst-defaults-dialog
+    [supplier]="gstDefaultsFor"
+    (closed)="closeGstDefaults()"
+  ></app-supplier-gst-defaults-dialog>
 }
 
 @if (deleting) {
