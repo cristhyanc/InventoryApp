@@ -112,13 +112,12 @@ export class ExpenseDeleteConfirmationComponent {
     }
     const current = controls.indexOf(document.activeElement as HTMLElement);
     const last = controls.length - 1;
-    const next = event.shiftKey
-      ? current <= 0
-        ? last
-        : current - 1
-      : current === -1 || current === last
-        ? 0
-        : current + 1;
+    let next: number;
+    if (event.shiftKey) {
+      next = current <= 0 ? last : current - 1;
+    } else {
+      next = current === -1 || current === last ? 0 : current + 1;
+    }
     event.preventDefault();
     controls[next].focus();
   }
@@ -152,7 +151,7 @@ export class ExpenseDeleteConfirmationComponent {
     this.opener = null;
     const confirming = this.confirming;
     this.confirming = false;
-    if (!confirming && opener !== null && opener.isConnected) {
+    if (!confirming && opener?.isConnected) {
       opener.focus();
     }
   }
