@@ -1405,7 +1405,7 @@ PUT  /api/super-admin/businesses/{businessId}/plan-grant      { plan, endsOnUtc?
 POST /api/super-admin/businesses/{businessId}/plan-grant/end  { reason, revision }
 GET  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  the recorded sender, or 404
 PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  { awsSenderId, isEnabled, expectedRevision }
-GET  /api/super-admin/businesses/{businessId}/receipt-scan-usage  scans used this month (read-only)
+GET  /api/super-admin/businesses/{businessId}/purchase-scan-usage  scans used this month (read-only)
 ```
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the diagnostics API, checked on every request, plus the ordinary authentication and `access_as_user` scope requirements. **With the pair unset — the shipped state — nobody reaches it at all.** An Owner holds the strongest business role there is and is refused here like anybody else: a business role is not platform authority.

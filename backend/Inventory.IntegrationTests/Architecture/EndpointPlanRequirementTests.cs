@@ -398,7 +398,7 @@ public class EndpointPlanRequirementTests
         // platform-admin endpoint has one: what a business has spent at the reader is the platform's
         // own question about its own costs, and the plan that business holds cannot decide whether
         // the Super Admin may look.
-        new("SuperAdminReceiptScanUsageController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/receipt-scan-usage
+        new("SuperAdminPurchaseScanUsageController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/purchase-scan-usage
         new("SuperAdminSupplierPresetsController.Create", PlanRequirementKind.None), // POST api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.List", PlanRequirementKind.None), // GET api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.Update", PlanRequirementKind.None), // PUT api/super-admin/supplier-presets/{id:int}

@@ -5,7 +5,9 @@ import { ConfigService } from './config.service';
 
 /**
  * One business's receipt-scan usage as
- * `GET /api/super-admin/businesses/{businessId}/receipt-scan-usage` reports it (issue #1164).
+ * `GET /api/super-admin/businesses/{businessId}/purchase-scan-usage` reports it (issue #1164). The
+ * route is named `purchase-scan`, never `receipt-scan`, by issue #127's rule that no published
+ * schema, tag or vocabulary carries a Receipt name.
  *
  * `month` is the business's **own** calendar month as `yyyy-MM`, derived on the server in the time
  * zone stored on that business - not the administrator's browser's month and not UTC's. It is
@@ -39,7 +41,7 @@ export class SuperAdminReceiptScanUsageService {
   /** That business's month, what it has used in it, what is left and the cap. */
   get(businessId: number): Observable<SuperAdminReceiptScanUsage> {
     return this.http.get<SuperAdminReceiptScanUsage>(
-      `${this.config.apiBaseUrl.replace(/\/$/, '')}/super-admin/businesses/${businessId}/receipt-scan-usage`
+      `${this.config.apiBaseUrl.replace(/\/$/, '')}/super-admin/businesses/${businessId}/purchase-scan-usage`
     );
   }
 }

@@ -17,6 +17,12 @@ namespace InventoryApi.Controllers;
 /// extra scans is explicitly out of scope on issue #1164, and a counter somebody could edit is not
 /// evidence of what was spent.</para>
 ///
+/// <para><strong>The controller and its route are named <c>PurchaseScan</c>, never
+/// <c>ReceiptScan</c></strong> - the rule issue #127 established and
+/// <c>PublishedResponseSchemaContractTests</c> enforces: no schema or tag in the published document
+/// may carry a Receipt name, and a controller's name is its tag. The scanned document is of course a
+/// receipt, which is what this documentation and the Super Admin's own card call it.</para>
+///
 /// <para><strong>Authorisation is the other Super Admin surfaces', unchanged.</strong>
 /// <c>[Authorize(Policy = PlatformAdminPolicy.Name)]</c> is evaluated by the authorization middleware
 /// before any action here runs, and <c>BusinessScopeMiddleware</c> re-evaluates the same policy
@@ -44,7 +50,7 @@ namespace InventoryApi.Controllers;
 /// use case with the request's cancellation token, and maps the result to HTTP.</para>
 /// </summary>
 [ApiController]
-[Route("api/super-admin/businesses/{businessId:int}/receipt-scan-usage")]
+[Route("api/super-admin/businesses/{businessId:int}/purchase-scan-usage")]
 // Both, and both are enforced: the default policy carries the delegated-scope requirement that
 // [RequiredScope] declares, and the named policy carries the platform-admin one. A named policy
 // alone would replace the default rather than add to it, which would leave the scope undemanded.
@@ -52,11 +58,11 @@ namespace InventoryApi.Controllers;
 [Authorize(Policy = PlatformAdminPolicy.Name)]
 [RequiredScope("access_as_user")]
 [PlatformDiagnosticsEndpoint]
-public sealed class SuperAdminReceiptScanUsageController : ControllerBase
+public sealed class SuperAdminPurchaseScanUsageController : ControllerBase
 {
     private readonly GetBusinessReceiptScanUsage _usage;
 
-    public SuperAdminReceiptScanUsageController(GetBusinessReceiptScanUsage usage)
+    public SuperAdminPurchaseScanUsageController(GetBusinessReceiptScanUsage usage)
     {
         _usage = usage;
     }
@@ -73,12 +79,12 @@ public sealed class SuperAdminReceiptScanUsageController : ControllerBase
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<SuperAdminReceiptScanUsageResponse>> Get(
+    public async Task<ActionResult<SuperAdminPurchaseScanUsageResponse>> Get(
         int businessId,
         CancellationToken cancellationToken)
     {
         var view = await _usage.Handle(businessId, cancellationToken);
 
-        return view is null ? NotFound() : Ok(SuperAdminReceiptScanUsageResponse.From(view));
+        return view is null ? NotFound() : Ok(SuperAdminPurchaseScanUsageResponse.From(view));
     }
 }

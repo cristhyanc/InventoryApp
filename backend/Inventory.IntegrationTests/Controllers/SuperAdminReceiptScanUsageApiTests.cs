@@ -218,8 +218,12 @@ public class SuperAdminReceiptScanUsageApiTests
         Assert.Equal(before, await _factory.StoredCountersAsync());
     }
 
+    /// <summary>
+    /// The published route is named <c>purchase-scan-usage</c>, never <c>receipt-scan-usage</c>, by
+    /// issue #127's rule that no published schema, tag or vocabulary carries a Receipt name.
+    /// </summary>
     private static string Route(int businessId) =>
-        $"/api/super-admin/businesses/{businessId}/receipt-scan-usage";
+        $"/api/super-admin/businesses/{businessId}/purchase-scan-usage";
 
     private async Task<JsonElement> ReadAsync(int businessId)
     {
