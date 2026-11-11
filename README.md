@@ -3008,6 +3008,41 @@ Every menu and dialog starts closed, opens one at a time, works from the keyboar
 Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
 `docs/screenshots/issue-1093/`.
 
+## Adding and editing a supplier
+
+The Suppliers page is a list, and everything you do to one supplier happens in a dialog over it, so
+you never lose your place in the list (issue #1174). There is no New/Edit form above the table any
+more.
+
+- **Add supplier** is in the page header and opens the dialog empty; each row's **Edit** opens the
+  same dialog filled in with that supplier. One form serves both: Name, Contact name, Phone, Email,
+  Website and Address, with **Create supplier** or **Save changes** as the primary action beside
+  **Cancel**.
+- **On a desktop** it is a centred panel about 600px wide that never grows past the window — the
+  fields scroll inside it and the action row stays visible. **On a phone** it is a full-screen form
+  with the fields stacked, clear of the notch and the home indicator, and you can still pinch to
+  zoom.
+- **Saving says so.** The primary action shows its progress and cannot be pressed twice. A refused
+  save keeps every value you typed and shows the server's own sentence above the fields — including
+  the refusals a supplier from the platform's list produces. The list is re-read and a success
+  message appears only after the save has actually gone through.
+- **Closing an unchanged form just closes it.** Cancel, the ✕, Escape and a click outside a form you
+  *have* changed ask first: **Discard changes** or **Keep editing**, and keeping takes you back to
+  the form exactly as you left it.
+- **GST defaults** is a button on each supplier's row and opens that supplier's
+  [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the same three
+  settings, with the same permission: a role that may read but not change them sees the choices
+  without a Save.
+- **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
+  A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
+  the list exactly as it was and shows the server's reason.
+- **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
+  inside itself, closes on Escape and returns focus to the control that opened it; the page behind
+  it cannot be clicked or tabbed into while it is open.
+
+The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
+add** section are unchanged, and no API, model or stored field changed with this.
+
 ## A supplier's website
 
 A supplier can record an optional **Website** beside its name, contact and address, so you can open
@@ -3057,9 +3092,10 @@ supplier with a **Platform list** label.
   has already been added and leaves one supplier; a supplier that serves another state is not offered
   and cannot be added.
 
-- **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
-  Website fields are read-only, with a note saying why. The API refuses a change to either with
-  `400` and a message you can read, whatever a client sends.
+- **Its name and website are the platform's.** Open a linked supplier in the Edit dialog (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)) and the Name and Website fields
+  are read-only, with a note saying why. The API refuses a change to either with `400` and a message
+  you can read, whatever a client sends.
 - **It cannot be deleted.** There is no Delete button on a linked row, and the endpoint refuses the
   delete.
 - **Its contact details and GST defaults are yours.** Contact name, phone, email and address save
@@ -3295,9 +3331,12 @@ classified:
   else changes, adds or removes a product while you are confirming, the change is refused rather
   than applied to a different set of products — the dialog says so, shows the new number and asks
   you to confirm again.
-- **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
+- **Suppliers → the supplier's row → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
-  defaults**. The three are independent: a charge never inherits the product-line default.
+  defaults**. The three are independent: a charge never inherits the product-line default. Since
+  issue #1174 this opens in its own dialog from the row, rather than appearing under the page while
+  a supplier is being edited (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)).
 
 The two single-record panels — a product's own GST rule and a supplier's GST defaults — read the
 stored setting first, and the save button stays disabled until it is on screen,

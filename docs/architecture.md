@@ -5382,7 +5382,11 @@ Receive is navigation to the already-guarded upload page, so only the control ne
 new guard. `SupplierListComponent` disables the Create/Update submit button and hides Delete,
 guarding `save()` and `remove()` the same way; Edit is left alone because it only sets local form
 state and issues no request of its own - the control that matters is the Save/Create button it
-leads to. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
+leads to. Since issue #1174 moved that form into a dialog the rule is unchanged and lives in the
+same two places: the page passes `[sessionActive]` to `SupplierFormDialogComponent`, which disables
+its own primary action and returns from `save()` before calling the API, the page still hides Delete
+and guards `askDelete()`/`remove()`, and Edit still opens the dialog for the same reason it was left
+alone here (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
 it is on `Purchasing.Operate`, which a session grants, so the page hides the control and
 `setNotUsed()` returns before calling the API
 ([The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934)).
@@ -5403,9 +5407,11 @@ disabled and `submit()` emitting nothing while `sessionActive` is set directly o
 `purchase-edit-page.component.spec.ts` covers the page passing its own `active$` subscription down
 as that input and `onSave` refusing to call the API. `supplier-orders.component.spec.ts` covers
 Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
-`supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
-`save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
-resuming once a session ends.
+`supplier-list.component.spec.ts` (new) covers Delete being hidden, `remove()` refusing to call the
+API while a session is active, and normal behaviour resuming once a session ends; since issue #1174
+the save half of that is `supplier-form-dialog.component.spec.ts` (the primary action disabled and
+`save()` refusing to call the API) plus the page spec opening the dialog to assert the disabled
+submit it composes.
 
 ### Auditing the remaining write actions across the support view UI (issue #661)
 
@@ -7985,6 +7991,8 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
+**The shared dialog UI.** `components/shared/confirmation-dialog.component.ts` (`ConfirmationDialogComponent`) is the one shared confirmation: a title, a message, and a confirm/cancel pair, with the caller owning the write it guards. `components/shared/modal-dialog/modal-dialog.component.ts` (`ModalDialogComponent`, issue #1174) is the shared **shell** for a dialog that holds a workflow rather than a question: a labelled, centred panel of at most 600px that becomes a full-screen sheet below 640px, with a fixed header carrying the heading and a labelled Close control, a scrollable body (the default content slot) and a fixed action row (anything projected with `dialog-actions`). It is a native modal `<dialog>` opened with `showModal()`, so the top layer, the inert page behind it and the `::backdrop` are the platform's, and it carries **no** `role` or `aria-modal` of its own because the platform maps a modal `<dialog>` to both; its Tab cycle, its Escape handling and its focus return to the control that opened it are written in the component so a regression test can hold it to them. It never closes itself: Escape, the backdrop and Close all report `closeRequested` and the owner decides, which is what lets a dirty form ask before it is discarded. A dialog that needs a question *over* an open dialog uses a second instance of this shell rather than `ConfirmationDialogComponent`, because a `z-index` backdrop cannot paint above the top layer. `ConfirmationDialogComponent` still has the focus-trap gap described under [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930) and its own follow-up; new dialog UI should use the shell.
+
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 
 Tailwind classes in templates, `src/styles.scss`, and component styles are the styling sources. `npm run build:styles` generates `src/styles.css` before Angular builds, so do not make a manual fix only in the generated CSS. Keep production bundle and component-style budgets in `angular.json` passing.
@@ -8036,6 +8044,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 - Alerts: `.alert` with `.alert-success|warning|danger|info` and `.alert-title`
 - Forms: `.field`, `.field-label`, `.field-hint`, `.field-error`
 - Values: `.value-positive`, `.value-negative`, `.value-muted`
+- Dialogs: no shared class — `ModalDialogComponent` (above) owns the panel, header, body and action row in its own component styles, and a caller styles only what it projects.
 
 **Focus and disabled states.** Every interactive element — buttons, links, inputs, selects, nav items, table row actions — shows a `focus-visible` 2px `md-info` outline at 2px offset (4.51:1 against white, above the 3:1 non-text minimum). Never remove a focus outline without putting that one in its place. Every button and form control renders its disabled state as opacity 0.5 with `cursor-not-allowed`, no hover change and no shadow; WCAG 1.4.3 exempts disabled controls from the contrast minimum.
 
@@ -15567,8 +15576,9 @@ the link state beside it; `SupplierResponse` is untouched and is still the neste
 
 **The frontend mirrors the rule and links carefully.**
 `components/suppliers/supplier-url.ts` is the browser-side copy — same limit, same schemes, same two
-messages — used both by the create/edit form, which refuses before the request, and by the list,
-which renders a website as
+messages — used both by the create/edit form (in its own dialog since issue #1174, see
+[The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)), which refuses before the
+request, and by the list, which renders a website as
 `<a href=… target="_blank" rel="noopener noreferrer">` only when that same check still accepts the
 stored value. Anything else renders as plain text, so a value that somehow reached the database
 without passing the server rule is never clickable. Angular's own URL sanitisation stays in place
@@ -15588,6 +15598,78 @@ anything else happens — but on a linked copy the normalised value is then comp
 one, and a change is refused with `400` and that link rule's own sentence on the `url` field. A
 supplier the business created itself is unaffected. See
 [The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934).
+
+### The Suppliers page's dialogs (issue #1174)
+
+Adding or editing a supplier used to happen in a New/Edit form card above the list, with the GST
+defaults card appearing underneath it while a supplier was being edited. Both are gone: the Suppliers
+page is a list, and each thing done to one supplier happens in a dialog over it, so the operator
+keeps their place in the list. **No API, DTO, schema, Domain rule, capability or validation changed;
+this is the Angular page**, and the payload the form sends is byte-for-byte the one the inline form
+sent.
+
+**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191),
+`SupplierListComponent` keeps only *which* dialog is open and for which supplier
+(`formOpen`/`editing`, `gstDefaultsFor`, `deleting`) and the list's own reads, refusals and the
+"Not used", Delete and **Available to add** writes. The form — its values, its field rules, its
+submission state, its server refusal and its discard question — is `SupplierFormDialogComponent`
+(`components/suppliers/supplier-form-dialog/`), composed through `[supplier]`/`[sessionActive]` and
+reporting only `(saved)` and `(closed)`. `null` for `[supplier]` is an Add and an existing one is an
+Edit; the only differences are the title (*Add supplier* / *Edit supplier*), the primary action
+(*Create supplier* / *Save changes*) and which call is made. The page's own template authors no
+dialog markup at all, which is what `page-composition.guard.ts` checks.
+
+**Three dialogs, one shell.** All of them are `ModalDialogComponent`
+(see [Interaction and presentation](#interaction-and-presentation)) or the shared
+`ConfirmationDialogComponent`:
+
+- **Add/Edit** is the form dialog above. Its action row sits in the shell's footer and submits the
+  form through `form="supplier-form"` (the #892 mechanism), so it stays visible while the fields
+  scroll. Initial focus is the Name field, or **Contact name** when the name is locked — the first
+  field the operator can actually edit.
+- **GST defaults** is the existing `SupplierGstDefaultsComponent` projected into the shell from each
+  row's *GST defaults* action, unchanged: its own read, `switchMap` cancellation, save, messages and
+  `Suppliers.ManageGstDefaults` read/write split are its own (see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430)). The dialog's title
+  names the supplier, so the panel is not asked to name it a second time.
+- **Delete** is `ConfirmationDialogComponent`, naming the supplier, in place of the browser's
+  `confirm()`. `canDelete === false` and a support session still remove the button, and `askDelete()`
+  and `remove()` each check both, so a question the server would refuse is never asked and a write it
+  would refuse is never issued. A refused delete shows the server's sentence verbatim and **does not
+  reload the list**.
+- **Discard changes?** is a second instance of the shell, opened *over* the form dialog rather than
+  instead of it: the form behind it is inert while the question is open and comes back with every
+  entered value when the answer is *Keep editing*. It cannot be `ConfirmationDialogComponent`,
+  because a `z-index` backdrop cannot paint above the form dialog's top layer.
+
+**What the dialog decides, and what it does not.** Closing an unchanged form dismisses it; a dirty
+one (the values on screen compared with the ones it opened with) asks first, whether the dismissal
+came from Cancel, the Close control, Escape or the backdrop. A save holds everything still — the
+primary action, Cancel and Close are all disabled and the action shows *Saving…* — so a second
+submission cannot be issued, and only a successful write reports `saved`, which is what lets the page
+re-read the list and show its toast **after** the write rather than beside it. A refusal keeps every
+entered value and shows the server's own sentence (`supplier-refusal.ts`, the shared reader of the
+two shapes the API uses, which the list uses for its own refusals) above the fields. A support
+session disables the save and `save()` returns before calling the API, exactly as the inline form's
+submit did; Edit still **opens**, because opening a form issues no request (see
+[Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
+
+**What proves it.** `supplier-list.component.spec.ts` covers the page half — no inline form or GST
+card left, the header action opening an empty dialog, a row's Edit opening a filled one, the list
+re-read and the toast only after a successful save, the dialog kept open with no reload and no toast
+on a refusal, the GST dialog opened for the right supplier with its permission intact, the delete
+question naming the supplier with nothing written until it is confirmed and nothing written when it
+is dismissed, and the support-session paths. `supplier-form-dialog.component.spec.ts` covers the form
+— the #847 website rule and its two messages, the blank-name refusal, the #934 lock with the stored
+name and website sent back unchanged, the exact payload, duplicate-submit prevention with the values
+kept and the refusal shown verbatim on failure, the discard question from all four dismissal paths
+with *Keep editing* keeping every value, and the dialog's labelling and initial focus.
+`modal-dialog.component.spec.ts` covers the shell — opened modally and labelled by its own heading
+with no `role` of its own, projection into body and footer, the nominated initial focus, the three
+dismissal paths reporting rather than closing, the Tab cycle, and focus returning to the control that
+opened it. The rendered geometry at 1440px, 390px and 360px is not something jsdom can answer
+(it computes no layout), so the desktop panel width, the full-screen phone sheet and the 44px touch
+targets are a browser-level concern; see [Browser-level end-to-end suite](#browser-level-end-to-end-suite-issue-46).
 
 ### A product carries no supplier (issue #787)
 
