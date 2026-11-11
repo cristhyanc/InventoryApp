@@ -21,7 +21,7 @@ import {
   ExpenseSaveRequest,
   newExpenseFormValue
 } from './expense-form.component';
-import { expenseFilterQueryParams, readExpenseFilters } from './expense-register-filters';
+import { expenseRegisterQueryParams, readExpenseRegisterView } from './expense-register-filters';
 
 /** The one sentence a departure asks while there is unsaved work (issue #1167). */
 export const EXPENSE_UNSAVED_LEAVE_WARNING =
@@ -116,7 +116,10 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
    */
   sessionActive = false;
 
-  /** The register's applied filters, carried back on a save, a Cancel and Back to expenses. */
+  /**
+   * The register's applied filters and its page (issue #1170), carried back on a save, a Cancel and
+   * Back to expenses, so the operator returns to the register they left rather than to page 1.
+   */
   returnQueryParams: Params = {};
 
   @ViewChild(ExpenseFormComponent) private readonly form?: ExpenseFormComponent;
@@ -158,9 +161,11 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
     );
     this.loadMachines();
 
-    // The applied filters travel in the address, so a reload of this page keeps the return context.
+    // The register's filters and page travel in the address, so a reload keeps the return context.
     this.subscriptions.add(
-      this.route.queryParamMap.subscribe((params) => (this.returnQueryParams = expenseFilterQueryParams(readExpenseFilters(params))))
+      this.route.queryParamMap.subscribe(
+        (params) => (this.returnQueryParams = expenseRegisterQueryParams(readExpenseRegisterView(params)))
+      )
     );
     // paramMap rather than a snapshot: the router reuses this component between two edit URLs, so
     // browser Back and Forward must load the expense the current address names.
