@@ -3,90 +3,19 @@
     <div>
       <h1 class="page-title">Suppliers</h1>
     </div>
+    <!-- Offered during a support session and a role preview, as the New Supplier form was before
+         issue #1174: opening the dialog issues no request, and its own Save is what both of those
+         states disable. -->
+    <div class="page-actions">
+      <button type="button" class="btn btn-primary min-h-11" data-testid="add-supplier" (click)="addSupplier()">
+        <app-icon name="add" [size]="16" />
+        Add supplier
+      </button>
+    </div>
   </header>
 
   @if (error) {
     <p class="field-error" role="alert">{{ error }}</p>
-  }
-
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">{{ editing ? 'Edit Supplier' : 'New Supplier' }}</h2>
-    </div>
-    <div class="card-body">
-      <form class="flex flex-col gap-4" (ngSubmit)="save()">
-        <!-- A supplier that came from the platform's list keeps that list's name and website
-             (issue #934). The inputs are shown read-only rather than removed, because the
-             operator still needs to see which supplier they are editing; the API refuses a
-             change to either whatever this form sends. -->
-        @if (nameAndWebsiteLocked) {
-          <p class="text-md-body value-muted" data-testid="supplier-locked-note">
-            This supplier comes from the platform's supplier list, so its name and website cannot be
-            changed and it cannot be deleted. Mark it "Not used" to hide it from the supplier lists.
-          </p>
-        }
-        <div class="field">
-          <label class="field-label" for="supplierName">Name</label>
-          <input
-            id="supplierName"
-            [(ngModel)]="form.name"
-            name="name"
-            required
-            [readonly]="nameAndWebsiteLocked"
-            [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
-            placeholder="e.g. General Distributors Inc."
-          />
-        </div>
-        <div class="field">
-          <label class="field-label" for="supplierContactName">Contact Name</label>
-          <input id="supplierContactName" [(ngModel)]="form.contactName" name="contactName" placeholder="Optional" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="supplierPhone">Phone</label>
-          <input id="supplierPhone" [(ngModel)]="form.phone" name="phone" placeholder="Optional" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="supplierEmail">Email</label>
-          <input id="supplierEmail" [(ngModel)]="form.email" name="email" type="email" placeholder="Optional" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="supplierUrl">Website</label>
-          <input
-            id="supplierUrl"
-            [(ngModel)]="form.url"
-            name="url"
-            type="url"
-            inputmode="url"
-            [maxlength]="urlMaxLength"
-            [readonly]="nameAndWebsiteLocked"
-            [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
-            placeholder="Optional, e.g. https://example.com"
-            [attr.aria-invalid]="urlError ? 'true' : null"
-            [attr.aria-describedby]="urlError ? 'supplierUrlError' : null"
-          />
-          @if (urlError) {
-            <p id="supplierUrlError" class="field-error" role="alert">{{ urlError }}</p>
-          }
-        </div>
-        <div class="field">
-          <label class="field-label" for="supplierAddress">Address</label>
-          <textarea id="supplierAddress" [(ngModel)]="form.address" name="address" rows="2" placeholder="Optional"></textarea>
-        </div>
-        <div class="page-actions">
-          <button type="submit" class="btn btn-primary" [disabled]="sessionActive">{{ editing ? 'Update' : 'Create' }}</button>
-          @if (editing) {
-            <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
-          }
-        </div>
-      </form>
-    </div>
-  </section>
-
-  @if (editing) {
-    <app-supplier-gst-defaults
-      [supplierId]="editing.id"
-      [supplierName]="editing.name"
-    ></app-supplier-gst-defaults>
   }
 
   <section class="card">
@@ -157,16 +86,41 @@
                   </td>
                   <td class="table-cell">
                     <div class="flex flex-wrap gap-2">
-                      <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(s)">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-secondary min-h-11"
+                        [attr.data-testid]="'supplier-edit-' + s.id"
+                        [attr.aria-label]="'Edit ' + s.name"
+                        (click)="editSupplier(s)"
+                      >
                         <app-icon name="edit" [size]="16" />
                         Edit
+                      </button>
+                      <!-- The supplier's own GST defaults (issue #430), from the row since issue
+                           #1174. Offered to every role the page is offered to: a role that may
+                           only read them opens the same dialog without a Save, which the panel
+                           itself decides from `Suppliers.ManageGstDefaults`. -->
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-secondary min-h-11"
+                        [attr.data-testid]="'supplier-gst-defaults-' + s.id"
+                        [attr.aria-label]="'GST defaults for ' + s.name"
+                        (click)="openGstDefaults(s)"
+                      >
+                        GST defaults
                       </button>
                       <!-- Hidden rather than disabled while a support session is active (issue
                            #657): a session grants PurchasingOperate, so this write would
                            otherwise still render. Hidden for a linked supplier too (issue #934),
                            which the API refuses to delete at all. -->
                       @if (!sessionActive && s.canDelete !== false) {
-                        <button type="button" class="btn btn-sm btn-danger" (click)="remove(s)">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-danger min-h-11"
+                          [attr.data-testid]="'supplier-delete-' + s.id"
+                          [attr.aria-label]="'Delete ' + s.name"
+                          (click)="askDelete(s)"
+                        >
                           <app-icon name="delete" [size]="16" />
                           Delete
                         </button>
@@ -243,3 +197,45 @@
     </section>
   }
 </div>
+
+<!--
+  The three dialogs this page composes (issue #1174). Each is a child component, so the page's own
+  template authors no dialog markup at all - the page composition boundary of issue #191 and its
+  automated `page-composition.guard.ts` check.
+-->
+@if (formOpen) {
+  <app-supplier-form-dialog
+    [supplier]="editing"
+    [sessionActive]="sessionActive"
+    (saved)="onSupplierSaved()"
+    (closed)="closeForm()"
+  ></app-supplier-form-dialog>
+}
+
+@if (gstDefaultsFor) {
+  <app-modal-dialog
+    [dialogTitle]="'GST defaults - ' + gstDefaultsFor.name"
+    testId="supplier-gst-defaults-dialog"
+    (closeRequested)="closeGstDefaults()"
+  >
+    <!-- The existing panel, unchanged: its own read, save, messages and
+         `Suppliers.ManageGstDefaults` permission are its business. The supplier is named in the
+         dialog's own title, so the panel is not asked to name it a second time. -->
+    <app-supplier-gst-defaults [supplierId]="gstDefaultsFor.id"></app-supplier-gst-defaults>
+
+    <div dialog-actions>
+      <button type="button" class="btn btn-secondary min-h-11" (click)="closeGstDefaults()">Close</button>
+    </div>
+  </app-modal-dialog>
+}
+
+@if (deleting) {
+  <app-confirmation-dialog
+    title="Delete supplier?"
+    [message]="`Delete the supplier '${deleting.name}'? This cannot be undone.`"
+    confirmLabel="Delete supplier"
+    cancelLabel="Cancel"
+    (confirmed)="confirmDelete()"
+    (canceled)="cancelDelete()"
+  ></app-confirmation-dialog>
+}
