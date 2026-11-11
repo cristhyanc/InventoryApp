@@ -70,6 +70,42 @@ public sealed class FakeReceiptScanCatalogueStore : IReceiptScanCatalogueStore
 }
 
 /// <summary>
+/// The last purchase of each product, in memory (issue #1165). It records what it was asked for, so a
+/// test can assert that a scan with nothing to suggest asks nothing - and that the supplier it reads
+/// is the suggested one.
+/// </summary>
+public sealed class FakeReceiptScanPurchaseHistoryStore : IReceiptScanPurchaseHistoryStore
+{
+    private readonly IReadOnlyList<ReceiptScanLastPurchase> _purchases;
+
+    public FakeReceiptScanPurchaseHistoryStore(params ReceiptScanLastPurchase[] purchases) =>
+        _purchases = purchases;
+
+    /// <summary>How many times the history was read. Zero is an assertion several tests make.</summary>
+    public int Calls { get; private set; }
+
+    /// <summary>The supplier of the last read, so a test can assert whose history was asked for.</summary>
+    public int? LastSupplierId { get; private set; }
+
+    /// <summary>The products of the last read.</summary>
+    public IReadOnlyCollection<long> LastProductIds { get; private set; } = [];
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<ReceiptScanLastPurchase>> ListLatestAsync(
+        int supplierId,
+        IReadOnlyCollection<long> productIds,
+        CancellationToken cancellationToken)
+    {
+        Calls++;
+        LastSupplierId = supplierId;
+        LastProductIds = productIds;
+
+        return Task.FromResult<IReadOnlyList<ReceiptScanLastPurchase>>(
+            _purchases.Where(purchase => productIds.Contains(purchase.ProductId)).ToList());
+    }
+}
+
+/// <summary>
 /// The scanning settings, as a test chooses them. <see cref="SwitchedOff"/> is the shipped state and
 /// is what every test host uses unless it is testing a scan.
 /// </summary>

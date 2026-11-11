@@ -395,6 +395,9 @@ public static class InfrastructureServiceCollectionExtensions
         // The one read receipt scanning makes of the business's own data (issue #1163): two columns
         // each of its products and suppliers, through the ordinary tenant query filters.
         services.AddScoped<IReceiptScanCatalogueStore, EfReceiptScanCatalogueStore>();
+        // And the one read behind a suggested pack size (issue #1165): the latest recorded purchase
+        // line for a few of this business's products from one supplier, through the same filters.
+        services.AddScoped<IReceiptScanPurchaseHistoryStore, EfReceiptScanPurchaseHistoryStore>();
         // And the business's own monthly scan counter (issue #1164): one row per business per
         // calendar month of its own zone, counted inside one write-locked transaction so two
         // simultaneous scans cannot both take the last one.

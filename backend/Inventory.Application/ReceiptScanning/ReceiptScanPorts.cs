@@ -25,6 +25,60 @@ public interface IReceiptScanCatalogueStore
 }
 
 /// <summary>
+/// One recorded purchase line a missing pack size may be suggested from (issue #1165): what one unit
+/// cost, and when that purchase was.
+/// </summary>
+/// <param name="ProductId">The product the line was for - this business's own product.</param>
+/// <param name="UnitCost">
+/// The <c>PurchaseItem.UnitCost</c> recorded on that line, which is GST-inclusive like every purchase
+/// amount in this application (AGENTS.md § Purchase GST classification).
+/// </param>
+/// <param name="PurchaseDate">
+/// That purchase's own date, as the calendar date the draft publishes beside the suggestion so an
+/// operator can see which purchase the number came from.
+/// </param>
+public sealed record ReceiptScanLastPurchase(long ProductId, decimal UnitCost, DateOnly PurchaseDate);
+
+/// <summary>
+/// The most recent recorded purchase line for each of a few products from one supplier (issue #1165,
+/// sub-issue E of #975) - the one read the pack-size suggestion makes of the business's own purchase
+/// history.
+///
+/// <para><strong>It is read-only and it is the business's own history.</strong> The method takes no
+/// business id in either direction: the business is the one the request already resolved, through the
+/// ordinary tenant query filters, so only this business's purchases can be read (AGENTS.md § Tenant
+/// ownership and data isolation). Nothing on this port can write, and the scan it serves stores
+/// nothing.</para>
+///
+/// <para><strong>It is deliberately not <c>IProductPurchasePriceHistoryProvider</c></strong> (issue
+/// #63's price comparison): that port answers a product's whole cost history across every supplier,
+/// for a feature that presents it, while this one answers one figure per product for one supplier.
+/// Widening either into the other would make a scan read a history it has no use for.</para>
+/// </summary>
+public interface IReceiptScanPurchaseHistoryStore
+{
+    /// <summary>
+    /// The latest purchase line for each of <paramref name="productIds"/> whose purchase recorded
+    /// <paramref name="supplierId"/> as its supplier - at most one entry per product, and no entry
+    /// at all for a product this business has never bought from that supplier.
+    ///
+    /// <para>"Latest" is <c>Inventory.Domain.Purchases.SupplierPurchaseRecency</c>'s one ordering
+    /// rule - the purchase date, then the purchase-item id - which is the same rule
+    /// <c>SupplierPriceComparisonPolicy</c> (issue #63) orders its own history with, so two purchases
+    /// on one day name the same line here as they do there. An implementation must consume that rule
+    /// rather than restate the ordering, and must answer every product in one bounded read rather
+    /// than one read per product.</para>
+    /// </summary>
+    /// <param name="supplierId">The supplier the scan suggested, as this business's own supplier id.</param>
+    /// <param name="productIds">The products a pack size might be suggested for.</param>
+    /// <param name="cancellationToken">The request's own token.</param>
+    Task<IReadOnlyList<ReceiptScanLastPurchase>> ListLatestAsync(
+        int supplierId,
+        IReadOnlyCollection<long> productIds,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Whether receipt scanning is switched on in this deployment, and the limits it works to (issue
 /// #1163). An Application-owned port because the use case needs the answers and must not read
 /// configuration: only the composition root does that (AGENTS.md § Architecture rules).

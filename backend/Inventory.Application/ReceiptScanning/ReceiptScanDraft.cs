@@ -35,6 +35,24 @@ public sealed record ReceiptLineGstHint(
     string? Marker);
 
 /// <summary>
+/// Where a pack size this application suggested came from (issue #1165, sub-issue E of #975), and
+/// which purchase said so.
+///
+/// <para>It appears only beside a <strong>suggested</strong> pack size. A pack size printed on the
+/// receipt carries no source, because it was not suggested by anything.</para>
+/// </summary>
+/// <param name="UnitsPerPack">The suggested pack size, the same figure the line publishes.</param>
+/// <param name="SuggestedFrom">Which deterministic step suggested it.</param>
+/// <param name="PurchaseDate">
+/// The date of the purchase it was derived from, so an operator can see which purchase the number
+/// came from and judge whether it still applies.
+/// </param>
+public sealed record ReceiptPackSizeSuggestion(
+    int UnitsPerPack,
+    ReceiptPackSizeSource SuggestedFrom,
+    DateOnly PurchaseDate);
+
+/// <summary>
 /// One line of a scanned draft (issue #1163).
 ///
 /// <para><strong>Delivery and package lines are not here.</strong> They are summed into the draft's
@@ -45,7 +63,11 @@ public sealed record ReceiptLineGstHint(
 /// <param name="Kind">What the line is. Only <see cref="ReceiptLineKind.Stock"/> carries a product suggestion.</param>
 /// <param name="Text">The line as printed, which is what an operator recognises it by.</param>
 /// <param name="Packs">How many packs were delivered.</param>
-/// <param name="UnitsPerPack">How many units one pack holds, as printed - never guessed.</param>
+/// <param name="UnitsPerPack">
+/// How many units one pack holds: as printed, or - when the receipt printed none - the pack size
+/// issue #1165 suggested from the last purchase, marked <see cref="ReceiptValueProvenance.Suggested"/>
+/// and described by <paramref name="UnitsPerPackSuggestion"/>. Never guessed from product knowledge.
+/// </param>
 /// <param name="Units">The product of the two above, when both are known.</param>
 /// <param name="LineTotal">The line's GST-inclusive amount, after discounts and any levy share.</param>
 /// <param name="UnitCost">The amount over the units, unrounded.</param>
@@ -56,6 +78,10 @@ public sealed record ReceiptLineGstHint(
 /// the operator to decide rather than to check.
 /// </param>
 /// <param name="Missing">Which values the line could not be completed with.</param>
+/// <param name="UnitsPerPackSuggestion">
+/// Where a suggested pack size came from (issue #1165), or <see langword="null"/> when the pack size
+/// was printed on the receipt or is still unknown.
+/// </param>
 public sealed record ReceiptScanLine(
     ReceiptLineKind Kind,
     ReceiptScanValue<string> Text,
@@ -67,7 +93,8 @@ public sealed record ReceiptScanLine(
     ReceiptScanValue<long>? ProductId,
     ReceiptLineGstHint Gst,
     bool LevyUnresolved,
-    IReadOnlyList<ReceiptLineMissingValue> Missing);
+    IReadOnlyList<ReceiptLineMissingValue> Missing,
+    ReceiptPackSizeSuggestion? UnitsPerPackSuggestion = null);
 
 /// <summary>
 /// A purchase this application suggests from one receipt (issue #1163). <strong>Nothing about it is
