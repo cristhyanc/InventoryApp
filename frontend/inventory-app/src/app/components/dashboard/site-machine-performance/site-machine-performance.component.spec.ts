@@ -4,7 +4,6 @@ import { Machine, Site } from '../../../models/models';
 import {
   MACHINE_FIGURE_UNAVAILABLE,
   MACHINE_NO_CAPACITY,
-  NO_PERIOD_COMPARISON,
   OTHER_MACHINES_LABEL,
   SiteMachinePerformanceComponent,
   groupSitesAndMachines
@@ -17,6 +16,12 @@ import {
  * presentation change, and nothing here calculates.
  */
 
+/**
+ * One machine, with a current figure and a baseline for each of the three comparison modes issue
+ * #1178 offers. Each pair is a ↑ 25.0% rise, and the three baselines differ ($8, $16, $48), so a
+ * mode that read another mode's field would show the wrong amount rather than the right percentage.
+ * `lastWeekGrossRevenue` is a full previous week that no comparison may ever fall back to.
+ */
 function machine(machineID: number, machineName: string, siteId: number | null): Machine {
   return {
     machineID,
@@ -35,6 +40,8 @@ function machine(machineID: number, machineName: string, siteId: number | null):
     previousComparableWeekDirectProfit: 6,
     monthToDateGrossRevenue: 60,
     monthToDateDirectProfit: 24,
+    previousComparableDayGrossRevenue: 8,
+    previousComparableMonthGrossRevenue: 48,
     profitabilityStatus: null,
     siteId
   };
@@ -53,6 +60,8 @@ function site(siteId: number, siteName: string, overrides: Partial<Site> = {}): 
     previousComparableWeekRevenue: 16,
     lastWeekRevenue: 40,
     monthToDateRevenue: 75,
+    previousComparableDayRevenue: 8,
+    previousComparableMonthRevenue: 60,
     ...overrides
   };
 }
@@ -173,6 +182,24 @@ function periodButton(host: HTMLElement, label: string): HTMLButtonElement {
 
 function totals(host: HTMLElement): string {
   return table(host).querySelector('tfoot')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+/** The text of one element, with its lines collapsed to single spaces so wording can be asserted. */
+function text(host: HTMLElement, testId: string): string {
+  return host.querySelector(`[data-testid="${testId}"]`)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+/**
+ * One element's text line by line - each of its child elements' own text, collapsed to single
+ * spaces. Angular drops the whitespace between two block children, so a cell holding a percentage
+ * and the baseline amount beneath it (issue #1178) has to be read as the two lines a reader sees
+ * rather than as one run-together string.
+ */
+function lines(host: HTMLElement, testId: string): string[] {
+  const element = host.querySelector(`[data-testid="${testId}"]`);
+  if (element === null) return [];
+  const parts = element.children.length > 0 ? Array.from(element.children) : [element];
+  return parts.map((part) => part.textContent?.replace(/\s+/g, ' ').trim() ?? '');
 }
 
 /**
@@ -345,28 +372,28 @@ describe('Site and machine performance card (issue #987)', () => {
 describe('Site and machine performance shared period controls (issue #987)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('offers every existing period and starts on This week', async () => {
+  it('offers exactly Today, This week and This month, in that order, and starts on This week', async () => {
     const { host } = await render();
     const labels = Array.from(
       host.querySelectorAll('[data-testid="performance-period"] button')
     ).map((button) => button.textContent?.trim());
 
-    expect(labels).toEqual(['Today', 'This week', 'Last week', 'Month to date']);
+    expect(labels).toEqual(['Today', 'This week', 'This month']);
     expect(periodButton(host, 'This week').getAttribute('aria-pressed')).toBe('true');
   });
 
   it('labels the sales column with the selected period and moves every row and the total to it', async () => {
     const { fixture, host } = await render();
 
-    periodButton(host, 'Last week').click();
+    periodButton(host, 'This month').click();
     fixture.detectChanges();
 
-    expect(headers(host)).toContain('Sales · Last week');
-    expect(machineRegion(host, 'site-1').textContent).toContain('$30.00 sales');
-    expect(totals(host)).toContain('$150.00 sales');
+    expect(headers(host)).toContain('Sales · This month');
+    expect(machineRegion(host, 'site-1').textContent).toContain('$60.00 sales');
+    expect(totals(host)).toContain('$300.00 sales');
   });
 
-  it('shows a site its own published sales for every one of the four periods', async () => {
+  it('shows a site its own published sales for every one of the three periods', async () => {
     const { fixture, host } = await render();
     const siteRow = () => host.querySelector('[data-testid="site-row-1"]') as HTMLElement;
     const siteCard = () =>
@@ -377,8 +404,7 @@ describe('Site and machine performance shared period controls (issue #987)', () 
 
     for (const [label, amount] of [
       ['Today', '$10.00'],
-      ['Last week', '$40.00'],
-      ['Month to date', '$75.00']
+      ['This month', '$75.00']
     ]) {
       periodButton(host, label).click();
       fixture.detectChanges();
@@ -390,18 +416,34 @@ describe('Site and machine performance shared period controls (issue #987)', () 
   });
 
   it('shows $0.00 for a period with no sales and Unavailable for a withheld figure', async () => {
-    const quiet = site(1, 'Harbour Point Plaza', { monthToDateRevenue: 0, lastWeekRevenue: null });
+    const quiet = site(1, 'Harbour Point Plaza', {
+      monthToDateRevenue: 0,
+      previousComparableMonthRevenue: 0,
+      todayRevenue: null
+    });
     const { fixture, host } = await render({ sites: [quiet, PAVILLION] });
-    const siteRow = () => host.querySelector('[data-testid="site-row-1"]') as HTMLElement;
+    const siteSalesCell = () => text(host, 'site-sales-1');
 
-    periodButton(host, 'Month to date').click();
+    periodButton(host, 'This month').click();
     fixture.detectChanges();
-    expect(siteRow().textContent).toContain('$0.00');
+    expect(siteSalesCell()).toBe('$0.00');
 
-    periodButton(host, 'Last week').click();
+    periodButton(host, 'Today').click();
     fixture.detectChanges();
-    expect(siteRow().textContent).toContain('Unavailable');
-    expect(siteRow().textContent).not.toContain('$0.00');
+    expect(siteSalesCell()).toBe('Unavailable');
+  });
+
+  it('no longer offers Last week on this card, or says a period has no comparison', async () => {
+    const { fixture, host } = await render();
+
+    for (const label of ['Today', 'This week', 'This month']) {
+      periodButton(host, label).click();
+      fixture.detectChanges();
+
+      expect(periodButton(host, 'Last week')).toBeUndefined();
+      expect(host.textContent).not.toContain('No comparison for this period');
+      expect(headers(host)).not.toContain('Comparison');
+    }
   });
 
   /**
@@ -415,20 +457,6 @@ describe('Site and machine performance shared period controls (issue #987)', () 
     expect(host.querySelector('[data-testid="site-period-note"]')).toBeNull();
     expect(host.textContent).not.toContain('Not published for sites');
     expect(openHelp(fixture, host).textContent).not.toContain('Not published for sites');
-  });
-
-  it('keeps "vs same time last week" to the week comparison the API actually publishes', async () => {
-    const { fixture, host } = await render();
-
-    expect(headers(host)).toContain('vs same time last week');
-    expect((host.querySelector('[data-testid="site-row-1"]') as HTMLElement).textContent).toContain('↑ 25.0%');
-
-    periodButton(host, 'Today').click();
-    fixture.detectChanges();
-
-    expect(headers(host)).not.toContain('vs same time last week');
-    expect(headers(host)).toContain('Comparison');
-    expect((host.querySelector('[data-testid="site-row-1"]') as HTMLElement).textContent).toContain(NO_PERIOD_COMPARISON);
   });
 
   it('shows each machine its own direct profit and margin for the selected period', async () => {
@@ -467,6 +495,194 @@ describe('Site and machine performance totals (issue #987)', () => {
     expect(totals(host)).toContain('Unavailable');
     expect(totals(host)).not.toContain('$0.00');
     expect(machineRegion(host, 'site-1').textContent).toContain('Unavailable');
+  });
+});
+
+/**
+ * The three comparison modes (issue #1178): Today against yesterday to this time (#1177), This week
+ * against last week to this time, and This month against last month to this point (#1180). Every
+ * row and the fleet total state the percentage and the baseline amount it was worked out from, on
+ * both layouts, and the fleet compares a sum of currents with a sum of baselines or says nothing.
+ *
+ * These cases replace the former Last week period's and the "No comparison for this period" cases:
+ * the card no longer offers Last week and no longer has a period without a comparison, so there is
+ * nothing left for those to assert. Nothing here is skipped.
+ */
+describe('Site and machine performance three-period comparisons (issue #1178)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  /**
+   * One row per mode: the heading the column carries, the label the baseline amount is given, and
+   * the baselines the shared fixtures publish for a site ($8 / $16 / $60), one machine ($8 / $16 /
+   * $48) and the five-machine fleet ($40 / $80 / $240). Each current figure is 25% above its own
+   * baseline, so the percentage is the same in every mode and only the amounts tell them apart.
+   */
+  const MODES = [
+    { label: 'Today', heading: 'vs same time yesterday', baseline: 'Yesterday to this time', site: '$8.00', machine: '$8.00', fleet: '$40.00' },
+    { label: 'This week', heading: 'vs same time last week', baseline: 'Last week to this time', site: '$16.00', machine: '$16.00', fleet: '$80.00' },
+    { label: 'This month', heading: 'vs same time last month', baseline: 'Last month to this time', site: '$60.00', machine: '$48.00', fleet: '$240.00' }
+  ];
+
+  it('names in the column heading the comparison each mode makes, and no other', async () => {
+    const { fixture, host } = await render();
+
+    for (const mode of MODES) {
+      periodButton(host, mode.label).click();
+      fixture.detectChanges();
+
+      expect(headers(host)).toContain(mode.heading);
+      for (const other of MODES.filter((candidate) => candidate !== mode)) {
+        expect(headers(host)).not.toContain(other.heading);
+      }
+    }
+  });
+
+  it('shows a site row the percentage and the labelled baseline amount in every mode, on both layouts', async () => {
+    const { fixture, host } = await render();
+
+    for (const mode of MODES) {
+      periodButton(host, mode.label).click();
+      fixture.detectChanges();
+
+      expect(lines(host, 'site-comparison-1')).toEqual(['↑ 25.0%', `${mode.baseline} ${mode.site}`]);
+      expect(lines(host, 'site-card-comparison-1')).toEqual([
+        `↑ 25.0% ${mode.heading}`,
+        `${mode.baseline} ${mode.site}`
+      ]);
+    }
+  });
+
+  it('shows an expanded machine row the same, from the machine read', async () => {
+    const { fixture, host } = await render();
+
+    for (const mode of MODES) {
+      periodButton(host, mode.label).click();
+      fixture.detectChanges();
+
+      expect(lines(host, 'machine-comparison-2')).toEqual(['↑ 25.0%', `${mode.baseline} ${mode.machine}`]);
+      expect(lines(host, 'machine-card-comparison-2')).toEqual([
+        `↑ 25.0% ${mode.heading}`,
+        `${mode.baseline} ${mode.machine}`
+      ]);
+    }
+  });
+
+  it('shows the fleet total the same, on both layouts', async () => {
+    const { fixture, host } = await render();
+
+    for (const mode of MODES) {
+      periodButton(host, mode.label).click();
+      fixture.detectChanges();
+
+      expect(lines(host, 'totals-comparison')).toEqual(['↑ 25.0%', `${mode.baseline} ${mode.fleet}`]);
+      expect(lines(host, 'machine-totals-card')).toContain(`↑ 25.0% ${mode.heading}`);
+      expect(lines(host, 'machine-totals-card')).toContain(`${mode.baseline} ${mode.fleet}`);
+    }
+  });
+
+  it('states a rise and a fall from the figures the response published', async () => {
+    const { fixture, host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { currentWeekRevenue: 150, previousComparableWeekRevenue: 100, todayRevenue: 75, previousComparableDayRevenue: 100 }), PAVILLION]
+    });
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['↑ 50.0%', 'Last week to this time $100.00']);
+
+    periodButton(host, 'Today').click();
+    fixture.detectChanges();
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['↓ 25.0%', 'Yesterday to this time $100.00']);
+  });
+
+  it('calls a known zero baseline no prior sales, and still shows the $0.00 it is', async () => {
+    const { host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { previousComparableWeekRevenue: 0 }), PAVILLION]
+    });
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['No prior sales', 'Last week to this time $0.00']);
+  });
+
+  it('reports a withheld baseline as unavailable rather than as $0.00', async () => {
+    const { host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { previousComparableWeekRevenue: null }), PAVILLION],
+      machines: [{ ...machine(2, 'Avenue Hotel VM', 1), previousComparableWeekGrossRevenue: null }]
+    });
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['Unavailable', 'Last week to this time Unavailable']);
+    expect(lines(host, 'machine-comparison-2')).toEqual(['Unavailable', 'Last week to this time Unavailable']);
+    expect(text(host, 'site-comparison-1')).not.toContain('$0.00');
+    expect(text(host, 'machine-comparison-2')).not.toContain('$0.00');
+  });
+
+  it('reports a withheld current figure as unavailable while still stating the published baseline', async () => {
+    const { host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { currentWeekRevenue: null }), PAVILLION]
+    });
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['Unavailable', 'Last week to this time $16.00']);
+  });
+
+  it('compares the fleet as a sum of the currents against a sum of the baselines', async () => {
+    const { host } = await render({
+      machines: [
+        { ...machine(1, 'Pavillion Left', 2), currentWeekGrossRevenue: 100, previousComparableWeekGrossRevenue: 80 },
+        { ...machine(2, 'Avenue Hotel VM', 1), currentWeekGrossRevenue: 50, previousComparableWeekGrossRevenue: 20 }
+      ]
+    });
+
+    expect(lines(host, 'totals-comparison')).toEqual(['↑ 50.0%', 'Last week to this time $100.00']);
+  });
+
+  /**
+   * The rule that replaces the fleet's former week fallback (issue #987 carried it across from
+   * #972): a machine whose comparable figure was `null` had its *full* `lastWeekGrossRevenue` added
+   * to the baseline instead, mixing a whole week into a part-week comparison. The fixture machine
+   * still publishes `lastWeekGrossRevenue: 30`, so a fleet that fell back would show a percentage
+   * here rather than Unavailable.
+   */
+  it('reports the fleet unavailable when one machine has no baseline, and never falls back to a full period', async () => {
+    const { fixture, host } = await render({
+      machines: [
+        machine(1, 'Pavillion Left', 2),
+        {
+          ...machine(2, 'Avenue Hotel VM', 1),
+          previousComparableDayGrossRevenue: null,
+          previousComparableWeekGrossRevenue: null,
+          previousComparableMonthGrossRevenue: null
+        }
+      ]
+    });
+
+    for (const mode of MODES) {
+      periodButton(host, mode.label).click();
+      fixture.detectChanges();
+
+      expect(lines(host, 'totals-comparison')).toEqual(['Unavailable', `${mode.baseline} Unavailable`]);
+      expect(text(host, 'totals-comparison')).not.toContain('%');
+      expect(lines(host, 'machine-totals-card')).toContain(`Unavailable ${mode.heading}`);
+    }
+  });
+
+  it('reports the fleet unavailable when one machine has no current figure, and never counts it as zero', async () => {
+    const { host } = await render({
+      machines: [
+        machine(1, 'Pavillion Left', 2),
+        { ...machine(2, 'Avenue Hotel VM', 1), currentWeekGrossRevenue: null }
+      ]
+    });
+
+    expect(lines(host, 'totals-comparison')).toEqual(['Unavailable', 'Last week to this time Unavailable']);
+    expect(text(host, 'totals-comparison')).not.toContain('%');
+  });
+
+  it('shows a member without Dashboard.ViewFinancials no percentage and no baseline amount', async () => {
+    const { host } = await render({ canViewFinancials: false });
+
+    for (const mode of MODES) {
+      expect(host.textContent).not.toContain(mode.heading);
+      expect(host.textContent).not.toContain(mode.baseline);
+    }
+    expect(host.querySelector('[data-testid="site-comparison-1"]')).toBeNull();
+    expect(host.querySelector('[data-testid="machine-comparison-2"]')).toBeNull();
   });
 });
 
@@ -533,7 +749,7 @@ describe('Site and machine performance machine stock (issue #1013)', () => {
     const { fixture, host } = await render();
     const before = machineStockCell(host, 'site-2', 1).textContent;
 
-    periodButton(host, 'Month to date').click();
+    periodButton(host, 'This month').click();
     fixture.detectChanges();
 
     expect(machineStockCell(host, 'site-2', 1).textContent).toBe(before);
