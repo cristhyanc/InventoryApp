@@ -1,13 +1,15 @@
 /**
- * The copy and the sample figures of the public Restockroo landing page (issue #954).
+ * The copy and the example figures of the public Restockroo landing page (issue #954, its refill
+ * and supplier comparison examples replaced by issue #1192).
  *
  * The source is the owner-approved Stitch export attached to the issue (see
  * `docs/design/restockroo-landing-page.md`). Where its wording claimed more than the application
  * does, the wording here is narrowed rather than the application extended, and that design note
  * records each change - so read it before "restoring" a phrase from the export.
  *
- * Everything below is static. The example dashboard is illustrative content with synthetic site
- * and supplier names: no figure on the landing page is read from any business.
+ * Everything below is static. The refill and supplier comparison examples are illustrative content
+ * with a fictional site, machine and supplier offers: no figure on the landing page is read from
+ * any business, and the page makes no API request.
  */
 
 /** A section a header or footer link scrolls to. The id is the section element's own id. */
@@ -153,53 +155,94 @@ export const LANDING_FAQS: readonly LandingFaq[] = [
   }
 ];
 
-/** The example dashboard's headline figures. Synthetic, and labelled as such on the page. */
-export interface SampleMetric {
-  readonly label: string;
-  readonly value: string;
-  readonly caption: string;
-  readonly icon: string;
-  readonly warning?: boolean;
-}
-
-export const SAMPLE_METRICS: readonly SampleMetric[] = [
-  { label: 'Stock on hand', value: '922 items', caption: 'across active products', icon: 'inventory_2' },
-  { label: 'Low-stock products', value: '2 products', caption: 'below minimum threshold', icon: 'warning', warning: true },
-  { label: 'Recent purchases', value: '11 dockets', caption: '$1,840.50 logged this month', icon: 'receipt' },
-  { label: 'Inventory at cost', value: '$2,482.83', caption: 'valued at average unit cost', icon: 'account_balance_wallet' }
-];
-
-export interface SampleMachine {
-  readonly site: string;
-  readonly machine: string;
-  readonly categories: string;
-  readonly products: number;
-}
-
-export const SAMPLE_MACHINES: readonly SampleMachine[] = [
-  { site: 'Harbour Point Plaza - Ground', machine: 'Beverage Combo #1', categories: 'Drinks, Snacks', products: 18 },
-  { site: 'Apex Commercial - Tower A', machine: 'Cold Drinks Unit #3', categories: 'Drinks', products: 12 },
-  { site: 'Apex Commercial - Tower B', machine: 'Snack & Confectionery #2', categories: 'Snacks, Bars', products: 15 }
-];
-
-export interface SampleStockLevel {
+/**
+ * The refill example (issue #1192): one site and machine, with a short pick list of products to
+ * pack. "Loaded" is how many of the "To pack" quantity have been packed so far in the same Pick
+ * List run - it is not a second, separately recorded quantity.
+ */
+export interface LandingRefillItem {
   readonly product: string;
-  readonly category: string;
-  readonly inStock: number;
-  readonly minimum: number;
-  readonly supplier: string;
-  readonly lastUnitCost: string;
+  readonly toPack: number;
+  readonly loaded: number;
 }
 
-export const SAMPLE_STOCK_LEVELS: readonly SampleStockLevel[] = [
-  { product: 'Red Bull 250mL', category: 'Energy Drinks', inStock: 0, minimum: 7, supplier: 'Wholesale Direct', lastUnitCost: '$1.42' },
-  { product: 'Coke 375mL', category: 'Carbonated Drinks', inStock: 26, minimum: 17, supplier: 'Metro Dist', lastUnitCost: '$0.98' },
-  { product: 'Kinder Bueno', category: 'Confectionery', inStock: 5, minimum: 7, supplier: 'Confectionery Hub', lastUnitCost: '$1.15' }
+export const LANDING_REFILL_SITE = 'Banksia House';
+export const LANDING_REFILL_MACHINE = 'Banksia House VM';
+
+export const LANDING_REFILL_ITEMS: readonly LandingRefillItem[] = [
+  { product: 'Coke - Original 375mL', toPack: 24, loaded: 24 },
+  { product: "Smith's Chips - Original 45g", toPack: 12, loaded: 8 },
+  { product: 'Red Bull - Original 250mL', toPack: 10, loaded: 0 },
+  { product: 'Kit Kat - 4 Finger 45g', toPack: 8, loaded: 8 }
 ];
 
-/** Whether a sample row is below its minimum, which is the only thing its low-stock warning means. */
-export function isLowStock(level: SampleStockLevel): boolean {
-  return level.inStock < level.minimum;
+/** What the refill example says "Loaded" means, so it is never read as its own tracked record. */
+export const LANDING_REFILL_LOADED_NOTE =
+  "Loaded is how many of each product you've packed so far in this Pick List run, not a separate record.";
+
+/** Whether every unit of a refill item's planned quantity has been packed. */
+export function refillItemIsPacked(item: LandingRefillItem): boolean {
+  return item.loaded >= item.toPack;
+}
+
+/**
+ * The supplier comparison example (issue #1192): one product, the supplier offers the owner's
+ * design shows, and the badges and notices that go with them. `unitPriceIncGst` decides the
+ * "Lowest unit price" badge, computed rather than stored per row, so the three tied 30-pack rows
+ * stay in step with the figures above them if either ever changes.
+ */
+export interface LandingSupplierOffer {
+  readonly supplier: string;
+  readonly packSize: string;
+  readonly packPrice: number;
+  readonly unitPriceIncGst: number;
+  readonly unitPriceExGst: number;
+  readonly special: boolean;
+  readonly availability: 'In stock' | 'Stock unknown';
+  readonly lastChecked: string;
+}
+
+export const LANDING_SUPPLIER_COMPARISON_PRODUCT = 'Coke - Original 375mL';
+export const LANDING_SUPPLIER_COMPARISON_CATEGORY = 'Drinks';
+
+export const LANDING_SUPPLIER_OFFERS: readonly LandingSupplierOffer[] = [
+  { supplier: 'Coles', packSize: '30 pack', packPrice: 32.0, unitPriceIncGst: 1.07, unitPriceExGst: 0.97, special: false, availability: 'In stock', lastChecked: '11/11/2026, 05:17 am' },
+  { supplier: 'Woolworths', packSize: '30 pack', packPrice: 32.0, unitPriceIncGst: 1.07, unitPriceExGst: 0.97, special: true, availability: 'In stock', lastChecked: '11/11/2026, 05:17 am' },
+  { supplier: 'Big W', packSize: '30 pack', packPrice: 32.0, unitPriceIncGst: 1.07, unitPriceExGst: 0.97, special: false, availability: 'In stock', lastChecked: '08/11/2026, 09:10 am' },
+  { supplier: 'Coles', packSize: '24 pack', packPrice: 27.0, unitPriceIncGst: 1.13, unitPriceExGst: 1.02, special: true, availability: 'In stock', lastChecked: '11/11/2026, 05:17 am' },
+  { supplier: 'Big W', packSize: '24 pack', packPrice: 27.0, unitPriceIncGst: 1.13, unitPriceExGst: 1.02, special: false, availability: 'In stock', lastChecked: '08/11/2026, 09:10 am' },
+  { supplier: 'Woolworths', packSize: '10 pack', packPrice: 11.5, unitPriceIncGst: 1.15, unitPriceExGst: 1.05, special: true, availability: 'In stock', lastChecked: '11/11/2026, 05:17 am' },
+  { supplier: 'ALDI', packSize: '18 pack', packPrice: 20.99, unitPriceIncGst: 1.17, unitPriceExGst: 1.06, special: false, availability: 'Stock unknown', lastChecked: '11/11/2026, 05:17 am' }
+];
+
+export const LANDING_SUPPLIER_COMPARISON_HEADING = 'Compare prices across supported suppliers';
+export const LANDING_SUPPLIER_EXAMPLE_NOTICE = 'Example comparison — prices and availability change.';
+export const LANDING_SUPPLIER_CONFIRM_NOTICE = 'Confirm the product, pack size and final price with the supplier before buying.';
+export const LANDING_LOWEST_UNIT_PRICE_LABEL = 'Lowest unit price';
+export const LANDING_SPECIAL_BADGE_LABEL = 'Special';
+export const LANDING_ONLINE_PRICE_NOTE = 'Online price, may differ in store';
+
+/** The badges a row carries: the owner's design shows "Lowest unit price" before "Special". */
+export function landingSupplierOfferBadges(offer: LandingSupplierOffer, offers: readonly LandingSupplierOffer[]): readonly string[] {
+  const badges: string[] = [];
+  if (isLandingLowestUnitPrice(offer, offers)) {
+    badges.push(LANDING_LOWEST_UNIT_PRICE_LABEL);
+  }
+  if (offer.special) {
+    badges.push(LANDING_SPECIAL_BADGE_LABEL);
+  }
+  return badges;
+}
+
+/** Whether an offer ties for the lowest unit price (inc GST) among the offers shown. */
+export function isLandingLowestUnitPrice(offer: LandingSupplierOffer, offers: readonly LandingSupplierOffer[]): boolean {
+  const lowest = Math.min(...offers.map((candidate) => candidate.unitPriceIncGst));
+  return offer.unitPriceIncGst === lowest;
+}
+
+/** `$1.07`, the one money format this example uses. */
+export function landingMoney(value: number): string {
+  return `$${value.toFixed(2)}`;
 }
 
 /** The browser tab title and the description meta tag the landing page publishes while it is shown. */

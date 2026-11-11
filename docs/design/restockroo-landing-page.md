@@ -62,8 +62,12 @@ wording rather than adding features. These are the changes, each checked against
 The required copy was unchanged by issue #954/#971: the headline, the integration heading, the three
 step titles, the four core FAQ questions, the "Example dashboard · Sample data" label and every sample
 figure the issue lists. The headline, integration heading and step titles were later replaced for the
-public beta - see [Public beta refresh](#public-beta-refresh-issue-1191) below; the four core FAQs,
-the dashboard label and the sample figures are still exactly as this issue approved them.
+public beta - see [Public beta refresh](#public-beta-refresh-issue-1191) below; the four core FAQs are
+still exactly as this issue approved them. **The example dashboard and its sample figures - the
+"Example dashboard · Sample data" label, the fleet metrics, and the sample sites, machines and stock
+levels - were removed by issue #1192**, which replaced them with the refill and supplier comparison
+examples described in [Refill and supplier comparison examples](#refill-and-supplier-comparison-examples-issue-1192)
+below.
 
 ## Public beta refresh (issue #1191)
 
@@ -73,9 +77,9 @@ that where the export's wording and the issue's wording differ, the issue wins -
 original export above, this one was not read line by line for implementation copy, only for layout
 direction. Its receipt-upload, planogram, route, vehicle and fleet content, "Banksia Hotel",
 "Brisbane" and "© 2025" are from its own placeholder business and are not implemented: none of them
-is a Restockroo capability, the example dashboard and the refill/supplier-comparison examples it
-shows are issue #1192's work (after this issue merges), and the copyright year stays the real current
-year.
+is a Restockroo capability, the refill and supplier comparison examples it shows are issue #1192's
+work (see [Refill and supplier comparison examples](#refill-and-supplier-comparison-examples-issue-1192)
+below), and the copyright year stays the real current year.
 
 **What changed from the original approved copy.** Issue #1191 moved the page from its original
 subscription-first copy to public-beta copy, while every capability-accuracy rule above still holds:
@@ -102,7 +106,61 @@ Chromium and captured at 1440px and 390px into
 every width from 320px to 390px and found no page-level horizontal scrolling at any of them, with the
 viewport meta tag still allowing pinch zoom. The run is
 `frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts`; regenerate both pictures in
-the same commit as any later change to this page.
+the same commit as any later change to this page. **That regeneration is open follow-up work after
+issue #1192** - see below.
+
+## Refill and supplier comparison examples (issue #1192)
+
+Issue #1192 removed issue #954's example dashboard - its fleet metrics and its sample sites,
+machines and stock levels - and replaced it with two static examples,
+`LandingRefillExampleComponent` and `LandingSupplierComparisonExampleComponent`
+(`frontend/inventory-app/src/app/public/landing/`), both reading only `landing-content.ts` and
+making no request. The owner's Stitch export for issue #1191 (see above) was used for layout
+direction only; its receipt-upload, planogram, route, vehicle and fleet content is not implemented,
+and this issue's own text and table are the complete copy source.
+
+- **Refill example.** The fictional site "Banksia House" and machine "Banksia House VM", with a
+  Pick List of four fictional products, each carrying a "To pack" and a "Loaded" quantity. Loaded is
+  how many of that product have been packed so far in the same Pick List run - the real Pick List
+  records one planned quantity per product and machine plus whether it has been picked
+  (`PickListComponent.isPicked`/`togglePicked`), not a second quantity tracked apart from it, so the
+  example carries its own note saying exactly that (`LANDING_REFILL_LOADED_NOTE`) rather than
+  implying a feature that does not exist.
+- **Supplier comparison example.** One fictional product, "Coke - Original 375mL" (category
+  Drinks), and the seven supplier offers the issue's table specifies, in `LANDING_SUPPLIER_OFFERS`.
+  The "Lowest unit price" badge is computed from each offer's inc-GST unit price
+  (`isLandingLowestUnitPrice`), not stored per row, so the three tied 30-pack rows cannot drift from
+  the figures beside them; today that is Coles, Woolworths and Big W. Every row carries "Online
+  price, may differ in store". The heading, "Example comparison — prices and availability change."
+  and the confirm-before-buying notice are this issue's own wording, kept separate from the in-app
+  supplier comparison's wording (`cheapest-supplier-format.ts`, issue #1183): the two surfaces read
+  similarly because they describe the same kind of comparison, but neither imports the other, and a
+  later change to one is not a change to the other. No supplier name in the example is a link - the
+  issue forbids navigation to a real supplier site from here.
+- **The responsive split and its dialog.** From the `md` breakpoint up, the full comparison table is
+  shown inline - a dialog would only add a click to see what already fits. Below `md`, a short
+  preview (the lowest unit price and how many suppliers tie for it) stands in for the table, with a
+  **View full comparison** button that opens the same table in a native `<dialog>`, opened with
+  `showModal()`. It closes on Escape, a click on its own backdrop, or either of its two Close
+  controls, returns focus to the button that opened it every time, and - being a real modal in its
+  own top layer rather than a `role="dialog"` div - makes the rest of the page inert while it is
+  open and causes no page-level horizontal scrolling. Pinch zoom is unaffected: nothing on this page
+  touches the viewport meta tag. The dialog's Tab cycle is written down in the component itself
+  (`LandingSupplierComparisonExampleComponent.onPanelKeydown`) rather than left to the browser, the
+  same reason the existing supplier comparison dialog does
+  (`setup-jest.ts` - jsdom 20 implements `<dialog>`'s open/close state but none of its focus trap),
+  so `landing-supplier-comparison-example.component.spec.ts` can hold it to that cycle with real
+  `keydown` events.
+- **Not yet done: browser evidence.** `landing-page.component.spec.ts` and
+  `landing-supplier-comparison-example.component.spec.ts` prove the rows, the notices and the
+  dialog's keyboard behaviour under Jest, which is everything jsdom can see. What jsdom cannot see -
+  that the page still never scrolls sideways at 390px with the dialog open, and a picture of that
+  open mobile dialog - needs a real browser; the existing
+  [docs/screenshots/issue-1191/](../screenshots/issue-1191/README.md) pair predates this issue and
+  still shows the removed example dashboard. Regenerating both and adding a mobile dialog capture is
+  open follow-up work, in the same style as
+  [the supplier comparison notice's own browser evidence](https://github.com/cristhyanc/InventoryApp/commit/5aabe828f4ab13f9cee17a78a8243efb728c8c49)
+  (issue #1183).
 
 ## Pricing copy (issue #971, removed from the page by issue #1191)
 
