@@ -20,6 +20,7 @@ import { SIGN_IN_ROUTE } from './auth/intended-destination';
 import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
+import { legalRoutes } from './public/legal/legal-routes';
 import { PLAN_LOCKED_PATH } from './access/plan-lock';
 import { requirePlan } from './access/plan-lock.guard';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
@@ -730,5 +731,9 @@ export const routes: Routes = [
   // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
   // fixture. Must stay above the wildcard, which would otherwise swallow it.
   ...designSystemRoutes,
+  // Empty in every optimized build, for the same reason: the Privacy Policy and Terms of Use page
+  // layouts (issue #1190) are reachable only in a development build, and nothing links to either
+  // path. Must stay above the wildcard, which would otherwise swallow them.
+  ...legalRoutes,
   { path: '**', redirectTo: '' }
 ];

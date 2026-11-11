@@ -507,9 +507,13 @@ opening or refreshing it never asks for a sign-in or reads any business, account
 
 Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
 the page presents Nayax only as an optional connection for supported sales data and the reports
-built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
-those pages exists yet; add them to its footer once they do. The approved design and every wording
-change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
+built on it. The page's footer has **no Privacy Policy, Terms of Service or Contact link**: the
+Privacy Policy and Terms of Use page layouts exist (issue #1190, `frontend/inventory-app/src/app/public/legal/`),
+but the legal copy on them is not approved yet, so both pages are reachable only in a development
+build and nothing links to either one; add the footer link once the copy is approved and the pages
+are published. The approved designs and every wording change are recorded in
+[docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md) and
+[docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
 
 ### Pricing on the landing page (issue #971)
 
