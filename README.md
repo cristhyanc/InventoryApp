@@ -491,77 +491,59 @@ The journey a second live business needs is now complete end to end. The applica
 
 ## The public landing page
 
-A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
-application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
-integration, a three-step workflow, pricing and FAQs. It makes no request to the API at all, so
-opening or refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954, refreshed for
+the public beta by issue #1191): what the application does, an example dashboard drawn from clearly
+labelled sample data, the optional Nayax integration, a three-step workflow and FAQs. It makes no
+request to the API at all, so opening or refreshing it never asks for a sign-in or reads any business,
+account or Nayax data.
 
+- The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
+  compare supplier prices and plan your next refill in one place." Directly under it sits the public
+  beta notice - "Pro access is free during our public beta. No credit card required." - and, directly
+  under that, the export notice: "Data exports are not part of the free beta. Downloading your data
+  as CSV or Excel will need a paid plan once paid plans launch." No price, plan card or beta end date
+  appears anywhere on the page (see [Pricing on the landing page](#pricing-on-the-landing-page-issue-971)
+  below).
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
   is configured, otherwise a redirect straight to Microsoft that returns to `/`.
-- **Get started** opens the business application at `/apply` (see
+- **Start free** opens the business application at `/apply` (see
   [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
-  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
-  page instead, exactly as before.
+  sign-in first - the same `/apply` journey the button used under its earlier "Get started" label.
+  While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome page instead,
+  exactly as before.
 - **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
   **Open app** button returns to `/`.
 
-Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
-the page presents Nayax only as an optional connection for supported sales data and the reports
-built on it. The page's footer has **no Privacy Policy, Terms of Service or Contact link**: the
-Privacy Policy and Terms of Use page layouts exist (issue #1190, `frontend/inventory-app/src/app/public/legal/`),
-but the legal copy on them is not approved yet, so both pages are reachable only in a development
-build and nothing links to either one; add the footer link once the copy is approved and the pages
-are published. The approved designs and every wording change are recorded in
-[docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md) and
-[docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax; the
+Nayax section states "Use core inventory on its own. Connect Nayax for sales integration.", with no
+reference to a paid plan. The three workflow steps are "Set up your business", "Add products and
+machines" and "Plan and record refills". The footer carries a contact line - the
+`admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" - and **no Privacy
+Policy or Terms of Service link**: the Privacy Policy and Terms of Use page layouts exist (issue #1190,
+`frontend/inventory-app/src/app/public/legal/`), but the legal copy on them is not approved yet, so
+both pages are reachable only in a development build and nothing links to either one; add the footer
+link once the copy is approved and the pages are published. The approved designs and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md)
+and [docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
+
+The page never scrolls sideways on a phone: it was measured in Chromium at every width from 320px to
+390px, and the viewport meta tag still allows pinch zoom. Signed-out screenshots:
+[1440px](docs/screenshots/issue-1191/homepage-signed-out-1440px.png) and
+[390px](docs/screenshots/issue-1191/homepage-signed-out-390px.png), captured by
+`frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
+[docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
+them).
 
 ### Pricing on the landing page (issue #971)
 
-A **Pricing** link in the header, mobile menu and footer navigation scrolls to a section before the
-FAQs with three static plan cards - `landing-content.ts`'s `LANDING_PLANS`, read only by the page,
-never fetched - matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed: **Free** (A$0, 1 GB of purchase/expense attachments, every manual feature - Dashboard,
-Machines, Inventory, Purchases, Supplier orders, Suppliers, Expenses and manual Pick List entry -
-with no supplier comparisons and no reports), **Starter** (A$7 per business per month; Free plus
-20 GB of attachments, daily cheapest-supplier comparisons, and the Bookkeeping and GST reports with
-their CSV/XLSX export) and **Pro** (A$15 per business per month; Starter plus the Nayax connection
-and everything that needs it today - Sites, Site Commissions, the Daily, Transactions,
-Reconciliation, Machines and Products reports, machine latest sales, Sync Restock, dashboard sales
-refresh, the Nayax sales file import and the calculated Pick List matrix - with 5 connected
-machines included and A$2/month per additional connected machine).
-
-**Coming soon, not purchasable.** Paid enforcement, billing and the plan catalogue API (issue #965's
-other child tasks) are not live. Free carries an "Available now" badge; Starter and Pro carry a
-"Coming soon" badge. Every plan card's action is the same **Get started**/**Open app** as the rest
-of the page - the existing business application journey - so there is no checkout, trial promise or
-waitlist, nothing a visitor could mistake for a live purchase. The Pro card also states explicitly
-that plan entitlement and a *usable* Nayax connection are separate: Pro will include the Nayax
-connection, but connected features still need the business's own working Nayax credentials, exactly
-as today.
-
-**Existing copy reconciled with the plan catalogue.** The "Optional sales connection" and "Optional
-integration" facts in the Nayax section now say Nayax will be a Pro plan feature once paid plans go
-live (it stays open to every business today, and connecting it stays optional even on Pro), and the
-former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
-figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
-is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
-purchasable, what the storage allowances will do once the paid plans launch, and that the extra
-connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
-treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
-asserted here until it is decided.
-
-**Plan limits are still described as future behaviour, because none of them applies to a visitor
-today.** The attachment quota is implemented (issue #968) but applies only once a deployment
-switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
-needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
-allowances and the connected-machine charge start when the paid plans launch and that nothing is
-limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
-80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
-[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
-limit, a paused upload or a per-machine charge as today's behaviour;
-`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
-attaching a document has since shipped, issue #976, and the page claims nothing about it either
-way.)
+Issue #971 gave the landing page a **Pricing** section with Free/Starter/Pro plan cards, matching the
+catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965) agreed. Issue #1191
+removed it for the public beta: the page shows no Pricing section, no plan card and no price, because
+every business gets full access at no cost while the beta runs (see [The public landing
+page](#the-public-landing-page) above for the beta and export notices that replace it). The plan
+catalogue itself, `Business plans (Free, Starter and Pro)` below, is unaffected - only its landing-page
+presentation is off while plan enforcement and billing stay off. Reintroducing pricing on the page is
+tracked separately, for whenever paid plans actually launch.
 
 ## The dashboard and the menu
 

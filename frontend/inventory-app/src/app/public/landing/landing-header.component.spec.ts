@@ -101,7 +101,6 @@ describe('LandingHeaderComponent (issue #954)', () => {
       ['Features', '#features'],
       ['How it works', '#how-it-works'],
       ['Nayax integration', '#nayax'],
-      ['Pricing', '#pricing'],
       ['FAQs', '#faqs']
     ]);
 
@@ -133,6 +132,13 @@ describe('LandingHeaderComponent (issue #954)', () => {
 
     expect([signIn, getStarted]).toEqual([1, 1]);
     expect(menu.hidden).toBe(true);
+  });
+
+  it('labels the primary action Start free for a signed-out visitor, in both the bar and the menu', async () => {
+    const { host, menu } = await render();
+
+    expect(host.querySelector('[data-testid="landing-get-started"]')?.textContent?.trim()).toBe('Start free');
+    expect(menu.querySelector('[data-testid="landing-menu-get-started"]')?.textContent?.trim()).toBe('Start free');
   });
 
   it('offers only Open app, to the app entry route, in the menu of a signed-in person', async () => {

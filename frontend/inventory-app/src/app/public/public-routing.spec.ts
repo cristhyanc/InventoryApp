@@ -161,7 +161,7 @@ describe('public root route (issue #954)', () => {
 
       await tester.navigateByUrl('/');
 
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
@@ -189,7 +189,7 @@ describe('public root route (issue #954)', () => {
       await tester.navigateByUrl('/no-such-page');
 
       expect(TestBed.inject(Router).url).toBe('/');
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
@@ -223,7 +223,7 @@ describe('public root route (issue #954)', () => {
 
       await tester.navigateByUrl('/home');
 
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
