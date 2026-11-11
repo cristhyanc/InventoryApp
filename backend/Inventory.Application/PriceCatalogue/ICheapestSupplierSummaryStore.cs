@@ -32,10 +32,9 @@ public sealed record LinkedSupplier(int SupplierId, string Name, int SupplierPre
 /// <param name="IsPromotion">Whether the price was a special rather than the ordinary price.</param>
 /// <param name="PromotionEndsAtUtc">When that special finishes, or <see langword="null"/>.</param>
 /// <param name="StockStatus">What the supplier said about availability.</param>
-/// <param name="ObservedAtUtc">When the price was read, which is what staleness is measured from.</param>
-/// <param name="FreshnessLimitHours">
-/// The supplier master record's own freshness limit, which is per supplier and comes from the stored
-/// record rather than from any code that names a supplier.
+/// <param name="ObservedAtUtc">
+/// When the price was read, which is the day staleness is measured from: the supplier's own schedule
+/// decides which search day follows it (issue #1200).
 /// </param>
 public sealed record ObservedPackPrice(
     decimal PackPrice,
@@ -44,8 +43,7 @@ public sealed record ObservedPackPrice(
     bool IsPromotion,
     DateTime? PromotionEndsAtUtc,
     SupplierStockStatus StockStatus,
-    DateTime ObservedAtUtc,
-    int FreshnessLimitHours);
+    DateTime ObservedAtUtc);
 
 /// <summary>
 /// One supplier's listing of the master product a tracked product is matched to (issue #930), with
@@ -69,6 +67,17 @@ public sealed record ObservedPackPrice(
 /// <param name="LastCheckedAtUtc">
 /// When the listing was last checked successfully, or <see langword="null"/> while it never has been.
 /// </param>
+/// <param name="SupplierSchedule">
+/// The supplier master record's own search schedule, read with
+/// <c>SupplierSearchSchedulePolicy.Read</c> (issue #1108). It is what decides how long one of this
+/// supplier's prices stays comparable, so the <em>current</em> schedule is read on every summary and
+/// no stored number of hours is consulted (issue #1200).
+/// </param>
+/// <param name="SupplierSearchesPrices">
+/// Whether that supplier's prices are still searched (<c>SupplierPreset.SearchPrices</c>, issue
+/// #1077). A supplier whose search was stopped keeps its listings and its last price, and none of
+/// them is compared.
+/// </param>
 /// <param name="Price">The latest accepted observation, or <see langword="null"/>.</param>
 public sealed record TrackedListingPrice(
     long SupplierListingId,
@@ -77,6 +86,8 @@ public sealed record TrackedListingPrice(
     int? UnitsPerPack,
     string? ProductUrl,
     DateTime? LastCheckedAtUtc,
+    SupplierSearchSchedule SupplierSchedule,
+    bool SupplierSearchesPrices,
     ObservedPackPrice? Price);
 
 /// <summary>

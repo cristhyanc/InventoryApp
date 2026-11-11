@@ -92,7 +92,9 @@ public class EfCheapestSupplierSummaryStoreTests
     /// <summary>
     /// The way into the shared catalogue is the caller's own matched mapping: a listing is read
     /// only for a master product that mapping names, with the listing's current price and its
-    /// supplier's own freshness limit beside it.
+    /// supplier's own search schedule and <em>Search prices</em> switch beside it - the three
+    /// columns the freshness window is derived from since issue #1200, and the one that takes a
+    /// stopped supplier out of the comparison.
     /// </summary>
     [Fact]
     public async Task A_matched_mapping_reads_its_master_products_listings_with_their_prices()
@@ -122,10 +124,55 @@ public class EfCheapestSupplierSummaryStoreTests
         Assert.Equal(24, listing.UnitsPerPack);
         Assert.Equal(22.80m, listing.Price!.PackPrice);
         Assert.Equal(SupplierPriceBasis.InclusiveOfGst, listing.Price.PriceBasis);
-        Assert.Equal(
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
-            listing.Price.FreshnessLimitHours);
+        Assert.True(SupplierSearchSchedulePolicy.AreEquivalent(
+            SupplierSearchSchedulePolicy.Daily,
+            listing.SupplierSchedule));
+        Assert.True(listing.SupplierSearchesPrices);
         Assert.Equal(PriceCatalogueFixture.CreatedAt, listing.LastCheckedAtUtc);
+    }
+
+    /// <summary>
+    /// The criterion: the schedule and the switch are read back from the supplier master record as
+    /// they are stored, so a supplier searched on Wednesday and Sunday whose searching was stopped is
+    /// answered as exactly that. The comparison those two facts feed is
+    /// <c>CheapestUnitOfferPolicyTests</c>' and <c>CheapestSupplierSummaryTests</c>'; what is under
+    /// test here is that the columns arrive.
+    /// </summary>
+    [Fact]
+    public async Task A_suppliers_own_schedule_and_stopped_search_are_read_as_they_are_stored()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        await fixture.SeedSupplierAsync(
+            fixture.FirstBusinessId, "Alpha Grocer", fixture.SupplierPresetId);
+        await fixture.SetSupplierSearchAsync(
+            fixture.SupplierPresetId,
+            SupplierSearchFrequency.Weekly,
+            [DayOfWeek.Wednesday, DayOfWeek.Sunday],
+            fortnightStartDate: null,
+            searchPrices: false);
+
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var masterProductId = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        await fixture.MatchAsync(mapping.Id, masterProductId);
+
+        var listingId = await fixture.SeedListingAsync(
+            masterProductId, "ALPHA-COLA-24", unitsPerPack: 24);
+        await fixture.ConfirmListingAsync(listingId);
+        var runId = await fixture.SeedCollectorRunAsync();
+        await fixture.SeedObservationAsync(listingId, runId, packPrice: 22.80m);
+
+        var facts = await fixture.SummaryStoreFor(fixture.FirstBusinessId).ReadAsync(
+            BusinessId.From(fixture.FirstBusinessId),
+            [fixture.FirstBusinessColaId],
+            CancellationToken.None);
+
+        var listing = Assert.Single(Assert.Single(facts.Products).Listings);
+        Assert.False(listing.SupplierSearchesPrices);
+        Assert.Equal(SupplierSearchFrequency.Weekly, listing.SupplierSchedule.Frequency);
+        Assert.Equal(
+            [DayOfWeek.Wednesday, DayOfWeek.Sunday],
+            listing.SupplierSchedule.DaysOfWeek);
+        Assert.Null(listing.SupplierSchedule.FortnightStartDate);
     }
 
     /// <summary>

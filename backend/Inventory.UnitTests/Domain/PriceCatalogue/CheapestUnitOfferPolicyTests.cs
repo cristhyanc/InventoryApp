@@ -18,8 +18,17 @@ public class CheapestUnitOfferPolicyTests
     private static readonly DateTime Now = new(2026, 10, 28, 6, 0, 0, DateTimeKind.Utc);
 
     /// <summary>
-    /// A supplier that publishes GST-inclusive prices, in stock, confirmed, observed an hour ago and
-    /// checked daily: the ordinary offer every case below varies one fact of.
+    /// When the next scheduled search day after the observation ends, in the ordinary case: tomorrow,
+    /// so the offer is comfortably inside its window at <see cref="Now"/>. Every staleness case below
+    /// moves this instant rather than the observation, because since issue #1200 it is the supplier's
+    /// own schedule - converted by the collection calendar - that decides the boundary.
+    /// </summary>
+    private static readonly DateTime NextSearchDayEnd = Now.AddDays(1);
+
+    /// <summary>
+    /// A supplier that publishes GST-inclusive prices, in stock, confirmed, still searched, and whose
+    /// next scheduled search day is still ahead: the ordinary offer every case below varies one fact
+    /// of.
     /// </summary>
     private static SupplierUnitOffer Offer(
         long listingId,
@@ -30,8 +39,8 @@ public class CheapestUnitOfferPolicyTests
         decimal? supplierGstRate = null,
         SupplierStockStatus stockStatus = SupplierStockStatus.InStock,
         DateTime? promotionEndsAtUtc = null,
-        DateTime? observedAtUtc = null,
-        int freshnessLimitHours = SupplierPriceFreshnessPolicy.DailyCheckLimitHours) =>
+        bool supplierSearchesPrices = true,
+        DateTime? nextSearchDayEndUtc = null) =>
         new(
             listingId,
             confirmed,
@@ -41,8 +50,8 @@ public class CheapestUnitOfferPolicyTests
             supplierGstRate,
             stockStatus,
             promotionEndsAtUtc,
-            observedAtUtc ?? Now.AddHours(-1),
-            freshnessLimitHours);
+            supplierSearchesPrices,
+            nextSearchDayEndUtc ?? NextSearchDayEnd);
 
     private static CheapestUnitOffers Compare(
         IReadOnlyList<SupplierUnitOffer> offers,
@@ -301,60 +310,99 @@ public class CheapestUnitOfferPolicyTests
     }
 
     /// <summary>
-    /// A daily supplier's price is good for 30 hours, and stale at 30 - the owner's decision of
-    /// 27 October 2026, with the six-hour margin that stops a run starting a little later than
-    /// yesterday's from marking every price stale.
+    /// A price is compared until the end of the supplier's next scheduled search day plus the margin,
+    /// and stale from that instant (issue #1200): 06:00 the morning after the run that should have
+    /// refreshed it. The boundary belongs to the stale side.
     /// </summary>
-    [Theory]
-    [InlineData(29.99, null)]
-    [InlineData(30.0, SupplierOfferIneligibility.Stale)]
-    [InlineData(31.0, SupplierOfferIneligibility.Stale)]
-    public void A_daily_suppliers_price_is_stale_at_thirty_hours(
-        double ageHours,
-        SupplierOfferIneligibility? expected)
+    [Fact]
+    public void A_price_is_stale_once_the_next_scheduled_search_day_and_the_margin_have_passed()
     {
-        var result = Compare(
-            [
-                Offer(
-                    1,
-                    packPrice: 24.00m,
-                    observedAtUtc: Now.AddHours(-ageHours),
-                    freshnessLimitHours: SupplierPriceFreshnessPolicy.DailyCheckLimitHours),
-            ]);
+        var dayEnd = Now.AddHours(-SupplierPriceFreshnessPolicy.MarginHours);
 
-        Assert.Equal(expected, Assert.Single(result.Offers).Ineligibility);
+        // One tick before the boundary the price is still compared.
+        Assert.Null(Assert
+            .Single(Compare([Offer(1, packPrice: 24.00m, nextSearchDayEndUtc: dayEnd.AddTicks(1))])
+            .Offers)
+            .Ineligibility);
+
+        // At it, and after it, it is not.
+        Assert.Equal(
+            SupplierOfferIneligibility.Stale,
+            Assert.Single(Compare([Offer(1, packPrice: 24.00m, nextSearchDayEndUtc: dayEnd)]).Offers)
+                .Ineligibility);
+        Assert.Equal(
+            SupplierOfferIneligibility.Stale,
+            Assert.Single(Compare([Offer(1, packPrice: 24.00m, nextSearchDayEndUtc: Now.AddDays(-7))]).Offers)
+                .Ineligibility);
     }
 
     /// <summary>
-    /// BIG W is checked on Thursday and Sunday, so its longest legitimate gap is 96 hours and its
-    /// stored limit is 102. The same 40-hour-old price that is stale for a daily supplier is still
-    /// current for it, which is the whole reason the limit is per supplier and stored rather than one
-    /// number in this file.
+    /// A stale offer's price is still published and it is simply not the cheapest - a failed or
+    /// missing check never removes the last good price (issue #925).
     /// </summary>
-    [Theory]
-    [InlineData(40.0, null)]
-    [InlineData(101.99, null)]
-    [InlineData(102.0, SupplierOfferIneligibility.Stale)]
-    public void A_twice_weekly_suppliers_price_is_stale_at_a_hundred_and_two_hours(
-        double ageHours,
-        SupplierOfferIneligibility? expected)
+    [Fact]
+    public void A_stale_offer_keeps_its_price_and_is_never_the_cheapest()
     {
         var result = Compare(
             [
-                Offer(
-                    1,
-                    packPrice: 24.00m,
-                    observedAtUtc: Now.AddHours(-ageHours),
-                    freshnessLimitHours: SupplierPriceFreshnessPolicy.TwiceWeeklyCheckLimitHours),
+                Offer(1, packPrice: 6.00m, nextSearchDayEndUtc: Now.AddDays(-7)),
+                Offer(2, packPrice: 24.00m),
             ]);
 
-        Assert.Equal(expected, Assert.Single(result.Offers).Ineligibility);
+        var stale = result.Offers.Single(offer => offer.SupplierListingId == 1);
+        Assert.Equal(SupplierOfferIneligibility.Stale, stale.Ineligibility);
+        Assert.Equal(0.25m, stale.UnitPriceIncGst);
+        Assert.Equal(2L, Assert.Single(result.Cheapest).SupplierListingId);
     }
 
     /// <summary>
-    /// More than one reason can hold at once, and exactly one is reported, in the order issue #925
-    /// states them: pack size, then the match, then the rate, then stock, then the promotion, then
-    /// staleness. A page shows the first thing that has to change rather than arguing with itself.
+    /// The criterion: a supplier whose price search has been stopped is listed with its last price,
+    /// carries <see cref="SupplierOfferIneligibility.SearchStopped"/>, and is never the cheapest -
+    /// even with the lowest unit price and a reading from an hour ago. Nothing will refresh that
+    /// price, so naming it the cheapest supplier is guidance nobody can stand behind.
+    /// </summary>
+    [Fact]
+    public void A_supplier_whose_search_is_stopped_is_listed_and_never_cheapest()
+    {
+        var result = Compare(
+            [
+                Offer(1, packPrice: 6.00m, supplierSearchesPrices: false),
+                Offer(2, packPrice: 24.00m),
+            ]);
+
+        var stopped = result.Offers.Single(offer => offer.SupplierListingId == 1);
+        Assert.Equal(SupplierOfferIneligibility.SearchStopped, stopped.Ineligibility);
+        Assert.Equal(0.25m, stopped.UnitPriceIncGst);
+        Assert.False(stopped.IsComparable);
+
+        Assert.Equal(2L, Assert.Single(result.Cheapest).SupplierListingId);
+        Assert.Equal(1.00m / 1.10m, result.CheapestUnitPrice);
+
+        // And it is published after the compared offer rather than dropped.
+        Assert.Equal([2L, 1L], result.Offers.Select(offer => offer.SupplierListingId).ToArray());
+    }
+
+    /// <summary>
+    /// Switching the search back on makes that supplier's offers ordinary candidates again at the
+    /// very next read: nothing about the offer itself changed, and no stored state of this comparison
+    /// remembers the pause.
+    /// </summary>
+    [Fact]
+    public void A_supplier_whose_search_is_switched_back_on_is_compared_again()
+    {
+        var stopped = Offer(1, packPrice: 6.00m, supplierSearchesPrices: false);
+
+        var resumed = Compare([stopped with { SupplierSearchesPrices = true }]);
+
+        Assert.Null(Assert.Single(resumed.Offers).Ineligibility);
+        Assert.Equal(1L, Assert.Single(resumed.Cheapest).SupplierListingId);
+    }
+
+    /// <summary>
+    /// More than one reason can hold at once, and exactly one is reported, in the order issues #925
+    /// and #1200 state them: pack size, then the match, then the rate, then stock, then the
+    /// promotion, then a stopped search, then staleness. A page shows the first thing that has to
+    /// change rather than arguing with itself.
     /// </summary>
     [Fact]
     public void One_reason_is_reported_in_the_issues_own_order()
@@ -366,7 +414,8 @@ public class CheapestUnitOfferPolicyTests
             confirmed: false,
             stockStatus: SupplierStockStatus.OutOfStock,
             promotionEndsAtUtc: Now.AddDays(-1),
-            observedAtUtc: Now.AddDays(-7));
+            supplierSearchesPrices: false,
+            nextSearchDayEndUtc: Now.AddDays(-7));
 
         Assert.Equal(
             SupplierOfferIneligibility.PackSizeUnknown,
@@ -387,6 +436,19 @@ public class CheapestUnitOfferPolicyTests
         Assert.Equal(
             SupplierOfferIneligibility.PromotionEnded,
             Assert.Single(Compare([confirmedAndStale]).Offers).Ineligibility);
+
+        // Then the stopped search, which comes before staleness: the offer is stale too, and what
+        // somebody has to change to compare it is the switch.
+        var stillRunning = confirmedAndStale with { PromotionEndsAtUtc = null };
+
+        Assert.Equal(
+            SupplierOfferIneligibility.SearchStopped,
+            Assert.Single(Compare([stillRunning]).Offers).Ineligibility);
+
+        Assert.Equal(
+            SupplierOfferIneligibility.Stale,
+            Assert.Single(Compare([stillRunning with { SupplierSearchesPrices = true }]).Offers)
+                .Ineligibility);
     }
 
     /// <summary>

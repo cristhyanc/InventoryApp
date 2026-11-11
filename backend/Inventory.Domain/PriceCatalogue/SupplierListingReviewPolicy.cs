@@ -130,11 +130,11 @@ public static class SupplierListingReviewPolicy
         "the listing holds no pending reading, so it is confirmed with no current price";
 
     /// <summary>
-    /// Why a confirmation accepted no price: the reading is older than this supplier's own freshness
-    /// limit, so it is no longer purchasing guidance.
+    /// Why a confirmation accepted no price: this supplier's next scheduled search did not refresh the
+    /// reading, so it is no longer purchasing guidance.
     /// </summary>
     public const string StaleReadingReason =
-        "the pending reading is older than this supplier's price freshness limit";
+        "the pending reading is older than this supplier's next scheduled price search";
 
     /// <summary>
     /// Why a confirmation accepted no price: the reading describes a different pack from the one that
@@ -282,9 +282,11 @@ public static class SupplierListingReviewPolicy
     /// <param name="lastAcceptedPackPrice">
     /// The listing's last accepted pack price, or <see langword="null"/> when it has never had one.
     /// </param>
-    /// <param name="freshnessLimitHours">
-    /// The supplier master record's own <c>PriceCheckFreshnessHours</c> (issue #925) - never a limit
-    /// decided from a supplier's name.
+    /// <param name="nextSearchDayEndUtc">
+    /// When the first scheduled search day after the day the reading was observed ends, derived from
+    /// the supplier master record's own schedule (issue #1200) - never a limit decided from a
+    /// supplier's name. It is the same instant the cheapest comparison judges that reading by, so the
+    /// review page and the comparison cannot disagree about whether a price is too old.
     /// </param>
     /// <param name="asOfUtc">Now, from the application clock.</param>
     /// <param name="priceExceptionApproved">
@@ -296,7 +298,7 @@ public static class SupplierListingReviewPolicy
         SupplierListingIdentity confirmed,
         ReviewedPendingReading? pending,
         decimal? lastAcceptedPackPrice,
-        int freshnessLimitHours,
+        DateTime nextSearchDayEndUtc,
         DateTime asOfUtc,
         bool priceExceptionApproved)
     {
@@ -307,10 +309,7 @@ public static class SupplierListingReviewPolicy
             return Refused(NoPendingReadingReason);
         }
 
-        if (!SupplierPriceFreshnessPolicy.IsFresh(
-            pending.ObservedAtUtc,
-            asOfUtc,
-            freshnessLimitHours))
+        if (!SupplierPriceFreshnessPolicy.IsFreshUntil(asOfUtc, nextSearchDayEndUtc))
         {
             return Refused(StaleReadingReason);
         }

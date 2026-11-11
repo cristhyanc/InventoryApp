@@ -369,6 +369,128 @@ public class SupplierSearchSchedulePolicyTests
             SupplierSearchSchedulePolicy.CurrentOccurrenceOn(schedule, new DateOnly(2026, 11, 26)));
     }
 
+    /// <summary>
+    /// The next occurrence of a daily supplier is always the following day, which is what makes a
+    /// daily price current until 06:00 the day after tomorrow (issue #1200).
+    /// </summary>
+    [Fact]
+    public void The_next_occurrence_of_a_daily_schedule_is_the_following_day()
+    {
+        for (var day = 0; day < 14; day++)
+        {
+            var date = new DateOnly(2026, 11, 1).AddDays(day);
+
+            Assert.Equal(
+                date.AddDays(1),
+                SupplierSearchSchedulePolicy.NextOccurrenceAfter(
+                    SupplierSearchSchedulePolicy.Daily,
+                    date));
+        }
+    }
+
+    /// <summary>
+    /// The owner's own example: Coles is searched on Wednesday and Sunday, so a Wednesday price's
+    /// next search is Sunday and a Sunday price's next search is the following Wednesday. Both gaps
+    /// are answered from the date itself rather than from the longest of them.
+    /// </summary>
+    [Fact]
+    public void The_next_occurrence_is_the_next_searched_day_and_never_the_days_own_run()
+    {
+        var schedule = Weekly(DayOfWeek.Wednesday, DayOfWeek.Sunday);
+
+        // Wednesday 11 November 2026 and Sunday 15 November 2026.
+        Assert.Equal(
+            new DateOnly(2026, 11, 15),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(schedule, new DateOnly(2026, 11, 11)));
+        Assert.Equal(
+            new DateOnly(2026, 11, 18),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(schedule, new DateOnly(2026, 11, 15)));
+    }
+
+    /// <summary>
+    /// A price read on a day the supplier is not searched on - a manual run on a Tuesday - is decided
+    /// by the next scheduled day after it, which is Wednesday's run and not the following Sunday's.
+    /// </summary>
+    [Fact]
+    public void A_date_that_is_not_an_occurrence_is_answered_by_the_next_one_after_it()
+    {
+        var schedule = Weekly(DayOfWeek.Wednesday, DayOfWeek.Sunday);
+
+        Assert.Equal(
+            new DateOnly(2026, 11, 11),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(schedule, new DateOnly(2026, 11, 10)));
+        Assert.Equal(
+            new DateOnly(2026, 11, 15),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(schedule, new DateOnly(2026, 11, 12)));
+    }
+
+    /// <summary>
+    /// A supplier searched on one weekday waits the whole week, and a fortnightly one the whole
+    /// fortnight - including from a date in its off week, where the next on week's day is the answer.
+    /// </summary>
+    [Fact]
+    public void A_weekly_or_fortnightly_schedule_waits_a_whole_cycle_between_occurrences()
+    {
+        // Thursday 5 November 2026.
+        Assert.Equal(
+            new DateOnly(2026, 11, 12),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(
+                Weekly(DayOfWeek.Thursday),
+                new DateOnly(2026, 11, 5)));
+
+        // BIG W every second Saturday: the on weeks start Monday 9 November 2026, so Saturday the
+        // 14th's next search is Saturday the 28th.
+        var fortnightly = Fortnightly(new DateOnly(2026, 11, 9), DayOfWeek.Saturday);
+
+        Assert.Equal(
+            new DateOnly(2026, 11, 28),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(
+                fortnightly,
+                new DateOnly(2026, 11, 14)));
+
+        // And from a date in the off week in between, the same on-week Saturday.
+        Assert.Equal(
+            new DateOnly(2026, 11, 28),
+            SupplierSearchSchedulePolicy.NextOccurrenceAfter(
+                fortnightly,
+                new DateOnly(2026, 11, 18)));
+    }
+
+    /// <summary>
+    /// Every date's next occurrence really is the first scheduled date after it, over a whole
+    /// fortnight of both kinds of schedule: stated as the property rather than as a list, because
+    /// what the freshness rule needs is that no scheduled day in between is ever skipped.
+    /// </summary>
+    [Fact]
+    public void The_next_occurrence_skips_no_scheduled_date()
+    {
+        var schedules = new[]
+        {
+            SupplierSearchSchedulePolicy.Daily,
+            Weekly(DayOfWeek.Wednesday, DayOfWeek.Sunday),
+            Weekly(DayOfWeek.Thursday),
+            Fortnightly(new DateOnly(2026, 11, 9), DayOfWeek.Saturday),
+            Fortnightly(new DateOnly(2026, 11, 9), DayOfWeek.Monday, DayOfWeek.Friday),
+        };
+
+        foreach (var schedule in schedules)
+        {
+            for (var day = 0; day < 28; day++)
+            {
+                var date = new DateOnly(2026, 11, 1).AddDays(day);
+                var next = SupplierSearchSchedulePolicy.NextOccurrenceAfter(schedule, date);
+
+                Assert.True(next > date);
+                Assert.True(SupplierSearchSchedulePolicy.IsScheduledOn(schedule, next));
+
+                for (var between = date.AddDays(1); between < next; between = between.AddDays(1))
+                {
+                    Assert.False(SupplierSearchSchedulePolicy.IsScheduledOn(schedule, between));
+                }
+            }
+        }
+    }
+
     [Fact]
     public void Monday_is_the_first_day_of_the_week()
     {

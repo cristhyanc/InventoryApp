@@ -1,4 +1,5 @@
 using Inventory.Application.PriceCatalogue;
+using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Infrastructure.Data;
@@ -56,10 +57,19 @@ namespace Inventory.Infrastructure.Persistence;
 public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
 {
     private readonly AppDbContext _db;
+    private readonly ISupplierSearchScheduleCalendar _calendar;
 
-    public EfPriceCatalogueReviewStore(AppDbContext db)
+    /// <param name="db">The platform-admin request's own context.</param>
+    /// <param name="calendar">
+    /// The platform collection calendar (issue #1108), which is how a held reading's own day and the
+    /// supplier's next search day become true instants. The review judges a reading too old by the
+    /// same schedule rule the cheapest comparison does (issue #1200), so the page and the comparison
+    /// cannot disagree about one reading.
+    /// </param>
+    public EfPriceCatalogueReviewStore(AppDbContext db, ISupplierSearchScheduleCalendar calendar)
     {
         _db = db;
+        _calendar = calendar;
     }
 
     /// <summary>
@@ -352,7 +362,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
                     pending.PackPrice,
                     pending.ObservedAtUtc),
             accepted?.PackPrice,
-            FreshnessLimitHoursOf(listing),
+            // A listing holding no reading has no observation to date the window from; the policy
+            // refuses it on that ground before the window is read at all.
+            NextSearchDayEndUtcOf(listing, pending?.ObservedAtUtc ?? asOfUtc),
             asOfUtc,
             submission.ApprovePriceException);
 
@@ -1232,12 +1244,25 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
     }
 
     /// <summary>
-    /// The freshness limit a listing's reading is measured against: the supplier master record's own
-    /// stored hours, never a limit decided from a supplier's name (issue #925).
+    /// The instant a reading of <paramref name="listing"/> observed at
+    /// <paramref name="observedAtUtc"/> stops being guidance by: the end of the first day after it
+    /// that this supplier is searched on, from the supplier master record's own stored schedule and
+    /// never from a limit decided from a supplier's name (issues #925 and #1200).
+    ///
+    /// <para>A listing whose supplier record was not loaded is judged on the default daily schedule,
+    /// which is the shortest window any schedule gives: an unknown cadence must not make a reading
+    /// look fresher than it is.</para>
     /// </summary>
-    private static int FreshnessLimitHoursOf(SupplierListing listing) =>
-        listing.SupplierPreset?.PriceCheckFreshnessHours
-            ?? SupplierPriceFreshnessPolicy.DailyCheckLimitHours;
+    private DateTime NextSearchDayEndUtcOf(SupplierListing listing, DateTime observedAtUtc) =>
+        SupplierSearchScheduleWindow.NextSearchDayEndUtc(
+            _calendar,
+            listing.SupplierPreset is { } preset
+                ? SupplierSearchSchedulePolicy.Read(
+                    preset.SearchFrequency,
+                    preset.SearchDaysOfWeek,
+                    preset.FortnightStartDate)
+                : SupplierSearchSchedulePolicy.Daily,
+            observedAtUtc);
 
     private static IReadOnlyList<ReviewedWaitingProduct> WaitingProducts(
         IReadOnlyList<MappingFacts> mappings,
@@ -1367,7 +1392,7 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             .ThenBy(mapping => mapping.UnitLabel, StringComparer.Ordinal)
             .First();
 
-    private static ReviewedSupplierListing Describe(
+    private ReviewedSupplierListing Describe(
         SupplierListing listing,
         IReadOnlyList<SupplierListing> confirmed,
         IReadOnlyDictionary<long, SupplierListingPendingObservation> pending,
@@ -1422,7 +1447,7 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             reading is null ? null : Describe(reading, lastAccepted, listing, asOfUtc));
     }
 
-    private static ReviewedPendingObservation Describe(
+    private ReviewedPendingObservation Describe(
         SupplierListingPendingObservation reading,
         decimal? lastAcceptedPackPrice,
         SupplierListing listing,
@@ -1451,10 +1476,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             reading.UnitsPerPack,
             reading.Title,
             reading.RecordedAtUtc,
-            SupplierPriceFreshnessPolicy.IsFresh(
-                reading.ObservedAtUtc,
+            SupplierPriceFreshnessPolicy.IsFreshUntil(
                 asOfUtc,
-                FreshnessLimitHoursOf(listing)),
+                NextSearchDayEndUtcOf(listing, reading.ObservedAtUtc)),
             SupplierListingReviewPolicy.NeedsPriceException(
                 lastAcceptedPackPrice,
                 reading.PackPrice));

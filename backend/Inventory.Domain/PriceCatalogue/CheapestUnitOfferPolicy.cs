@@ -48,17 +48,30 @@ public enum SupplierOfferIneligibility
     PromotionEnded = 5,
 
     /// <summary>
-    /// The observation is older than this supplier's own freshness limit
+    /// The supplier's next scheduled search did not refresh this price, so it is too old to compare
     /// (<see cref="SupplierPriceFreshnessPolicy"/>). It is kept and shown - a failed or missing check
     /// never removes the last good price - and it stops being compared.
     /// </summary>
     Stale = 6,
+
+    /// <summary>
+    /// This supplier's price search has been stopped (<c>SupplierPreset.SearchPrices</c>, issue
+    /// #1077), so no run will refresh what it last published (issue #1200, the owner's decision of
+    /// 12 November 2026).
+    ///
+    /// <para>The offer is still listed with that last price, because a supplier somebody paused is
+    /// not a supplier that stopped selling the product, and it is never the cheapest: naming as
+    /// cheapest a price nothing is checking any more is purchasing guidance the application cannot
+    /// stand behind.</para>
+    /// </summary>
+    SearchStopped = 7,
 }
 
 /// <summary>
 /// One candidate offer in a cheapest-per-unit comparison (issue #925): one supplier listing, the
-/// latest accepted observation of its price, and the freshness limit of the supplier master record
-/// that published it.
+/// latest accepted observation of its price, and the two facts about the supplier master record that
+/// published it - whether its prices are still searched, and when the search that should refresh this
+/// price is due by.
 ///
 /// <para>Everything here is a stored fact. The policy that reads it derives, stores and rounds
 /// nothing, so this record is the whole of what a comparison depends on - which is what makes the
@@ -85,10 +98,17 @@ public enum SupplierOfferIneligibility
 /// When the promotional price finishes, or <see langword="null"/> for an ordinary price and for a
 /// promotion with no stated end.
 /// </param>
-/// <param name="ObservedAtUtc">When the price was observed.</param>
-/// <param name="FreshnessLimitHours">
-/// The supplier master record's own freshness limit, in hours. It is per supplier and comes from the
-/// stored record, never from this policy - see <see cref="SupplierPriceFreshnessPolicy"/>.
+/// <param name="SupplierSearchesPrices">
+/// Whether this supplier's prices are still searched (<c>SupplierPreset.SearchPrices</c>). A supplier
+/// whose search has been stopped is listed and never compared -
+/// <see cref="SupplierOfferIneligibility.SearchStopped"/>.
+/// </param>
+/// <param name="NextSearchDayEndUtc">
+/// When the first scheduled search day after the day this price was observed ends: 00:00 of the
+/// following date in the schedule's own calendar, as a true instant. It comes from the supplier
+/// master record's own stored schedule through
+/// <c>Inventory.Application.Time.ISupplierSearchScheduleCalendar</c>, never from a limit this policy
+/// knows or a supplier it can name - see <see cref="SupplierPriceFreshnessPolicy"/>.
 /// </param>
 public readonly record struct SupplierUnitOffer(
     long SupplierListingId,
@@ -99,8 +119,8 @@ public readonly record struct SupplierUnitOffer(
     decimal? SupplierGstRate,
     SupplierStockStatus StockStatus,
     DateTime? PromotionEndsAtUtc,
-    DateTime ObservedAtUtc,
-    int FreshnessLimitHours);
+    bool SupplierSearchesPrices,
+    DateTime NextSearchDayEndUtc);
 
 /// <summary>
 /// What one candidate offer costs per vending unit (issue #925), on both GST bases, and whether it
@@ -347,11 +367,15 @@ public static class CheapestUnitOfferPolicy
 
     /// <summary>
     /// The one reason <paramref name="offer"/> cannot be compared, in the order issue #925 states
-    /// them, or <see langword="null"/> when it can.
+    /// them - with <see cref="SupplierOfferIneligibility.SearchStopped"/> between the promotion and
+    /// staleness, which is where issue #1200 puts it - or <see langword="null"/> when it can.
     ///
-    /// <para>The order is the issue's own, not a severity ranking: more than one reason may hold at
+    /// <para>The order is the issues' own, not a severity ranking: more than one reason may hold at
     /// once, and reporting the first in a fixed order keeps the answer deterministic and keeps a page
-    /// from arguing with itself about which of two true statements to show.</para>
+    /// from arguing with itself about which of two true statements to show. The reasons that describe
+    /// the <em>offer</em> - its pack size, its match, its rate, its promotion - come before the two
+    /// that describe the supplier's searching, because they are what somebody would have to change to
+    /// make this price comparable at all.</para>
     /// </summary>
     private static SupplierOfferIneligibility? IneligibilityOf(
         SupplierUnitOffer offer,
@@ -380,7 +404,15 @@ public static class CheapestUnitOfferPolicy
             return SupplierOfferIneligibility.PromotionEnded;
         }
 
-        return SupplierPriceFreshnessPolicy.IsFresh(offer.ObservedAtUtc, asOfUtc, offer.FreshnessLimitHours)
+        // After the reasons that describe the offer itself and before staleness (issue #1200): a
+        // supplier nothing searches any more is out of the comparison however recently its last
+        // price was read, and saying so is a better answer than waiting for that price to age.
+        if (!offer.SupplierSearchesPrices)
+        {
+            return SupplierOfferIneligibility.SearchStopped;
+        }
+
+        return SupplierPriceFreshnessPolicy.IsFreshUntil(asOfUtc, offer.NextSearchDayEndUtc)
             ? null
             : SupplierOfferIneligibility.Stale;
     }
