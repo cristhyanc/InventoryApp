@@ -69,7 +69,13 @@ public static class ReceiptScanResponseMapper
                 ReceiptGstAnswers.Name(line.Gst.Taxability),
                 line.Gst.Marker),
             line.LevyUnresolved,
-            line.Missing.Select(ReceiptLineMissingValues.Name).ToList());
+            line.Missing.Select(ReceiptLineMissingValues.Name).ToList(),
+            // The pack size itself is already published above; what this adds is which step
+            // suggested it and the purchase it came from (issue #1165).
+            line.UnitsPerPackSuggestion is { } suggestion
+                ? new PurchaseScanPackSizeSuggestionDto(
+                    ReceiptPackSizeSources.Name(suggestion.SuggestedFrom), suggestion.PurchaseDate)
+                : null);
 
     private static PurchaseScanValueDto<T>? Value<T>(ReceiptScanValue<T>? value) =>
         value is null

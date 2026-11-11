@@ -17,7 +17,9 @@ namespace Inventory.Application.ReceiptScanning;
 /// #1164 writes is a counter - how many scans this business has made in its own calendar month -
 /// which holds no receipt, no file name, no product and no part of a draft. That is the whole of the
 /// no-writes criterion as it now stands, and it is still structural: the only writing port here is
-/// <see cref="IReceiptScanUsageStore"/>, whose single write increments one integer.</para>
+/// <see cref="IReceiptScanUsageStore"/>, whose single write increments one integer. Every other
+/// persistence port it takes is read-only: the catalogue the receipt is read against, and - since
+/// issue #1165 - the last purchase a missing pack size may be suggested from.</para>
 ///
 /// <para><strong>The month's cap is the last thing checked and the first thing written.</strong> A
 /// scan is counted when the reader is about to be called - after everything free has been refused,
@@ -48,6 +50,7 @@ public sealed class ScanReceipt
 {
     private readonly IReceiptScanSettings _settings;
     private readonly IReceiptScanCatalogueStore _catalogue;
+    private readonly IReceiptScanPurchaseHistoryStore _purchases;
     private readonly IPdfPageCounter _pages;
     private readonly IReceiptReader _reader;
     private readonly IReceiptScanLog _log;
@@ -58,6 +61,7 @@ public sealed class ScanReceipt
     public ScanReceipt(
         IReceiptScanSettings settings,
         IReceiptScanCatalogueStore catalogue,
+        IReceiptScanPurchaseHistoryStore purchases,
         IPdfPageCounter pages,
         IReceiptReader reader,
         IReceiptScanLog log,
@@ -67,6 +71,7 @@ public sealed class ScanReceipt
     {
         _settings = settings;
         _catalogue = catalogue;
+        _purchases = purchases;
         _pages = pages;
         _reader = reader;
         _log = log;
@@ -156,12 +161,16 @@ public sealed class ScanReceipt
                 .ConfigureAwait(false);
 
             var payload = ReceiptScanPayloadParser.Parse(read.Json);
+            var productIds = products.Select(product => product.Id).ToHashSet();
+            var supplierIds = suppliers.Select(supplier => supplier.Id).ToHashSet();
+            var history = payload is null
+                ? ReceiptPackSizeHistory.None
+                : await LastPurchasesAsync(payload, productIds, supplierIds, cancellationToken)
+                    .ConfigureAwait(false);
+
             var draft = payload is null
                 ? null
-                : ReceiptScanDraftBuilder.Build(
-                    payload,
-                    products.Select(product => product.Id).ToHashSet(),
-                    suppliers.Select(supplier => supplier.Id).ToHashSet());
+                : ReceiptScanDraftBuilder.Build(payload, productIds, supplierIds, history);
 
             return result = draft is null
                 ? ScanReceiptResult.Refused(ScanReceiptOutcome.Unreadable)
@@ -192,6 +201,35 @@ public sealed class ScanReceipt
                 read?.InputTokens,
                 read?.OutputTokens);
         }
+    }
+
+    /// <summary>
+    /// The last purchase of each product a pack size might be suggested for (issue #1165), or
+    /// <see cref="ReceiptPackSizeHistory.None"/> when there is nothing worth asking for: no supplier
+    /// of this business was suggested, or no line is a stock line of a known product with its pack
+    /// size missing.
+    ///
+    /// <para><strong>One statement for the whole receipt, read after the reader has answered.</strong>
+    /// It is made only when the answer names something it could apply to, so a refused or unreadable
+    /// scan reads no purchase history at all, and it is one call rather than one per line. It is a
+    /// read: this use case still has nothing it can write with.</para>
+    /// </summary>
+    private async Task<ReceiptPackSizeHistory> LastPurchasesAsync(
+        ReceiptScanPayload payload,
+        IReadOnlySet<long> productIds,
+        IReadOnlySet<int> supplierIds,
+        CancellationToken cancellationToken)
+    {
+        if (ReceiptPackSizeLookup.For(payload, productIds, supplierIds) is not { } lookup)
+        {
+            return ReceiptPackSizeHistory.None;
+        }
+
+        var purchases = await _purchases
+            .ListLatestAsync(lookup.SupplierId, lookup.ProductIds, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ReceiptPackSizeHistory.Of(purchases);
     }
 
     private ScanReceiptResult InvalidFile(ReceiptScanFileVerdict verdict) =>

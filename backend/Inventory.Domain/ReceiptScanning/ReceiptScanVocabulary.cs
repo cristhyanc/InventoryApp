@@ -157,6 +157,43 @@ public static class ReceiptPackSizes
 }
 
 /// <summary>
+/// Where a pack size the receipt did not print came from (issue #1165, sub-issue E of #975).
+///
+/// <para>It is a separate vocabulary from <see cref="ReceiptValueProvenance"/> rather than a third
+/// member of it: the provenance says whether a value was read or suggested, and this says which
+/// deterministic step suggested it. There is exactly one such step today - the business's own most
+/// recent purchase of that product from that supplier - and a pack size that is simply unknown
+/// carries no source at all.</para>
+/// </summary>
+public enum ReceiptPackSizeSource
+{
+    /// <summary>
+    /// The business's most recent recorded purchase line for that product from the same suggested
+    /// supplier (<see cref="ReceiptPackSizeSuggestionPolicy"/>).
+    /// </summary>
+    LastPurchase = 10,
+}
+
+/// <summary>The declared <see cref="ReceiptPackSizeSource"/> vocabulary and the published name of each member.</summary>
+public static class ReceiptPackSizeSources
+{
+    /// <summary>Every declared source, in the enum's own order.</summary>
+    public static readonly IReadOnlyList<ReceiptPackSizeSource> All = [ReceiptPackSizeSource.LastPurchase];
+
+    /// <summary>
+    /// The source's published token, written out rather than taken from the enum member so renaming
+    /// a C# member cannot silently change the contract a client branches on.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="source"/> is not declared.</exception>
+    public static string Name(ReceiptPackSizeSource source) => source switch
+    {
+        ReceiptPackSizeSource.LastPurchase => "lastPurchase",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(source), source, "Only a declared pack-size source has a published name."),
+    };
+}
+
+/// <summary>
 /// Whether a printed line price already has GST in it (issue #1163). The application's purchase
 /// amounts are GST-inclusive (AGENTS.md § Purchase GST classification), so a price read from an
 /// ex-GST column has to be converted before it can become a unit cost - and a price whose basis
