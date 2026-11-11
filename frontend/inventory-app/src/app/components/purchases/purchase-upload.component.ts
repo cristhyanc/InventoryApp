@@ -26,7 +26,6 @@ import {
   lineTotalFromUnitCost,
   purchaseLinePriceErrorMessage,
   purchaseLinePriceProblem,
-  savedLineAmount,
   syncPurchaseLinePrice,
   totalPriceFieldValue,
   unitPriceFieldValue
@@ -35,6 +34,32 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { SupplierOrderCompletionDialogComponent } from './supplier-order-completion-dialog/supplier-order-completion-dialog.component';
 import { PurchaseFormLayoutComponent, missingProductErrorMessage } from './purchase-form/purchase-form-layout.component';
 import { purchaseTitleSuggestion } from './purchase-form/purchase-title-suggestion';
+import {
+  PurchaseScannedLevy,
+  PurchaseScannedLine,
+  isScannedLineSkipped,
+  purchaseScanFill
+} from './purchase-form/purchase-scan-draft';
+import {
+  PurchaseReceiptScanComponent,
+  PurchaseReceiptScanned
+} from './purchase-receipt-scan/purchase-receipt-scan.component';
+
+/**
+ * The part of `AttachmentStorageQuotaPolicy.StorageFullMessage` (issue #968) that identifies the
+ * refusal, which the create endpoint answers as a bare `400` string with no code of its own.
+ *
+ * Matching a sentence is not a contract, so this is written to depend on as little of it as
+ * possible, and the cost of a miss is bounded: the refusal is still shown in full and nothing is
+ * saved - only the "save it without the receipt" shortcut would be absent, and attaching the
+ * document to the saved purchase later (issue #976) still works.
+ */
+const STORAGE_ALLOWANCE_REFUSAL = 'attachment storage allowance';
+
+/** Whether a refused save was refused because the receipt does not fit the storage allowance. */
+export function isAttachmentStorageRefusal(message: unknown): boolean {
+  return typeof message === 'string' && message.includes(STORAGE_ALLOWANCE_REFUSAL);
+}
 
 // Draft item representation where the quantity and either price may be null
 interface DraftPurchaseItem {
@@ -56,12 +81,24 @@ interface DraftPurchaseItem {
    * product, the supplier or the amount (parent issue #62, decision D4).
    */
   gstClassification: GstClassification;
+
+  /**
+   * What a scanned receipt said about this line (issue #1166), and absent on a line somebody typed.
+   * A line it marks as skipped is shown, counted towards the receipt total, and never submitted.
+   */
+  scan?: PurchaseScannedLine;
 }
 
 @Component({
   selector: 'app-purchase-upload',
   standalone: true,
-  imports: [CommonModule, RouterLink, PurchaseFormLayoutComponent, SupplierOrderCompletionDialogComponent],
+  imports: [
+    CommonModule,
+    RouterLink,
+    PurchaseFormLayoutComponent,
+    PurchaseReceiptScanComponent,
+    SupplierOrderCompletionDialogComponent
+  ],
   templateUrl: './purchase-upload.component.html'
 })
 export class PurchaseUploadComponent implements OnInit, OnDestroy {
@@ -72,6 +109,23 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   selectedFile: File | null = null;
   saving = false;
   error = '';
+
+  /**
+   * The receipt a scan read (issue #1166), shown beside the lines it produced. It is a record of
+   * what the lines came from rather than of what will be uploaded - removing the chosen document
+   * leaves it on screen, because the lines it explains are still there.
+   */
+  scannedReceipt: File | null = null;
+
+  /** Levies a scanned receipt's own totals could not place on any product; never saved as lines. */
+  scannedLevies: PurchaseScannedLevy[] = [];
+
+  /**
+   * Whether the last save was refused because the receipt does not fit the business's attachment
+   * storage allowance (issue #968). The filled form is kept and the one way forward is offered -
+   * saving the purchase without the receipt - and until that is chosen, nothing is saved.
+   */
+  storageRefusedReceipt = false;
 
   /**
    * Whether a support session is active (issue #657, extending #554): Add Purchase is disabled
@@ -195,6 +249,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   private resetPurchaseForm(): void {
     this.items = [];
     this.selectedFile = null;
+    this.scannedReceipt = null;
+    this.scannedLevies = [];
+    this.storageRefusedReceipt = false;
     this.error = '';
     this.saving = false;
 
@@ -283,6 +340,66 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
    */
   onReceiptChange(file: File | null): void {
     this.selectedFile = file;
+    // A different document is no longer the one the storage allowance refused.
+    this.storageRefusedReceipt = false;
+  }
+
+  /** Whether the form already holds items, which is what makes a scan ask before replacing them. */
+  get hasLines(): boolean {
+    return this.items.length > 0;
+  }
+
+  /**
+   * A receipt was scanned (issue #1166). The draft fills this form for the operator to check and
+   * **nothing is saved**: the purchase is still created by the ordinary create request when they
+   * press Save, through the endpoint and the validation that already existed.
+   *
+   * Every figure is the draft's, carried through by `purchaseScanFill`; a value the receipt did not
+   * carry leaves the form's own alone, which is what keeps a purchase date no receipt printed at
+   * today. The scanned file becomes the purchase's document, so the save uploads the exact bytes
+   * that were read, once.
+   */
+  onScanned(result: PurchaseReceiptScanned): void {
+    const fill = purchaseScanFill(result.draft, { products: this.products, suppliers: this.suppliers });
+
+    if (fill.fields.supplierId !== null) this.form.supplierId = fill.fields.supplierId;
+    if (fill.fields.purchaseDate !== null) this.form.purchaseDate = fill.fields.purchaseDate;
+    if (fill.fields.invoiceNumber !== null) this.form.invoiceNumber = fill.fields.invoiceNumber;
+    if (fill.fields.receiptTotal !== null) this.form.totalAmount = fill.fields.receiptTotal;
+    if (fill.fields.deliveryCost !== null) this.form.deliveryCost = fill.fields.deliveryCost;
+    if (fill.fields.packageCost !== null) this.form.packageCost = fill.fields.packageCost;
+
+    this.items = fill.lines;
+    this.scannedLevies = fill.levies;
+    this.selectedFile = result.file;
+    this.scannedReceipt = result.file;
+    this.error = '';
+    this.storageRefusedReceipt = false;
+
+    // The supplier and the date may both have moved, and a title nobody typed follows them.
+    this.refreshSuggestedTitle();
+
+    // The lines are not the ones any completion projection was made against, so the question is
+    // asked again rather than a stale fingerprint being resubmitted (issue #974).
+    this.completionChoice = null;
+    this.completionDecision = null;
+    this.completionChoiceSettled = false;
+  }
+
+  /**
+   * The operator chose to save the purchase without the receipt the storage allowance refused
+   * (issue #968, and the optional document of #976). The filled form is untouched; only the
+   * document is dropped, and this is the only thing that saves it.
+   */
+  saveWithoutReceipt(): void {
+    if (!this.storageRefusedReceipt) {
+      return;
+    }
+
+    this.selectedFile = null;
+    this.storageRefusedReceipt = false;
+    this.error = '';
+    this.upload();
   }
 
   /** Back to where this purchase was started from, saving nothing. */
@@ -296,6 +413,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     if (this.sessionActive) {
       return;
     }
+
+    // Whatever this attempt is refused for, it is this attempt's reason: the previous refusal's
+    // offer must not be left beside a different message.
+    this.storageRefusedReceipt = false;
+
     if (this.loadingSupplierOrder) {
       this.error = 'Please wait while the supplier order is loading.';
       return;
@@ -319,9 +441,14 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // A scanned line the receipt said is not stock, and that nobody has chosen a product for, is
+    // not a purchase line at all (issue #1166): it is shown, it is counted towards the receipt
+    // total, and it is neither validated nor submitted. Everything else is a line.
+    const savedItems = this.items.filter(item => !isScannedLineSkipped(item));
+
     // Every line names a product (issue #1029): a new line starts with none chosen rather than
     // silently on the first product in the list.
-    const linesWithoutProduct = this.items.filter(item => !item.productId);
+    const linesWithoutProduct = savedItems.filter(item => !item.productId);
     if (linesWithoutProduct.length > 0) {
       this.error = missingProductErrorMessage(linesWithoutProduct.length);
       return;
@@ -330,8 +457,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     // Validate every line's quantity and price, in whichever direction it was entered (issue
     // #707): a whole number of units above zero, a finite non-negative entered amount, and a
     // finite non-negative unit cost to submit - so a blank price, a zero quantity's division and a
-    // NaN are all refused here rather than sent.
-    const invalidItems = this.items.filter(item => !isPurchaseLinePriceComplete(item));
+    // NaN are all refused here rather than sent. A scanned line with no pack size has no usable
+    // quantity, so this is also what blocks Save until the units are filled in (issue #1166).
+    const invalidItems = savedItems.filter(item => !isPurchaseLinePriceComplete(item));
     if (invalidItems.length > 0) {
       this.error = purchaseLinePriceErrorMessage(invalidItems.length);
       return;
@@ -340,7 +468,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.error = '';
 
     // Map draft items to PurchaseItemPayload only after validation
-    const validItems: PurchaseItemPayload[] = this.items.map(item => ({
+    const validItems: PurchaseItemPayload[] = savedItems.map(item => ({
       productId: item.productId,
       quantity: item.quantity as number,  // Safe to cast after validation
       unitCost: item.unitCost as number,  // Safe to cast after validation
@@ -394,6 +522,10 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         error: (err) => {
           this.error = err?.error ?? 'Failed to add purchase.';
           this.saving = false;
+          // The receipt is what was refused, not the purchase (issue #968): everything entered stays
+          // on screen and the purchase is offered without the document, which it is allowed to have
+          // none of (issue #976). Nothing is saved until that is explicitly chosen.
+          this.storageRefusedReceipt = this.selectedFile !== null && isAttachmentStorageRefusal(this.error);
           // The entered purchase stays on screen, and the choice is asked again: a refusal may be
           // exactly that the order changed, so the fingerprint it was made against is no good.
           this.completionDecision = null;
@@ -558,10 +690,6 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     return classification === GstClassification.Unknown ? undefined : classification;
   }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
-
-  /** The amount this line will save: the server's own round(quantity * unitCost, 2). */
-  savedLineAmount(item: DraftPurchaseItem): number { return savedLineAmount(item); }
-  get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.savedLineAmount(item), 0); }
 
   private purchaseTimestamp(): string | null {
     if (!this.form.purchaseDate) return null;

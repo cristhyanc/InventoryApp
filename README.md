@@ -2391,7 +2391,57 @@ and record it through Add Purchase as usual, which is still where a purchase is 
   There is no automatic retry, because a retry is a second charge.
 
 Receipt scanning is off until a key is configured — see
-[`ReceiptScanning__ApiKey`](#configuration-and-secrets). The **Scan receipt** screen itself is issue #1166.
+[`ReceiptScanning__ApiKey`](#configuration-and-secrets).
+
+### Scanning a receipt on Add Purchase (issue #1166)
+
+**Add Purchase** has a **Scan receipt** button above the form. Pick a photo or a PDF of the receipt and the
+form is filled in for you to check; **nothing is saved until you press Save purchase**, exactly as if you had
+typed it all in. The same file is attached as the purchase's receipt, so saving uploads it once.
+
+What the scan fills in:
+
+- The **supplier** (when one of yours was matched), the **purchase date**, the **invoice number**, the
+  **receipt total**, and the **delivery** and **packaging** costs. Anything the receipt did not say is left
+  exactly as it was — a receipt with no date leaves the date on today.
+- One **item** per stock line, with the suggested product, the number of **units** (packs × pack size) and the
+  **unit price**. Each line shows the text the receipt printed and the pack maths — `2 x 24-pack = 48` — so
+  you can check it at a glance. A pack size that came from your own purchase history rather than from the
+  docket is marked **from your last purchase**.
+- Nothing is classified for **GST**: each line starts as *Not classified*, as a line you typed does. The
+  receipt's GST markers are the receipt's claim, not a classification.
+
+What it asks you about:
+
+- **A line with no product, or no pack size, is highlighted in red and Save is blocked until you fill it in.**
+  The line says why — "The pack size is not printed on the receipt. Enter the units." — and the printed amount
+  is already in **Line total**, so typing the units is all it takes.
+- **A line that is not stock for resale** — office paper, a service fee — arrives with **Not stock, skip**
+  ticked. It is shown, it is not saved as a purchase line, and choosing a product for it puts it into the
+  purchase.
+- **A container deposit levy the receipt's own totals could not place** gets a row of its own, outside the
+  items, saying *Container levy not added to any product: check the receipt*. It has no product picker and is
+  never saved as a purchase line.
+- The **Receipt total** check counts the skipped items and the unresolved levy, because the receipt printed
+  them, so the total adds up instead of showing a difference you cannot act on. Neither is part of what the
+  purchase costs.
+
+The receipt itself sits **beside the items on a wide screen and above them on a phone**, with **Open full
+size** for a closer look.
+
+- **It needs the Pro plan.** On Free or Starter the button is replaced by "Scanning a receipt needs the Pro
+  plan." with a link to the Plan page, like every other Pro-only entry.
+- **Scanning again asks first** when you have already typed or scanned items: *Replace items* goes ahead,
+  *Keep what I typed* sends nothing at all — so a scan you did not want costs you nothing.
+- **Cancel stops waiting** while the receipt is being read.
+- **If the scan fails you are told why and the form is untouched** — "Receipt scanning is not available."
+  when it is switched off, "Could not read this receipt." when nothing usable came back, a message when it
+  timed out, and the monthly cap's own sentence when you are over it. Anything you had already typed is still
+  there, and you carry on by hand.
+- **If the receipt will not fit your storage allowance**, the purchase is *not* saved and nothing is lost:
+  the filled form stays on screen with the reason, and a **Save the purchase without the receipt** button
+  records the purchase with no document (see [A purchase without a receipt](#a-purchase-without-a-receipt)).
+  Nothing is saved until you choose it.
 
 ### 100 scans a month (issue #1164)
 

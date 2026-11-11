@@ -21,7 +21,8 @@ export const PLAN_FEATURES = [
   'ProviderSalesReports',
   'SiteCommissions',
   'SalesFileImport',
-  'ObservedSupplierPrices'
+  'ObservedSupplierPrices',
+  'ReceiptScanning'
 ] as const;
 
 /** One declared plan feature, spelled exactly as `PlanFeatures.Name` publishes it. */
@@ -43,12 +44,31 @@ const REQUIRED_PLAN: Readonly<Record<PlanFeature, SubscriptionPlanName>> = {
   ProviderSalesReports: 'Pro',
   SiteCommissions: 'Pro',
   SalesFileImport: 'Pro',
-  ObservedSupplierPrices: 'Starter'
+  ObservedSupplierPrices: 'Starter',
+  ReceiptScanning: 'Pro'
 };
+
+/**
+ * The features `PlanFeaturePolicy.FailsClosedWhileUnenforced` refuses while plan enforcement is
+ * switched off, instead of leaving unrestricted like everything else (issue #1163) - mirrored here
+ * for the same reason the table above is.
+ *
+ * **There is one, and a second entry is a commercial decision.** Enforcement being off means the
+ * deployment has not started charging anybody, and the honest answer to "may this business use a
+ * feature it is not being charged for?" is yes - for every feature whose cost is already paid by
+ * running the application at all. Receipt scanning spends money at an outside service per use, so
+ * there is no state in which giving it to every business is the cautious answer.
+ */
+const FAILS_CLOSED_WHILE_UNENFORCED: ReadonlySet<PlanFeature> = new Set<PlanFeature>(['ReceiptScanning']);
 
 /** The least plan that includes `feature`, for the sentence a lock names it in. */
 export function requiredPlanOf(feature: PlanFeature): SubscriptionPlanName {
   return REQUIRED_PLAN[feature];
+}
+
+/** Whether `feature` is refused while nothing is enforced. See {@link FAILS_CLOSED_WHILE_UNENFORCED}. */
+export function failsClosedWhileUnenforced(feature: PlanFeature): boolean {
+  return FAILS_CLOSED_WHILE_UNENFORCED.has(feature);
 }
 
 function rankOf(plan: SubscriptionPlanName): number {
@@ -70,14 +90,19 @@ export function isDeclaredPlan(plan: string): plan is SubscriptionPlanName {
  * and offering the feature is what lets the page's own call answer for itself rather than locking a
  * member out of a feature their business may perfectly well have bought.
  *
- * **Otherwise it is the backend's own rule.** `enforced: false` offers everything - "not enforced is
- * not a plan" - and once enforced, a `null` plan or one this build does not declare offers nothing
- * that is not free: there is no plan to compare against, and guessing the nearest one would offer a
- * feature nobody bought.
+ * **Otherwise it is the backend's own rule.** `enforced: false` offers everything except the one
+ * feature {@link failsClosedWhileUnenforced} names - "not enforced is not a plan", and a feature
+ * that spends money per use has no unrestricted state - and once enforced, a `null` plan or one this
+ * build does not declare offers nothing that is not free: there is no plan to compare against, and
+ * guessing the nearest one would offer a feature nobody bought.
  */
 export function planFeatureAllowed(entitlement: Entitlement | undefined, feature: PlanFeature): boolean {
-  if (!entitlement?.enforced) {
+  if (entitlement === undefined) {
     return true;
+  }
+
+  if (!entitlement.enforced) {
+    return !failsClosedWhileUnenforced(feature);
   }
 
   const plan = entitlement.plan;
