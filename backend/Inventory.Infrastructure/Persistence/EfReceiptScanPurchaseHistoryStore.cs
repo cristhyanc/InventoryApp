@@ -54,8 +54,8 @@ public sealed class EfReceiptScanPurchaseHistoryStore : IReceiptScanPurchaseHist
                 && !_db.ReceiptItems.Any(later =>
                     later.ProductId == item.ProductId
                     && later.Purchase!.SupplierId == supplierId
-                    && (later.Purchase!.PurchaseDate > item.Purchase!.PurchaseDate
-                        || (later.Purchase!.PurchaseDate == item.Purchase!.PurchaseDate
+                    && (later.Purchase.PurchaseDate > item.Purchase.PurchaseDate
+                        || (later.Purchase.PurchaseDate == item.Purchase.PurchaseDate
                             && later.Id > item.Id))))
             .Select(item => new
             {

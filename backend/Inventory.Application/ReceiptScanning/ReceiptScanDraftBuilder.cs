@@ -116,7 +116,7 @@ public static class ReceiptScanDraftBuilder
         IReadOnlySet<long> productIds,
         ReceiptPackSizeHistory history)
     {
-        var printed = Arithmetic(line);
+        var printed = EvaluateArithmetic(line);
         var suggestion = SuggestPackSize(line, printed.Amount, productIds, history);
 
         return suggestion is null
@@ -124,7 +124,7 @@ public static class ReceiptScanDraftBuilder
             : new EvaluatedLine(
                 index,
                 line,
-                Arithmetic(line with { UnitsPerPack = suggestion.UnitsPerPack }),
+                EvaluateArithmetic(line with { UnitsPerPack = suggestion.UnitsPerPack }),
                 suggestion);
     }
 
@@ -158,7 +158,7 @@ public static class ReceiptScanDraftBuilder
             : null;
     }
 
-    private static ReceiptLineArithmetic Arithmetic(ReceiptScanPayloadLine line) =>
+    private static ReceiptLineArithmetic EvaluateArithmetic(ReceiptScanPayloadLine line) =>
         ReceiptLineArithmeticPolicy.Evaluate(
             line.LineTotal,
             line.DiscountTotal,
