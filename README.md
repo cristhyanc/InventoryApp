@@ -3047,6 +3047,13 @@ more.
 The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
 add** section are unchanged, and no API, model or stored field changed with this.
 
+Screenshots of the reviewed states, with sample suppliers, are in `docs/screenshots/issue-1174/`:
+[Add, 1440px](docs/screenshots/issue-1174/add-supplier-dialog-1440px.png),
+[Edit a supplier from the platform list, 1440px](docs/screenshots/issue-1174/edit-linked-supplier-dialog-1440px.png),
+[Add, 390px](docs/screenshots/issue-1174/add-supplier-dialog-390px.png),
+[Add, 360px](docs/screenshots/issue-1174/add-supplier-dialog-360px.png) and
+[Discard changes, 1440px](docs/screenshots/issue-1174/discard-changes-dialog-1440px.png).
+
 ## A supplier's website
 
 A supplier can record an optional **Website** beside its name, contact and address, so you can open
