@@ -5390,7 +5390,15 @@ Receive is navigation to the already-guarded upload page, so only the control ne
 new guard. `SupplierListComponent` disables the Create/Update submit button and hides Delete,
 guarding `save()` and `remove()` the same way; Edit is left alone because it only sets local form
 state and issues no request of its own - the control that matters is the Save/Create button it
-leads to. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
+leads to. Since issue #1174 moved that form into a dialog the rule is unchanged and lives in the
+same two places: the page passes `[sessionActive]` to `SupplierFormDialogComponent`, which disables
+its own primary action and returns from `save()` before calling the API, the page still hides Delete
+and guards `askDelete()`/`remove()`, and Edit still opens the dialog for the same reason it was left
+alone here (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). The one
+thing that issue did add is a control of its own: the page header's **Add supplier** button, which
+the inline form never had, so it is *hidden* in a session on the same terms as Add Purchase on the
+purchase list and `addSupplier()` is guarded beneath it - a create is a write on the capability a
+session grants, so a form the server could only refuse is not offered at all. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
 it is on `Purchasing.Operate`, which a session grants, so the page hides the control and
 `setNotUsed()` returns before calling the API
 ([The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934)).
@@ -5411,9 +5419,13 @@ disabled and `submit()` emitting nothing while `sessionActive` is set directly o
 `purchase-edit-page.component.spec.ts` covers the page passing its own `active$` subscription down
 as that input and `onSave` refusing to call the API. `supplier-orders.component.spec.ts` covers
 Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
-`supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
-`save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
-resuming once a session ends.
+`supplier-list.component.spec.ts` (new) covers Delete being hidden, `remove()` refusing to call the
+API while a session is active, and normal behaviour resuming once a session ends; since issue #1174
+the save half of that is `supplier-form-dialog.component.spec.ts` (the primary action disabled and
+`save()` refusing to call the API) plus the page spec asserting, on the rendered page, that the
+header **Add supplier** button is absent in a session and `addSupplier()` opens nothing when
+invoked anyway, that the row's Edit button is still there and opens the dialog filled in with its
+submit disabled, and that the header button returns once the session ends.
 
 ### Auditing the remaining write actions across the support view UI (issue #661)
 
@@ -8033,6 +8045,8 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
+**The shared dialog UI.** `components/shared/confirmation-dialog.component.ts` (`ConfirmationDialogComponent`) is the one shared confirmation: a title, a message, and a confirm/cancel pair, with the caller owning the write it guards. `components/shared/modal-dialog/modal-dialog.component.ts` (`ModalDialogComponent`, issue #1174) is the shared **shell** for a dialog that holds a workflow rather than a question: a labelled, centred panel of at most 600px that becomes a full-screen sheet below 640px, with a fixed header carrying the heading and a labelled Close control, a scrollable body (the default content slot) and a fixed action row (anything projected with `dialog-actions`). It is a native modal `<dialog>` opened with `showModal()`, so the top layer, the inert page behind it and the `::backdrop` are the platform's, and it carries **no** `role` or `aria-modal` of its own because the platform maps a modal `<dialog>` to both; its Tab cycle, its Escape handling and its focus return to the control that opened it are written in the component so a regression test can hold it to them. It never closes itself: Escape, the backdrop and Close all report `closeRequested` and the owner decides, which is what lets a dirty form ask before it is discarded. A dialog that needs a question *over* an open dialog uses a second instance of this shell rather than `ConfirmationDialogComponent`, because a `z-index` backdrop cannot paint above the top layer. `ConfirmationDialogComponent` still has the focus-trap gap described under [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930) and its own follow-up; new dialog UI should use the shell.
+
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 
 Tailwind classes in templates, `src/styles.scss`, and component styles are the styling sources. `npm run build:styles` generates `src/styles.css` before Angular builds, so do not make a manual fix only in the generated CSS. Keep production bundle and component-style budgets in `angular.json` passing.
@@ -8049,7 +8063,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. `landing-page-public-beta.visual.ts` (issue #1191) captures the **signed-out** public homepage into `docs/screenshots/issue-1191/`: the whole page at 1440px and at 390px. It is the one visual run that asks the E2E auth stub for the signed-out application (`e2e-signed-out` in `sessionStorage`, set before the bundle loads — see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), because `/` shows the landing page only to a visitor nobody has signed in as. It needs no `/api/` stubbing at all, since the page injects no API service, and it asserts in the browser what jsdom cannot: no page-level horizontal overflow at **every** width from 320px to 390px — the issue's own acceptance criterion, measured at each width rather than at the two ends — and the same at both captured widths, alongside the viewport meta tag that still allows pinch zoom. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. `landing-page-public-beta.visual.ts` (issue #1191) captures the **signed-out** public homepage into `docs/screenshots/issue-1191/`: the whole page at 1440px and at 390px. It is the one visual run that asks the E2E auth stub for the signed-out application (`e2e-signed-out` in `sessionStorage`, set before the bundle loads — see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), because `/` shows the landing page only to a visitor nobody has signed in as. It needs no `/api/` stubbing at all, since the page injects no API service, and it asserts in the browser what jsdom cannot: no page-level horizontal overflow at **every** width from 320px to 390px — the issue's own acceptance criterion, measured at each width rather than at the two ends — and the same at both captured widths, alongside the viewport meta tag that still allows pinch zoom. `suppliers-dialogs.visual.ts` (issue #1174) captures the Suppliers page's Add/Edit dialog into `docs/screenshots/issue-1174/`: the empty Add modal and a linked supplier's Edit modal at 1440px, the full-screen phone sheet at 390px and 360px, and the *Discard changes?* question standing over the form it belongs to. It answers every `/api/` request with synthetic suppliers and refuses every non-`GET`, so no supplier is created, updated or deleted, and it measures what jsdom cannot — the 600px desktop panel, the full-screen sheet with its action row still inside the viewport, no sideways scroll of the page, the panel or its scrollable body at 1440px, 390px or 360px, pinch zoom still permitted, 44px touch targets, and Escape dismissal with focus returning to the control that opened the dialog (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -8084,6 +8098,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 - Alerts: `.alert` with `.alert-success|warning|danger|info` and `.alert-title`
 - Forms: `.field`, `.field-label`, `.field-hint`, `.field-error`
 - Values: `.value-positive`, `.value-negative`, `.value-muted`
+- Dialogs: no shared class — `ModalDialogComponent` (above) owns the panel, header, body and action row in its own component styles, and a caller styles only what it projects.
 
 **Focus and disabled states.** Every interactive element — buttons, links, inputs, selects, nav items, table row actions — shows a `focus-visible` 2px `md-info` outline at 2px offset (4.51:1 against white, above the 3:1 non-text minimum). Never remove a focus outline without putting that one in its place. Every button and form control renders its disabled state as opacity 0.5 with `cursor-not-allowed`, no hover change and no shadow; WCAG 1.4.3 exempts disabled controls from the contrast minimum.
 
@@ -15671,8 +15686,9 @@ the link state beside it; `SupplierResponse` is untouched and is still the neste
 
 **The frontend mirrors the rule and links carefully.**
 `components/suppliers/supplier-url.ts` is the browser-side copy — same limit, same schemes, same two
-messages — used both by the create/edit form, which refuses before the request, and by the list,
-which renders a website as
+messages — used both by the create/edit form (in its own dialog since issue #1174, see
+[The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)), which refuses before the
+request, and by the list, which renders a website as
 `<a href=… target="_blank" rel="noopener noreferrer">` only when that same check still accepts the
 stored value. Anything else renders as plain text, so a value that somehow reached the database
 without passing the server rule is never clickable. Angular's own URL sanitisation stays in place
@@ -15692,6 +15708,95 @@ anything else happens — but on a linked copy the normalised value is then comp
 one, and a change is refused with `400` and that link rule's own sentence on the `url` field. A
 supplier the business created itself is unaffected. See
 [The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934).
+
+### The Suppliers page's dialogs (issue #1174)
+
+Adding or editing a supplier used to happen in a New/Edit form card above the list, with the GST
+defaults card appearing underneath it while a supplier was being edited. Both are gone: the Suppliers
+page is a list, and each thing done to one supplier happens in a dialog over it, so the operator
+keeps their place in the list. **No API, DTO, schema, Domain rule, capability or validation changed;
+this is the Angular page**, and the payload the form sends is byte-for-byte the one the inline form
+sent.
+
+**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191),
+`SupplierListComponent` keeps only *which* dialog is open and for which supplier
+(`formOpen`/`editing`, `gstDefaultsFor`, `deleting`) and the list's own reads, refusals and the
+"Not used", Delete and **Available to add** writes. The form — its values, its field rules, its
+submission state, its server refusal and its discard question — is `SupplierFormDialogComponent`
+(`components/suppliers/supplier-form-dialog/`), composed through `[supplier]`/`[sessionActive]` and
+reporting only `(saved)` and `(closed)`. `null` for `[supplier]` is an Add and an existing one is an
+Edit; the only differences are the title (*Add supplier* / *Edit supplier*), the primary action
+(*Create supplier* / *Save changes*) and which call is made. The page's own template authors no
+dialog markup at all, which is what `page-composition.guard.ts` checks.
+
+**Three dialogs, one shell.** All of them are `ModalDialogComponent`
+(see [Interaction and presentation](#interaction-and-presentation)) or the shared
+`ConfirmationDialogComponent`:
+
+- **Add/Edit** is the form dialog above. Its action row sits in the shell's footer and submits the
+  form through `form="supplier-form"` (the #892 mechanism), so it stays visible while the fields
+  scroll. Initial focus is the Name field, or **Contact name** when the name is locked — the first
+  field the operator can actually edit.
+- **GST defaults** is the existing `SupplierGstDefaultsComponent` projected into the shell from each
+  row's *GST defaults* action, unchanged: its own read, `switchMap` cancellation, save, messages and
+  `Suppliers.ManageGstDefaults` read/write split are its own (see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430)). The dialog's title
+  names the supplier, so the panel is not asked to name it a second time.
+- **Delete** is `ConfirmationDialogComponent`, naming the supplier, in place of the browser's
+  `confirm()`. `canDelete === false` and a support session still remove the button, and `askDelete()`
+  and `remove()` each check both, so a question the server would refuse is never asked and a write it
+  would refuse is never issued. A refused delete shows the server's sentence verbatim and **does not
+  reload the list**.
+- **Discard changes?** is a second instance of the shell, opened *over* the form dialog rather than
+  instead of it: the form behind it is inert while the question is open and comes back with every
+  entered value when the answer is *Keep editing*. It cannot be `ConfirmationDialogComponent`,
+  because a `z-index` backdrop cannot paint above the form dialog's top layer.
+
+**What the dialog decides, and what it does not.** Closing an unchanged form dismisses it; a dirty
+one (the values on screen compared with the ones it opened with) asks first, whether the dismissal
+came from Cancel, the Close control, Escape or the backdrop. A save holds everything still — the
+primary action, Cancel and Close are all disabled and the action shows *Saving…* — so a second
+submission cannot be issued, and only a successful write reports `saved`, which is what lets the page
+re-read the list and show its toast **after** the write rather than beside it. A refusal keeps every
+entered value and shows the server's own sentence (`supplier-refusal.ts`, the shared reader of the
+two shapes the API uses, which the list uses for its own refusals) above the fields. A support
+session disables the save and `save()` returns before calling the API, exactly as the inline form's
+submit did, and the header's **Add supplier** trigger is hidden outright with `addSupplier()`
+guarded beneath it, because a create in a session could only end in the server's refusal; Edit
+still **opens**, because opening a stored supplier's details issues no request, which is what lets
+a session read them (see
+[Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
+
+**What proves it.** `supplier-list.component.spec.ts` covers the page half — no inline form or GST
+card left, the header action opening an empty dialog, a row's Edit opening a filled one, the list
+re-read and the toast only after a successful save, the dialog kept open with no reload and no toast
+on a refusal, the GST dialog opened for the right supplier with its permission intact, the delete
+question naming the supplier with nothing written until it is confirmed and nothing written when it
+is dismissed, and the support-session paths. `supplier-form-dialog.component.spec.ts` covers the form
+— the #847 website rule and its two messages, the blank-name refusal, the #934 lock with the stored
+name and website sent back unchanged, the exact payload, duplicate-submit prevention with the values
+kept and the refusal shown verbatim on failure, the discard question from all four dismissal paths
+with *Keep editing* keeping every value, and the dialog's labelling and initial focus.
+`modal-dialog.component.spec.ts` covers the shell — opened modally and labelled by its own heading
+with no `role` of its own, projection into body and footer, the nominated initial focus, the three
+dismissal paths reporting rather than closing, the Tab cycle, and focus returning to the control that
+opened it. The rendered geometry is not something jsdom can answer — it computes no layout and has
+no native `<dialog>` top layer — so **the browser evidence is `e2e/visual/suppliers-dialogs.visual.ts`
+into `docs/screenshots/issue-1174/`**: the empty Add modal and a linked supplier's Edit modal at
+1440px and the full-screen sheet at 390px and 360px, plus the measurements the jsdom specs cannot
+make — the 600px desktop panel bounded by the window over a body whose `overflow-y` is `auto`,
+Contact name and Phone paired at 1440px and stacked below `sm`, the sheet filling the viewport with
+no border radius and its action row still inside it, no sideways scroll of the page, the panel or
+its body at any of the three widths, the viewport meta still permitting pinch zoom, every input,
+footer button and the square Close control at least 44px at 390px and 360px, and the keyboard half:
+Escape dismissing an unchanged form with focus returning to the header's **Add supplier** and to a
+row's **Edit** respectively, and Escape on a changed form opening the *Discard changes?* question
+with *Keep editing* focused, every typed value still there afterwards, and *Discard changes*
+returning focus to the opener. Like every visual run it answers each `/api/` request with synthetic
+suppliers, refuses every non-`GET` so no save can be photographed, and is human-invoked rather than
+part of `scripts/validate.sh`; see
+[Browser-level end-to-end suite](#browser-level-end-to-end-suite-issue-46) and the regeneration
+note under [Interaction and presentation](#interaction-and-presentation).
 
 ### A product carries no supplier (issue #787)
 

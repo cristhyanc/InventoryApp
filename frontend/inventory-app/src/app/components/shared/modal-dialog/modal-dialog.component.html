@@ -1,0 +1,37 @@
+<!--
+  A native modal `<dialog>`, not a `role="dialog"` div inside a backdrop div, for the reason the
+  cheapest-supplier popup is one (issue #930) and the supplier-order completion question became one
+  (issue #974): `showModal()` moves this into the top layer, makes the page behind it inert and
+  paints the overlay as this element's own `::backdrop`, so nothing underneath can be clicked,
+  tabbed into or reached by assistive technology while the dialog is open. Neither `role` nor
+  `aria-modal` is written here because the platform maps a modal `<dialog>` to exactly those, and
+  repeating them is how the two drift apart.
+-->
+<dialog
+  #dialogPanel
+  tabindex="-1"
+  class="app-dialog"
+  [attr.aria-labelledby]="titleId"
+  [attr.data-testid]="testId"
+>
+  <div class="app-dialog-header">
+    <h2 class="app-dialog-title" [id]="titleId" [attr.data-testid]="titleTestId">{{ dialogTitle }}</h2>
+    <button
+      type="button"
+      class="app-dialog-close"
+      [attr.aria-label]="closeLabel"
+      [disabled]="closeDisabled"
+      (click)="requestClose()"
+    >
+      <span aria-hidden="true">&times;</span>
+    </button>
+  </div>
+
+  <div class="app-dialog-body">
+    <ng-content></ng-content>
+  </div>
+
+  <div class="app-dialog-footer">
+    <ng-content select="[dialog-actions]"></ng-content>
+  </div>
+</dialog>

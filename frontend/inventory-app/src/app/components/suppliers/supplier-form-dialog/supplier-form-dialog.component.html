@@ -1,0 +1,178 @@
+<app-modal-dialog
+  [dialogTitle]="title"
+  [closeDisabled]="saving"
+  testId="supplier-form-dialog"
+  titleTestId="supplier-form-title"
+  (closeRequested)="requestClose()"
+>
+  <!--
+    The action row lives in the dialog's footer rather than inside the form, so it stays visible
+    above a scrolling body; `form="supplier-form"` is what still makes the primary control submit
+    this form (the mechanism issue #892 introduced on the product form).
+  -->
+  <form id="supplier-form" class="flex flex-col gap-4" (ngSubmit)="save()">
+    <!-- A supplier that came from the platform's list keeps that list's name and website
+         (issue #934). The inputs are shown read-only rather than removed, because the operator
+         still needs to see which supplier they are editing; the API refuses a change to either
+         whatever this form sends. -->
+    @if (nameAndWebsiteLocked) {
+      <p class="text-md-body value-muted" data-testid="supplier-locked-note">
+        This supplier comes from the platform's supplier list, so its name and website cannot be
+        changed and it cannot be deleted. Mark it "Not used" to hide it from the supplier lists.
+      </p>
+    }
+
+    @if (error) {
+      <p class="field-error" role="alert" data-testid="supplier-form-error">{{ error }}</p>
+    }
+
+    <div class="field">
+      <label class="field-label" for="supplierName">Name</label>
+      <input
+        id="supplierName"
+        class="min-h-11"
+        [(ngModel)]="form.name"
+        (ngModelChange)="onFieldChanged()"
+        name="name"
+        required
+        [attr.data-dialog-autofocus]="nameAndWebsiteLocked ? null : ''"
+        [readonly]="nameAndWebsiteLocked"
+        [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
+        [disabled]="saving"
+        placeholder="e.g. General Distributors Inc."
+        [attr.aria-invalid]="nameError ? 'true' : null"
+        [attr.aria-describedby]="nameError ? 'supplierNameError' : null"
+      />
+      @if (nameError) {
+        <p id="supplierNameError" class="field-error" role="alert">{{ nameError }}</p>
+      }
+    </div>
+
+    <!-- Contact name and Phone share a row from `sm` up and stack below it. -->
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div class="field">
+        <label class="field-label" for="supplierContactName">Contact name</label>
+        <input
+          id="supplierContactName"
+          class="min-h-11"
+          [(ngModel)]="form.contactName"
+          (ngModelChange)="onFieldChanged()"
+          name="contactName"
+          [attr.data-dialog-autofocus]="nameAndWebsiteLocked ? '' : null"
+          [disabled]="saving"
+          placeholder="Optional"
+        />
+      </div>
+      <div class="field">
+        <label class="field-label" for="supplierPhone">Phone</label>
+        <input
+          id="supplierPhone"
+          class="min-h-11"
+          [(ngModel)]="form.phone"
+          (ngModelChange)="onFieldChanged()"
+          name="phone"
+          type="tel"
+          inputmode="tel"
+          [disabled]="saving"
+          placeholder="Optional"
+        />
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="supplierEmail">Email</label>
+      <input
+        id="supplierEmail"
+        class="min-h-11"
+        [(ngModel)]="form.email"
+        (ngModelChange)="onFieldChanged()"
+        name="email"
+        type="email"
+        inputmode="email"
+        [disabled]="saving"
+        placeholder="Optional"
+      />
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="supplierUrl">Website</label>
+      <input
+        id="supplierUrl"
+        class="min-h-11"
+        [(ngModel)]="form.url"
+        (ngModelChange)="onFieldChanged()"
+        name="url"
+        type="url"
+        inputmode="url"
+        [maxlength]="urlMaxLength"
+        [readonly]="nameAndWebsiteLocked"
+        [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
+        [disabled]="saving"
+        placeholder="Optional, e.g. https://example.com"
+        [attr.aria-invalid]="urlError ? 'true' : null"
+        [attr.aria-describedby]="urlError ? 'supplierUrlError' : null"
+      />
+      @if (urlError) {
+        <p id="supplierUrlError" class="field-error" role="alert">{{ urlError }}</p>
+      }
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="supplierAddress">Address</label>
+      <textarea
+        id="supplierAddress"
+        [(ngModel)]="form.address"
+        (ngModelChange)="onFieldChanged()"
+        name="address"
+        rows="2"
+        [disabled]="saving"
+        placeholder="Optional"
+      ></textarea>
+    </div>
+  </form>
+
+  <div dialog-actions>
+    <button type="button" class="btn btn-secondary min-h-11" [disabled]="saving" (click)="requestClose()">
+      Cancel
+    </button>
+    <button
+      type="submit"
+      form="supplier-form"
+      class="btn btn-primary min-h-11"
+      [disabled]="saving || sessionActive"
+      data-testid="supplier-form-submit"
+    >
+      {{ saving ? 'Saving…' : submitLabel }}
+    </button>
+  </div>
+</app-modal-dialog>
+
+<!--
+  The discard question, over the form rather than instead of it: a second modal `<dialog>` is the
+  topmost element in the top layer, so the form behind it is inert while the question is open and
+  comes back exactly as it was - with every entered value - when the answer is "Keep editing".
+-->
+@if (confirmingDiscard) {
+  <app-modal-dialog
+    dialogTitle="Discard changes?"
+    closeLabel="Keep editing"
+    testId="supplier-discard-dialog"
+    (closeRequested)="keepEditing()"
+  >
+    <p class="text-md-body">
+      This supplier has changes that have not been saved. Discarding them cannot be undone.
+    </p>
+
+    <div dialog-actions>
+      <button
+        type="button"
+        class="btn btn-secondary min-h-11"
+        data-dialog-autofocus
+        (click)="keepEditing()"
+      >
+        Keep editing
+      </button>
+      <button type="button" class="btn btn-danger min-h-11" (click)="discardChanges()">Discard changes</button>
+    </div>
+  </app-modal-dialog>
+}
