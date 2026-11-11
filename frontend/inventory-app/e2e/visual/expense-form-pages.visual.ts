@@ -170,17 +170,19 @@ async function expectAmountsLayout(page: Page, width: number): Promise<void> {
 async function expectFullWidthLayout(page: Page, width: number): Promise<void> {
   const header = (await page.locator('[data-testid="expense-form-header"]').boundingBox())!;
 
-  for (const section of ['details', 'amounts', 'supporting']) {
-    const box = (await page.locator(`[data-testid="expense-section-${section}"]`).boundingBox())!;
-    expect(box.width, `${section} section is wider than 840px at ${width}px`).toBeGreaterThan(840);
-    expect(Math.abs(box.x - header.x), `${section} section left edge lines up with the header at ${width}px`).toBeLessThanOrEqual(
-      2
-    );
-    expect(
-      Math.abs(box.x + box.width - (header.x + header.width)),
-      `${section} section right edge lines up with the header at ${width}px`
-    ).toBeLessThanOrEqual(2);
-  }
+  await Promise.all(
+    ['details', 'amounts', 'supporting'].map(async (section) => {
+      const box = (await page.locator(`[data-testid="expense-section-${section}"]`).boundingBox())!;
+      expect(box.width, `${section} section is wider than 840px at ${width}px`).toBeGreaterThan(840);
+      expect(Math.abs(box.x - header.x), `${section} section left edge lines up with the header at ${width}px`).toBeLessThanOrEqual(
+        2
+      );
+      expect(
+        Math.abs(box.x + box.width - (header.x + header.width)),
+        `${section} section right edge lines up with the header at ${width}px`
+      ).toBeLessThanOrEqual(2);
+    })
+  );
 }
 
 /**
