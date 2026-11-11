@@ -129,10 +129,21 @@ public class RemoveProductUnitPriceMigrationTests
                 product.IsActive, product.CategoryId, product.ExternalProductId));
 
         // The purchase's own costs, the supplier order's agreed price and the stock movement.
-        var purchase = await after.Receipts.Include(receipt => receipt.Items).SingleAsync();
+        // Projected rather than materialised as an entity, for the reason the supplier order's line
+        // below is read with SQL: this test stops at an older schema, and a column a later additive
+        // migration adds to Receipts (issue #1162's InvoiceNumber) is in the model and not here.
+        var purchase = await after.Receipts
+            .Select(receipt => new
+            {
+                receipt.SupplierId,
+                receipt.TotalAmount,
+                receipt.DeliveryCost,
+                receipt.PackageCost,
+            })
+            .SingleAsync();
         Assert.Equal((1, 20.90m, 5.00m, 2.70m), (purchase.SupplierId, purchase.TotalAmount,
             purchase.DeliveryCost, purchase.PackageCost));
-        var item = Assert.Single(purchase.Items);
+        var item = Assert.Single(await after.ReceiptItems.ToListAsync());
         Assert.Equal((7L, 12m, 1.10m), (item.ProductId, item.Quantity, item.UnitCost));
 
         // The supplier order's agreed price is read with SQL rather than through the EF model: this
@@ -194,7 +205,9 @@ public class RemoveProductUnitPriceMigrationTests
         Assert.Equal((7L, "Chips", 1.10m, 3L),
             (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
         Assert.Equal("1.25", (await ScalarAsync(connection, "SELECT UnitPrice FROM SupplierOrderLines;"))?.ToString());
-        Assert.Equal(1.10m, (await after.Receipts.Include(r => r.Items).SingleAsync()).Items.Single().UnitCost);
+        // The line alone, rather than through the purchase: a column a later additive migration adds
+        // to Receipts (issue #1162's InvoiceNumber) is in the model and not in this older schema.
+        Assert.Equal(1.10m, (await after.ReceiptItems.SingleAsync()).UnitCost);
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
     }
 

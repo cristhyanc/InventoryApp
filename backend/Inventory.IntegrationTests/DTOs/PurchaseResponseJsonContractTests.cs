@@ -56,6 +56,7 @@ public class PurchaseResponseJsonContractTests
         BusinessId: 2,
         "Weekly restock",
         "Supplier note",
+        "INV-123",
         65.40m,
         5m,
         GstClassification.Taxable,
@@ -88,6 +89,7 @@ public class PurchaseResponseJsonContractTests
         Id = record.Id,
         Title = record.Title,
         Notes = record.Notes,
+        InvoiceNumber = record.InvoiceNumber,
         TotalAmount = record.TotalAmount,
         DeliveryCost = record.DeliveryCost,
         DeliveryGstClassification = record.DeliveryGstClassification,
@@ -194,9 +196,10 @@ public class PurchaseResponseJsonContractTests
     }
 
     /// <summary>
-    /// Issue #429 added the per-line and per-charge GST classification keys. They are the only
-    /// deliberate additions to this contract: every other key keeps its name, position and value,
-    /// and each classification sits next to the amount it describes.
+    /// Issue #429 added the per-line and per-charge GST classification keys, and issue #1162 added
+    /// <c>invoiceNumber</c> beside the notes. They are the only deliberate additions to this
+    /// contract: every other key keeps its name, position and value, and each classification sits
+    /// next to the amount it describes.
     /// </summary>
     [Fact]
     public void Response_exposes_the_same_keys_in_the_same_order_the_entity_did()
@@ -208,7 +211,7 @@ public class PurchaseResponseJsonContractTests
         Assert.Equal(
             new[]
             {
-                "id", "title", "notes", "totalAmount", "deliveryCost", "deliveryGstClassification",
+                "id", "title", "notes", "invoiceNumber", "totalAmount", "deliveryCost", "deliveryGstClassification",
                 "deliveryGstClassificationSource", "packageCost", "packageGstClassification",
                 "packageGstClassificationSource", "purchaseDate",
                 "supplierId", "supplier", "items", "fileName", "storedFileName", "contentType",
@@ -331,6 +334,26 @@ public class PurchaseResponseJsonContractTests
         Assert.Equal("abc-def.jpg", document.RootElement.GetProperty("storedFileName").GetString());
         Assert.Equal("image/jpeg", document.RootElement.GetProperty("contentType").GetString());
         Assert.Equal(2048, document.RootElement.GetProperty("fileSizeBytes").GetInt64());
+    }
+
+    /// <summary>
+    /// The supplier's own invoice number (issue #1162), emitted trimmed where one is recorded and as
+    /// an explicit <c>null</c> where none is - never as <c>""</c> and never omitted, so a client
+    /// reads "no invoice number" the same way it reads "no document".
+    /// </summary>
+    [Fact]
+    public void Response_carries_the_invoice_number_and_reports_none_as_null()
+    {
+        var json = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
+        var withoutNumber = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord() with { InvoiceNumber = null }, Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("INV-123", document.RootElement.GetProperty("invoiceNumber").GetString());
+        using var none = JsonDocument.Parse(withoutNumber);
+        Assert.Equal(JsonValueKind.Null, none.RootElement.GetProperty("invoiceNumber").ValueKind);
     }
 
     /// <summary>

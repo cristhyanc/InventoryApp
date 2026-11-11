@@ -1,6 +1,7 @@
 import { Component, ElementRef, EventEmitter, Input, OnDestroy, Output, ViewChild } from '@angular/core';
 import { IconComponent } from '../../shared/icon.component';
 import { ObjectUrlCache } from '../../shared/object-url-cache';
+import { prepareImageForUpload } from '../../shared/image-upload-preparation';
 
 /** The saved receipt's name and size, as the purchase read reports them. */
 export interface StoredReceipt {
@@ -18,7 +19,11 @@ export interface StoredReceipt {
  * attach endpoint refuses a purchase that already has one), and this change adds no endpoint. So
  * opening Edit, or cancelling it, never deletes anything.
  *
- * It validates nothing itself: the API's size and type rules decide, as they always have.
+ * It validates nothing itself: the API's size and type rules decide, as they always have. Since
+ * issue #1161 a chosen photo is shrunk and, where the browser can read HEIC, converted to JPEG
+ * before it is reported - so the size shown here is the size that will be uploaded. That takes a
+ * moment, during which the control says so and {@link preparingChange} tells the form to hold its
+ * Save; a file that cannot be improved is reported exactly as it was chosen.
  */
 @Component({
   selector: 'app-purchase-receipt-field',
@@ -42,6 +47,15 @@ export class PurchaseReceiptFieldComponent implements OnDestroy {
   /** The person asked to see the saved receipt; the page fetches it through the authorized API. */
   @Output() readonly previewStored = new EventEmitter<void>();
 
+  /**
+   * Whether a chosen photo is still being prepared (issue #1161), so the form it sits in can hold
+   * its Save until the file it would upload exists.
+   */
+  @Output() readonly preparingChange = new EventEmitter<boolean>();
+
+  /** Whether a chosen photo is being shrunk or converted right now. */
+  preparing = false;
+
   @ViewChild('fileInput', { static: true }) private readonly fileInput!: ElementRef<HTMLInputElement>;
 
   private readonly objectUrls = new ObjectUrlCache();
@@ -52,16 +66,24 @@ export class PurchaseReceiptFieldComponent implements OnDestroy {
 
   /** Attach and Replace both open the same file chooser. */
   chooseFile(): void {
-    if (this.disabled) return;
+    if (this.disabled || this.preparing) return;
     this.fileInput.nativeElement.click();
   }
 
-  onFileSelected(event: Event): void {
+  async onFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.length ? input.files[0] : null;
     // Cleared so choosing the same file again after a Remove still reports a change.
     input.value = '';
-    if (file) this.pendingFileChange.emit(file);
+    if (!file) return;
+
+    this.setPreparing(true);
+    try {
+      // The prepared file is what the form holds, shows the size of, and finally uploads.
+      this.pendingFileChange.emit(await prepareImageForUpload(file));
+    } finally {
+      this.setPreparing(false);
+    }
   }
 
   removePending(): void {
@@ -71,6 +93,11 @@ export class PurchaseReceiptFieldComponent implements OnDestroy {
   previewPending(): void {
     if (!this.pendingFile) return;
     window.open(this.objectUrls.create(this.pendingFile), '_blank', 'noopener');
+  }
+
+  private setPreparing(preparing: boolean): void {
+    this.preparing = preparing;
+    this.preparingChange.emit(preparing);
   }
 
   /** A size as a person reads it: bytes, KB or MB. */

@@ -1,8 +1,10 @@
 using Inventory.Application.Access;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
@@ -49,6 +51,20 @@ public class PurchasesController : ControllerBase
     /// </summary>
     private const string InvalidFileOrSupplierMessage = "Invalid file or supplier";
 
+    /// <summary>
+    /// The cap on a receipt scan upload (issue #1163), deliberately tighter than the 10 MB ceiling
+    /// the purchase document endpoints above carry. A scanned receipt is not a stored business
+    /// document: it is read into memory, sent once to the reader and dropped, and the reader's own
+    /// documented image limit (5 MB by default) is lower again, so nothing an operator can
+    /// legitimately scan comes near this. Eight million bytes is also the cap the evidence-export
+    /// upload settled on for the same reason - it sits inside SonarCloud S5693's
+    /// <c>fileUploadSizeLimit</c>, which reads a 10 MB limit as an excessive content length rather
+    /// than as the mitigation it is (<c>NayaxSaleTimestampRepairsController</c>). Raising it is a
+    /// human decision; both attributes below carry it and
+    /// <c>ReceiptScanUploadLimitTests</c> pins them.
+    /// </summary>
+    private const long MaxScanUploadBytes = 8_000_000;
+
     private readonly ListPurchases _listPurchases;
     private readonly GetPurchase _getPurchase;
     private readonly GetPurchaseFile _getPurchaseFile;
@@ -58,6 +74,8 @@ public class PurchasesController : ControllerBase
     private readonly DeletePurchase _deletePurchase;
     private readonly ComputePurchaseTotalValidation _computeValidation;
     private readonly ComputePurchaseGstSummary _computeGstSummary;
+    private readonly ScanReceipt _scanReceipt;
+    private readonly GetReceiptScanUsage _getReceiptScanUsage;
     private readonly CurrentCapabilities _capabilities;
 
     public PurchasesController(
@@ -70,9 +88,13 @@ public class PurchasesController : ControllerBase
         DeletePurchase deletePurchase,
         ComputePurchaseTotalValidation computeValidation,
         ComputePurchaseGstSummary computeGstSummary,
+        ScanReceipt scanReceipt,
+        GetReceiptScanUsage getReceiptScanUsage,
         CurrentCapabilities capabilities)
     {
         _capabilities = capabilities;
+        _scanReceipt = scanReceipt;
+        _getReceiptScanUsage = getReceiptScanUsage;
         _listPurchases = listPurchases;
         _getPurchase = getPurchase;
         _getPurchaseFile = getPurchaseFile;
@@ -109,7 +131,8 @@ public class PurchasesController : ControllerBase
         return File(file.Content, file.ContentType, file.FileName);
     }
 
-    // multipart/form-data: file (optional, issue #976) + title + notes + totalAmount + deliveryCost
+    // multipart/form-data: file (optional, issue #976) + title + notes + invoiceNumber (optional,
+    // issue #1162) + totalAmount + deliveryCost
     // + deliveryGstClassification + packageCost + packageGstClassification + purchaseDate
     // + supplierId + items + completeSupplierOrderId + completeSupplierOrderFingerprint
     [HttpPost]
@@ -119,6 +142,7 @@ public class PurchasesController : ControllerBase
         IFormFile? file,
         [FromForm] string title,
         [FromForm] string? notes,
+        [FromForm] string? invoiceNumber,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
         [FromForm] GstClassification? deliveryGstClassification,
@@ -144,7 +168,7 @@ public class PurchasesController : ControllerBase
                 ToFileInput(file),
                 new PurchaseFields(
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
-                    deliveryGstClassification, packageGstClassification),
+                    deliveryGstClassification, packageGstClassification, invoiceNumber),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 ToCompletionRequest(completeSupplierOrderId, completeSupplierOrderFingerprint),
                 CancellationToken.None);
@@ -194,11 +218,94 @@ public class PurchasesController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// Reads a receipt image or PDF into a suggested purchase draft, and stores nothing (issue
+    /// #1163, child of #975).
+    ///
+    /// <para><strong>It is this controller's existing <c>Purchasing.Operate</c> capability plus one
+    /// plan requirement</strong> - the same permission as creating a purchase, which is what the
+    /// draft is for - and the plan feature <c>ReceiptScanning</c>, which only Pro includes.
+    /// <c>[RequirePlan]</c> runs before model binding, so a refused request never has its file read
+    /// and never costs anything; it is also the one feature that is refused while plan enforcement is
+    /// off, because every scan spends money at the reader (see
+    /// <c>Inventory.Domain.Subscriptions.PlanFeaturePolicy.FailsClosedWhileUnenforced</c>).</para>
+    ///
+    /// <para><strong>Nothing is written.</strong> No file is stored, no draft is persisted and no
+    /// purchase is created: the operator edits the suggestion and submits it through
+    /// <c>POST /api/purchases</c>, which is where a purchase is created and validated.</para>
+    /// </summary>
+    // multipart/form-data: file
+    [HttpPost("scan")]
+    [Consumes("multipart/form-data")]
+    [RequirePlan(PlanFeature.ReceiptScanning)]
+    // Both limits, as Upload and AddFile above need: RequestSizeLimit caps the raw body through the
+    // host's max-request-body-size feature, and RequestFormLimits caps what the multipart reader
+    // buffers in process, which otherwise defaults to FormOptions' 128 MB. Both carry the scan cap,
+    // so neither is the one that is left open; ReceiptScanUploadLimitTests pins them.
+    [RequestSizeLimit(MaxScanUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxScanUploadBytes)]
+    public async Task<ActionResult<PurchaseScanResponseDto>> Scan(IFormFile? file)
+    {
+        var result = await _scanReceipt.Handle(ToFileInput(file), CancellationToken.None);
+
+        return result.Outcome switch
+        {
+            ScanReceiptOutcome.Draft => Ok(
+                ReceiptScanResponseMapper.ToResponse(result.Draft!, result.Usage!)),
+            ScanReceiptOutcome.InvalidFile => BadRequest(result.Message),
+            // No reader is configured in this deployment: the feature is off rather than broken, and
+            // nothing was sent anywhere.
+            ScanReceiptOutcome.SwitchedOff => StatusCode(
+                StatusCodes.Status503ServiceUnavailable, result.Message),
+            // The request was understood and the receipt was not. Unprocessable rather than a bad
+            // request: there is nothing wrong with what the caller sent.
+            ScanReceiptOutcome.Unreadable => StatusCode(
+                StatusCodes.Status422UnprocessableEntity, result.Message),
+            ScanReceiptOutcome.TimedOut => StatusCode(
+                StatusCodes.Status504GatewayTimeout, result.Message),
+            // The business has used its whole month's allowance (issue #1164). Too Many Requests
+            // rather than a plan refusal: the plan does include scanning, and the same request will
+            // succeed next month without anything being bought - which is exactly what 429 means and
+            // what 402 or 403 would not. No scan was counted and the reader was not called.
+            ScanReceiptOutcome.LimitReached => StatusCode(
+                StatusCodes.Status429TooManyRequests, result.Message),
+            _ => StatusCode(StatusCodes.Status502BadGateway, result.Message),
+        };
+    }
+
+    /// <summary>
+    /// How many receipt scans this business has used this month, and how many are left (issue #1164,
+    /// child of #975).
+    ///
+    /// <para><strong>Asking is not scanning.</strong> It reads one counter of the caller's own
+    /// business, makes no outbound call, spends nothing and counts nothing - so it carries this
+    /// controller's existing <c>Purchasing.Operate</c> capability and deliberately <strong>no</strong>
+    /// <c>[RequirePlan]</c>. A business whose plan does not include scanning reads a count of zero,
+    /// which is true and tells it nothing it could not already infer; making this the second endpoint
+    /// in the API that is unavailable while plan enforcement is off would be a commercial decision,
+    /// and the scan itself is the only endpoint that may be one
+    /// (<c>EndpointPlanRequirementTests.Exactly_the_receipt_scan_declares_the_fail_closed_feature</c>).</para>
+    ///
+    /// <para>The month is the business's own calendar month, from the zone configured on it - the
+    /// same boundary the scan counts against, through one policy, so a page and a refusal cannot
+    /// disagree about which month it is.</para>
+    /// </summary>
+    /// <response code="200">The month, the count, what is left and the cap.</response>
+    [HttpGet("scan/usage")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<PurchaseScanUsageDto>> ScanUsage(CancellationToken cancellationToken)
+    {
+        return Ok(
+            ReceiptScanResponseMapper.ToUsage(
+                await _getReceiptScanUsage.Handle(cancellationToken)));
+    }
+
     [HttpPut("{id:int}")]
     public async Task<ActionResult<PurchaseResponseDto>> Update(
         int id,
         [FromForm] string? title,
         [FromForm] string? notes,
+        [FromForm] string? invoiceNumber,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
         [FromForm] GstClassification? deliveryGstClassification,
@@ -217,7 +324,7 @@ public class PurchasesController : ControllerBase
                 id,
                 new PurchaseFields(
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
-                    deliveryGstClassification, packageGstClassification),
+                    deliveryGstClassification, packageGstClassification, invoiceNumber),
                 ParseItems(items)?.Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }

@@ -1,5 +1,22 @@
 import { routes } from '../../app.routes';
-import { BreadcrumbRouteEntry, breadcrumbRoutes, buildBreadcrumbTrail, buildTrailFrom } from './breadcrumb-routes';
+import {
+  BreadcrumbParent,
+  BreadcrumbRouteEntry,
+  breadcrumbRoutes,
+  buildBreadcrumbTrail,
+  buildTrailFrom
+} from './breadcrumb-routes';
+
+/** Every routable ancestor's path, without the leading slash, for the declaration check below. */
+function ancestorPaths(parent: BreadcrumbParent | undefined): string[] {
+  const paths: string[] = [];
+  for (let current = parent; current !== undefined; current = current.parent) {
+    if (current.path !== undefined) {
+      paths.push(current.path.replace(/^\//, ''));
+    }
+  }
+  return paths;
+}
 
 /** Every path `app.routes.ts` declares, flattened (including `products`'s children). */
 function declaredRoutePaths(): Set<string> {
@@ -32,9 +49,10 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
 
   it("maps every parent's path to a route declared in app.routes.ts", () => {
     const declared = declaredRoutePaths();
+    // Every ancestor, not only the immediate parent: a parent may declare one of its own since
+    // issue #1152, and a chain that names a page that does not exist is the same defect.
     const undeclaredParents = breadcrumbRoutes
-      .filter((entry) => entry.parent?.path)
-      .map((entry) => entry.parent!.path!.replace(/^\//, ''))
+      .flatMap((entry) => ancestorPaths(entry.parent))
       .filter((path) => !declared.has(path));
 
     expect(undeclaredParents).toEqual([]);
@@ -59,6 +77,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/reports/gst',
       '/reports/site-commissions',
       '/admin/imports',
+      '/admin/imports/reimbursement-report',
       '/admin/historical-cost-recovery',
       '/admin/avco-transition',
       '/admin/costing-repair',
@@ -69,6 +88,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/super-admin/supplier-presets',
       '/super-admin/price-catalogue-review',
       '/super-admin/master-products',
+      '/super-admin/menu-visibility',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -98,6 +118,26 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/purchases/42/edit', null)).toEqual([
       { label: 'Purchases', path: '/purchases', current: false },
       { label: 'Edit purchase', current: true }
+    ]);
+  });
+
+  /**
+   * The Reimbursement Report page (issue #1152) is the first three-item trail: it is owned by the
+   * Imports page, which is owned by the Admin hub, and both ancestors are real pages so both are
+   * links. Its URL is three segments, so it must not be read as `/admin/imports`.
+   */
+  it('builds Admin > Imports > Reimbursement Report for the dedicated page (issue #1152)', () => {
+    expect(buildBreadcrumbTrail('/admin/imports/reimbursement-report', null)).toEqual([
+      { label: 'Admin', path: '/admin', current: false },
+      { label: 'Imports', path: '/admin/imports', current: false },
+      { label: 'Reimbursement Report', current: true }
+    ]);
+  });
+
+  it('leaves the Imports page itself a two-item trail', () => {
+    expect(buildBreadcrumbTrail('/admin/imports', null)).toEqual([
+      { label: 'Admin', path: '/admin', current: false },
+      { label: 'Imports', current: true }
     ]);
   });
 
@@ -145,6 +185,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/super-admin/master-products', null)).toEqual([
       { label: 'Super Admin', path: undefined, current: false },
       { label: 'Master Products', current: true }
+    ]);
+  });
+
+  it('builds Super Admin > Menu Visibility for the switches page (issue #1151)', () => {
+    expect(buildBreadcrumbTrail('/super-admin/menu-visibility', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Menu Visibility', current: true }
     ]);
   });
 
@@ -260,6 +307,55 @@ describe('buildTrailFrom (non-routable group)', () => {
     expect(buildTrailFrom(entries, '/widgets/9', null)).toEqual([
       { label: 'Widgets', path: undefined, current: false },
       { label: 'Widget details', current: true }
+    ]);
+  });
+});
+
+/**
+ * The parent chain itself (issue #1152), driven over fixture entries so the rule is tested rather
+ * than only today's routes.
+ */
+describe('buildTrailFrom (a parent that declares a parent)', () => {
+  const grandparent: BreadcrumbParent = { label: 'Area', path: '/area' };
+  const parent: BreadcrumbParent = { label: 'Section', path: '/area/section', parent: grandparent };
+
+  it('names every ancestor, outermost first, with only the current page uncurrent', () => {
+    const entries: readonly BreadcrumbRouteEntry[] = [
+      { pattern: '/area/section/leaf', label: 'Leaf', parent }
+    ];
+
+    expect(buildTrailFrom(entries, '/area/section/leaf', null)).toEqual([
+      { label: 'Area', path: '/area', current: false },
+      { label: 'Section', path: '/area/section', current: false },
+      { label: 'Leaf', current: true }
+    ]);
+  });
+
+  it('keeps a non-routable ancestor a label rather than a link, at any depth', () => {
+    const entries: readonly BreadcrumbRouteEntry[] = [
+      {
+        pattern: '/area/section/leaf',
+        label: 'Leaf',
+        parent: { label: 'Section', path: '/area/section', parent: { label: 'Group' } }
+      }
+    ];
+
+    expect(buildTrailFrom(entries, '/area/section/leaf', null)).toEqual([
+      { label: 'Group', path: undefined, current: false },
+      { label: 'Section', path: '/area/section', current: false },
+      { label: 'Leaf', current: true }
+    ]);
+  });
+
+  it('leaves a dynamic label on the current page alone, never on an ancestor', () => {
+    const entries: readonly BreadcrumbRouteEntry[] = [
+      { pattern: '/area/section/:id', label: 'Leaf details', parent, dynamic: true }
+    ];
+
+    expect(buildTrailFrom(entries, '/area/section/7', 'Widget 7')).toEqual([
+      { label: 'Area', path: '/area', current: false },
+      { label: 'Section', path: '/area/section', current: false },
+      { label: 'Widget 7', current: true }
     ]);
   });
 });

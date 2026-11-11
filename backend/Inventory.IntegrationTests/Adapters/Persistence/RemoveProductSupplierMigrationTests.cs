@@ -125,10 +125,21 @@ public class RemoveProductSupplierMigrationTests
             (await after.Suppliers.Select(supplier => supplier.Name).ToListAsync())
                 .Order(StringComparer.Ordinal));
 
-        var purchase = await after.Receipts.Include(receipt => receipt.Items).SingleAsync();
+        // Projected for the same reason the suppliers above are: a column a later additive migration
+        // adds to Receipts (issue #1162's InvoiceNumber) is in the current model and not in this
+        // schema.
+        var purchase = await after.Receipts
+            .Select(receipt => new
+            {
+                receipt.SupplierId,
+                receipt.TotalAmount,
+                receipt.DeliveryCost,
+                receipt.PackageCost,
+            })
+            .SingleAsync();
         Assert.Equal((2, 20.90m, 5.00m, 2.70m), (purchase.SupplierId, purchase.TotalAmount,
             purchase.DeliveryCost, purchase.PackageCost));
-        var item = Assert.Single(purchase.Items);
+        var item = Assert.Single(await after.ReceiptItems.ToListAsync());
         Assert.Equal((7L, 12m, 1.10m), (item.ProductId, item.Quantity, item.UnitCost));
 
         // The supplier order is read with SQL rather than through the EF model: this test stops at
@@ -175,7 +186,9 @@ public class RemoveProductSupplierMigrationTests
         await using var after = TestAppDbContext.Unrestricted(options);
         var product = await after.Products.SingleAsync();
         Assert.Equal((7L, "Chips", 1.10m, 3L), (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
-        Assert.Equal(2, (await after.Receipts.SingleAsync()).SupplierId);
+        // Projected for the reason above: the current model's Receipts carries a column this schema
+        // does not (issue #1162's InvoiceNumber).
+        Assert.Equal(2, await after.Receipts.Select(receipt => receipt.SupplierId).SingleAsync());
         Assert.Equal("2", await ScalarTextAsync(connection, "SELECT SupplierId FROM SupplierOrders;"));
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
     }

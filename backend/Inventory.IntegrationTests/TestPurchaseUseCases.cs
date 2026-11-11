@@ -1,10 +1,13 @@
 using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Attachments;
+using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.ReceiptScanning;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 
@@ -40,6 +43,45 @@ internal static class TestPurchaseUseCases
     public static AttachPurchaseDocument Attach(
         IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard? quota = null) =>
         new(store, documents, quota ?? FakeAttachmentQuota.NotEnforced());
+
+    /// <summary>
+    /// Issue #1163's receipt scan, for the controller tests that construct the controller directly.
+    /// It defaults to the shipped state - no reader configured - so a test about something else
+    /// cannot accidentally exercise a scan, and no test ever reaches a live reader.
+    /// </summary>
+    public static ScanReceipt Scan(
+        IReceiptScanSettings? settings = null,
+        IReceiptScanCatalogueStore? catalogue = null,
+        IPdfPageCounter? pages = null,
+        IReceiptReader? reader = null,
+        IReceiptScanLog? log = null,
+        ICurrentBusinessProvider? business = null,
+        IReceiptScanPurchaseHistoryStore? purchases = null,
+        IReceiptScanUsageStore? usage = null,
+        IBusinessCalendar? calendar = null) =>
+        new(
+            settings ?? FakeReceiptScanSettings.SwitchedOff(),
+            catalogue ?? new FakeReceiptScanCatalogueStore(),
+            purchases ?? new FakeReceiptScanPurchaseHistoryStore(),
+            pages ?? new FakePdfPageCounter(),
+            reader ?? FakeReceiptReader.Unavailable(),
+            log ?? new RecordingReceiptScanLog(),
+            business ?? new FakeCurrentBusinessProvider(1),
+            // Issue #1164's monthly counter, in memory and starting at zero: a test about something
+            // else neither counts a scan nor is refused by a cap it never set.
+            usage ?? new FakeReceiptScanUsageStore(),
+            calendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 1)));
+
+    /// <summary>
+    /// Issue #1164's "how many scans are left" read, for the controller tests that construct the
+    /// controller directly. It counts nothing and makes no outbound call.
+    /// </summary>
+    public static GetReceiptScanUsage ScanUsage(
+        IReceiptScanUsageStore? usage = null,
+        IBusinessCalendar? calendar = null) =>
+        new(
+            usage ?? new FakeReceiptScanUsageStore(),
+            calendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 1)));
 
     private static ActorIdentity Actor(string objectId)
     {

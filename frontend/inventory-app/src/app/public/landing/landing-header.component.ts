@@ -6,7 +6,7 @@ import { APP_ENTRY_URL, PUBLIC_HOME_ROUTE } from './landing-routes';
 
 /**
  * The landing page's own header (issue #954): the Restockroo brand, the section links, and the
- * account actions - **Sign in** and **Get started** for a signed-out visitor, **Open app** for a
+ * account actions - **Sign in** and **Start free** for a signed-out visitor, **Open app** for a
  * signed-in person.
  *
  * It decides nothing about authentication. It reports which action was chosen and which section
@@ -53,7 +53,7 @@ import { APP_ENTRY_URL, PUBLIC_HOME_ROUTE } from './landing-routes';
               Sign in
             </button>
             <button type="button" class="rr-button-primary" data-testid="landing-get-started" (click)="getStartedRequested.emit()">
-              Get started
+              Start free
             </button>
           }
           <button
@@ -88,7 +88,7 @@ import { APP_ENTRY_URL, PUBLIC_HOME_ROUTE } from './landing-routes';
                 Sign in
               </button>
               <button type="button" class="rr-button-primary w-full" data-testid="landing-menu-get-started" (click)="closeMenu(false); getStartedRequested.emit()">
-                Get started
+                Start free
               </button>
             }
           </div>

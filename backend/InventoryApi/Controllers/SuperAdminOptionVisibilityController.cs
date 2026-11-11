@@ -8,8 +8,16 @@ using Microsoft.Identity.Web.Resource;
 namespace InventoryApi.Controllers;
 
 /// <summary>
-/// The Super Admin's switch over the one option whose visibility is switchable (issue #873):
-/// Historical GST Classification, the occasional maintenance tool of issue #433.
+/// The Super Admin's switch over Historical GST Classification's visibility (issue #873), the
+/// occasional maintenance tool of issue #433.
+///
+/// <para><strong>Superseded by <see cref="SuperAdminMenuVisibilityController"/> and kept for the
+/// rollout (issue #1148).</strong> The API deploys before the frontend, so this endpoint still works
+/// and still writes the same stored answer - the <c>admin.historical-gst-classification</c> row of
+/// the menu-visibility catalogue, through the same <c>SetMenuVisibility</c> use case, with the same
+/// audit event the new surface emits. It adds no second way to store anything. Removing it, the
+/// legacy <c>historicalGstClassificationVisible</c> field and the superseded
+/// <c>PlatformOptionVisibility</c> table is a later issue, after a release.</para>
 ///
 /// <para><strong>Authorisation is the other Super Admin surfaces', unchanged.</strong>
 /// <c>[Authorize(Policy = PlatformAdminPolicy.Name)]</c> is evaluated by the authorization
@@ -35,7 +43,9 @@ namespace InventoryApi.Controllers;
 /// authorizing every request by <c>Data.Repair</c> exactly as issue #433 left them. The current state
 /// is published to every signed-in caller - the administrator included - by
 /// <c>GET /api/me/access</c>, which is where the application shell already reads what it may offer,
-/// so a second read endpoint here would be a second answer to one question.</para>
+/// so a second read endpoint here would be a second answer to one question. The whole catalogue,
+/// with its labels and defaulted keys, is read from
+/// <c>GET /api/super-admin/menu-visibility</c> instead.</para>
 /// </summary>
 [ApiController]
 [Route("api/super-admin/option-visibility")]
@@ -48,12 +58,11 @@ namespace InventoryApi.Controllers;
 [PlatformDiagnosticsEndpoint]
 public sealed class SuperAdminOptionVisibilityController : ControllerBase
 {
-    private readonly SetHistoricalGstClassificationVisibility _setHistoricalGstClassification;
+    private readonly SetMenuVisibility _setMenuVisibility;
 
-    public SuperAdminOptionVisibilityController(
-        SetHistoricalGstClassificationVisibility setHistoricalGstClassification)
+    public SuperAdminOptionVisibilityController(SetMenuVisibility setMenuVisibility)
     {
-        _setHistoricalGstClassification = setHistoricalGstClassification;
+        _setMenuVisibility = setMenuVisibility;
     }
 
     /// <summary>
@@ -68,10 +77,15 @@ public sealed class SuperAdminOptionVisibilityController : ControllerBase
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var stored = await _setHistoricalGstClassification.Handle(
+        // The key is this endpoint's, never the caller's: the body carries no key at all, so this
+        // route can only ever write the one destination it was built for (issue #1148).
+        var stored = await _setMenuVisibility.Handle(
+            MenuVisibilityKeys.HistoricalGstClassification,
             request.HistoricalGstClassificationVisible,
             cancellationToken);
 
-        return Ok(SuperAdminOptionVisibilityResponse.From(stored));
+        // The key is a compiled catalogue constant, so the use case cannot answer "no such key"
+        // here; a null would be a bug in the catalogue rather than anything a caller did.
+        return Ok(SuperAdminOptionVisibilityResponse.From(stored!));
     }
 }

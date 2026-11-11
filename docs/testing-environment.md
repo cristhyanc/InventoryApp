@@ -159,9 +159,13 @@ deploy without them.
 | `PlatformAdmin__DirectoryTenantId`, `PlatformAdmin__ObjectId` | your own Entra ids (optional) | Super Admin pages on testing, for example to approve that business. |
 | `PriceCollector__TenantId`, `PriceCollector__ClientId`, `PriceCollector__RunExpiryHours` | see [Collector](#manual-supplier-price-collector-against-testing) | Only when you test the collector. |
 
-**Leave unset**: `NayaxTokenProtection__*`, `NayaxSqs__*`, `BackupStorage__*`,
+**Leave unset**: `NayaxTokenProtection__*`, `NayaxSqs__*`, `ReceiptScanning__*`, `BackupStorage__*`,
 `APPLICATIONINSIGHTS_CONNECTION_STRING` (or point it at a separate test Application Insights
-resource), `ExternalId__*` (see below), and `Subscriptions__EnforcementEnabled`. With no Nayax token
+resource), `ExternalId__*` (see below), and `Subscriptions__EnforcementEnabled`. With no
+`ReceiptScanning__ApiKey` (issue #1163) receipt scanning is off on testing, so
+`POST /api/purchases/scan` answers `503` and nothing is sent to Anthropic or charged for; a key here
+would spend real money on test receipts, and with `Subscriptions__EnforcementEnabled` unset the
+fail-closed plan rule refuses every scan on this environment in any case. With no Nayax token
 key, no business on testing can store Nayax credentials, so the test API makes no Nayax call. The
 deploy job warns when a Nayax key or backup storage is configured. The application has no payment
 provider. Never copy production connection strings, keys or storage settings into testing.

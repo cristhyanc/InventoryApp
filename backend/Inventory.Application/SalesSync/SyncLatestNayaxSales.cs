@@ -1,4 +1,3 @@
-using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Providers;
@@ -219,8 +218,8 @@ public interface INayaxLastSalesObserver
 /// replays every pending row the business has. That is what makes a failed rebuild recoverable on
 /// this path: the sales were already stored, so a run that only looked at its own batch found no
 /// affected products the next time and never retried. A product whose history is still unreplayable
-/// is raised as the one <see cref="Costing.InventoryCostDataQualityException"/> it always was, after
-/// every product that could be rebuilt has been.</para>
+/// no longer fails the run: it keeps its pending row and failure code, is retried by every later run,
+/// and is reported by product through <see cref="Costing.GetProductsNeedingCostAttention"/>.</para>
 ///
 /// <para><strong>A run that happened moments ago is skipped, not repeated</strong> (issue #843, part
 /// of parent #839). The Dashboard calls this on every load, so a visit, a back-navigation or a
@@ -506,11 +505,16 @@ public sealed class SyncLatestNayaxSales
         // the products this batch's completed sales touched, so a rebuild that failed was never
         // retried: the sales were already stored, the next sync therefore reported no affected
         // products, and that product's costing position stayed stale until its next sale.
-        var drained = await _store.RebuildInventoryCostsAsync(cancellationToken);
-        if (drained.Failures.Count > 0)
-            throw new InventoryCostDataQualityException(
-                "The latest Nayax sales synchronization could not rebuild every affected product's "
-                    + "inventory cost. " + string.Join(" ", drained.Failures));
+        //
+        // A product whose history still cannot be replayed does not fail the synchronization: the
+        // sales are stored, every other product was rebuilt, and the failed product keeps its
+        // durable pending row with its attempt count and failure code, which every later run of
+        // either sales path retries and the Dashboard's "costs need attention" read reports by
+        // product. Before, one product's missing purchase failed the whole business's sync on every
+        // visit and hid every fresh figure behind a "could not be synchronized" warning. The hourly
+        // reconciliation still records no success while a failure is pending; it checks its own
+        // drain for that.
+        await _store.RebuildInventoryCostsAsync(cancellationToken);
 
         await RecordCoverageAsync(windowStarts, everyReadSaleHasAnInstant, readStartedAtUtc, cancellationToken);
 

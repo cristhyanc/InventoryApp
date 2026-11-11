@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Inventory.Application.PlatformOptions;
+using Inventory.Infrastructure.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -8,6 +10,16 @@ namespace InventoryApi.Tests.Controllers;
 /// <summary>
 /// The switchable Admin option's visibility over real HTTP (issue #873): who may change it, what it
 /// defaults to, what every member is told, and what a refused write leaves behind.
+///
+/// <para><strong>Since issue #1148 this is the legacy endpoint's compatibility contract.</strong>
+/// <c>PUT /api/super-admin/option-visibility</c> and the <c>historicalGstClassificationVisible</c>
+/// field are kept for the rollout, because the API deploys before the frontend, and both now work
+/// over the keyed menu-visibility storage: the write stores the
+/// <c>admin.historical-gst-classification</c> row and the superseded <c>PlatformOptionVisibility</c>
+/// table is never written again. Every assertion below is the behaviour issue #873 specified; what
+/// changed is only where the answer is stored, which is why the row assertions read the new table
+/// and prove the old one stays empty. The new surface's own contract is
+/// <c>SuperAdminMenuVisibilityApiTests</c>.</para>
 ///
 /// <para>Everything here goes through the complete pipeline - authentication, <c>[Authorize]</c>,
 /// the platform-admin policy, <c>[RequiredScope]</c>, <c>RolePreviewMiddleware</c>,
@@ -39,7 +51,7 @@ public class SuperAdminOptionVisibilityApiTests
     public async Task InitializeAsync()
     {
         await _factory.ResetAsync();
-        await _factory.ResetOptionVisibilityAsync();
+        await _factory.ResetMenuVisibilityAsync();
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -54,7 +66,7 @@ public class SuperAdminOptionVisibilityApiTests
     [Fact]
     public async Task The_option_is_offered_by_default_with_no_stored_setting_at_all()
     {
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
 
         Assert.True(await VisibleToTheOwnerAsync());
     }
@@ -73,14 +85,14 @@ public class SuperAdminOptionVisibilityApiTests
         Assert.Equal(HttpStatusCode.OK, off.StatusCode);
         Assert.False(await ReadVisibleAsync(off));
         Assert.False(await VisibleToTheOwnerAsync());
-        Assert.False(Assert.Single(await _factory.OptionVisibilityRowsAsync()).HistoricalGstClassificationVisible);
+        Assert.False(await StoredVisibleAsync());
 
         var on = await PutAsync(_factory.AsAdministrator(), visible: true);
 
         Assert.Equal(HttpStatusCode.OK, on.StatusCode);
         Assert.True(await ReadVisibleAsync(on));
         Assert.True(await VisibleToTheOwnerAsync());
-        Assert.True(Assert.Single(await _factory.OptionVisibilityRowsAsync()).HistoricalGstClassificationVisible);
+        Assert.True(await StoredVisibleAsync());
     }
 
     /// <summary>
@@ -100,7 +112,7 @@ public class SuperAdminOptionVisibilityApiTests
         var response = await PutAsync(_factory.Authenticated(objectId), visible: false);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
         Assert.True(await VisibleToTheOwnerAsync());
     }
 
@@ -121,7 +133,7 @@ public class SuperAdminOptionVisibilityApiTests
             visible: true);
 
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
-        Assert.False(Assert.Single(await _factory.OptionVisibilityRowsAsync()).HistoricalGstClassificationVisible);
+        Assert.False(await StoredVisibleAsync());
         Assert.False(await VisibleToTheOwnerAsync());
     }
 
@@ -137,7 +149,7 @@ public class SuperAdminOptionVisibilityApiTests
         var response = await _factory.AsAdministrator().PutAsJsonAsync(VisibilityUrl, new { });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
         Assert.True(await VisibleToTheOwnerAsync());
     }
 
@@ -152,7 +164,7 @@ public class SuperAdminOptionVisibilityApiTests
         var response = await PutAsync(_factory.CreateClient(), visible: false);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
     }
 
     /// <summary>
@@ -167,7 +179,7 @@ public class SuperAdminOptionVisibilityApiTests
             visible: false);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
     }
 
     /// <summary>
@@ -191,7 +203,7 @@ public class SuperAdminOptionVisibilityApiTests
         var response = await PutAsync(client, visible: false);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.Empty(await StoredRowsAsync());
     }
 
     /// <summary>
@@ -230,7 +242,7 @@ public class SuperAdminOptionVisibilityApiTests
 
         var audits = _factory
             .LoggedEntries()
-            .Where(entry => entry.Contains("option visibility audit", StringComparison.OrdinalIgnoreCase))
+            .Where(entry => entry.Contains("menu visibility audit", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var audit = Assert.Single(audits);
@@ -238,6 +250,12 @@ public class SuperAdminOptionVisibilityApiTests
             SuperAdminBusinessesApiFactory.AdministratorObjectId,
             audit,
             StringComparison.OrdinalIgnoreCase);
+        // The destination the legacy endpoint writes is named in the trail like any other
+        // (issue #1148): one event, one key, one resulting state.
+        Assert.Contains(
+            MenuVisibilityKeys.HistoricalGstClassification,
+            audit,
+            StringComparison.Ordinal);
         Assert.Contains("visible False", audit, StringComparison.Ordinal);
         Assert.DoesNotContain(
             SuperAdminBusinessesApiFactory.TradingBusinessName,
@@ -260,7 +278,69 @@ public class SuperAdminOptionVisibilityApiTests
 
         Assert.DoesNotContain(
             _factory.LoggedEntries(),
-            entry => entry.Contains("option visibility audit", StringComparison.OrdinalIgnoreCase));
+            entry => entry.Contains("menu visibility audit", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The compatibility criterion of issue #1148, in one request each way: what this legacy
+    /// endpoint writes is the <em>same stored answer</em> the new surfaces report - the catalogue key
+    /// on <c>GET /api/super-admin/menu-visibility</c>, and the switched-off list on
+    /// <c>GET /api/me/access</c> beside the legacy boolean it is derived from. There are not two
+    /// settings; there is one, with two ways in during the rollout.
+    /// </summary>
+    [Fact]
+    public async Task The_legacy_write_is_the_answer_the_new_surfaces_report()
+    {
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await PutAsync(_factory.AsAdministrator(), visible: false)).StatusCode);
+
+        using var catalogue = JsonDocument.Parse(
+            await (await _factory.AsAdministrator().GetAsync("/api/super-admin/menu-visibility"))
+                .Content.ReadAsStringAsync());
+        var option = catalogue.RootElement
+            .GetProperty("options")
+            .EnumerateArray()
+            .Single(entry => entry.GetProperty("key").GetString()
+                == MenuVisibilityKeys.HistoricalGstClassification);
+
+        Assert.False(option.GetProperty("visible").GetBoolean());
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        using var access = JsonDocument.Parse(
+            await (await owner.GetAsync(AccessUrl)).Content.ReadAsStringAsync());
+
+        Assert.Equal(
+            [MenuVisibilityKeys.HistoricalGstClassification],
+            access.RootElement
+                .GetProperty("menuVisibility")
+                .GetProperty("switchedOffKeys")
+                .EnumerateArray()
+                .Select(key => key.GetString())
+                .ToArray());
+        Assert.False(access.RootElement.GetProperty(VisibleProperty).GetBoolean());
+    }
+
+    /// <summary>
+    /// Every stored menu-visibility row (issue #1148) - where this endpoint's answer now lives - and
+    /// the proof that the superseded single-option table is not written by it at all.
+    /// </summary>
+    private async Task<IReadOnlyList<PlatformMenuVisibility>> StoredRowsAsync()
+    {
+        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        return await _factory.MenuVisibilityRowsAsync();
+    }
+
+    /// <summary>
+    /// The one destination this legacy endpoint writes, as it is stored: one row, under the
+    /// catalogue key, and nothing else switched.
+    /// </summary>
+    private async Task<bool> StoredVisibleAsync()
+    {
+        var row = Assert.Single(await StoredRowsAsync());
+
+        Assert.Equal(MenuVisibilityKeys.HistoricalGstClassification, row.Key);
+        return row.Visible;
     }
 
     private Task<HttpResponseMessage> PutAsync(HttpClient client, bool visible) =>

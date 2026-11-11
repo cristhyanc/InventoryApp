@@ -488,6 +488,11 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/catalogue-review/unresolved-sales/apply", "POST", Capability.DataRepair)]
     [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
     [InlineData("api/imports/pending-xml", "POST", Capability.ImportsRun)]
+    // Issue #1149's uploaded Nayax reimbursement report ZIP: uploading one is running the import, and
+    // the two reads that report what became of one are readable by exactly the members who may run it.
+    [InlineData("api/imports/reimbursement-report", "POST", Capability.ImportsRun)]
+    [InlineData("api/imports/reimbursement-report/jobs", "GET", Capability.ImportsRun)]
+    [InlineData("api/imports/reimbursement-report/jobs/{jobId:int}", "GET", Capability.ImportsRun)]
     [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "POST", Capability.SiteCommissionsManage)]
@@ -502,6 +507,7 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/settings/nayax-connection/retest", "POST", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-connection/status", "GET", Capability.DashboardView)]
     [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
+    [InlineData("api/inventory-cost-attention", "GET", Capability.DashboardView)]
     [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-transition/preview", "POST", Capability.DataRepair)]
@@ -756,6 +762,11 @@ public class EndpointAuthorizationClassificationTests
     // routes, because removing a sender is the PUT's own audited update rather than a DELETE.
     [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "GET")]
     [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "PUT")]
+    // Issue #1164's monthly receipt-scan count on one business. Class 2 again - the same marker and
+    // the same policy - and deliberately one route and one method, because looking at what a
+    // business has spent cannot change it. The route is named purchase-scan, never receipt-scan, by
+    // issue #127's published-vocabulary rule.
+    [InlineData("api/super-admin/businesses/{businessId:int}/purchase-scan-usage", "GET")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

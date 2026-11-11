@@ -1,4 +1,5 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -14,7 +15,15 @@ import {
 } from '../../models/models';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
-import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adjustment-form.component';
+import { IconComponent } from '../shared/icon.component';
+import { ListPaginationComponent } from '../shared/list-pagination/list-pagination.component';
+import { StockAdjustmentPanelComponent } from './stock-adjustment-panel/stock-adjustment-panel.component';
+
+/** A filter under More filters, shown as a removable chip while it is applied (issue #1156). */
+export interface AppliedStockHistoryFilter {
+  key: 'reason' | 'machineId' | 'source';
+  label: string;
+}
 
 /**
  * The global Stock History page (issue #384), routed at `/stock-history` and also reached from the
@@ -28,7 +37,9 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
  *
  * The page is a composition boundary (docs/architecture.md § Page composition boundary): it owns the
  * route parameters, the filter state, the paging state and its own loading/empty/error states, and
- * delegates the manual-adjustment workflow to {@link StockAdjustmentFormComponent}. It applies no
+ * delegates the manual-adjustment workflow to `StockAdjustmentFormComponent`, which since issue #1156
+ * opens in {@link StockAdjustmentPanelComponent} - a drawer over the ledger, full screen on a phone -
+ * so the selection, the filters and the page of movements stay in place behind it. It applies no
  * inventory or costing rule of its own - date interpretation, ordering, bounding and every stock
  * mutation stay on the backend.
  *
@@ -45,14 +56,29 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
  * - The **"Nayax Sync Restock" source** option needs only Nayax to be part of this business: the
  *   movements it selects are already recorded locally. A connection that merely needs attention
  *   keeps it, and the table keeps labelling such a movement whatever the filter offers.
+ *
+ * **Layout (issue #1156).** A compact toolbar holds Product and Date range, with Reason, Machine and
+ * Source under More filters; a filter applies as soon as it changes, from page 1, with the same
+ * request the former Apply filters button sent. The ledger is a table from `md` and a list of
+ * movement cards below it, both rendering the same page of movements; each movement's unit cost,
+ * eat-before date and notes are behind its own Details disclosure. Rows per page sits with the pager
+ * under the results.
  */
 @Component({
   selector: 'app-stock-history-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, BusinessDateTimePipe, StockAdjustmentFormComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    BusinessDateTimePipe,
+    IconComponent,
+    ListPaginationComponent,
+    StockAdjustmentPanelComponent
+  ],
   templateUrl: './stock-history-page.component.html'
 })
-export class StockHistoryPageComponent implements OnInit {
+export class StockHistoryPageComponent implements OnInit, OnDestroy {
   products: Product[] = [];
 
   /**
@@ -107,12 +133,40 @@ export class StockHistoryPageComponent implements OnInit {
   /** Whether Nayax is part of this business at all; only the source filter depends on it. */
   providerRecordsAvailable = true;
 
+  /** Whether the More filters disclosure (Reason, Machine, Source) is expanded. */
+  moreFiltersOpen = false;
+
+  /** Whether the Adjust stock panel is open for {@link selectedProduct}. */
+  adjusting = false;
+
+  /** Announced after an adjustment was recorded, until the next filter or page change. */
+  adjustmentMessage = '';
+
+  /**
+   * The product filter the page of movements on screen was read with, so the Product column is
+   * left out only when that page really is one product's movements - not merely because a product
+   * was chosen and its page is still loading.
+   */
+  shownProductId: number | null = null;
+
+  /** The movements whose Details are expanded, by id; cleared whenever another page is read. */
+  private readonly expanded = new Set<number>();
+
+  @ViewChild('adjustButton') private readonly adjustButton?: ElementRef<HTMLButtonElement>;
+
+  /**
+   * The history request in flight. Filters apply as soon as they change, so requests can overlap;
+   * starting a new one cancels this one, so an older answer arriving last can never replace the
+   * movements, paging, loading or error state of the filters now applied.
+   */
+  private historyRequest?: Subscription;
+
   constructor(
-    private route: ActivatedRoute,
-    private stockService: StockService,
-    private productService: ProductService,
-    private localMachineService: LocalMachineService,
-    private provider: ProviderAvailabilityService
+    private readonly route: ActivatedRoute,
+    private readonly stockService: StockService,
+    private readonly productService: ProductService,
+    private readonly localMachineService: LocalMachineService,
+    private readonly provider: ProviderAvailabilityService
   ) {}
 
   ngOnInit(): void {
@@ -176,7 +230,10 @@ export class StockHistoryPageComponent implements OnInit {
   load(): void {
     this.loading = true;
     this.error = '';
-    this.stockService
+    this.expanded.clear();
+    const productId = this.filters.productId;
+    this.historyRequest?.unsubscribe();
+    this.historyRequest = this.stockService
       .historyPage({
         productId: this.filters.productId,
         from: this.filters.from || null,
@@ -190,6 +247,7 @@ export class StockHistoryPageComponent implements OnInit {
       .subscribe({
         next: (page) => {
           this.history = page;
+          this.shownProductId = productId;
           this.currentPage = page.page;
           this.filters.pageSize = page.pageSize;
           this.loading = false;
@@ -204,10 +262,36 @@ export class StockHistoryPageComponent implements OnInit {
       });
   }
 
+  ngOnDestroy(): void {
+    this.historyRequest?.unsubscribe();
+  }
+
   /** Any filter change restarts at the first page, so a narrowed filter cannot land past its end. */
   applyFilters(): void {
     this.currentPage = 1;
+    this.adjustmentMessage = '';
     this.load();
+  }
+
+  /** Removes one More filters choice, as its chip's remove button does. */
+  removeFilter(key: AppliedStockHistoryFilter['key']): void {
+    this.filters[key] = null;
+    this.applyFilters();
+  }
+
+  /** The More filters choices currently applied, each named the way its filter names it. */
+  get appliedMoreFilters(): AppliedStockHistoryFilter[] {
+    const applied: AppliedStockHistoryFilter[] = [];
+    if (this.filters.reason !== null) {
+      applied.push({ key: 'reason', label: `Reason: ${this.reasonLabel(this.filters.reason)}` });
+    }
+    if (this.filters.machineId !== null) {
+      applied.push({ key: 'machineId', label: `Machine: ${this.machineLabel(this.filters.machineId)}` });
+    }
+    if (this.filters.source !== null) {
+      applied.push({ key: 'source', label: `Source: ${this.sourceLabel(this.filters.source)}` });
+    }
+    return applied;
   }
 
   clearFilters(): void {
@@ -256,15 +340,82 @@ export class StockHistoryPageComponent implements OnInit {
     this.load();
   }
 
+  /** The pager's zero-based page index, onto the server's one-based page. */
+  goToPage(pageIndex: number): void {
+    const page = pageIndex + 1;
+    if (page < 1 || page === this.currentPage) return;
+    if (page > this.currentPage && !this.history?.hasMore) return;
+    this.currentPage = page;
+    this.adjustmentMessage = '';
+    this.load();
+  }
+
+  /** Rows per page, from the pager; only an offered size is sent, and it starts again at page 1. */
+  onPageSizeChange(pageSize: number): void {
+    if (!this.pageSizeOptions.includes(pageSize)) return;
+    this.filters.pageSize = pageSize;
+    this.applyFilters();
+  }
+
+  isExpanded(movementId: number): boolean {
+    return this.expanded.has(movementId);
+  }
+
+  toggleDetails(movementId: number): void {
+    if (this.expanded.has(movementId)) {
+      this.expanded.delete(movementId);
+    } else {
+      this.expanded.add(movementId);
+    }
+  }
+
+  /** Adjust stock is offered for a product the catalogue resolved; see the template. */
+  openAdjustment(): void {
+    if (!this.selectedProduct) return;
+    this.adjustmentMessage = '';
+    this.adjusting = true;
+  }
+
+  /** Closes the panel and returns focus to the Adjust stock button that opened it. */
+  closeAdjustment(): void {
+    this.adjusting = false;
+    setTimeout(() => this.adjustButton?.nativeElement.focus());
+  }
+
   onAdjustmentApplied(): void {
+    const productName = this.selectedProduct?.name;
+    this.closeAdjustment();
+    this.adjustmentMessage = productName ? `Stock adjustment recorded for ${productName}.` : 'Stock adjustment recorded.';
     // The adjustment is already recorded; the history and the product's stock are re-read from the
-    // API rather than patched locally, so what the operator sees is what was persisted.
+    // API rather than patched locally, so what the operator sees is what was persisted. The filters
+    // stay as they are, so a movement outside them stays outside the results.
     this.productService.getAll().subscribe({
       next: (products) => (this.products = products || []),
       error: () => undefined
     });
     this.currentPage = 1;
     this.load();
+  }
+
+  /**
+   * A movement's signed change, `+12` or `−3` (a true minus sign, so it reads as one), and `0` for
+   * a zero change.
+   */
+  changeLabel(change: number): string {
+    if (change > 0) return `+${change}`;
+    if (change < 0) return `\u2212${Math.abs(change)}`;
+    return '0';
+  }
+
+  /** A recorded quantity, including a recorded `0`; only a missing value is shown as `—`. */
+  quantityLabel(quantity?: number | null): string {
+    return quantity === null || quantity === undefined ? '—' : String(quantity);
+  }
+
+  /** The product's unit label (for example `375 mL`), which is its pack size and never a quantity. */
+  unitLabel(product: Product): string {
+    const unit = product.unit?.trim();
+    return unit || 'Not set';
   }
 
   reasonLabel(reason: StockAdjustmentReason): string {

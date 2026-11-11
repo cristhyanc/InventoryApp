@@ -49,12 +49,20 @@ export function purchaseTotal(
  * `PurchaseTotalValidationPolicy.Evaluate` does: the unrounded sum of quantity x unit cost, plus the
  * delivery and package charges, against the entered total, the absolute difference rounded to cents
  * with halves away from zero.
+ *
+ * `amountOutsideLines` is the one addition of issue #1166, and it is zero for every form that has
+ * not scanned a receipt: the amounts a **scanned** receipt printed that this purchase deliberately
+ * does not record - a line marked "Not stock, skip", and an unresolved container levy - so the
+ * difference the operator is shown is explained rather than left to be chased. None of it is saved,
+ * and it is never part of {@link purchaseTotal}: what the purchase costs is its own lines and
+ * charges, exactly as before.
  */
 export function compareReceiptTotal(
   receiptTotal: number | null | undefined,
   items: ReadonlyArray<PurchaseLinePrice>,
   deliveryCost: number | null | undefined,
-  packageCost: number | null | undefined
+  packageCost: number | null | undefined,
+  amountOutsideLines: number | null | undefined = 0
 ): ReceiptTotalComparison {
   if (typeof receiptTotal !== 'number' || !Number.isFinite(receiptTotal)) return { kind: 'absent' };
   if (items.some((item) => !isValidLineQuantity(item.quantity) || !isValidLineAmount(item.unitCost))) {
@@ -62,7 +70,8 @@ export function compareReceiptTotal(
   }
 
   const itemSubtotal = items.reduce((sum, item) => sum + (item.quantity as number) * (item.unitCost as number), 0);
-  const calculatedTotal = itemSubtotal + chargeAmount(deliveryCost) + chargeAmount(packageCost);
+  const calculatedTotal =
+    itemSubtotal + chargeAmount(deliveryCost) + chargeAmount(packageCost) + chargeAmount(amountOutsideLines);
   const difference = roundToCents(Math.abs(calculatedTotal - receiptTotal));
 
   return difference === 0

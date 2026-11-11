@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
 using Inventory.Application.ConnectedMachines;
+using Inventory.Application.Imports;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxReconciliation;
@@ -15,6 +16,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxReconciliation;
 using Inventory.Infrastructure.NayaxSqs;
+using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
@@ -27,6 +29,7 @@ using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Adapters.Products;
+using InventoryApi.Adapters.ReimbursementImport;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
@@ -340,11 +343,11 @@ builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
 // fields - and its entry type has no field for the preset's name or its URL, so neither can reach
 // the trail by a sink's discretion.
 builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
-// The option-visibility audit trail (issue #873): one event per committed switch. A separate port
-// again, for the same reason - a different event with different fields, and an entry type that has
-// no field for a business, a member or anything of theirs, because this setting is about none of
-// them.
-builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
+// The menu-visibility audit trail (issue #1148, replacing issue #873's option-visibility one): one
+// event per committed switch, naming the destination it was about. A separate port again, for the
+// same reason - a different event with different fields, and an entry type that has no field for a
+// business, a member or anything of theirs, because this setting is about none of them.
+builder.Services.AddScoped<IMenuVisibilityAudit, LoggingMenuVisibilityAudit>();
 // The price-catalogue review trail (issue #928): one event per committed decision, and a second one
 // beside it when a price outside the band was accepted on the reviewer's explicit exception. A
 // separate port again, for the same reason as the four above - a different event with different
@@ -458,6 +461,17 @@ builder.Services.AddNayaxTokenProtection(
     builder.Configuration.GetSection(NayaxTokenProtectionOptions.SectionName).Get<NayaxTokenProtectionOptions>()
         ?? new NayaxTokenProtectionOptions());
 
+// Receipt scanning (issue #1163, child of #975). Registered for every environment: with no
+// ReceiptScanning:ApiKey the feature is simply off - POST /api/purchases/scan answers 503 and
+// nothing leaves the process - which is the shipped state, so deploying without the key is safe.
+// The production key is set only after issue #1164's monthly cap is deployed and plan enforcement
+// is on (the launch gate recorded on #1163). The key is read here, as every secret is, and is never
+// reachable from Inventory.Application or Inventory.Domain. See
+// Inventory.Infrastructure.ReceiptScanning.ReceiptScanningOptions and README.md § Receipt scanning.
+builder.Services.AddReceiptScanning(
+    builder.Configuration.GetSection(ReceiptScanningOptions.SectionName).Get<ReceiptScanningOptions>()
+        ?? new ReceiptScanningOptions());
+
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
@@ -528,6 +542,23 @@ builder.Services.AddSingleton<INayaxSalesReconciliationLog, LoggingNayaxSalesRec
 builder.Services.AddSingleton<INayaxSalesReconciliationScopes, ServiceScopeNayaxSalesReconciliationScopes>();
 builder.Services.AddSingleton<NayaxSalesReconciliationRunner>();
 builder.Services.AddHostedService<NayaxSalesReconciliationWorker>();
+
+// The fourth hosted background service (issue #1149): importing the Nayax reimbursement report ZIPs
+// operators upload. It first looks for work about thirty seconds after startup and then takes the
+// oldest job that is due, one at a time, each in its own service scope resolved to that job's own
+// business - so one business's archive never touches another's, and one job's trouble never stops
+// another's.
+//
+// It is in-process for the reasons the two workers above are - one writer on one SQLite file, no
+// second identity or configuration surface - and App Service Always On is the same human
+// prerequisite: without it a queued job waits until the next request wakes the app. It has no
+// setting to switch it on; an environment where nobody has uploaded an archive finds nothing to do
+// and writes nothing.
+builder.Services.AddSingleton<IReimbursementImportJobSchedule, SystemReimbursementImportJobSchedule>();
+builder.Services.AddSingleton<IReimbursementImportJobLog, LoggingReimbursementImportJobLog>();
+builder.Services.AddSingleton<IReimbursementImportJobScopes, ServiceScopeReimbursementImportJobScopes>();
+builder.Services.AddSingleton<ReimbursementImportJobRunner>();
+builder.Services.AddHostedService<ReimbursementImportJobWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

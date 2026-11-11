@@ -1,0 +1,129 @@
+<section
+  class="rounded-xl border border-rr-line bg-white px-4 py-3 font-rr text-rr-navy"
+  aria-labelledby="purchaseReceiptScanHeading"
+  data-testid="purchase-receipt-scan"
+>
+  <h2 id="purchaseReceiptScanHeading" class="m-0 flex items-center gap-2 text-base font-semibold text-rr-navy">
+    <span class="text-rr-teal"><app-icon name="receipt" [size]="20" /></span>
+    Scan receipt
+  </h2>
+
+  <input
+    #fileInput
+    type="file"
+    accept="image/*,.pdf"
+    class="sr-only"
+    tabindex="-1"
+    aria-hidden="true"
+    data-testid="purchase-receipt-scan-input"
+    (change)="onFileSelected($event)"
+  />
+
+  @if (state === 'planLocked') {
+    <!--
+      The entitlement's own answer, not a guess: receipt scanning is Pro, and it is the one feature
+      that is refused while plan enforcement is switched off too. There is no Retry, because a plan
+      refusal is not a transient failure.
+    -->
+    <output class="mt-2 flex flex-wrap items-center gap-3" data-testid="purchase-receipt-scan-plan-lock">
+      <span class="m-0 text-sm text-rr-muted">{{ planLockMessage }}</span>
+      <a routerLink="/plan" class="btn-link">View the Plan page</a>
+    </output>
+  } @else {
+    <p class="m-0 mt-1 text-sm text-rr-muted">
+      Pick a photo or PDF of the receipt and the items, supplier, date and totals are filled in for you to check.
+      Nothing is saved until you press Save purchase.
+    </p>
+
+    <div class="mt-3 flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        class="rr-button-secondary"
+        data-testid="purchase-receipt-scan-start"
+        [disabled]="!available"
+        (click)="chooseFile()"
+      >
+        <app-icon name="receipt" [size]="18" />
+        {{ buttonLabel }}
+      </button>
+
+      @if (state === 'preparing') {
+        <output class="text-sm text-rr-muted" data-testid="purchase-receipt-scan-preparing">Preparing photo…</output>
+      } @else if (state === 'scanning') {
+        <output class="text-sm text-rr-muted" data-testid="purchase-receipt-scan-progress">
+          Reading the receipt…
+        </output>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center rounded-md px-2 font-semibold text-rr-teal hover:bg-rr-teal-tint"
+          data-testid="purchase-receipt-scan-cancel"
+          (click)="cancel()"
+        >
+          Cancel
+        </button>
+      }
+    </div>
+
+    @if (state === 'failed') {
+      <!-- The form is exactly as it was: manual entry carries on from here. -->
+      <div class="alert alert-danger mt-3" role="alert" data-testid="purchase-receipt-scan-error">
+        <p class="alert-title">{{ errorMessage }}</p>
+        <p class="m-0">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="purchase-receipt-scan-dismiss"
+            (click)="dismissError()"
+          >
+            Dismiss
+          </button>
+        </p>
+      </div>
+    }
+  }
+</section>
+
+@if (state === 'confirming') {
+  <!--
+    A native modal <dialog>, for the reason the supplier-order question is one (issue #974):
+    showModal() moves it into the top layer, makes the purchase form behind it inert and paints the
+    backdrop as this element's own ::backdrop, so the form cannot be clicked, tabbed into or reached
+    by assistive technology while the question is open. Neither role nor aria-modal is written here,
+    because the platform maps a modal <dialog> to exactly those. Escape arrives as the dialog's own
+    cancel event, which keeps what was typed: dismissing a question is not answering it.
+  -->
+  <dialog
+    #dialogPanel
+    tabindex="-1"
+    [attr.aria-labelledby]="titleId"
+    class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-md flex-col overflow-hidden rounded-md-dialog border-0 bg-white p-0 text-left font-rr text-rr-navy shadow-md-lg outline-none backdrop:bg-md-gray-800/50"
+    data-testid="purchase-receipt-scan-replace-dialog"
+  >
+    <div class="border-b border-rr-line px-6 py-4">
+      <h2 [id]="titleId" class="card-title">Replace the items in this purchase?</h2>
+    </div>
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <p class="m-0 text-md-body value-muted">{{ replaceQuestion }}</p>
+    </div>
+    <!-- Replace first and focused: it is the answer that was asked for by choosing a receipt. -->
+    <div class="flex flex-wrap justify-end gap-3 border-t border-rr-line px-6 py-4">
+      <button
+        #replaceButton
+        type="button"
+        class="rr-button-primary"
+        data-testid="purchase-receipt-scan-replace"
+        (click)="replaceLines()"
+      >
+        Replace items
+      </button>
+      <button
+        type="button"
+        class="rr-button-secondary"
+        data-testid="purchase-receipt-scan-keep"
+        (click)="keepLines()"
+      >
+        Keep what I typed
+      </button>
+    </div>
+  </dialog>
+}

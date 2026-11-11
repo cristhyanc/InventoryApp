@@ -5,6 +5,7 @@ import { Observable, of } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { MENU_VISIBILITY_KEYS, OptionVisibility } from '../access/option-visibility';
 import { SpecConnectionStatus, provideNayaxConnectionStatus } from '../provider/provider-availability.spec-helpers';
 import { BottomNavComponent, shortcutsOf } from './bottom-nav.component';
 import { navigationFor } from './navigation';
@@ -12,12 +13,13 @@ import { navigationFor } from './navigation';
 @Component({ standalone: true, template: '' })
 class BlankPageComponent {}
 
-function granted(capabilities: readonly Capability[]): MemberAccessState {
+function granted(capabilities: readonly Capability[], optionVisibility?: OptionVisibility): MemberAccessState {
   const access: MemberAccess = {
     role: 'Test',
     capabilities: capabilitySet([...capabilities]),
     businessName: 'Vending Co',
-    timeZoneId: 'Australia/Sydney'
+    timeZoneId: 'Australia/Sydney',
+    optionVisibility
   };
   return { status: 'granted', access };
 }
@@ -141,5 +143,48 @@ describe('BottomNavComponent (issue #972)', () => {
       '/products'
     ]);
     expect(shortcutsOf(navigationFor(capabilitySet(['Expenses.Manage']), false, 'offered'))).toEqual([]);
+  });
+
+  /**
+   * The switchable destinations (issues #1151 and #1153) reach this bar through the same
+   * `navigationFor` answer the sidebar uses, and the bar's own shortcuts are four destinations no
+   * switch can reach: none of them declares a visibility key, which is asserted here so that a
+   * future shortcut that *did* declare one could not quietly stay on the bar after being switched
+   * off. `MENU_VISIBILITY_KEYS` is the whole catalogue, so since #1153 "whatever is switched off"
+   * below includes all eight Reports keys. The whole menu on a narrow screen is the More sheet,
+   * which is the sidebar in drawer mode and is covered by its own spec.
+   */
+  describe('switchable menu visibility (issues #1151 and #1153)', () => {
+    const everyKeyOff = { switchedOffKeys: [...MENU_VISIBILITY_KEYS] };
+
+    it('offers the same shortcuts whatever is switched off, because no shortcut is switchable', async () => {
+      const { host } = await render({ access: of(granted(CAPABILITIES, everyKeyOff)) });
+
+      expect(hrefs(host)).toEqual(['/', '/pick-list', '/sites', '/products']);
+    });
+
+    it('declares no visibility key on any shortcut it can offer', () => {
+      const sources = shortcutsOf(
+        navigationFor(capabilitySet([...CAPABILITIES]), false, 'offered', undefined, { switchedOffKeys: [] })
+      ).map((shortcut) => shortcut.source);
+
+      sources.forEach((source) => {
+        const keys =
+          source.kind === 'group'
+            ? source.children.map((child) => (child.kind === 'link' ? child.visibilityKey : undefined))
+            : [source.visibilityKey];
+        expect(keys.filter((key) => key !== undefined)).toEqual([]);
+      });
+    });
+
+    it('builds the bar from the switched-off answer the shared read carried', async () => {
+      const { component } = await render({ access: of(granted(CAPABILITIES, everyKeyOff)) });
+
+      // The bar's own navigation is the filtered one: no switchable Admin destination survives it,
+      // so nothing in it could become a shortcut while those keys are off.
+      expect(shortcutsOf(navigationFor(capabilitySet([...CAPABILITIES]), false, 'offered', undefined, everyKeyOff))).toEqual(
+        component.shortcuts
+      );
+    });
   });
 });

@@ -197,6 +197,439 @@ public class MachineDashboardWindowTests
     }
 
     /// <summary>
+    /// The previous comparable day (issue #1177): yesterday's business day up to the same elapsed
+    /// time since business-local midnight as now is into today's. 15:00 on Thursday 12 March 2026 in
+    /// Sydney is fifteen hours into today, so the baseline runs from Wednesday 11 March's own
+    /// midnight (10 March 13:00 UTC) to fifteen hours into it, and both its business dates are
+    /// 11 March.
+    /// </summary>
+    [Fact]
+    public void Resolve_EndsThePreviousComparableDayTheSameElapsedTimeIntoYesterday()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 12, 4, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 12), window.BusinessToday);
+        Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 11, 4, 0), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(new DateTime(2026, 3, 11), window.PreviousComparableDay.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 3, 11), window.PreviousComparableDay.LastBusinessDate);
+
+        // The baseline is exactly as far into its day as today is into its own, from the one
+        // captured instant every other period is measured from.
+        Assert.Equal(
+            window.NowUtc - window.Today.StartUtc,
+            window.PreviousComparableDay.EndUtc - window.PreviousComparableDay.StartUtc);
+        Assert.True(window.PreviousComparableDay.EndUtc < window.Today.StartUtc);
+    }
+
+    /// <summary>
+    /// One minute into Thursday 12 March in Sydney: the baseline is the first minute of Wednesday
+    /// 11 March and nothing more. A comparison that reached further would show yesterday's whole
+    /// trading evening against today's first minute.
+    /// </summary>
+    [Fact]
+    public void Resolve_KeepsThePreviousComparableDayShortJustAfterBusinessMidnight()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 11, 13, 1, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 12), window.BusinessToday);
+        Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 10, 13, 1), window.PreviousComparableDay.EndUtc);
+    }
+
+    /// <summary>
+    /// On a Monday, yesterday is the Sunday that closed the <em>previous</em> business week, so the
+    /// baseline lies entirely inside last week and entirely before the current one. The day is read
+    /// from the business calendar rather than from a week's arithmetic, so a week boundary does not
+    /// shorten or move it.
+    /// </summary>
+    [Fact]
+    public void Resolve_TakesThePreviousComparableDayFromLastWeekOnAMonday()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 8, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 9), window.BusinessToday);
+        Assert.Equal(DayOfWeek.Monday, window.BusinessToday.DayOfWeek);
+        Assert.Equal(Utc(2026, 3, 7, 13, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 7, 23, 0), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(new DateTime(2026, 3, 8), window.PreviousComparableDay.FirstBusinessDate);
+
+        // Sunday 8 March closed last week, which is where the baseline sits in full.
+        Assert.True(window.PreviousComparableDay.EndUtc < window.CurrentWeek.StartUtc);
+        Assert.True(window.PreviousComparableDay.StartUtc >= window.LastWeek.StartUtc);
+        Assert.True(window.PreviousComparableDay.EndUtc <= window.LastWeek.EndUtc);
+    }
+
+    /// <summary>
+    /// On the first of a month the baseline is in the month before, so it lies entirely before month
+    /// to date begins; on 1 January it is in the year before as well. Neither is a special case in
+    /// the arithmetic - the day comes from the business date minus one day - and both are pinned so
+    /// that it stays that way.
+    /// </summary>
+    [Theory]
+    [InlineData(2026, 2, 28, 23, 0, 2026, 3, 1, 2026, 2, 27, 13, 0, 2026, 2, 27, 23, 0, 2026, 2, 28)]
+    [InlineData(2025, 12, 31, 23, 0, 2026, 1, 1, 2025, 12, 30, 13, 0, 2025, 12, 30, 23, 0, 2025, 12, 31)]
+    public void Resolve_PlacesThePreviousComparableDayInThePreviousMonthOnTheFirst(
+        int utcYear,
+        int utcMonth,
+        int utcDay,
+        int utcHour,
+        int utcMinute,
+        int expectedBusinessYear,
+        int expectedBusinessMonth,
+        int expectedBusinessDay,
+        int expectedStartYear,
+        int expectedStartMonth,
+        int expectedStartDay,
+        int expectedStartHour,
+        int expectedStartMinute,
+        int expectedEndYear,
+        int expectedEndMonth,
+        int expectedEndDay,
+        int expectedEndHour,
+        int expectedEndMinute,
+        int expectedBaselineDateYear,
+        int expectedBaselineDateMonth,
+        int expectedBaselineDateDay)
+    {
+        var time = new FixedSydneyTime(
+            new DateTime(utcYear, utcMonth, utcDay, utcHour, utcMinute, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(
+            new DateTime(expectedBusinessYear, expectedBusinessMonth, expectedBusinessDay),
+            window.BusinessToday);
+        Assert.Equal(
+            Utc(expectedStartYear, expectedStartMonth, expectedStartDay, expectedStartHour, expectedStartMinute),
+            window.PreviousComparableDay.StartUtc);
+        Assert.Equal(
+            Utc(expectedEndYear, expectedEndMonth, expectedEndDay, expectedEndHour, expectedEndMinute),
+            window.PreviousComparableDay.EndUtc);
+        Assert.Equal(
+            new DateTime(expectedBaselineDateYear, expectedBaselineDateMonth, expectedBaselineDateDay),
+            window.PreviousComparableDay.FirstBusinessDate);
+
+        // Month to date began today, so the baseline is entirely outside it.
+        Assert.Equal(window.Today.StartUtc, window.MonthToDate.StartUtc);
+        Assert.True(window.PreviousComparableDay.EndUtc < window.MonthToDate.StartUtc);
+    }
+
+    /// <summary>
+    /// The day after daylight saving starts. Sunday 4 October 2026 is only 23 hours long, so at
+    /// 23:30 on Monday 5 October - 23 and a half hours into today - the same elapsed time would land
+    /// half an hour <em>inside</em> today. The baseline is held one millisecond before today begins,
+    /// so it covers yesterday in full and can never count a sale today also counts.
+    /// </summary>
+    [Fact]
+    public void Resolve_ClampsThePreviousComparableDayToYesterdayAfterDaylightSavingStarts()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 10, 5, 12, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 10, 5), window.BusinessToday);
+        Assert.Equal(Utc(2026, 10, 3, 14, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 10, 4, 13, 0).AddMilliseconds(-1), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousComparableDay.EndUtc);
+        Assert.True(window.PreviousComparableDay.EndUtc < window.Today.StartUtc);
+
+        // Clamped, so the baseline is shorter than the time elapsed into today: 23 hours of
+        // yesterday against 23 and a half hours of today.
+        Assert.True(
+            window.PreviousComparableDay.EndUtc - window.PreviousComparableDay.StartUtc <
+            window.NowUtc - window.Today.StartUtc);
+
+        // Still the whole of yesterday, whose 23 hours are all the business day holds.
+        Assert.Equal(new DateTime(2026, 10, 4), window.PreviousComparableDay.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 10, 4), window.PreviousComparableDay.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// Earlier on that same Monday the clamp does not apply: ten hours into today is ten hours into
+    /// the 23-hour Sunday before it, measured from that day's own AEST (+10) midnight rather than by
+    /// subtracting 24 hours from now, which would land an hour inside Saturday.
+    /// </summary>
+    [Fact]
+    public void Resolve_MeasuresThePreviousComparableDayFromItsOwnMidnightAcrossATransition()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 10, 4, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 10, 5), window.BusinessToday);
+        Assert.Equal(Utc(2026, 10, 3, 14, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 10, 4, 0, 0), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(
+            window.NowUtc - window.Today.StartUtc,
+            window.PreviousComparableDay.EndUtc - window.PreviousComparableDay.StartUtc);
+    }
+
+    /// <summary>
+    /// The clamp also holds on the day daylight saving <em>ends</em>, where today is the longer day:
+    /// 23:30 on Sunday 5 April 2026 is 24 and a half hours into a 25-hour Sunday, and Saturday
+    /// 4 April holds only 24. The baseline is held at Saturday's own last instant rather than
+    /// reaching into Sunday.
+    /// </summary>
+    [Fact]
+    public void Resolve_ClampsThePreviousComparableDayWhenTodayIsTheLongerDay()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 4, 5, 13, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 4, 5), window.BusinessToday);
+        Assert.Equal(Utc(2026, 4, 3, 13, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(Utc(2026, 4, 4, 13, 0).AddMilliseconds(-1), window.PreviousComparableDay.EndUtc);
+        Assert.Equal(new DateTime(2026, 4, 4), window.PreviousComparableDay.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// The day after daylight saving ends, the mirror image: Sunday 5 April 2026 is 25 hours long,
+    /// so the same elapsed time into it never reaches Monday 6 April and the clamp never applies -
+    /// even at 23:30 on the Monday, where 23 and a half hours into a 25-hour day is 22:30 Sydney on
+    /// the Sunday. The hour of difference on a transition day is the recorded decision: "the same
+    /// time yesterday" is the same elapsed time since business-local midnight.
+    /// </summary>
+    [Fact]
+    public void Resolve_NeverClampsThePreviousComparableDayAfterDaylightSavingEnds()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 4, 6, 13, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 4, 6), window.BusinessToday);
+        Assert.Equal(Utc(2026, 4, 5, 14, 0), window.Today.StartUtc);
+        Assert.Equal(Utc(2026, 4, 4, 13, 0), window.PreviousComparableDay.StartUtc);
+        Assert.Equal(Utc(2026, 4, 5, 12, 30), window.PreviousComparableDay.EndUtc);
+        Assert.True(window.PreviousComparableDay.EndUtc < window.Today.StartUtc);
+        Assert.Equal(
+            window.NowUtc - window.Today.StartUtc,
+            window.PreviousComparableDay.EndUtc - window.PreviousComparableDay.StartUtc);
+        Assert.Equal(new DateTime(2026, 4, 5), window.PreviousComparableDay.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// The previous comparable month (issue #1180): the previous calendar month from its own first
+    /// business-day midnight to the same point into the comparable day as now is into today. 01:30 on
+    /// Thursday 12 March 2026 in Sydney is ninety minutes into today, so the baseline runs from
+    /// 1 February's own midnight (31 January 13:00 UTC) to 01:30 on Thursday 12 February
+    /// (11 February 14:30 UTC), and its business dates are 1 and 12 February.
+    /// </summary>
+    [Fact]
+    public void Resolve_EndsThePreviousComparableMonthTheSamePointIntoTheComparableDay()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 11, 14, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 12), window.BusinessToday);
+        Assert.Equal(Utc(2026, 1, 31, 13, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2026, 2, 11, 14, 30), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2026, 2, 1), window.PreviousComparableMonth.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 2, 12), window.PreviousComparableMonth.LastBusinessDate);
+
+        // As far into the comparable day as today is into its own, from the one captured instant,
+        // and entirely before this month began - so no sale can be in both figures.
+        Assert.Equal(
+            window.NowUtc - window.Today.StartUtc,
+            window.PreviousComparableMonth.EndUtc - Utc(2026, 2, 11, 13, 0));
+        Assert.True(window.PreviousComparableMonth.EndUtc < window.MonthToDate.StartUtc);
+    }
+
+    /// <summary>
+    /// One minute into the first of a month: the baseline is the first minute of the previous month's
+    /// first day and nothing more, which is the month's mirror image of the day baseline's own
+    /// just-after-midnight case. A comparison that reached further would show a whole month against
+    /// one minute.
+    /// </summary>
+    [Fact]
+    public void Resolve_KeepsThePreviousComparableMonthShortOnTheFirstJustAfterBusinessMidnight()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 2, 28, 13, 1, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 1), window.BusinessToday);
+        Assert.Equal(Utc(2026, 1, 31, 13, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2026, 1, 31, 13, 1), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2026, 2, 1), window.PreviousComparableMonth.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 2, 1), window.PreviousComparableMonth.LastBusinessDate);
+
+        // Month to date began today, so the baseline lies entirely outside it.
+        Assert.Equal(window.Today.StartUtc, window.MonthToDate.StartUtc);
+        Assert.True(window.PreviousComparableMonth.EndUtc < window.MonthToDate.StartUtc);
+    }
+
+    /// <summary>
+    /// On 1 January the previous month is December of the previous year, which is not a special case
+    /// in the arithmetic - the previous calendar month is derived from the business date - and is
+    /// pinned so that it stays that way. 10:00 on Thursday 1 January 2026 in Sydney is ten hours into
+    /// today, so the baseline runs from 1 December 2025's own midnight to ten hours into that same
+    /// day.
+    /// </summary>
+    [Fact]
+    public void Resolve_PlacesThePreviousComparableMonthInThePreviousYearOnTheFirstOfJanuary()
+    {
+        var time = new FixedSydneyTime(new DateTime(2025, 12, 31, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 1, 1), window.BusinessToday);
+        Assert.Equal(Utc(2025, 11, 30, 13, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2025, 11, 30, 23, 0), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2025, 12, 1), window.PreviousComparableMonth.FirstBusinessDate);
+        Assert.Equal(new DateTime(2025, 12, 1), window.PreviousComparableMonth.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// A day of the month the previous month does not have: the baseline is held at that month's own
+    /// last instant - one millisecond before this month began - rather than reaching into this month
+    /// for the missing days. February is the case that matters, in a non-leap year (28 days, so the
+    /// 29th, 30th and 31st of March are all clamped) and in a leap year (29 days, so only the 30th
+    /// and 31st are), and April's thirty days clamp the 31st of May the same way.
+    /// </summary>
+    [Theory]
+    // 10:00 on 29, 30 and 31 March 2026 in Sydney (AEDT): February 2026 has 28 days.
+    [InlineData(2026, 3, 28, 23, 0, 2026, 3, 29, 2026, 2, 28)]
+    [InlineData(2026, 3, 29, 23, 0, 2026, 3, 30, 2026, 2, 28)]
+    [InlineData(2026, 3, 30, 23, 0, 2026, 3, 31, 2026, 2, 28)]
+    // 10:00 on 30 and 31 March 2028 in Sydney: February 2028 is a leap February, so its last day is
+    // the 29th and the 29th of March is not clamped at all (asserted separately below).
+    [InlineData(2028, 3, 29, 23, 0, 2028, 3, 30, 2028, 2, 29)]
+    [InlineData(2028, 3, 30, 23, 0, 2028, 3, 31, 2028, 2, 29)]
+    // 09:00 on 31 May 2026 in Sydney (AEST): April has 30 days.
+    [InlineData(2026, 5, 30, 23, 0, 2026, 5, 31, 2026, 4, 30)]
+    public void Resolve_HoldsThePreviousComparableMonthAtItsOwnEndWhenThatMonthIsShorter(
+        int utcYear,
+        int utcMonth,
+        int utcDay,
+        int utcHour,
+        int utcMinute,
+        int expectedBusinessYear,
+        int expectedBusinessMonth,
+        int expectedBusinessDay,
+        int expectedLastBusinessYear,
+        int expectedLastBusinessMonth,
+        int expectedLastBusinessDay)
+    {
+        var time = new FixedSydneyTime(
+            new DateTime(utcYear, utcMonth, utcDay, utcHour, utcMinute, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(
+            new DateTime(expectedBusinessYear, expectedBusinessMonth, expectedBusinessDay),
+            window.BusinessToday);
+
+        // One millisecond before this month began, which is the previous month's own last instant:
+        // the baseline covers that month in full and never a moment of this one.
+        Assert.Equal(
+            window.MonthToDate.StartUtc.AddMilliseconds(-1), window.PreviousComparableMonth.EndUtc);
+        Assert.True(window.PreviousComparableMonth.EndUtc < window.MonthToDate.StartUtc);
+        Assert.Equal(
+            new DateTime(expectedLastBusinessYear, expectedLastBusinessMonth, expectedLastBusinessDay),
+            window.PreviousComparableMonth.LastBusinessDate);
+        Assert.Equal(
+            new DateTime(expectedLastBusinessYear, expectedLastBusinessMonth, 1),
+            window.PreviousComparableMonth.FirstBusinessDate);
+    }
+
+    /// <summary>
+    /// The leap-year boundary the clamp above does not cross: 29 February 2028 exists, so 29 March
+    /// 2028 compares against it by elapsed time like any other day and is not held at the month's
+    /// end. In a non-leap year the same day of the month is clamped, which is the case pinned above.
+    /// </summary>
+    [Fact]
+    public void Resolve_ComparesTheTwentyNinthWithALeapFebruary()
+    {
+        var time = new FixedSydneyTime(new DateTime(2028, 3, 28, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2028, 3, 29), window.BusinessToday);
+        Assert.Equal(Utc(2028, 1, 31, 13, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2028, 2, 28, 23, 0), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2028, 2, 29), window.PreviousComparableMonth.LastBusinessDate);
+        Assert.True(window.PreviousComparableMonth.EndUtc < window.MonthToDate.StartUtc);
+    }
+
+    /// <summary>
+    /// A previous month containing a daylight-saving change, with the comparable day on the change
+    /// day itself. Daylight saving starts on Sunday 4 October 2026, so that Sydney day is 23 hours
+    /// long while Wednesday 4 November is 24: at 23:30 on 4 November the same elapsed time would land
+    /// half an hour <em>inside</em> 5 October, so the baseline is held one millisecond before that day
+    /// begins. The month's own first instant is an AEST (+10) midnight while today's is an AEDT (+11)
+    /// one, which a fixed offset or a shifted UTC instant gets wrong.
+    /// </summary>
+    [Fact]
+    public void Resolve_ClampsThePreviousComparableMonthToTheComparableDayAcrossADaylightSavingChange()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 11, 4, 12, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 11, 4), window.BusinessToday);
+        Assert.Equal(Utc(2026, 9, 30, 14, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2026, 10, 4, 13, 0).AddMilliseconds(-1), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2026, 10, 1), window.PreviousComparableMonth.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 10, 4), window.PreviousComparableMonth.LastBusinessDate);
+
+        // Never past the comparable day's own end, and never past the previous month's end either.
+        Assert.True(window.PreviousComparableMonth.EndUtc < window.MonthToDate.StartUtc);
+        Assert.True(
+            window.PreviousComparableMonth.EndUtc - window.PreviousComparableMonth.StartUtc <
+            window.NowUtc - window.MonthToDate.StartUtc);
+    }
+
+    /// <summary>
+    /// Earlier on that same day the clamp does not apply, and the baseline is measured from the
+    /// comparable day's own AEST (+10) midnight rather than by subtracting a month from the current
+    /// UTC instant - which lands an hour earlier by Sydney wall clock, because the two days are in
+    /// different daylight-saving offsets.
+    /// </summary>
+    [Fact]
+    public void Resolve_MeasuresThePreviousComparableMonthFromTheComparableDaysOwnMidnight()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 11, 3, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 11, 4), window.BusinessToday);
+        Assert.Equal(Utc(2026, 9, 30, 14, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2026, 10, 4, 0, 0), window.PreviousComparableMonth.EndUtc);
+        Assert.NotEqual(window.NowUtc.AddMonths(-1), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(
+            window.NowUtc - window.Today.StartUtc,
+            window.PreviousComparableMonth.EndUtc - Utc(2026, 10, 3, 14, 0));
+    }
+
+    /// <summary>
+    /// A previous month containing a daylight-saving change with the comparable day after it: the
+    /// month starts at an AEST (+10) midnight and the comparable day at an AEDT (+11) one, each
+    /// resolved through the business calendar rather than from one offset for the whole month.
+    /// </summary>
+    [Fact]
+    public void Resolve_ResolvesTheMonthStartAndTheComparableDayInTheirOwnOffsets()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 11, 19, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 11, 20), window.BusinessToday);
+        Assert.Equal(Utc(2026, 9, 30, 14, 0), window.PreviousComparableMonth.StartUtc);
+        Assert.Equal(Utc(2026, 10, 19, 23, 0), window.PreviousComparableMonth.EndUtc);
+        Assert.Equal(new DateTime(2026, 10, 20), window.PreviousComparableMonth.LastBusinessDate);
+    }
+
+    /// <summary>
     /// Every period also carries the <c>Australia/Sydney</c> business dates it covers, because the
     /// Nayax processing fee engine charges fees by business date: those dates must describe exactly the
     /// same period as the UTC instants beside them, or a period's profit would subtract a fee for a day
@@ -210,17 +643,23 @@ public class MachineDashboardWindowTests
         var window = time.Window;
 
         Assert.Equal((new DateTime(2026, 3, 12), new DateTime(2026, 3, 12)), BusinessDates(window.Today));
+        Assert.Equal(
+            (new DateTime(2026, 3, 11), new DateTime(2026, 3, 11)),
+            BusinessDates(window.PreviousComparableDay));
         Assert.Equal((new DateTime(2026, 3, 9), new DateTime(2026, 3, 12)), BusinessDates(window.CurrentWeek));
         Assert.Equal((new DateTime(2026, 3, 2), new DateTime(2026, 3, 5)), BusinessDates(window.PreviousComparableWeek));
         Assert.Equal((new DateTime(2026, 3, 2), new DateTime(2026, 3, 8)), BusinessDates(window.LastWeek));
         Assert.Equal((new DateTime(2026, 3, 1), new DateTime(2026, 3, 12)), BusinessDates(window.MonthToDate));
+        Assert.Equal(
+            (new DateTime(2026, 2, 1), new DateTime(2026, 2, 12)),
+            BusinessDates(window.PreviousComparableMonth));
         Assert.Equal((new DateTime(2026, 2, 23), new DateTime(2026, 3, 1)), BusinessDates(window.TwoWeeksAgo));
 
         // Each period's own instants fall on the first and last business date it claims to cover.
         MachineDashboardPeriodUtc[] periods =
         [
-            window.Today, window.CurrentWeek, window.PreviousComparableWeek,
-            window.LastWeek, window.MonthToDate, window.TwoWeeksAgo
+            window.Today, window.PreviousComparableDay, window.CurrentWeek, window.PreviousComparableWeek,
+            window.LastWeek, window.MonthToDate, window.PreviousComparableMonth, window.TwoWeeksAgo
         ];
         Assert.All(periods, period =>
         {

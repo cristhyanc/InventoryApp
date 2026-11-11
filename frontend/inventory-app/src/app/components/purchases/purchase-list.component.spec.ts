@@ -164,6 +164,27 @@ describe('PurchaseListComponent GST display (issue #431)', () => {
   });
 });
 
+describe('PurchaseListComponent invoice number (issue #1162)', () => {
+  const headings = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('thead th')).map((cell) => cell.textContent?.replace(/\s+/g, ' ').trim());
+
+  it('has an Invoice number column that shows the number a purchase records', async () => {
+    const { host } = await render([purchase({ invoiceNumber: 'INV-123' })]);
+
+    expect(headings(host)).toContain('Invoice number');
+    expect(host.querySelector('[data-testid="purchase-invoice-number"]')?.textContent?.trim()).toBe('INV-123');
+  });
+
+  it('shows a purchase that records none exactly as before, with no number in its row', async () => {
+    const { host } = await render([purchase({ invoiceNumber: null }), purchase({ id: 9 })]);
+
+    expect(headings(host)).toContain('Invoice number');
+    expect(host.querySelectorAll('[data-testid="purchase-invoice-number"]')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-testid="purchase-no-invoice-number"]')).toHaveLength(2);
+    expect(host.querySelectorAll('tbody > tr.table-row')).toHaveLength(2);
+  });
+});
+
 describe('PurchaseListComponent consolidated row layout (issue #474)', () => {
   it('renders one display row per purchase even when notes, GST and a total mismatch warning are all present', async () => {
     const withEverything = purchase({

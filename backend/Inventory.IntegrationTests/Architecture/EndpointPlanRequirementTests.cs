@@ -138,6 +138,12 @@ public class EndpointPlanRequirementTests
         // feed the two reports a Starter business includes.
         new("ImportsController.ImportNayaxSales", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales
         new("ImportsController.ImportPendingXmlFiles", PlanRequirementKind.None), // POST api/imports/pending-xml
+        // The uploaded Nayax reimbursement report ZIP of issue #1149 is the same settlement
+        // statement by another delivery route, so it carries no plan requirement either - and
+        // neither do the two reads that report what became of one.
+        new("ImportsController.UploadReimbursementReport", PlanRequirementKind.None), // POST api/imports/reimbursement-report
+        new("ImportsController.ReimbursementReportJobs", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs
+        new("ImportsController.ReimbursementReportJob", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs/{jobId:int}
 
         // Costing repairs over this business's own recorded history.
         new("InventoryCostRepairsController.Apply", PlanRequirementKind.None), // POST api/admin/inventory-cost-repair/apply
@@ -229,6 +235,8 @@ public class EndpointPlanRequirementTests
 
         // The sales sync is the provider read the Dashboard starts with.
         new("NayaxSalesSyncController.SyncLatest", PlanRequirementKind.ViaProviderGate), // POST api/nayax-sales-sync
+        // The products whose cost replay failed: a read of the business's own rows, no provider call.
+        new("InventoryCostAttentionController.List", PlanRequirementKind.None), // GET api/inventory-cost-attention
 
         // The self-service application runs with a denied scope and creates the business itself.
         new("OnboardingController.Apply", PlanRequirementKind.None), // POST api/onboarding/business-applications
@@ -299,6 +307,17 @@ public class EndpointPlanRequirementTests
         new("PurchasesController.GetFile", PlanRequirementKind.None), // GET api/purchases/{id:int}/file
         new("PurchasesController.Update", PlanRequirementKind.None), // PUT api/purchases/{id:int}
         new("PurchasesController.Upload", PlanRequirementKind.None), // POST api/purchases
+        // Reading a receipt is the one purchasing endpoint a plan decides (issue #1163, child of
+        // #975): it spends money at an external reader on every call, which is also why it is the
+        // one feature that fails closed while plan enforcement is off. Recording the purchase the
+        // draft becomes, and attaching the same receipt to it, stay on every plan above.
+        new("PurchasesController.Scan", PlanRequirementKind.Declared, PlanFeature.ReceiptScanning), // POST api/purchases/scan
+        // And how many of the month's scans are left (issue #1164). Deliberately on **no** plan:
+        // asking is not scanning - it reads one counter of the caller's own business, makes no
+        // outbound call and spends nothing - and declaring the fail-closed feature here would make
+        // this the second endpoint in the API that is unavailable in the shipped state, which the
+        // test below keeps as a commercial decision rather than an implementation detail.
+        new("PurchasesController.ScanUsage", PlanRequirementKind.None), // GET api/purchases/scan/usage
 
         // The reports. The two that need no provider are Starter; the other six are Pro; the export
         // takes the feature of whichever report it was asked for.
@@ -359,6 +378,12 @@ public class EndpointPlanRequirementTests
         new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
         new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products
         new("SuperAdminMasterProductsController.Update", PlanRequirementKind.None), // PUT api/super-admin/master-products/{id:long}
+        // Issue #1148's switchable Admin menu destinations. No plan requirement, for the reason no
+        // platform-admin endpoint has one: which destinations the platform offers is the platform's
+        // own decision, and a plan a business holds cannot decide whether the Super Admin may read
+        // or change it. The switches withhold nothing a plan would have to agree about either.
+        new("SuperAdminMenuVisibilityController.Get", PlanRequirementKind.None), // GET api/super-admin/menu-visibility
+        new("SuperAdminMenuVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/menu-visibility/{key}
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
         new("SuperAdminPriceCatalogueReviewController.ConfirmAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm
         new("SuperAdminPriceCatalogueReviewController.DecideListing", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision
@@ -369,6 +394,11 @@ public class EndpointPlanRequirementTests
         new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
         new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant
+        // Issue #1164's monthly receipt-scan count. No plan requirement, for the reason no
+        // platform-admin endpoint has one: what a business has spent at the reader is the platform's
+        // own question about its own costs, and the plan that business holds cannot decide whether
+        // the Super Admin may look.
+        new("SuperAdminPurchaseScanUsageController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/purchase-scan-usage
         new("SuperAdminSupplierPresetsController.Create", PlanRequirementKind.None), // POST api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.List", PlanRequirementKind.None), // GET api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.Update", PlanRequirementKind.None), // PUT api/super-admin/supplier-presets/{id:int}
@@ -572,6 +602,7 @@ public class EndpointPlanRequirementTests
     [InlineData("NayaxConnectionController.Save", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Retest", SubscriptionPlan.Pro)]
     [InlineData("CheapestSuppliersController.Summary", SubscriptionPlan.Starter)]
+    [InlineData("PurchasesController.Scan", SubscriptionPlan.Pro)]
     public void The_listed_endpoints_require_the_plan_the_issue_assigns_them(
         string endpointKey,
         SubscriptionPlan expected)
@@ -592,6 +623,9 @@ public class EndpointPlanRequirementTests
     [Theory]
     [InlineData("NayaxConnectionController.Status")]
     [InlineData("ImportsController.ImportPendingXmlFiles")]
+    [InlineData("ImportsController.UploadReimbursementReport")]
+    [InlineData("ImportsController.ReimbursementReportJobs")]
+    [InlineData("ImportsController.ReimbursementReportJob")]
     [InlineData("PickListController.RecordRefill")]
     [InlineData("PickListController.RecordMultiMachineRefill")]
     [InlineData("ProductsController.SetPriceTracking")]
@@ -622,6 +656,28 @@ public class EndpointPlanRequirementTests
 
         Assert.Equal(PlanRequirementKind.Declared, entry.Kind);
         Assert.Equal(PriceCollectionEligibilityPolicy.Feature, entry.Feature);
+    }
+
+    /// <summary>
+    /// Issue #1163's fail-closed criterion, read off the endpoint: the receipt scan declares the one
+    /// feature that is refused while plan enforcement is off, and it is the only endpoint in the API
+    /// that declares such a feature. A second one would mean a second surface that is unavailable in
+    /// the shipped state, which is a commercial decision rather than an implementation detail.
+    /// </summary>
+    [Fact]
+    public void Exactly_the_receipt_scan_declares_the_fail_closed_feature()
+    {
+        var failClosed = Inventory
+            .Where(entry => entry.Feature is { } feature
+                && PlanFeaturePolicy.FailsClosedWhileUnenforced(feature))
+            .Select(entry => entry.Endpoint)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["PurchasesController.Scan"], failClosed);
+        Assert.True(
+            PlanFeaturePolicy.FailsClosedWhileUnenforced(PlanFeature.ReceiptScanning),
+            "The receipt scan endpoint must declare the feature that fails closed (issue #1163).");
     }
 
     /// <summary>

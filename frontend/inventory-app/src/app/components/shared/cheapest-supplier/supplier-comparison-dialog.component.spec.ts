@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { CheapestSupplierOffer, SupplierPriceBasis, SupplierStockStatus } from '../../../models/cheapest-supplier';
+import { CheapestSupplierOffer, SupplierOfferIneligibility, SupplierPriceBasis, SupplierStockStatus } from '../../../models/cheapest-supplier';
 import { ProductPriceTrackingStatus } from '../../../models/models';
 import { SupplierComparisonDialogComponent, comparisonBasisNote } from './supplier-comparison-dialog.component';
 
@@ -68,8 +68,39 @@ describe('SupplierComparisonDialogComponent (issue #1093)', () => {
     expect(row.textContent).toContain('$1.84 inc GST');
     expect(row.textContent).toContain('$1.67 ex GST');
     expect(row.textContent).toContain('Special');
-    expect(row.textContent).toContain('Cheapest');
+    expect(row.textContent).toContain('Lowest unit price');
     expect(row.querySelector('a')?.getAttribute('href')).toBe('https://example.test/coles/espresso');
+  });
+
+  it('carries the required check-before-buying notice above the table, before any supplier row', async () => {
+    const { host } = await render([offer()]);
+
+    const notice = host.querySelector('[data-testid="supplier-comparison-notice"]');
+    expect(notice?.querySelector('p')?.textContent?.trim()).toBe(
+      'Check before buying: Prices and availability may change and can vary by location, membership or '
+      + 'promotion. Comparisons use recorded unit prices from supported suppliers and exclude delivery '
+      + 'and additional fees. Confirm the product, pack size and final total on the supplier’s '
+      + 'website before purchasing.'
+    );
+
+    const table = host.querySelector('table');
+    expect(notice === null || table === null).toBe(false);
+    expect(notice!.compareDocumentPosition(table!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('explains the Lowest unit price badge once, in visible text, when a row carries it', async () => {
+    const { host } = await render([offer()]);
+
+    expect(host.querySelector('[data-testid="supplier-comparison-badge-explainer"]')?.textContent).toBe(
+      'Lowest recorded unit price among the eligible offers shown, excluding delivery and additional '
+      + 'fees. Check the supplier’s final price before buying.'
+    );
+  });
+
+  it('does not explain the badge when no offer carries it', async () => {
+    const { host } = await render([offer({ isCheapest: false, ineligibility: SupplierOfferIneligibility.Stale })]);
+
+    expect(host.querySelector('[data-testid="supplier-comparison-badge-explainer"]')).toBeNull();
   });
 
   it('shows unavailable pack and price data as unavailable, never inferred or zero', async () => {

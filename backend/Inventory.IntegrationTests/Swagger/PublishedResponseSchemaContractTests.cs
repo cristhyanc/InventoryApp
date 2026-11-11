@@ -489,7 +489,7 @@ public class PublishedResponseSchemaContractTests
     /// generation. Keep these literal: they are the client-visible contract, not a restatement of
     /// whatever the current CLR types happen to produce.
     ///
-    /// They have moved exactly twice since issue #304 pinned them. Issue #429 added the per-line and
+    /// They have moved exactly three times since issue #304 pinned them. Issue #429 added the per-line and
     /// per-charge GST classification keys, which that issue's acceptance criteria require the
     /// purchase API to return. That was an additive contract change - no existing key was renamed,
     /// reordered relative to the others, retyped or dropped - and each classification sits next to
@@ -500,8 +500,14 @@ public class PublishedResponseSchemaContractTests
     /// together. It is the one key that moved - the other three were already published as nullable -
     /// and the issue's own risk areas name the public API contract. The alternative, emitting
     /// <c>0</c> for a purchase with no document, would have been a false statement about the
-    /// document's size that no client could tell from a real one. Nothing else may move these
-    /// baselines without its own issue.</para>
+    /// document's size that no client could tell from a real one.</para>
+    ///
+    /// <para>Issue #1162 is the third: the <c>Purchase</c> schema gained the nullable
+    /// <c>invoiceNumber</c> beside <c>notes</c>, which that issue's acceptance criteria require the
+    /// purchase read, the purchase list and the Add/Edit form to carry. Additive again - no existing
+    /// key is renamed, reordered relative to the others, retyped or dropped - and that issue names
+    /// the public API contract among its own risk areas. Nothing else may move these baselines
+    /// without its own issue.</para>
     /// </summary>
     private static readonly Dictionary<string, string> BaseContractSchemas = new(StringComparer.Ordinal)
     {
@@ -512,6 +518,7 @@ public class PublishedResponseSchemaContractTests
             "id": { "type": "integer", "format": "int32" },
             "title": { "type": "string", "nullable": true },
             "notes": { "type": "string", "nullable": true },
+            "invoiceNumber": { "type": "string", "nullable": true },
             "totalAmount": { "type": "number", "format": "double", "nullable": true },
             "deliveryCost": { "type": "number", "format": "double", "nullable": true },
             "deliveryGstClassification": { "$ref": "#/components/schemas/GstClassification" },

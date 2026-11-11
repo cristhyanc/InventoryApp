@@ -617,6 +617,8 @@ public class MachinesControllerTests
                 It.IsAny<long>(), It.IsAny<long?>(), It.IsAny<MachineDashboardWindow>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineDashboardFacts(
                 period, period, period, period, period, period,
+                PreviousComparableDayGrossRevenue: 0m,
+                PreviousComparableMonthGrossRevenue: 0m,
                 new MachineProfitabilityStatusInputs(false, false, true, false)));
         return facts.Object;
     }

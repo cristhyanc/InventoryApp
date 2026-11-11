@@ -19,7 +19,9 @@ export const ADJUSTMENT_MACHINES_ERROR =
  * suggestion lookup, the correction sign handling, the required restock unit cost and the server's
  * validation errors (see docs/architecture.md § Page composition boundary). The page supplies the
  * product and the machine list through inputs and only learns that an adjustment was applied, so it
- * can refresh the history.
+ * can refresh the history. Since issue #1156 it is shown inside `StockAdjustmentPanelComponent`, the
+ * Adjust stock drawer (a full-screen form on a phone), and carries that panel's Cancel and Apply
+ * adjustment actions.
  *
  * It creates no new kind of stock movement: it posts to the existing
  * `POST /api/products/{productId}/stock` endpoint, which stays the sole authority on costing,
@@ -30,7 +32,9 @@ export const ADJUSTMENT_MACHINES_ERROR =
   selector: 'app-stock-adjustment-form',
   standalone: true,
   imports: [CommonModule, FormsModule],
-  templateUrl: './stock-adjustment-form.component.html'
+  templateUrl: './stock-adjustment-form.component.html',
+  // Fills the Adjust stock panel below its heading, so the fields scroll and the actions stay put.
+  host: { class: 'flex min-h-0 flex-1 flex-col' }
 })
 export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   /** The product the adjustment is recorded against. */
@@ -62,6 +66,16 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
 
   /** Raised after the existing adjustment endpoint accepted a movement, so the page can reload. */
   @Output() readonly adjustmentApplied = new EventEmitter<void>();
+
+  /**
+   * Raised by Cancel (issue #1156): the form is shown in the Adjust stock panel, which closes on it.
+   * Cancel is refused while an adjustment is being saved, so a write in flight is never abandoned
+   * behind a closed panel.
+   */
+  @Output() readonly cancelled = new EventEmitter<void>();
+
+  /** Reports whether an adjustment is being saved, so the panel around it can refuse to close. */
+  @Output() readonly savingChange = new EventEmitter<boolean>();
 
   readonly StockAdjustmentReason = StockAdjustmentReason;
   error = '';
@@ -147,6 +161,16 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * Whether the movement can be attributed to a machine at all (issue #1156): only a **Machine
+   * refill** moves stock to a machine, so the field is disabled for every other reason and a
+   * machine chosen under Machine refill is dropped when the reason changes away from it, rather
+   * than being submitted with a Restock, Sale, Damaged, Expired or Correction movement.
+   */
+  get machineApplicable(): boolean {
+    return this.form.reason === StockAdjustmentReason.MachineRefill;
+  }
+
   get requiresRestockCost(): boolean {
     return this.form.reason === StockAdjustmentReason.Restock && (this.form.quantityChange ?? 0) > 0;
   }
@@ -166,6 +190,10 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   }
 
   onAdjustmentInputsChanged(): void {
+    if (!this.machineApplicable) {
+      this.form.machineId = null;
+    }
+
     if (this.isCorrection && this.form.quantityChange !== null) {
       this.form.quantityChange = Math.abs(this.form.quantityChange);
     }
@@ -198,6 +226,11 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     if (this.sessionActive) {
       return;
     }
+    // One write at a time (issue #1156): a second press or Enter while the first is in flight is
+    // ignored rather than recording the same movement twice.
+    if (this.saving) {
+      return;
+    }
     const quantityChange = this.isCorrection
       ? -(Math.abs(this.form.quantityChange ?? 0))
       : this.form.quantityChange;
@@ -219,17 +252,18 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       }
     }
     this.error = '';
-    this.saving = true;
+    this.setSaving(true);
 
     const payload = {
       ...this.form,
       quantityChange,
+      machineId: this.machineApplicable ? this.form.machineId : null,
       unitCost: this.requiresRestockCost ? this.form.unitCost : null
     };
     this.stockService.adjust(this.productId, payload).subscribe({
       next: () => {
         this.reset();
-        this.saving = false;
+        this.setSaving(false);
         this.adjustmentApplied.emit();
       },
       error: (err) => {
@@ -237,10 +271,24 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
         // string body to a ProblemDetails object (issue #59); handle both shapes, matching the
         // same fallback already used in machine-detail.component.ts.
         const body = err?.error;
+        // Everything the operator entered stays on the form, so the message can be acted on and
+        // the adjustment applied again without retyping it.
         this.error = typeof body === 'string' ? body : (body?.message ?? body?.title ?? 'Failed to adjust stock.');
-        this.saving = false;
+        this.setSaving(false);
       }
     });
+  }
+
+  cancel(): void {
+    if (this.saving) {
+      return;
+    }
+    this.cancelled.emit();
+  }
+
+  private setSaving(saving: boolean): void {
+    this.saving = saving;
+    this.savingChange.emit(saving);
   }
 
   private reset(): void {

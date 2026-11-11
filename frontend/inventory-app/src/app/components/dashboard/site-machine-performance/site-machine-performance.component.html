@@ -140,8 +140,21 @@
                       </a>
                     </td>
                     @if (canViewFinancials) {
-                      <td class="table-cell table-num" [ngClass]="siteSalesClass(group.site)">{{ siteSalesText(group.site) }}</td>
-                      <td class="table-cell table-num" [ngClass]="siteComparisonClass(group.site)">{{ siteComparisonText(group.site) }}</td>
+                      <td
+                        class="table-cell table-num"
+                        [attr.data-testid]="'site-sales-' + group.site.siteId"
+                        [ngClass]="siteSalesClass(group.site)"
+                      >{{ siteSalesText(group.site) }}</td>
+                      <!--
+                        The percentage and, beneath it, the baseline amount it was worked out from
+                        (issue #1178), so the comparison is never a percentage with nothing behind
+                        it. The amount is the response's own figure - a known `$0.00` included -
+                        or Unavailable for one it withheld.
+                      -->
+                      <td class="table-cell table-num" [attr.data-testid]="'site-comparison-' + group.site.siteId">
+                        <div [ngClass]="siteComparisonClass(group.site)">{{ siteComparisonText(group.site) }}</div>
+                        <div class="text-xs value-muted">{{ baselineLabel }} {{ siteBaselineText(group.site) }}</div>
+                      </td>
                     }
                     <td class="table-cell table-num">
                       <a
@@ -248,7 +261,10 @@
                           <div>{{ machineSalesText(machine) }}</div>
                           <div class="text-xs value-muted">{{ machineProfitText(machine) }}</div>
                         </td>
-                        <td class="table-cell table-num" [ngClass]="machineComparisonClass(machine)">{{ machineComparisonText(machine) }}</td>
+                        <td class="table-cell table-num" [attr.data-testid]="'machine-comparison-' + machine.machineID">
+                          <div [ngClass]="machineComparisonClass(machine)">{{ machineComparisonText(machine) }}</div>
+                          <div class="text-xs value-muted">{{ baselineLabel }} {{ machineBaselineText(machine) }}</div>
+                        </td>
                       }
                       <td class="table-cell table-num">
                         @if (machine.localMachineId != null) {
@@ -294,7 +310,15 @@
                     <div>{{ totalSalesText }}</div>
                     <div class="text-xs value-muted">{{ totalProfitText }}</div>
                   </td>
-                  <td class="table-cell table-num" [ngClass]="totalComparisonClass">{{ totalComparisonText }}</td>
+                  <!--
+                    The fleet's own comparison (issue #1178): a sum of every machine's current
+                    figure against a sum of every machine's baseline, or Unavailable when one
+                    machine is missing either - never a full previous period in a baseline's place.
+                  -->
+                  <td class="table-cell table-num" data-testid="totals-comparison">
+                    <div [ngClass]="totalComparisonClass">{{ totalComparisonText }}</div>
+                    <div class="text-xs value-muted">{{ baselineLabel }} {{ totalBaselineText }}</div>
+                  </td>
                   <td class="table-cell"></td>
                 </tr>
               </tfoot>
@@ -331,7 +355,16 @@
                     <div>
                       <dt class="text-xs text-rr-muted">{{ salesHeader }}</dt>
                       <dd class="m-0 font-semibold" [ngClass]="siteSalesClass(group.site)">{{ siteSalesText(group.site) }}</dd>
-                      <dd class="m-0 text-xs" [ngClass]="siteComparisonClass(group.site)">{{ siteComparisonText(group.site) }}{{ period === 'week' ? ' vs same time last week' : '' }}</dd>
+                      <!--
+                        The same comparison as the table's cell, with the heading the column
+                        carries said in the row itself because a card has no column heading above
+                        it (issue #1178). Both lines are their own block and wrap on word
+                        boundaries, so the longest wording still fits a 360px card.
+                      -->
+                      <dd class="m-0 text-xs" [attr.data-testid]="'site-card-comparison-' + group.site.siteId">
+                        <span class="block break-words" [ngClass]="siteComparisonClass(group.site)">{{ siteComparisonText(group.site) }} {{ comparisonHeader }}</span>
+                        <span class="block break-words value-muted">{{ baselineLabel }} {{ siteBaselineText(group.site) }}</span>
+                      </dd>
                     </div>
                   }
                   <div>
@@ -408,7 +441,10 @@
                         <p class="m-0 mt-2 text-xs text-rr-muted">{{ salesHeader }}</p>
                         <p class="m-0 text-sm font-semibold">{{ machineSalesText(machine) }}</p>
                         <p class="m-0 text-xs text-rr-muted">{{ machineProfitText(machine) }}</p>
-                        <p class="m-0 text-xs" [ngClass]="machineComparisonClass(machine)">{{ machineComparisonText(machine) }}{{ period === 'week' ? ' vs same time last week' : '' }}</p>
+                        <p class="m-0 text-xs break-words" [attr.data-testid]="'machine-card-comparison-' + machine.machineID">
+                          <span class="block break-words" [ngClass]="machineComparisonClass(machine)">{{ machineComparisonText(machine) }} {{ comparisonHeader }}</span>
+                          <span class="block break-words value-muted">{{ baselineLabel }} {{ machineBaselineText(machine) }}</span>
+                        </p>
                       }
                     </li>
                   }
@@ -426,7 +462,8 @@
             <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">{{ totalsLabel }} · {{ periodLabel }}</p>
             <p class="m-0 mt-1 font-semibold">{{ totalSalesText }}</p>
             <p class="m-0 text-xs text-rr-muted">{{ totalProfitText }}</p>
-            <p class="m-0 text-xs" [ngClass]="totalComparisonClass">{{ totalComparisonText }}{{ period === 'week' ? ' vs same time last week' : '' }}</p>
+            <p class="m-0 text-xs break-words" [ngClass]="totalComparisonClass">{{ totalComparisonText }} {{ comparisonHeader }}</p>
+            <p class="m-0 text-xs break-words value-muted">{{ baselineLabel }} {{ totalBaselineText }}</p>
           </div>
         }
       }

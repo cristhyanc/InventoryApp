@@ -99,15 +99,15 @@ describe('AccessService capability cache (issue #528)', () => {
   });
 
   /**
-   * The shared switchable option visibility (issue #873) travels with the capabilities, because the
-   * shell builds one menu from both. It is read as reported and never defaulted here: an API that
-   * does not report it leaves the answer unknown, which hides nothing.
+   * The shared switchable menu visibility (issues #1148 and #1151) travels with the capabilities,
+   * because the shell builds one menu from both. It is read as reported and never defaulted here: an
+   * API that does not report it leaves the answer unknown, which hides nothing.
    */
-  it.each([true, false])(
-    'reports the switchable option visibility the API published, when it published %s',
-    async (visible) => {
+  it.each([[[]], [['admin.imports']], [['admin.imports', 'admin.costing-repair']]])(
+    'reports the switched-off keys the API published, when it published %p',
+    async (switchedOffKeys: string[]) => {
       const { service } = configure({
-        responses: [() => of({ ...OWNER_RESPONSE, historicalGstClassificationVisible: visible })]
+        responses: [() => of({ ...OWNER_RESPONSE, menuVisibility: { switchedOffKeys } })]
       });
 
       const state = await firstValueFrom(service.access$);
@@ -116,13 +116,13 @@ describe('AccessService capability cache (issue #528)', () => {
       if (state.status !== 'granted') {
         return;
       }
-      expect(state.access.optionVisibility).toEqual({ historicalGstClassificationVisible: visible });
+      expect(state.access.optionVisibility).toEqual({ switchedOffKeys });
       // And it is not a capability: the reported set is the role's, untouched.
       expect([...state.access.capabilities]).toEqual([...CAPABILITIES]);
     }
   );
 
-  it('leaves the option visibility unknown when the API did not report it', async () => {
+  it('leaves the menu visibility unknown when the API did not report it', async () => {
     const { service } = configure({ responses: [() => of(OWNER_RESPONSE)] });
 
     const state = await firstValueFrom(service.access$);
@@ -132,6 +132,38 @@ describe('AccessService capability cache (issue #528)', () => {
       return;
     }
     expect(state.access.optionVisibility).toBeUndefined();
+  });
+
+  /**
+   * The superseded `historicalGstClassificationVisible` field the API still reports for the rollout
+   * is deliberately not read: it is derived from the key list, so reading it would be a second answer
+   * to one question - and a response that carries only it hides nothing.
+   */
+  it('reads the keyed answer alone, ignoring the superseded derived field', async () => {
+    const { service } = configure({
+      responses: [() => of({ ...OWNER_RESPONSE, historicalGstClassificationVisible: false })]
+    });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.optionVisibility).toBeUndefined();
+  });
+
+  /** A reported block with no list at all is still an answer: nothing is switched off. */
+  it('reads a menu-visibility block with no list as nothing switched off', async () => {
+    const { service } = configure({ responses: [() => of({ ...OWNER_RESPONSE, menuVisibility: {} })] });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.optionVisibility).toEqual({ switchedOffKeys: [] });
   });
 
   /**

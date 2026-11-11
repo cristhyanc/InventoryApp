@@ -41,6 +41,12 @@ public class PurchasesControllerTests
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),
+            // Receipt scanning in its shipped state - no reader configured - because this file is
+            // about the purchase endpoints; the scan's own tests are ReceiptScanApiTests (issue
+            // #1163).
+            TestPurchaseUseCases.Scan(),
+            // And its monthly usage read (issue #1164), which this file does not exercise either.
+            TestPurchaseUseCases.ScanUsage(),
             // An Owner, so a line's nested product carries its inventory value; the role-dependent
             // shape itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
             TestCurrentCapabilities.Owner);
@@ -301,7 +307,7 @@ public class PurchasesControllerTests
             .ReturnsAsync(Record(totalAmount: 30m));
 
         await CreateController(store.Object).Upload(
-            CreateFile("scan.jpg"), "Weekly restock", null, 30m, null, null, null, null, null, 4,
+            CreateFile("scan.jpg"), "Weekly restock", null, null, 30m, null, null, null, null, null, 4,
             """[{"productId":3,"quantity":24,"unitCost":1.15}]""",
             supplierOrderId,
             fingerprint);
@@ -324,7 +330,7 @@ public class PurchasesControllerTests
             .ReturnsAsync((PurchaseRecord?)null);
 
         var result = await CreateController(store.Object)
-            .Update(404, "Updated", null, null, null, null, null, null, null, null, null);
+            .Update(404, "Updated", null, null, null, null, null, null, null, null, null, null);
 
         Assert.IsType<NotFoundResult>(result.Result);
     }
@@ -337,7 +343,7 @@ public class PurchasesControllerTests
             .ThrowsAsync(new InvalidOperationException("One or more purchase products do not exist."));
 
         var result = await CreateController(store.Object)
-            .Update(7, "Updated", null, null, null, null, null, null, null, null, null);
+            .Update(7, "Updated", null, null, null, null, null, null, null, null, null, null);
 
         Assert.Equal(
             "One or more purchase products do not exist.",
@@ -361,7 +367,8 @@ public class PurchasesControllerTests
             .Callback((int _, PurchaseFields _, IReadOnlyList<PurchaseItemInput>? supplied, CancellationToken _) => captured = supplied)
             .ReturnsAsync(Record());
 
-        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, null, null, items);
+        await CreateController(store.Object).Update(
+            7, "Updated", null, null, null, null, null, null, null, null, null, items);
 
         Assert.NotNull(captured);
         Assert.Empty(captured);
@@ -376,7 +383,8 @@ public class PurchasesControllerTests
             .Callback((int _, PurchaseFields _, IReadOnlyList<PurchaseItemInput>? supplied, CancellationToken _) => captured.Add(supplied))
             .ReturnsAsync(Record());
 
-        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, null, null, "null");
+        await CreateController(store.Object).Update(
+            7, "Updated", null, null, null, null, null, null, null, null, null, "null");
 
         Assert.Null(Assert.Single(captured));
     }
@@ -516,7 +524,7 @@ public class PurchasesControllerTests
     private static Task<ActionResult<PurchaseResponseDto>> UploadThrough(
         PurchasesController controller, IFormFile? file, string? items = null) =>
         controller.Upload(
-            file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items,
+            file, "Weekly restock", null, null, 30m, 5m, null, 2m, null, null, 4, items,
             completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
 
     private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
@@ -534,6 +542,7 @@ public class PurchasesControllerTests
         7,
         BusinessId: 1,
         "Weekly restock",
+        null,
         null,
         totalAmount,
         5m,

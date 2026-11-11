@@ -1,6 +1,6 @@
 import { SimpleChange } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form.component';
 import { StockService } from '../../../services/stock.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
@@ -393,5 +393,155 @@ describe('StockAdjustmentFormComponent product change', () => {
     component.ngOnChanges({ productId: new SimpleChange(undefined, 7, true) });
 
     expect(component.form.quantityChange).toBe(12);
+  });
+});
+
+/**
+ * Issue #1156: the machine field is enabled only for a Machine refill, and a machine chosen under
+ * Machine refill is never submitted with another reason.
+ */
+describe('StockAdjustmentFormComponent machine applies only to a machine refill (issue #1156)', () => {
+  it('treats the machine as applicable only while the reason is Machine refill', () => {
+    const { component } = createHarness();
+
+    expect(component.form.reason).toBe(StockAdjustmentReason.Restock);
+    expect(component.machineApplicable).toBe(false);
+
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    expect(component.machineApplicable).toBe(true);
+  });
+
+  it('drops a machine chosen under Machine refill when the reason changes away from it', () => {
+    const { component } = createHarness();
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.onAdjustmentInputsChanged();
+    component.form.machineId = 41;
+
+    component.form.reason = StockAdjustmentReason.Damaged;
+    component.onAdjustmentInputsChanged();
+
+    expect(component.form.machineId).toBeNull();
+  });
+
+  it('never submits a machine with a reason other than Machine refill', () => {
+    const { component, adjust } = createHarness();
+    component.form.quantityChange = -2;
+    component.form.reason = StockAdjustmentReason.Expired;
+    // Staged directly, as a stale value would be, without the reason-change handler running.
+    component.form.machineId = 41;
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ reason: StockAdjustmentReason.Expired, machineId: null }));
+  });
+
+  describe('rendered', () => {
+    async function render(): Promise<{ host: HTMLElement; component: StockAdjustmentFormComponent; detect: () => void; stable: () => Promise<unknown> }> {
+      await TestBed.configureTestingModule({
+        imports: [StockAdjustmentFormComponent],
+        providers: [
+          { provide: StockService, useValue: { adjust: jest.fn(() => of({})), restockCostSuggestion: jest.fn(() => of({ unitCost: 1, source: 'LastPurchase', purchaseDate: null })) } },
+          { provide: SupportSessionService, useValue: { active$: of(false) } }
+        ]
+      }).compileComponents();
+
+      const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
+      fixture.componentRef.setInput('productId', 7);
+      fixture.componentRef.setInput('machines', [localMachine(41, 'Lobby')]);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return { host: fixture.nativeElement as HTMLElement, component: fixture.componentInstance, detect: () => fixture.detectChanges(), stable: () => fixture.whenStable() };
+    }
+
+    afterEach(() => TestBed.resetTestingModule());
+
+    it('disables the machine field until Machine refill is chosen, and says why', async () => {
+      const { host, component, detect, stable } = await render();
+      const field = () => host.querySelector<HTMLSelectElement>('#adjustment-machine')!;
+
+      expect(field().disabled).toBe(true);
+      expect(host.querySelector('[data-testid="adjustment-machine-hint"]')?.textContent).toContain('Only a Machine refill');
+
+      const reason = host.querySelector<HTMLSelectElement>('#adjustment-reason')!;
+      reason.value = reason.options[5].value;
+      reason.dispatchEvent(new Event('change'));
+      detect();
+      await stable();
+      detect();
+
+      expect(component.form.reason).toBe(StockAdjustmentReason.MachineRefill);
+      expect(field().disabled).toBe(false);
+    });
+
+    it('explains signed quantities', async () => {
+      const { host } = await render();
+
+      expect(host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent).toContain('negative number removes');
+    });
+  });
+});
+
+describe('StockAdjustmentFormComponent submission (issue #1156)', () => {
+  it('keeps everything entered when the save fails, with the server message', () => {
+    const { component, applied } = createHarness({
+      adjustResult: throwError(() => ({ error: { title: 'Insufficient stock.' } }))
+    });
+    component.form.quantityChange = -40;
+    component.form.reason = StockAdjustmentReason.Damaged;
+    component.form.notes = 'Crushed cartons';
+    component.form.EatBefore = '2026-12-01';
+
+    component.adjust();
+
+    expect(component.error).toBe('Insufficient stock.');
+    expect(component.saving).toBe(false);
+    expect(component.form).toEqual(
+      expect.objectContaining({
+        quantityChange: -40,
+        reason: StockAdjustmentReason.Damaged,
+        notes: 'Crushed cartons',
+        EatBefore: '2026-12-01'
+      })
+    );
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it('records one movement however many times Apply is pressed while the first is saving', () => {
+    const pending = new Subject<StockAdjustment>();
+    const { component, adjust, applied } = createHarness({ adjustResult: pending.asObservable() });
+    const saving = jest.fn();
+    component.savingChange.subscribe(saving);
+    component.form.quantityChange = -3;
+    component.form.reason = StockAdjustmentReason.Damaged;
+
+    component.adjust();
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledTimes(1);
+    expect(saving).toHaveBeenLastCalledWith(true);
+
+    pending.next({} as StockAdjustment);
+    pending.complete();
+
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(saving).toHaveBeenLastCalledWith(false);
+  });
+
+  it('cancels only while nothing is being saved', () => {
+    const pending = new Subject<StockAdjustment>();
+    const { component } = createHarness({ adjustResult: pending.asObservable() });
+    const cancelled = jest.fn();
+    component.cancelled.subscribe(cancelled);
+
+    component.form.quantityChange = -3;
+    component.form.reason = StockAdjustmentReason.Damaged;
+    component.adjust();
+    component.cancel();
+    expect(cancelled).not.toHaveBeenCalled();
+
+    pending.error({ error: 'Failed.' });
+    component.cancel();
+    expect(cancelled).toHaveBeenCalledTimes(1);
   });
 });

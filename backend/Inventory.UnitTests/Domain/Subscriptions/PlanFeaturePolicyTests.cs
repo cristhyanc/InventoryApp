@@ -26,6 +26,7 @@ public class PlanFeaturePolicyTests
     [InlineData(PlanFeature.SiteCommissions, SubscriptionPlan.Pro)]
     [InlineData(PlanFeature.SalesFileImport, SubscriptionPlan.Pro)]
     [InlineData(PlanFeature.ObservedSupplierPrices, SubscriptionPlan.Starter)]
+    [InlineData(PlanFeature.ReceiptScanning, SubscriptionPlan.Pro)]
     public void Every_feature_requires_the_decided_plan(PlanFeature feature, SubscriptionPlan expected) =>
         Assert.Equal(expected, PlanFeaturePolicy.RequiredPlan(feature));
 
@@ -43,7 +44,7 @@ public class PlanFeaturePolicyTests
 
     /// <summary>The declared vocabulary, so a feature added later is added here too.</summary>
     [Fact]
-    public void The_declared_features_are_exactly_the_six()
+    public void The_declared_features_are_exactly_the_seven()
     {
         Assert.Equal(
             [
@@ -53,6 +54,7 @@ public class PlanFeaturePolicyTests
                 PlanFeature.SiteCommissions,
                 PlanFeature.SalesFileImport,
                 PlanFeature.ObservedSupplierPrices,
+                PlanFeature.ReceiptScanning,
             ],
             PlanFeatures.All);
         Assert.Equal(PlanFeatures.All.Count, Enum.GetValues<PlanFeature>().Length);
@@ -73,17 +75,50 @@ public class PlanFeaturePolicyTests
 
     /// <summary>
     /// The shipped state, and the criterion "until enforcement is switched on, nothing changes for
-    /// any business": an unenforced entitlement includes every feature, on both of the two reasons
-    /// it can be unenforced.
+    /// any business": an unenforced entitlement includes every feature a business could already use,
+    /// on both of the two reasons it can be unenforced.
+    ///
+    /// <para>The one exception is the feature that fails closed (issue #1163), asserted immediately
+    /// below. It is excluded here by asking the same table rather than by naming it, so a second
+    /// fail-closed feature cannot be added without both of these rules agreeing about it.</para>
     /// </summary>
     [Theory]
     [InlineData(EntitlementSource.EnforcementDisabled)]
     [InlineData(EntitlementSource.GrandfatheringNotCompleted)]
-    public void An_unenforced_entitlement_includes_every_feature(EntitlementSource reason) =>
+    public void An_unenforced_entitlement_includes_every_feature_that_does_not_fail_closed(
+        EntitlementSource reason) =>
         Assert.All(
-            PlanFeatures.All,
+            PlanFeatures.All.Where(feature => !PlanFeaturePolicy.FailsClosedWhileUnenforced(feature)),
             feature => Assert.True(
                 PlanFeaturePolicy.Allows(EffectiveEntitlementPolicy.Unrestricted(reason), feature)));
+
+    /// <summary>
+    /// The fail-closed rule (issue #1163): receipt scanning is refused while nothing is enforced, on
+    /// both of the two reasons an entitlement can be unenforced, because every scan spends money at
+    /// an external reader and "unrestricted" there would mean every business in the deployment.
+    /// </summary>
+    [Theory]
+    [InlineData(EntitlementSource.EnforcementDisabled)]
+    [InlineData(EntitlementSource.GrandfatheringNotCompleted)]
+    public void The_fail_closed_feature_is_refused_while_nothing_is_enforced(EntitlementSource reason) =>
+        Assert.False(
+            PlanFeaturePolicy.Allows(
+                EffectiveEntitlementPolicy.Unrestricted(reason), PlanFeature.ReceiptScanning));
+
+    /// <summary>
+    /// Exactly one feature fails closed, pinned by value: making a second one do so is a commercial
+    /// decision about who pays for a feature, so it is a change somebody has to see in a diff.
+    /// </summary>
+    [Fact]
+    public void Exactly_the_receipt_scan_feature_fails_closed()
+    {
+        Assert.Equal(
+            [PlanFeature.ReceiptScanning],
+            PlanFeatures.All.Where(PlanFeaturePolicy.FailsClosedWhileUnenforced));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => PlanFeaturePolicy.FailsClosedWhileUnenforced((PlanFeature)99));
+    }
 
     /// <summary>
     /// The plan × feature matrix, as the plan page advertises it: Free includes none of them,
@@ -97,18 +132,21 @@ public class PlanFeaturePolicyTests
     [InlineData(SubscriptionPlan.Free, PlanFeature.SiteCommissions, false)]
     [InlineData(SubscriptionPlan.Free, PlanFeature.SalesFileImport, false)]
     [InlineData(SubscriptionPlan.Free, PlanFeature.ObservedSupplierPrices, false)]
+    [InlineData(SubscriptionPlan.Free, PlanFeature.ReceiptScanning, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SalesProviderIntegration, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.BookkeepingAndGstReports, true)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.ProviderSalesReports, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SiteCommissions, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SalesFileImport, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.ObservedSupplierPrices, true)]
+    [InlineData(SubscriptionPlan.Starter, PlanFeature.ReceiptScanning, false)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SalesProviderIntegration, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.BookkeepingAndGstReports, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.ProviderSalesReports, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SiteCommissions, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SalesFileImport, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.ObservedSupplierPrices, true)]
+    [InlineData(SubscriptionPlan.Pro, PlanFeature.ReceiptScanning, true)]
     public void Each_plan_includes_exactly_the_features_the_catalogue_advertises(
         SubscriptionPlan plan,
         PlanFeature feature,

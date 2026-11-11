@@ -18,8 +18,10 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
 /// The site row and the machine rows under it are read from one table through two adapters, and
-/// issue #1012's invariant is that for each of the four published periods the site figure is exactly
-/// the sum of the gross revenue of the machines standing at it. This test is the only place both
+/// issue #1012's invariant is that for each published period the site figure is exactly
+/// the sum of the gross revenue of the machines standing at it - the four periods it published, and
+/// since issues #1177 and #1180 the previous comparable day and the previous comparable month as
+/// well. This test is the only place both
 /// production paths run over the same seeded sales: <see cref="GetSiteSummaries"/> with the real
 /// <see cref="EfSiteFactsStore"/> for the site figure, and the real
 /// <see cref="EfMachineDashboardFactsStore"/> for each machine's own figure, over one relational
@@ -30,8 +32,11 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// lookbacks, the two completed-sale filters and the two period comparisons are what could drift
 /// apart, and only a test that reads both can notice. The seeded sales deliberately straddle the
 /// boundaries where a difference would show - the month's first instant, the week's first and last
-/// instants, and the instants just outside each - and include a refunded transaction, which neither
-/// figure may count.</para>
+/// instants, the previous month's first instant and its comparable day's cutoff, and the instants
+/// just outside each - and include refunded transactions, which neither figure may count. The two
+/// adapters' lookbacks differ by construction (the site read starts at the earliest published
+/// period, the machine read at the earlier of that instant and one month back), which is exactly why
+/// the equality is asserted over sales that lie outside both of the old bounds.</para>
 /// </summary>
 public class SiteRevenueMatchesMachineRevenueTests : IDisposable
 {
@@ -91,13 +96,21 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
         Assert.Equal(left.CurrentWeek.GrossRevenue + right.CurrentWeek.GrossRevenue, site.CurrentWeekRevenue);
         Assert.Equal(left.LastWeek.GrossRevenue + right.LastWeek.GrossRevenue, site.LastWeekRevenue);
         Assert.Equal(left.MonthToDate.GrossRevenue + right.MonthToDate.GrossRevenue, site.MonthToDateRevenue);
+        Assert.Equal(
+            left.PreviousComparableDayGrossRevenue + right.PreviousComparableDayGrossRevenue,
+            site.PreviousComparableDayRevenue);
+        Assert.Equal(
+            left.PreviousComparableMonthGrossRevenue + right.PreviousComparableMonthGrossRevenue,
+            site.PreviousComparableMonthRevenue);
 
-        // The fixtures really do put money in each of the four periods, so the equalities above are
-        // not four pairs of zeroes agreeing with each other.
+        // The fixtures really do put money in each of the six periods, so the equalities above are
+        // not six pairs of zeroes agreeing with each other.
         Assert.Equal(3m, site.TodayRevenue);
-        Assert.Equal(26m, site.CurrentWeekRevenue);
+        Assert.Equal(135m, site.CurrentWeekRevenue);
         Assert.Equal(60m, site.LastWeekRevenue);
-        Assert.Equal(62m, site.MonthToDateRevenue);
+        Assert.Equal(171m, site.MonthToDateRevenue);
+        Assert.Equal(68m, site.PreviousComparableDayRevenue);
+        Assert.Equal(104m, site.PreviousComparableMonthRevenue);
     }
 
     /// <summary>
@@ -155,6 +168,31 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
             CompletedSale(4, LeftMachineId, 23m, Utc(2023, 10, 1, 13, 0)),
             // Thursday 5 October 2023, 09:00 AEDT: today.
             CompletedSale(5, LeftMachineId, 3m, Utc(2023, 10, 4, 22, 0)),
+            // Wednesday 4 October 2023, 07:00 and 09:00 AEDT: inside the previous comparable day,
+            // which runs to 10:00 on that day because the read is taken at 10:00 today (issue
+            // #1177). Both instants fall on UTC 3 October, a different date from their business day.
+            CompletedSale(10, LeftMachineId, 31m, Utc(2023, 10, 3, 20, 0)),
+            CompletedSale(11, RightMachineId, 37m, Utc(2023, 10, 3, 22, 0)),
+            // Wednesday 4 October 2023, 10:00:00.001 AEDT: one millisecond past the cutoff, so it is
+            // in this week and the month but in neither baseline figure.
+            CompletedSale(12, LeftMachineId, 41m, Utc(2023, 10, 3, 23, 0, 0, 1)),
+            // Refunded, inside the previous comparable day: both figures apply the same
+            // completed-sale policy there as they do to today.
+            RefundedTransaction(13, LeftMachineId, 999m, Utc(2023, 10, 3, 21, 0)),
+            // Friday 1 September 2023, 00:00 AEST: the previous comparable month's own first instant
+            // (issue #1180), more than a month before the read - so it is also the sale that proves
+            // the machine adapter's own sales read reaches back that far.
+            CompletedSale(14, LeftMachineId, 43m, Utc(2023, 8, 31, 14, 0)),
+            // Tuesday 5 September 2023, 10:00 AEST: exactly that period's cutoff, on its comparable
+            // day, which is inclusive.
+            CompletedSale(15, RightMachineId, 61m, Utc(2023, 9, 5, 0, 0)),
+            // One millisecond later: last month, but past the point this month has reached.
+            CompletedSale(16, LeftMachineId, 2000m, Utc(2023, 9, 5, 0, 0, 0, 1)),
+            // Thursday 31 August 2023, 23:59:59.999 AEST: one millisecond before September began.
+            CompletedSale(17, LeftMachineId, 3000m, Utc(2023, 8, 31, 13, 59, 59, 999)),
+            // Refunded, inside the previous comparable month: the same completed-sale policy applies
+            // there as it does to this month.
+            RefundedTransaction(18, LeftMachineId, 888m, Utc(2023, 9, 3, 0, 0)),
             // Sunday 24 September 2023, 23:59:59.999 AEST: the week before last week, which no
             // published period covers.
             CompletedSale(6, LeftMachineId, 29m, Utc(2023, 9, 24, 13, 59, 59, 999)),

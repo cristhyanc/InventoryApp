@@ -612,6 +612,19 @@ export interface Machine {
   previousComparableWeekDirectProfit: number | null;
   monthToDateGrossRevenue?: number | null;
   monthToDateDirectProfit: number | null;
+  /**
+   * The two remaining comparison baselines the dashboard card compares against (issues #1177 and
+   * #1180), each the same elapsed window as the figure above it: yesterday's gross revenue up to
+   * the same time of day, and the previous calendar month's up to the same point of the month. They
+   * are published on exactly the terms every other revenue field here is - an honest `0` for a
+   * window with no completed sale, `null` for a figure withheld from a role without
+   * `Dashboard.ViewFinancials` - so a `null` is never shown as `$0.00`.
+   *
+   * Revenue only, by the server's decision: neither baseline carries a direct profit, so the card
+   * compares sales and never profit or margin.
+   */
+  previousComparableDayGrossRevenue?: number | null;
+  previousComparableMonthGrossRevenue?: number | null;
   profitabilityStatus?: string | null;
   /**
    * The site the machine stands at - the same id `GET api/sites` answers as `siteId` - or
@@ -668,11 +681,22 @@ export interface Site {
    * The remaining two of the four sales periods a site row shows (issue #1012), published on the
    * same terms as the three above: the server's own sums over the same dashboard window, `null` for
    * a member without `Dashboard.ViewFinancials`, and an honest `0` for a period with no completed
-   * sale. `previousComparableWeekRevenue` stays the baseline of the one comparison the response
-   * carries, which belongs to the current week.
+   * sale. `previousComparableWeekRevenue` is the baseline of the current week's comparison; the two
+   * fields below are the other two baselines (issues #1177 and #1180), and `lastWeekRevenue` is a
+   * full previous week that is never used as one.
    */
   lastWeekRevenue?: number | null;
   monthToDateRevenue?: number | null;
+  /**
+   * The baselines Today and This month are compared against on the dashboard card (issues #1177 and
+   * #1180), the site-level counterparts of {@link Machine.previousComparableDayGrossRevenue} and
+   * {@link Machine.previousComparableMonthGrossRevenue} and published on the same terms as the
+   * figures above: the previous business date to the same time of day, and the previous calendar
+   * month to the same point of the month. An honest `0` for a window with no completed sale, `null`
+   * for a withheld figure, which a row shows as unavailable rather than as `$0.00`.
+   */
+  previousComparableDayRevenue?: number | null;
+  previousComparableMonthRevenue?: number | null;
   /**
    * The machines standing at this site and each one's own stock percentage (issue #1013), in the
    * order the fleet read returned them. Absent or empty means the response published none, which a
@@ -1193,6 +1217,12 @@ export interface Purchase {
   id: number;
   title: string;
   notes?: string | null;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162), trimmed as the API stored it, and
+   * `null` for a purchase that records none - which is every purchase recorded before that issue.
+   * Blank is never stored, so an empty string never arrives here.
+   */
+  invoiceNumber?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
   deliveryGstClassification?: GstClassification;

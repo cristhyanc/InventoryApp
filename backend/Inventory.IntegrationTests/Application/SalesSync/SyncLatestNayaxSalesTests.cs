@@ -1,4 +1,3 @@
-using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Infrastructure.Persistence;
@@ -175,23 +174,33 @@ public class SyncLatestNayaxSalesTests
     }
 
     /// <summary>
-    /// A product whose history is still unreplayable is raised as the one data-quality failure this
-    /// path has always raised (issue #362), after every product that could be rebuilt has been. The
-    /// store reports rather than throws since issue #1103 - the queue reader needs to tell its own
-    /// product's failure from another's - so this is where the request-driven path turns a reported
-    /// failure back into the exception an operator sees.
+    /// A product whose history is still unreplayable no longer fails the synchronization: the sales
+    /// are stored and every other product was rebuilt, so the run completes and records its
+    /// freshness. The failed product keeps its pending row (the store records the failure code and
+    /// attempt), which every later run retries and the Dashboard reports by product.
     /// </summary>
     [Fact]
-    public async Task Handle_raises_a_still_failing_pending_rebuild_as_a_data_quality_failure()
+    public async Task Handle_completes_when_a_pending_rebuild_still_fails()
     {
         var store = TestSalesSync.StoreMock();
         store.Setup(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new InventoryCostRebuildDrainResult([10], ["Product 10: no opening cost."]));
+        var useCase = TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object);
 
-        var failure = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
-            () => TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle());
+        var outcome = await useCase.Handle();
 
-        Assert.Contains("Product 10: no opening cost.", failure.Message, StringComparison.Ordinal);
+        // A run that happened: not refused, not busy, not a recent-sync skip.
+
+        Assert.Null(outcome.RetryAfter);
+
+        Assert.False(outcome.IsBusy);
+
+        Assert.Null(outcome.RecentlySyncedAtUtc);
+
+        // The run counted as done, so a visit moments later is the ordinary recent-sync skip rather
+        // than another full read that would fail the same way.
+        var next = await useCase.Handle();
+        Assert.NotNull(next.RecentlySyncedAtUtc);
     }
 
     private static Mock<INayaxLynxClient> SingleMachineNayax()

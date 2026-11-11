@@ -30,10 +30,12 @@ using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
+using Inventory.Application.PlatformReceiptScans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
@@ -59,6 +61,7 @@ using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxSqs;
+using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Reporting;
@@ -212,12 +215,13 @@ public static class InfrastructureServiceCollectionExtensions
         // one table in this schema that names no business in any statement because it is about none.
         // Scoped like every adapter here, so it runs on the request's own denied-scope context.
         services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
-        // The shared switchable option visibility (issue #873): the second table in this schema that
-        // names no business, for the same reason - the setting is one answer for the whole
-        // application. Scoped like every adapter here, so the Super Admin's write runs on the
+        // The shared switchable menu visibility (issue #1148, replacing issue #873's single-row
+        // adapter over PlatformOptionVisibility, which nothing writes any more): a table that names
+        // no business, for the same reason the presets do not - the setting is one answer for the
+        // whole application. Scoped like every adapter here, so the Super Admin's write runs on the
         // request's own denied-scope context and a member's read on their own resolved one; neither
         // scope selects anything, because there is no owner to compare.
-        services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
+        services.AddScoped<IMenuVisibilityStore, EfMenuVisibilityStore>();
         // The business subscription state of issue #966: three deliberately tiny adapters over three
         // tables, kept apart because the records they hold must never write each other. The billing
         // subscription and the manual grants are ordinary tenant-owned reads and writes through the
@@ -255,6 +259,14 @@ public static class InfrastructureServiceCollectionExtensions
         // every adapter here, so it runs on the request's own context and inside the decision's
         // transaction on it, which is also the only way that lease can be taken at all.
         services.AddScoped<IPlatformNayaxSqsSenderStore, EfPlatformNayaxSqsSenderStore>();
+
+        // The Super Admin's view of one business's monthly receipt-scan count (issue #1164). A
+        // separate adapter again, for the two adapters above's reason - the business is the subject
+        // of a platform read rather than the caller's own resolved scope - and the narrowest of the
+        // three: one business-pinned IgnoreQueryFilters read of one integer, no write of any kind and
+        // therefore no lease at all. Scoped like every adapter here, so it runs on the request's own
+        // context.
+        services.AddScoped<IPlatformReceiptScanUsageStore, EfPlatformReceiptScanUsageStore>();
 
         // The attachment storage accounting of issue #968: the business's own usage, and the
         // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
@@ -380,6 +392,16 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IBulkProductGstRuleStore, EfBulkProductGstRuleStore>();
         services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
         services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+        // The one read receipt scanning makes of the business's own data (issue #1163): two columns
+        // each of its products and suppliers, through the ordinary tenant query filters.
+        services.AddScoped<IReceiptScanCatalogueStore, EfReceiptScanCatalogueStore>();
+        // And the one read behind a suggested pack size (issue #1165): the latest recorded purchase
+        // line for a few of this business's products from one supplier, through the same filters.
+        services.AddScoped<IReceiptScanPurchaseHistoryStore, EfReceiptScanPurchaseHistoryStore>();
+        // And the business's own monthly scan counter (issue #1164): one row per business per
+        // calendar month of its own zone, counted inside one write-locked transaction so two
+        // simultaneous scans cannot both take the last one.
+        services.AddScoped<IReceiptScanUsageStore, EfReceiptScanUsageStore>();
         services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
         services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
         services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
@@ -440,9 +462,23 @@ public static class InfrastructureServiceCollectionExtensions
 
         // The Nayax sales review of issue #1105: the Owner's decisions and the Dashboard summary.
         services.AddScoped<INayaxSaleReviewStore, EfNayaxSaleReviewStore>();
+        services.AddScoped<IProductCostAttentionReader, EfProductCostAttentionReader>();
         services.AddScoped<INayaxReconciliationSuccessStore, EfNayaxReconciliationSuccessStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
+        // The uploaded reimbursement report import of issue #1149. All three are scoped because each
+        // runs on one context: the job store on the caller's own request scope for the upload and
+        // the status reads, and on the worker's per-business scope for the import; the per-file
+        // transaction on that same worker scope's context, which is what makes a file's rows, its
+        // coverage and its outcome one commit; and the queue on the deliberately business-less scope
+        // the worker opens for its one reviewed cross-business statement.
+        services.AddScoped<IReimbursementImportJobStore, EfReimbursementImportJobStore>();
+        services.AddScoped<IReimbursementImportFileTransactions, EfReimbursementImportFileTransactions>();
+        services.AddScoped<IReimbursementImportJobQueue, EfReimbursementImportJobQueue>();
+        // Reading the uploaded ZIP (issue #1149). A singleton because it holds nothing per request:
+        // it is given bytes and answers what they contain, touches no database and no filesystem,
+        // and its limits are the Domain's constants.
+        services.AddSingleton<IReimbursementArchiveReader, ZipReimbursementArchiveReader>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence
         // adapter since issue #739. Scoped like every other adapter here: both
         // operations read and write one caller's resolved business through the request's own
@@ -717,6 +753,59 @@ public static class InfrastructureServiceCollectionExtensions
         // Constructed now rather than lazily: validation of the key section belongs at startup.
         var protector = new AesGcmNayaxTokenProtector(options);
         services.AddSingleton<INayaxTokenProtector>(protector);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers everything receipt scanning needs behind its Application ports (issue #1163): the
+    /// settings, the PDF page counter, the log sink and the typed <c>HttpClient</c> that talks to the
+    /// reader.
+    ///
+    /// Separate from <see cref="AddInfrastructureServices"/>, like <see cref="AddNayaxLynxClient"/>
+    /// and <see cref="AddNayaxTokenProtection"/>, because only the composition root reads
+    /// configuration - which keeps the API key out of Inventory.Application and Inventory.Domain
+    /// entirely. The key is held by <see cref="ReceiptScanningConfiguration"/> and is deliberately not
+    /// reachable through <see cref="IReceiptScanSettings"/>, which is what the use case sees.
+    ///
+    /// <para><strong>Two outcomes, and both are deliberate.</strong> With no
+    /// <c>ReceiptScanning:ApiKey</c> the feature is off: <see cref="IReceiptScanSettings.IsConfigured"/>
+    /// is <see langword="false"/>, the endpoint answers "not available" before anything is read, and
+    /// nothing leaves the process - which is the shipped state and the state of every test host. With
+    /// a key and a broken setting beside it, registration fails here, at startup, with the setting
+    /// named (see <see cref="ReceiptScanningConfiguration.From"/>).</para>
+    ///
+    /// <para>The typed client is registered either way, with the configured base address and the
+    /// configured timeout, because an unconfigured reader refuses on its own
+    /// (<see cref="ClaudeReceiptReader"/> makes no unauthenticated call) and a container that composes
+    /// identically in both states is one fewer thing that can differ between environments. The
+    /// timeout is the <c>HttpClient</c>'s, which is what makes "no automatic retry" structural: there
+    /// is no resilience handler here, deliberately, unlike the Nayax client - a retried scan is a
+    /// second payment.</para>
+    /// </summary>
+    /// <param name="services">The container being built.</param>
+    /// <param name="options">The receipt scanning settings, bound from configuration.</param>
+    /// <exception cref="InvalidOperationException">
+    /// An API key is configured together with a setting that cannot be used.
+    /// </exception>
+    public static IServiceCollection AddReceiptScanning(
+        this IServiceCollection services,
+        ReceiptScanningOptions options)
+    {
+        // Validated now rather than lazily, for the reason the token protection section is: a
+        // half-configured section belongs at startup, not at the first scan.
+        var configuration = ReceiptScanningConfiguration.From(options);
+
+        services.AddSingleton(configuration);
+        services.AddSingleton<IReceiptScanSettings>(configuration);
+        services.AddSingleton<IPdfPageCounter, PdfPageCounter>();
+        services.AddSingleton<IReceiptScanLog, LoggingReceiptScanLog>();
+
+        services.AddHttpClient<IReceiptReader, ClaudeReceiptReader>(http =>
+        {
+            http.BaseAddress = configuration.BaseAddress;
+            http.Timeout = configuration.Timeout;
+        });
 
         return services;
     }

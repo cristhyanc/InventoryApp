@@ -1055,7 +1055,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758), `grandfather-business-plans` (issue #966), `reconcile-attachment-storage` (issue #968) and the database backup commands, plus the startup report that says whether plan enforcement can take effect (issue #966).
-- The two hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. Both are hosting glue, not use cases — neither holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+- The four hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). All four are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1546,7 +1546,9 @@ There is exactly one exception to the two bullets above, and it exists so the br
 
 **The frontend half is a build replacement, not a runtime flag.** `src/app/auth/browser-auth-providers.ts` holds the real MSAL wiring (`MSAL_INSTANCE`, `MsalGuard`, `MsalInterceptor`, …) that `app.config.ts` spreads into the application config. The `e2e` build configuration in `angular.json` — and only that configuration — replaces that one module with `browser-auth-providers.e2e.ts`, which lets the router through, stubs `MsalService`/`MsalBroadcastService` so no MSAL call reaches `login.microsoftonline.com`, and registers no HTTP interceptor and therefore attaches no token. A production or development bundle does not contain that module at all, so there is nothing in it to enable.
 
-**What proves it.** `backend/Inventory.IntegrationTests/Auth/E2ETestAuthenticationCompositionTests` pins the gate and what each environment registers; `E2ETestAuthenticationFailsClosedTests` hosts the real pipeline as Production, Development, `Testing`, `Staging` and `e2etest` and asserts the synthetic header authenticates nobody (`401`), the scheme is not registered, and no fixture data is seeded; `E2ETestAuthenticationTests` hosts the E2E environment and asserts the `401`/`403`/`200` boundary and two-business isolation by listing and by id. `browser-auth-providers.spec.ts` asserts the production module keeps the real guard and interceptor and that the replacement is declared in one build configuration only. All of these run in `scripts/validate.sh`; the Playwright suite itself does not (see [Frontend tests](#frontend-tests)).
+**That stub reports the synthetic account by default, and signed out on request** (issue #1191). The workflow suite needs the application rendered as signed in, so one synthetic account is what `getAllAccounts()`/`getActiveAccount()` answer unless `sessionStorage` holds `e2e-signed-out` (`E2E_SIGNED_OUT_KEY`) set to `true` before the bundle loads, in which case the stub reports no account at all. It exists because the public landing page is shown at `/` only to a visitor nobody has signed in as (`signedOutVisitorGuard`) and offers Sign in and Start free on the same condition, so the signed-out homepage cannot be rendered in a browser any other way; `landing-page-public-beta.visual.ts` is its one caller. It grants nothing: this module is in the `e2e` build alone, reporting no account is strictly less than reporting one, and the E2E host still decides every request for itself from the synthetic actor header.
+
+**What proves it.** `backend/Inventory.IntegrationTests/Auth/E2ETestAuthenticationCompositionTests` pins the gate and what each environment registers; `E2ETestAuthenticationFailsClosedTests` hosts the real pipeline as Production, Development, `Testing`, `Staging` and `e2etest` and asserts the synthetic header authenticates nobody (`401`), the scheme is not registered, and no fixture data is seeded; `E2ETestAuthenticationTests` hosts the E2E environment and asserts the `401`/`403`/`200` boundary and two-business isolation by listing and by id. `browser-auth-providers.spec.ts` asserts the production module keeps the real guard and interceptor, that the replacement is declared in one build configuration only, and that the stub reports the synthetic account by default and no account under the signed-out key, whose literal it pins so the Playwright side cannot drift from it. All of these run in `scripts/validate.sh`; the Playwright suite itself does not (see [Frontend tests](#frontend-tests)).
 
 ### Tenant ownership (issue #64)
 
@@ -1564,9 +1566,9 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except **five** structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business), `MemberInvite` (the reviewed decision on issue #532: the redemption has to find an invite by the token a caller with no membership presents, and under the denied scope such a request carries a filtered read matches no row at all — see [Invite redemption](#invite-redemption-issue-532)), and `SupportSession` (the reviewed decision on issue #550: every request that reaches it is a platform-admin request, and a platform administrator is a member of no business, so such a request resolves nothing — a filter would match none of its rows and the ownership stamp would have no business to stamp — see [Support sessions](#support-sessions-the-store-and-the-control-endpoints-issue-550)). There is no "global reference data" among *business* tables: the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered — and it asserts the exemption list itself, so a sixth table is a visible edit rather than an addition nobody reviewed.
 
-**And eleven *platform* tables, which are a different classification (issues #848, #873, #923, #925, #924, #937 and #966).** `SupplierPreset` is the platform's own list of suggested suppliers, kept by the Super Admin (see [Super Admin supplier presets](#super-admin-supplier-presets-issue-848)). Issue #931 widened that table — served states, whether its published prices include GST, and a price connector with its key ([The supplier-master fields](#the-supplier-master-fields-issue-931)) — issue #925 added one more column to it, the per-supplier price-check freshness limit ([Supplier price observations and comparison](#supplier-price-observations-and-comparison-issue-925)), issue #1077 added one more again, the **Search prices** switch that decides whether the collector searches that supplier at all ([The Search prices switch](#the-search-prices-switch-issue-1077)), and issue #1108 added four more, the supplier's own search schedule and the instant it became effective ([The search schedule](#the-search-schedule-issue-1108)); **it is still a platform table on exactly the terms below**: every one of the new columns says something about a *supplier*, none of them says whose supplier it is, so the table still carries no `BusinessId`, has no query filter and takes no ownership stamp. Adding a column to a platform table is not a tenancy decision; giving one a business key would be. `PlatformOptionVisibility` is the single shared row that says whether the one switchable Admin option is offered to anybody but a Super Admin (see [Switchable Admin option visibility](#switchable-admin-option-visibility-issue-873)). `MasterProduct`, `SupplierListing` and `ProductMatchSuggestion` are the shared supplier price catalogue's three tables (issue #923, see [Supplier price catalogue](#supplier-price-catalogue-issue-923)), and they are platform tables for the reason the parent issue exists: a product is looked up at a supplier **once** for every business, so a brand, a name, a size, a supplier's shelf and a matcher's opinion about them are facts about *products*. A `ProductMatchSuggestion` in particular names a folded product description and never the business whose product produced it, which is what keeps one business from being able to learn that another is tracking anything. `PriceCollectorRun` and `SupplierPriceObservation` are issue #925's two, and the same reason one step further on: what a supplier charged for a pack, and the run that read it, are facts about that supplier's shelf and about no business either (see [Supplier price observations and comparison](#supplier-price-observations-and-comparison-issue-925)). An observation names the listing it is a price *of* and never anybody who wanted that price. `PriceCollectorWorkItem` is issue #924's one, and the same reason again: one issued piece of work is a product description — a master product, or the folded search text of one nothing has matched yet — and a supplier's shelf, so it is about no business either, and it carries no `BusinessId`, no query filter and no ownership stamp (see [Collector work list](#collector-work-list-issue-924)). `PriceCollectorResultRow` and `SupplierListingPendingObservation` are issue #937's two, and the same reason once more: a reading a collector submitted, the decision this application made about it, and a reading that was held back rather than priced are facts about a supplier's shelf and about no business (see [Collector results](#collector-results-issue-937)). A result row names the run, the issued work item and the supplier's own product id — a product description and a shelf, never anybody who wanted the search. The business's own half of that catalogue is a separate, ordinary **tenant-owned** table, `ProductPriceTracking` — a business saying it wants one of its own products priced is that business's data, so it implements `IBusinessOwned` and is stamped, filtered and enforced centrally with nothing added for a business's own request, and it is asserted as owned in `BusinessOwnershipCoverageTests` rather than classified here. The two writes to it that do not come from a business are issue #941's automatic match and issue #928's Super Admin review — the same four match columns, through the narrow matching and review windows described in § The second reviewed write and § The fourth reviewed write below. Issue #982 adds the Super Admin's own write of that grant and the append-only `BusinessPlanGrantAudit` beside it — both tenant-owned on the same terms, both asserted as owned, and neither a platform table — through the third reviewed denied-scope write lease below (see [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982)). `SubscriptionGrandfathering` is issue #966's one, and the same reason from a different direction: the grandfathering step of the plan rollout runs **once, over every business**, so the fixed cutoff instant it grants by and the completion marker enforcement waits for are one answer for the whole application and there is no business whose key the row could carry (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)). What that step writes *per business* is an ordinary **tenant-owned** `BusinessPlanGrant`, and the paid record beside it, `BusinessBillingSubscription`, is tenant-owned too: a plan a business was granted and a plan it paid for are facts about that one business, so both implement `IBusinessOwned`, get the ordinary central treatment with nothing added, and are asserted as owned in `BusinessOwnershipCoverageTests` rather than classified here. Each of the eleven is about **no business at all**, which is what distinguishes them from the five above: each of those *is* about one business and carries its key in every statement, while these have no `BusinessId` to carry, no query filter to apply and no ownership stamp to make. The two lists are therefore kept apart in `BusinessOwnershipCoverageTests` — `PlatformEntities` beside `DeliberatelyGlobalEntities`, each closed and asserted, with a test that they do not overlap and that a platform table carries neither a business column nor a filter — so neither table is ever read as an unassigned tenant table somebody forgot to stamp, and the "still carries a business key" rule stays exactly as strong for the five it is about. What keeps them bounded is not ownership but authorization: the two that are written today are written only by the platform-admin surface, every such request carries a **denied** `BusinessScope` (so everything tenant-owned stays unreachable to it), and the copying issue #835 child C does (issue #849) goes one way only — into a business, as an ordinary tenant-owned `Supplier` row that business then owns outright. Nothing reads back out of a business. The copy *write* is the one reviewed provisioning exception below; it writes a `Supplier`, never a platform table. Of the price catalogue's eight tables, every one now has a writer, and the last to get one was `MasterProducts`: the Super Admin review of [#928](#super-admin-review-of-the-supplier-price-catalogue-issue-928) and the Master Products create/edit of [#1024](#super-admin-master-products-issues-1023-and-1024) are its **two** writers and the only two ways a master product is ever created or corrected, which no automatic match and no business ever does. The rest are written by exactly three collector paths, all under the **denied** scope a collector request carries: the work list of issue #924 through `IPriceCollectorRunStore` (one run, its work items, and the expiry of whatever run was still open, in one transaction — see [Collector work list](#collector-work-list-issue-924)); the results of issue #937 through `IPriceCollectorResultStore`, which writes the listings, the observations, the held readings, the recorded outcome of every submitted row and matching evidence on `ProductMatchSuggestions`, each call in one transaction (see [Collector results](#collector-results-issue-937)); and the matches of issue #941 through `IPriceCollectorMatchStore`, which records one suggestion per decided waiting key — this run's own row always, the proposal itself when nothing of that pair is waiting for a reviewer and otherwise the `Repeated` record of having decided the key, never a relabelling of a row another run wrote — and moves the listings that key had already collected onto the master product a match applied (see [Collector product matching](#collector-product-matching-issue-941)). Those are the second, third and fourth write-capable paths to a platform table and all are bounded the same way the first is — by authorization, not by ownership. The **sixth** is the Super Admin review of [#928](#super-admin-review-of-the-supplier-price-catalogue-issue-928), through `IPriceCatalogueReviewStore`: it creates master products, confirms or refuses listings at the identity a person reviewed, accepts a held reading as an observation and clears it from the pending store, and records every match decision on the suggestions — all of them platform tables, each decision one transaction, and bounded by authorization in exactly the same way. The **fifth** is issue #966's, and it is the one that is not a request path at all: the human-run `grandfather-business-plans` command writes the grandfathering record under a denied scope, and each eligible business's grant through a context scoped to that one business. No endpoint reads or writes that record's cutoff or marker — starting the web host and running a command are separate branches of `Program.cs` — and the per-request read beside it publishes one boolean (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)). Since issue #938, `MasterProducts` is also *read* from a member-facing endpoint under the third reading exception below, and since issue #1049 under the sixth — the business lookup, which is the one member-facing read of a master product reached by a search term rather than through a mapping of the caller's own, and which writes nothing either. And since issue #1023 the platform-admin surface **reads the master catalogue in its own right**, beside the review that decides it: `GET api/super-admin/master-products` and `GET .../master-products/{id}` read `MasterProducts`, `SupplierListings`, the `SupplierPresets` that publish those listings and the `SupplierPriceObservation` a listing points at for its current price — four platform tables, **no tenant-owned one at all**, so that surface adds no writer, no reviewed denied-scope write and no `IgnoreQueryFilters` statement anywhere: a platform table carries no business key, so the denied scope those requests run under reads the whole catalogue and none of anybody's own rows (see [Super Admin master products](#super-admin-master-products-issues-1023-and-1024)). **Since issue #1024 that same controller is also the price catalogue's *seventh* write-capable path, and the second writer of a master product**: `POST api/super-admin/master-products` and `PUT api/super-admin/master-products/{id}` add one to the catalogue and correct an existing one's brand, name or size, through `IMasterProductCatalogueWriteStore`. What they write is one platform table, `MasterProducts`, and nothing else at all — one row inserted or updated per call, never deleted, each call inside one `BEGIN IMMEDIATE` transaction that reads the duplicate key, the count of the product's **confirmed** supplier listings and the row's own `UpdatedAtUtc` before it writes. They add **no** reviewed denied-scope write lease and **no** `IgnoreQueryFilters` statement either, for the same reason the reads do not: a platform table carries no business key and no query filter, so the write passes `BusinessOwnershipEnforcer` because a master product is not `IBusinessOwned` rather than because anything was relaxed. Nothing tenant-owned is reachable in either direction: no listing is created, confirmed or refused, no mapping is matched or unmatched, and no business's own product, stock, cost or purchase is read or written. A master product is therefore created or corrected by exactly two paths, both class 2 platform-admin under the same marker and policy, and by nothing else.
+**And twelve *platform* tables, which are a different classification (issues #848, #873, #923, #925, #924, #937, #966 and #1148).** `SupplierPreset` is the platform's own list of suggested suppliers, kept by the Super Admin (see [Super Admin supplier presets](#super-admin-supplier-presets-issue-848)). Issue #931 widened that table — served states, whether its published prices include GST, and a price connector with its key ([The supplier-master fields](#the-supplier-master-fields-issue-931)) — issue #925 added one more column to it, the per-supplier price-check freshness limit ([Supplier price observations and comparison](#supplier-price-observations-and-comparison-issue-925)), issue #1077 added one more again, the **Search prices** switch that decides whether the collector searches that supplier at all ([The Search prices switch](#the-search-prices-switch-issue-1077)), and issue #1108 added four more, the supplier's own search schedule and the instant it became effective ([The search schedule](#the-search-schedule-issue-1108)); **it is still a platform table on exactly the terms below**: every one of the new columns says something about a *supplier*, none of them says whose supplier it is, so the table still carries no `BusinessId`, has no query filter and takes no ownership stamp. Adding a column to a platform table is not a tenancy decision; giving one a business key would be. `PlatformOptionVisibility` is the single shared row that said whether the one switchable Admin option of issue #873 is offered to anybody but a Super Admin, and `PlatformMenuVisibility` is issue #1148's successor to it: one row per switchable destination somebody has switched - the seven Admin ones of #1148 and the eight Reports ones of #1153 - keyed by that destination's own catalogue key, with no row meaning the destination is offered (see [Switchable Admin menu visibility](#switchable-admin-menu-visibility-issues-873-and-1148)). Both are platform tables for the same reason — whether a destination is offered is one answer for the whole application, so there is no business whose key either could carry — and the older one is left in place, no longer written, until a later issue drops it after a release. `MasterProduct`, `SupplierListing` and `ProductMatchSuggestion` are the shared supplier price catalogue's three tables (issue #923, see [Supplier price catalogue](#supplier-price-catalogue-issue-923)), and they are platform tables for the reason the parent issue exists: a product is looked up at a supplier **once** for every business, so a brand, a name, a size, a supplier's shelf and a matcher's opinion about them are facts about *products*. A `ProductMatchSuggestion` in particular names a folded product description and never the business whose product produced it, which is what keeps one business from being able to learn that another is tracking anything. `PriceCollectorRun` and `SupplierPriceObservation` are issue #925's two, and the same reason one step further on: what a supplier charged for a pack, and the run that read it, are facts about that supplier's shelf and about no business either (see [Supplier price observations and comparison](#supplier-price-observations-and-comparison-issue-925)). An observation names the listing it is a price *of* and never anybody who wanted that price. `PriceCollectorWorkItem` is issue #924's one, and the same reason again: one issued piece of work is a product description — a master product, or the folded search text of one nothing has matched yet — and a supplier's shelf, so it is about no business either, and it carries no `BusinessId`, no query filter and no ownership stamp (see [Collector work list](#collector-work-list-issue-924)). `PriceCollectorResultRow` and `SupplierListingPendingObservation` are issue #937's two, and the same reason once more: a reading a collector submitted, the decision this application made about it, and a reading that was held back rather than priced are facts about a supplier's shelf and about no business (see [Collector results](#collector-results-issue-937)). A result row names the run, the issued work item and the supplier's own product id — a product description and a shelf, never anybody who wanted the search. The business's own half of that catalogue is a separate, ordinary **tenant-owned** table, `ProductPriceTracking` — a business saying it wants one of its own products priced is that business's data, so it implements `IBusinessOwned` and is stamped, filtered and enforced centrally with nothing added for a business's own request, and it is asserted as owned in `BusinessOwnershipCoverageTests` rather than classified here. The two writes to it that do not come from a business are issue #941's automatic match and issue #928's Super Admin review — the same four match columns, through the narrow matching and review windows described in § The second reviewed write and § The fourth reviewed write below. Issue #982 adds the Super Admin's own write of that grant and the append-only `BusinessPlanGrantAudit` beside it — both tenant-owned on the same terms, both asserted as owned, and neither a platform table — through the third reviewed denied-scope write lease below (see [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982)). `SubscriptionGrandfathering` is issue #966's one, and the same reason from a different direction: the grandfathering step of the plan rollout runs **once, over every business**, so the fixed cutoff instant it grants by and the completion marker enforcement waits for are one answer for the whole application and there is no business whose key the row could carry (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)). What that step writes *per business* is an ordinary **tenant-owned** `BusinessPlanGrant`, and the paid record beside it, `BusinessBillingSubscription`, is tenant-owned too: a plan a business was granted and a plan it paid for are facts about that one business, so both implement `IBusinessOwned`, get the ordinary central treatment with nothing added, and are asserted as owned in `BusinessOwnershipCoverageTests` rather than classified here. Each of the twelve is about **no business at all**, which is what distinguishes them from the five above: each of those *is* about one business and carries its key in every statement, while these have no `BusinessId` to carry, no query filter to apply and no ownership stamp to make. The two lists are therefore kept apart in `BusinessOwnershipCoverageTests` — `PlatformEntities` beside `DeliberatelyGlobalEntities`, each closed and asserted, with a test that they do not overlap and that a platform table carries neither a business column nor a filter — so neither table is ever read as an unassigned tenant table somebody forgot to stamp, and the "still carries a business key" rule stays exactly as strong for the five it is about. What keeps them bounded is not ownership but authorization: the two that are written today are written only by the platform-admin surface, every such request carries a **denied** `BusinessScope` (so everything tenant-owned stays unreachable to it), and the copying issue #835 child C does (issue #849) goes one way only — into a business, as an ordinary tenant-owned `Supplier` row that business then owns outright. Nothing reads back out of a business. The copy *write* is the one reviewed provisioning exception below; it writes a `Supplier`, never a platform table. Of the price catalogue's eight tables, every one now has a writer, and the last to get one was `MasterProducts`: the Super Admin review of [#928](#super-admin-review-of-the-supplier-price-catalogue-issue-928) and the Master Products create/edit of [#1024](#super-admin-master-products-issues-1023-and-1024) are its **two** writers and the only two ways a master product is ever created or corrected, which no automatic match and no business ever does. The rest are written by exactly three collector paths, all under the **denied** scope a collector request carries: the work list of issue #924 through `IPriceCollectorRunStore` (one run, its work items, and the expiry of whatever run was still open, in one transaction — see [Collector work list](#collector-work-list-issue-924)); the results of issue #937 through `IPriceCollectorResultStore`, which writes the listings, the observations, the held readings, the recorded outcome of every submitted row and matching evidence on `ProductMatchSuggestions`, each call in one transaction (see [Collector results](#collector-results-issue-937)); and the matches of issue #941 through `IPriceCollectorMatchStore`, which records one suggestion per decided waiting key — this run's own row always, the proposal itself when nothing of that pair is waiting for a reviewer and otherwise the `Repeated` record of having decided the key, never a relabelling of a row another run wrote — and moves the listings that key had already collected onto the master product a match applied (see [Collector product matching](#collector-product-matching-issue-941)). Those are the second, third and fourth write-capable paths to a platform table and all are bounded the same way the first is — by authorization, not by ownership. The **sixth** is the Super Admin review of [#928](#super-admin-review-of-the-supplier-price-catalogue-issue-928), through `IPriceCatalogueReviewStore`: it creates master products, confirms or refuses listings at the identity a person reviewed, accepts a held reading as an observation and clears it from the pending store, and records every match decision on the suggestions — all of them platform tables, each decision one transaction, and bounded by authorization in exactly the same way. The **fifth** is issue #966's, and it is the one that is not a request path at all: the human-run `grandfather-business-plans` command writes the grandfathering record under a denied scope, and each eligible business's grant through a context scoped to that one business. No endpoint reads or writes that record's cutoff or marker — starting the web host and running a command are separate branches of `Program.cs` — and the per-request read beside it publishes one boolean (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)). Since issue #938, `MasterProducts` is also *read* from a member-facing endpoint under the third reading exception below, and since issue #1049 under the sixth — the business lookup, which is the one member-facing read of a master product reached by a search term rather than through a mapping of the caller's own, and which writes nothing either. And since issue #1023 the platform-admin surface **reads the master catalogue in its own right**, beside the review that decides it: `GET api/super-admin/master-products` and `GET .../master-products/{id}` read `MasterProducts`, `SupplierListings`, the `SupplierPresets` that publish those listings and the `SupplierPriceObservation` a listing points at for its current price — four platform tables, **no tenant-owned one at all**, so that surface adds no writer, no reviewed denied-scope write and no `IgnoreQueryFilters` statement anywhere: a platform table carries no business key, so the denied scope those requests run under reads the whole catalogue and none of anybody's own rows (see [Super Admin master products](#super-admin-master-products-issues-1023-and-1024)). **Since issue #1024 that same controller is also the price catalogue's *seventh* write-capable path, and the second writer of a master product**: `POST api/super-admin/master-products` and `PUT api/super-admin/master-products/{id}` add one to the catalogue and correct an existing one's brand, name or size, through `IMasterProductCatalogueWriteStore`. What they write is one platform table, `MasterProducts`, and nothing else at all — one row inserted or updated per call, never deleted, each call inside one `BEGIN IMMEDIATE` transaction that reads the duplicate key, the count of the product's **confirmed** supplier listings and the row's own `UpdatedAtUtc` before it writes. They add **no** reviewed denied-scope write lease and **no** `IgnoreQueryFilters` statement either, for the same reason the reads do not: a platform table carries no business key and no query filter, so the write passes `BusinessOwnershipEnforcer` because a master product is not `IBusinessOwned` rather than because anything was relaxed. Nothing tenant-owned is reachable in either direction: no listing is created, confirmed or refused, no mapping is matched or unmatched, and no business's own product, stock, cost or purchase is read or written. A master product is therefore created or corrected by exactly two paths, both class 2 platform-admin under the same marker and policy, and by nothing else.
 
-**Reading has exactly six documented exceptions, and each was reviewed on its own issue.** The first is issue #873's one boolean: `GET /api/me/access` publishes `historicalGstClassificationVisible` to every signed-in member, because an option the application has switched off has to stop being offered to the people it was switched off for. That read reaches one column of `PlatformOptionVisibility` through a one-method port, takes no caller-supplied input, and publishes nothing about any business or member. The second is the "Available to add" suppliers of issue [#935](https://github.com/cristhyanc/InventoryApp/issues/935), which is reviewed on that issue and bounded by it: `GET /api/suppliers/available-presets` publishes the **id, name and website** of the *enabled* `SupplierPreset` rows that serve the caller's own business's recorded state and that it holds no copy of. It exists because the alternative was pushing a record the platform added later into every business that serves — a write into somebody else's data on the platform's schedule — so the business is *offered* it instead and takes it up itself. It reaches that one table through `IAvailableSupplierPresetStore` with no caller-supplied filter, predicate, page or sort, publishes none of the supplier-master fields (served states, price basis, connector), and says nothing about any other business, because a platform record is about none. The **add** beside it is not a platform-table write at all: it inserts an ordinary tenant-owned `Supplier` in the caller's own resolved scope, stamped by the central enforcer. See [Supplier records by business state, and "Available to add"](#supplier-records-by-business-state-and-available-to-add-issue-935). The **third** is a matched master product's name and size, reviewed on issue [#938](https://github.com/cristhyanc/InventoryApp/issues/938) — that issue's own "known constraints" section *is* the review, and it fixed the limit before the code existed: `GET /api/products/{id}/price-tracking` publishes `MasterProduct.Name` and its `SizeValue`/`SizeUnit`, and nothing else about the shared catalogue. It exists because a mapping's *matched* status is unreadable without saying what the product was matched to — "Matched" alone tells a business nothing it can check. It is bounded in every direction at once: only a `ProductPriceTracking` row of the caller's **own** business (the central tenant filters, with no `IgnoreQueryFilters` and no unscoped context on the path), only while that mapping is in one of the two **matched** states, and only those two values — not the brand, the row key, the normalised key, the instants, a supplier listing, a price, or anything at all about another business. The master product is reached through the mapping's own navigation in `EfProductPriceTrackingStore`, so a master product no mapping of this business names is unreachable; there is no method on `IProductPriceTrackingStore` that takes a master product id, and no caller-supplied filter, predicate, page or sort anywhere on the path. See [Tracking supplier prices on a product](#tracking-supplier-prices-on-a-product-issue-938). The **fourth** is the cheapest-supplier summary, reviewed on issue [#930](https://github.com/cristhyanc/InventoryApp/issues/930), whose third acceptance criterion *is* that review: `POST /api/cheapest-suppliers/summary` publishes, for each of the caller's own products, what the business's own linked, not-hidden suppliers charge per vending unit. It exists because a price comparison that cannot name the suppliers and their prices is not a comparison; and it is bounded the same way the third is. The way into the shared catalogue is always one of this business's **own matched mappings**: `ICheapestSupplierSummaryStore` has no method that takes a master product id, a supplier listing id or a supplier record id, and no caller-supplied filter, predicate, page or sort anywhere on the path, so a listing no mapping of this business names is unreachable. What it publishes is a supplier the business already holds its own copy of (its own `Supplier.Name`, tenant-owned), that supplier's pack size, pack price, unit price on both GST bases, special, stock answer, last check and source link, and the reason an offer could not be compared — and **nothing that identifies the shared catalogue or anybody else**: no master product name, brand or key, no listing key, no supplier preset id, and no count of who else tracks the product. There is nowhere for such a value to travel, because a master product, a listing and an observation are facts about products and shelves rather than about businesses. See [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930). The **fifth** is the grandfathering completion marker, reviewed on issue [#966](https://github.com/cristhyanc/InventoryApp/issues/966): `GET /api/me/access` reads whether the plan rollout's grandfathering step has completed, because a business's entitlement depends on whether enforcement may start at all. It is the first exception's shape exactly — one answer, through the one-method `ISubscriptionGrandfatheringStore`, with no caller-supplied input — and what it *publishes* is narrower still: the one boolean `entitlement.enforced`, never the cutoff instant, the completion instant or the count of grandfathered businesses. See [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966). The **sixth** is the business lookup of the master products, reviewed on issue [#1049](https://github.com/cristhyanc/InventoryApp/issues/1049) under the repository owner's decision of 1 November 2026 that a business may see a master product's id, brand, name and size **through this lookup only**: `GET /api/products/master-product-suggestions?q=&page=&pageSize=` publishes, per matching master product, exactly `id`, `brand`, `name`, `sizeValue`, the `sizeUnit` code, and the `productName`/`unitLabel` that `Inventory.Domain.PriceCatalogue.MasterProductPrefill` computes from those four. It exists because the create that links a product to a master product ([#1051](https://github.com/cristhyanc/InventoryApp/issues/1051)) and the Name autocomplete ([#1052](https://github.com/cristhyanc/InventoryApp/issues/1052)) cannot offer a shared product nobody may read, and it is the **wider** read the owner approved rather than a widening of the third: #938's name-and-size limit on a *matched* mapping is unchanged. It is the only one of these six that takes a caller-supplied search term and page at all, so every bound is the server's and all of them are in `Inventory.Application.PriceCatalogue.MasterProductSuggestionPaging`: `q` is required, trimmed, at least 2 characters and at most 200 (`MasterProductPolicy.MaxNameLength`, because the longest stored value a search could usefully equal is a name), matched case-insensitively against the brand or the name with `LIKE` and an escaped wildcard; the page size is 10 by default and 20 at most, and the size actually served is reported back; and the order is fixed as brand, name, size, then the row's own key. Everything else is bounded as the third and fourth are: no normalised key, no instant, no supplier listing, no observed price, no match suggestion, no mapping, and no count of how much of the catalogue a term matches — a page says only whether more remain, so no business is told how large the shared catalogue is. `IMasterProductSuggestionStore` has one method, which takes no predicate, column list, sort, statement or master product id; it is deliberately a **separate port** from `IMasterProductCatalogueStore` rather than a projection of it, because that one is the Super Admin's view and answers with the catalogue's working detail. The one table behind it is `MasterProducts`, so it reads no tenant-owned row, needs no `IgnoreQueryFilters` statement and no write lease, and **writes nothing at all** — a lookup leaves every master product exactly as it was, and `MasterProductSuggestionStoreTests` asserts that a member's own scoped read answers precisely what an unfiltered context does, because a master product carries no business key for a filter to narrow. It declares **no authorization class of its own**: it is on `ProductsController`'s existing `Inventory.Operate`, the capability that creates a product there, so an unresolved business and a member without that capability are refused exactly as the create is rather than answered with an unfiltered lookup, and — because it is a `GET` and that capability is in the support set — a read-only support session and a role preview may make it by their own central method rules, the same rules that refuse the create as a `POST`. **That a valid read-only support session may make this lookup is the repository owner's own clarification of 2 November 2026 on #1049**, which supersedes that issue's earlier support-session refusal clause and authorizes nothing beyond it: no new support capability, no business-specific data and no write of any kind — what a supporter reads here is a brand, a name and a size, which are facts about products and say nothing about the business being supported, and the product create on the same capability stays refused as a `POST`. **The create of [#1051](https://github.com/cristhyanc/InventoryApp/issues/1051) reads two platform tables and publishes neither, which is why it is not a seventh exception.** `POST api/products` carrying `selectedMasterProductId` reads that one `MasterProducts` row's brand, name and size — to recompute the prefill the submitted Name and unit label are compared against — and the statuses of the `ProductMatchSuggestions` rows of the submitted `(waiting key, master product)` pair, both inside the create's own transaction and both through the ordinary `DbSet` of a platform table that carries no business key. What leaves the endpoint is the created product, or one of three refusal codes about the master product the caller itself named: not a field of either table, and nothing about any business. See [Tracking supplier prices on a product](#tracking-supplier-prices-on-a-product-issue-938). A **seventh** member-facing platform-table read, a wider projection of any of these six, or a value of either table published on #1051's create is a boundary change needing its own reviewed issue.
+**Reading has exactly six documented exceptions, and each was reviewed on its own issue.** The first is issue #873's one boolean, widened by issue #1148 to the keys that are switched off: `GET /api/me/access` publishes `menuVisibility.switchedOffKeys` — and the `historicalGstClassificationVisible` boolean derived from one of them, kept for the rollout — to every signed-in member, because a destination the application has switched off has to stop being offered to the people it was switched off for. That read reaches the stored rows of `PlatformMenuVisibility` through a two-method port, takes no caller-supplied input, publishes only which keys are off, and says nothing about any business or member. The second is the "Available to add" suppliers of issue [#935](https://github.com/cristhyanc/InventoryApp/issues/935), which is reviewed on that issue and bounded by it: `GET /api/suppliers/available-presets` publishes the **id, name and website** of the *enabled* `SupplierPreset` rows that serve the caller's own business's recorded state and that it holds no copy of. It exists because the alternative was pushing a record the platform added later into every business that serves — a write into somebody else's data on the platform's schedule — so the business is *offered* it instead and takes it up itself. It reaches that one table through `IAvailableSupplierPresetStore` with no caller-supplied filter, predicate, page or sort, publishes none of the supplier-master fields (served states, price basis, connector), and says nothing about any other business, because a platform record is about none. The **add** beside it is not a platform-table write at all: it inserts an ordinary tenant-owned `Supplier` in the caller's own resolved scope, stamped by the central enforcer. See [Supplier records by business state, and "Available to add"](#supplier-records-by-business-state-and-available-to-add-issue-935). The **third** is a matched master product's name and size, reviewed on issue [#938](https://github.com/cristhyanc/InventoryApp/issues/938) — that issue's own "known constraints" section *is* the review, and it fixed the limit before the code existed: `GET /api/products/{id}/price-tracking` publishes `MasterProduct.Name` and its `SizeValue`/`SizeUnit`, and nothing else about the shared catalogue. It exists because a mapping's *matched* status is unreadable without saying what the product was matched to — "Matched" alone tells a business nothing it can check. It is bounded in every direction at once: only a `ProductPriceTracking` row of the caller's **own** business (the central tenant filters, with no `IgnoreQueryFilters` and no unscoped context on the path), only while that mapping is in one of the two **matched** states, and only those two values — not the brand, the row key, the normalised key, the instants, a supplier listing, a price, or anything at all about another business. The master product is reached through the mapping's own navigation in `EfProductPriceTrackingStore`, so a master product no mapping of this business names is unreachable; there is no method on `IProductPriceTrackingStore` that takes a master product id, and no caller-supplied filter, predicate, page or sort anywhere on the path. See [Tracking supplier prices on a product](#tracking-supplier-prices-on-a-product-issue-938). The **fourth** is the cheapest-supplier summary, reviewed on issue [#930](https://github.com/cristhyanc/InventoryApp/issues/930), whose third acceptance criterion *is* that review: `POST /api/cheapest-suppliers/summary` publishes, for each of the caller's own products, what the business's own linked, not-hidden suppliers charge per vending unit. It exists because a price comparison that cannot name the suppliers and their prices is not a comparison; and it is bounded the same way the third is. The way into the shared catalogue is always one of this business's **own matched mappings**: `ICheapestSupplierSummaryStore` has no method that takes a master product id, a supplier listing id or a supplier record id, and no caller-supplied filter, predicate, page or sort anywhere on the path, so a listing no mapping of this business names is unreachable. What it publishes is a supplier the business already holds its own copy of (its own `Supplier.Name`, tenant-owned), that supplier's pack size, pack price, unit price on both GST bases, special, stock answer, last check and source link, and the reason an offer could not be compared — and **nothing that identifies the shared catalogue or anybody else**: no master product name, brand or key, no listing key, no supplier preset id, and no count of who else tracks the product. There is nowhere for such a value to travel, because a master product, a listing and an observation are facts about products and shelves rather than about businesses. See [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930). The **fifth** is the grandfathering completion marker, reviewed on issue [#966](https://github.com/cristhyanc/InventoryApp/issues/966): `GET /api/me/access` reads whether the plan rollout's grandfathering step has completed, because a business's entitlement depends on whether enforcement may start at all. It is the first exception's shape exactly — one answer, through the one-method `ISubscriptionGrandfatheringStore`, with no caller-supplied input — and what it *publishes* is narrower still: the one boolean `entitlement.enforced`, never the cutoff instant, the completion instant or the count of grandfathered businesses. See [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966). The **sixth** is the business lookup of the master products, reviewed on issue [#1049](https://github.com/cristhyanc/InventoryApp/issues/1049) under the repository owner's decision of 1 November 2026 that a business may see a master product's id, brand, name and size **through this lookup only**: `GET /api/products/master-product-suggestions?q=&page=&pageSize=` publishes, per matching master product, exactly `id`, `brand`, `name`, `sizeValue`, the `sizeUnit` code, and the `productName`/`unitLabel` that `Inventory.Domain.PriceCatalogue.MasterProductPrefill` computes from those four. It exists because the create that links a product to a master product ([#1051](https://github.com/cristhyanc/InventoryApp/issues/1051)) and the Name autocomplete ([#1052](https://github.com/cristhyanc/InventoryApp/issues/1052)) cannot offer a shared product nobody may read, and it is the **wider** read the owner approved rather than a widening of the third: #938's name-and-size limit on a *matched* mapping is unchanged. It is the only one of these six that takes a caller-supplied search term and page at all, so every bound is the server's and all of them are in `Inventory.Application.PriceCatalogue.MasterProductSuggestionPaging`: `q` is required, trimmed, at least 2 characters and at most 200 (`MasterProductPolicy.MaxNameLength`, because the longest stored value a search could usefully equal is a name), matched case-insensitively against the brand or the name with `LIKE` and an escaped wildcard; the page size is 10 by default and 20 at most, and the size actually served is reported back; and the order is fixed as brand, name, size, then the row's own key. Everything else is bounded as the third and fourth are: no normalised key, no instant, no supplier listing, no observed price, no match suggestion, no mapping, and no count of how much of the catalogue a term matches — a page says only whether more remain, so no business is told how large the shared catalogue is. `IMasterProductSuggestionStore` has one method, which takes no predicate, column list, sort, statement or master product id; it is deliberately a **separate port** from `IMasterProductCatalogueStore` rather than a projection of it, because that one is the Super Admin's view and answers with the catalogue's working detail. The one table behind it is `MasterProducts`, so it reads no tenant-owned row, needs no `IgnoreQueryFilters` statement and no write lease, and **writes nothing at all** — a lookup leaves every master product exactly as it was, and `MasterProductSuggestionStoreTests` asserts that a member's own scoped read answers precisely what an unfiltered context does, because a master product carries no business key for a filter to narrow. It declares **no authorization class of its own**: it is on `ProductsController`'s existing `Inventory.Operate`, the capability that creates a product there, so an unresolved business and a member without that capability are refused exactly as the create is rather than answered with an unfiltered lookup, and — because it is a `GET` and that capability is in the support set — a read-only support session and a role preview may make it by their own central method rules, the same rules that refuse the create as a `POST`. **That a valid read-only support session may make this lookup is the repository owner's own clarification of 2 November 2026 on #1049**, which supersedes that issue's earlier support-session refusal clause and authorizes nothing beyond it: no new support capability, no business-specific data and no write of any kind — what a supporter reads here is a brand, a name and a size, which are facts about products and say nothing about the business being supported, and the product create on the same capability stays refused as a `POST`. **The create of [#1051](https://github.com/cristhyanc/InventoryApp/issues/1051) reads two platform tables and publishes neither, which is why it is not a seventh exception.** `POST api/products` carrying `selectedMasterProductId` reads that one `MasterProducts` row's brand, name and size — to recompute the prefill the submitted Name and unit label are compared against — and the statuses of the `ProductMatchSuggestions` rows of the submitted `(waiting key, master product)` pair, both inside the create's own transaction and both through the ordinary `DbSet` of a platform table that carries no business key. What leaves the endpoint is the created product, or one of three refusal codes about the master product the caller itself named: not a field of either table, and nothing about any business. See [Tracking supplier prices on a product](#tracking-supplier-prices-on-a-product-issue-938). A **seventh** member-facing platform-table read, a wider projection of any of these six, or a value of either table published on #1051's create is a boundary change needing its own reviewed issue.
 
 **Two tenant-owned tables reference a platform table, and each is a reviewed decision of its own (issues #934 and #923).** `Suppliers.SupplierPresetId` is nullable and points at `SupplierPresets.Id`: a supplier a business received from the master records which suggestion it came from, so its name and website stop drifting and a later price comparison can follow it back ([Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849)). It changes nothing about either classification. The `Supplier` is still tenant-owned, still filtered, still stamped; the `SupplierPreset` is still about no business and still carries no business key; the copying still goes one way, and nothing reads a business's rows from the platform side. The key is **`Restrict`** and has no navigation property in either direction: the platform cannot delete a row a business depends on (a preset is disabled, never deleted), nothing is cascaded or nulled into a business's data, and no `Include` can pull a platform entity into a tenant-owned object graph. At most one supplier per business may carry a given preset, which is a filtered unique index on `(BusinessId, SupplierPresetId)` — led by `BusinessId`, because two businesses legitimately hold a copy of the same preset, and filtered to the linked rows, because "no preset" is the normal case. The second is issue #923's `ProductPriceTracking.MasterProductId`, nullable and pointing at `MasterProducts.Id` with **`Restrict`**: a business's mapping records which shared master product its own product is, so the platform cannot delete a master product a business is tracking, and a mapping still waiting for a match carries no link at all ([Supplier price catalogue](#supplier-price-catalogue-issue-923)). It changes neither classification either: the mapping is still tenant-owned, filtered and stamped, and the master product still names no business. `BusinessOwnershipCoverageTests` accepts these two keys **by name**, asserts they are the only ones of their kind, asserts that no platform table points the other way (a shared row depending on one business's data would be the real boundary break), and pins the index — so a third tenant-to-platform key is a decision somebody has to make there rather than an implementation detail.
 
@@ -1592,7 +1594,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **The fourth reviewed write is the Super Admin's review of the shared price catalogue (issue #928), and it is the second one's rule for the other decider.** `AppDbContext.BeginPriceCatalogueReview()` opens a lease under which `BusinessOwnershipEnforcer` accepts **updates to `Status`, `MasterProductId`, `MatchSource` and `UpdatedAtUtc` of `ProductPriceTracking` rows and nothing else** — the same written-out column set the matching window uses, asserted as a *set* rather than a lower bound, so the ownership key, the product, the waiting key and the captured search text are all outside it. One entity type, one state (an update: this surface can no more create or withdraw a business's request to be priced than a matcher can), four columns, one save. It names no business, because a match and an undo of one are decided for a waiting *key* and the mappings that carry it may belong to any number of businesses; what bounds it is *what may be written*. Issue #1051's undo of a match a business made itself is that same window and not a fifth one: the same four columns of the same entity type, decided for a `(waiting key, master product)` pair. The method is `internal`, its only caller is `EfPriceCatalogueReviewStore`, a lease may be taken only while the scope is `Denied`, and never beside another lease. It is a **separate window** from the matching one rather than a second caller of it, deliberately: each lease in that context names the one adapter that may take it, so "who may write a mapping's match columns?" has two answers with two issues behind them instead of one answer that has quietly grown a caller. A **fifth** denied-scope write exception, a lease taken anywhere else, or a wider entity set in any of the four is a boundary change needing its own reviewed issue. See [Super Admin review of the supplier price catalogue](#super-admin-review-of-the-supplier-price-catalogue-issue-928).
 
-**The six reviewed `IgnoreQueryFilters` paths in a request, each with its own issue (issues #544, #983, #924, #941, #982, #977 and #928).** The first is the Super Admin's business directory: it reports whether each business has stored Nayax credentials and the connection status stored beside them, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and those facts are otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` and `Status` alone (the second added by issue #983 under the repository owner's approval — see [The business's Nayax connection status](#the-businesss-nayax-connection-status-issue-983)), and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: what it reads is the ownership key, which is not business data, and one stored status that says how usable a connection was at its last test — no credential column, and nothing a business trades, buys, sells, counts or costs — and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
+**The eight reviewed `IgnoreQueryFilters` paths in a request, each with its own issue (issues #544, #983, #924, #941, #982, #977, #928, #1101 and #1164).** Six are described here; the **seventh** is the Super Admin's record of a business's Nayax SQS sender, described with the surface it serves in [Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101), and the **eighth** is the Super Admin's view of one business's monthly receipt-scan count, described in [Receipt scanning](#receipt-scanning-issue-975) — one business-pinned statement projecting one integer, read-only, with no write lease of any kind. The first is the Super Admin's business directory: it reports whether each business has stored Nayax credentials and the connection status stored beside them, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and those facts are otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` and `Status` alone (the second added by issue #983 under the repository owner's approval — see [The business's Nayax connection status](#the-businesss-nayax-connection-status-issue-983)), and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: what it reads is the ownership key, which is not business data, and one stored status that says how usable a connection was at its last test — no credential column, and nothing a business trades, buys, sells, counts or costs — and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
 The second is the collector work list (issue #924): `EfPriceCatalogueWorkListStore` reads `ProductPriceTracking` across businesses, projecting the waiting key, the search name, the unit label and the master product id — **a product description, and nothing that says whose product it is**. It is the exception issue #923 left for #924 to review, and it is narrowed in the same four directions the first one is: one table, one projection, read-only, and reachable from exactly one endpoint, which no person can call at all. See [Collector work list](#collector-work-list-issue-924).
 
@@ -1684,7 +1686,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
-| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `api/imports/pending-xml`, `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -1766,11 +1769,11 @@ Both shapes gained a third section state later, and neither is a role decision: 
 
 Issue #527 above is the pattern; issue #697 is the same decision applied to the second surface that sent every member a financial figure. `SitesController` is gated by `Inventory.Operate`, which an Operator holds — stocking and pricing a site is day-to-day inventory work, and the page is how a person stocking machines reads what is in them — so `GET /api/sites` sent every member each site's `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue`, and `GET /api/sites/{id}/products` sent them each product's `estimatedCardProfit`. The frontend-only hide of [issue #699](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) kept those figures off the page but left them in the raw response, which is not a boundary; this slice is the boundary.
 
-**What is withheld, and what deliberately is not.** The recorded decision (Cristhyan, 15 October 2026) is that `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure — and that **unit cost and selling price are not among them**. So `averageUnitCost` and `sitePrice` stay visible to every role, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — `maxStock`, the MDB codes, the machine count and the low/empty alert counts, which since issue #1019 each `machineStocks` entry also carries for its own machine, and only the amounts below change. A later period added to a site row is governed by this rule without amending it, which is what issue #1012's `lastWeekRevenue`/`monthToDateRevenue` are: two more sums over the one completed-sales read this decision already says is not made at all for such a caller.
+**What is withheld, and what deliberately is not.** The recorded decision (Cristhyan, 15 October 2026) is that `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure — and that **unit cost and selling price are not among them**. So `averageUnitCost` and `sitePrice` stay visible to every role, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — `maxStock`, the MDB codes, the machine count and the low/empty alert counts, which since issue #1019 each `machineStocks` entry also carries for its own machine, and only the amounts below change. A later period added to a site row is governed by this rule without amending it, which is what issue #1012's `lastWeekRevenue`/`monthToDateRevenue`, issue #1177's `previousComparableDayRevenue` and issue #1180's `previousComparableMonthRevenue` are: four more sums over the one completed-sales read this decision already says is not made at all for such a caller.
 
 | Caller | `GET /api/sites` per row | `GET /api/sites/{id}/products` per row |
 | --- | --- | --- |
-| Role grants `Dashboard.ViewFinancials` (Manager, Owner), or a support session | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, and since issue #1012 `lastWeekRevenue` and `monthToDateRevenue`, as calculated (unchanged) | `estimatedCardProfit` as calculated (unchanged) |
+| Role grants `Dashboard.ViewFinancials` (Manager, Owner), or a support session | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, since issue #1012 `lastWeekRevenue` and `monthToDateRevenue`, since issue #1177 `previousComparableDayRevenue` and since issue #1180 `previousComparableMonthRevenue`, as calculated (unchanged) | `estimatedCardProfit` as calculated (unchanged) |
 | Role does not (Operator) | every one of them `null` | `estimatedCardProfit` `null` |
 
 **A withheld figure is `null`, and never `0`.** `0` would be a financial statement about the business and a false one: a site that took no card payment today genuinely reports `0` to a caller who may see it, so the two had to stay distinguishable and `null` is what means "not yours to see". This is deliberately *not* #527's two-types-per-shape treatment, for a reason that is about the contract rather than taste: both site endpoints return a JSON **array**, and MVC serializes each element by its declared element type, so a union of two record types inside a `List<T>` would either lose the extra properties or need a `$type` discriminator on the wire. The fields are therefore nullable on the one published `SiteSummaryDto`/`SiteProductDto`, which is what the issue's migration note specifies and what the frontend already accepts — #699 made every site revenue and profit field optional and nullable in `models.ts` and made every template show "Unavailable" rather than `$0.00` or `NaN`, which is why #699 had to merge first. `estimatedCardProfit` was already nullable for an estimate that could not be made (no priced mapping, no cost basis, no effective fee rate, ambiguous commission configuration), so for that one field `null` now carries two meanings; the page never shows the difference, because a role that may not see the estimate is shown no column at all.
@@ -1787,7 +1790,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 
 #### Machine and product financial redaction (issue #698)
 
-#527 above redacts the Dashboard summary, and #681 closed `GET /api/products/inventory-value-summary`. The machine and product endpoints were the way back to both figures: `GET /api/machines` and `GET /api/machines/{id}` carry six periods of gross revenue, the six matching direct-profit figures and `profitabilityStatus`, and `GET /api/products`, `GET /api/products/{id}`, `GET /api/products/alerts/low-stock` and `GET /api/machines/{id}/products` carry each product's `inventoryValue`, which sums to the valuation the Dashboard withholds. All of them are gated on `Inventory.Operate`, which an Operator holds — correctly, because restocking machines is exactly what they are for. Issue #698 therefore withholds the figures and keeps the endpoints.
+#527 above redacts the Dashboard summary, and #681 closed `GET /api/products/inventory-value-summary`. The machine and product endpoints were the way back to both figures: `GET /api/machines` and `GET /api/machines/{id}` carry six periods of gross revenue, the six matching direct-profit figures, `profitabilityStatus` and - since issues #1177 and #1180, under this same rule and with no profit of their own - `previousComparableDayGrossRevenue` and `previousComparableMonthGrossRevenue`, and `GET /api/products`, `GET /api/products/{id}`, `GET /api/products/alerts/low-stock` and `GET /api/machines/{id}/products` carry each product's `inventoryValue`, which sums to the valuation the Dashboard withholds. All of them are gated on `Inventory.Operate`, which an Operator holds — correctly, because restocking machines is exactly what they are for. Issue #698 therefore withholds the figures and keeps the endpoints.
 
 **The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too. The catalogue `unitPrice` this decision also named is not a question any more: issue #792 removed the field, so the responses carry none at all (see [A product carries no selling price](#a-product-carries-no-selling-price-issue-792)).
 
@@ -1795,13 +1798,13 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 
 **One decision per request, from the one capability service.** `InventoryApi.Adapters.Mapping.FinancialFigureVisibility` is the two-valued answer — `Visible` or `Redacted`, with `Redacted` as the enum's zero so an undecided projection fails closed — and `CurrentCapabilities.ForCurrentRequestAsync` is the only thing that produces it, by asking `Inventory.Application.Access.CurrentCapabilities` for `Dashboard.ViewFinancials`. That is the same service the Dashboard summary, the capability policies and `GET /api/me/access` read, so what these endpoints withhold cannot drift from what the rest of the application says the caller may see, and no role name appears anywhere in the change. A support session needs no rule of its own for the same reason: `SupportSessionAccessPolicy`'s fixed set grants the capability, so a read-only support request is answered the full figures, exactly as its capability set says.
 
-**The mappers own the two projections, and every call site must choose one.** `MachineResponseMapper.ToResponse` and `ProductRecordResponseMapper.ToResponse` take the visibility as a required argument rather than offering a figure-carrying default, so a new call site cannot publish the figures by forgetting to ask. The machine mapper's redacted projection states all thirteen `null`s explicitly, which is what makes a revenue or profit field added later a decision rather than an omission. `MachinesController` and `ProductsController` resolve the visibility once per request and hand it to the mapper; they strip and recompute nothing, no use case changed, and no endpoint's authorization class changed, so nothing was added to `EndpointAuthorizationClassificationTests`.
+**The mappers own the two projections, and every call site must choose one.** `MachineResponseMapper.ToResponse` and `ProductRecordResponseMapper.ToResponse` take the visibility as a required argument rather than offering a figure-carrying default, so a new call site cannot publish the figures by forgetting to ask. The machine mapper's redacted projection states all thirteen `null`s explicitly - fifteen since issue #1177 added `previousComparableDayGrossRevenue` and issue #1180 `previousComparableMonthGrossRevenue` - which is what makes a revenue or profit field added later a decision rather than an omission, and is how both of those fields were decided here too. `MachinesController` and `ProductsController` resolve the visibility once per request and hand it to the mapper; they strip and recompute nothing, no use case changed, and no endpoint's authorization class changed, so nothing was added to `EndpointAuthorizationClassificationTests`.
 
 **Why at the mapping boundary rather than in the use case.** #527 decides in `GetDashboardSummary` because it decides what is *read* — a redacted caller makes no week-to-date query at all. Here the figures are not a separate read: a machine's revenue comes from the same per-machine facts query its dashboard assembly needs, and `inventoryValue` is a column of the catalogue row the restocking figures live on. There is nothing to avoid reading, so the decision belongs where the response is shaped, and the Application layer keeps one answer per machine and product for every caller.
 
 **What this does not cover, and where it was closed.** `ProductResponse.stockAdjustments` still carried each movement's `unitCost`, `totalCost`, `averageUnitCostAfter` and `inventoryValueAfter` after this slice, so the most recent movement still disclosed an inventory value at cost to an Operator who read a single product. That was deliberately out of #698's scope — stock-adjustment, purchase and supplier-order responses are audited together by #700 — and `inventoryValueAfter` is now withheld everywhere it appears by [issue #700](#operator-readable-financial-disclosure-issue-700), below, which also found and closed the nested catalogue snapshot a purchase line and a supplier-order line carry. The movement's own `unitCost`, `totalCost` and `averageUnitCostAfter` stay visible by the recorded decision. The site endpoints are [issue #697](#site-financial-redaction-issue-697), above.
 
-**What proves this slice.** `MachineAndProductFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue, fee rate and pair of sales, and a pinned clock so the business day, week and month the figures are summed over are fixed: every restricted field `null` for an Operator on the machine list, both machine details, the machine product list and the product list and detail; the real revenue, a real direct profit and the real profitability status for a Manager and an Owner, including a genuine `0` on a period with no sale, so a withheld figure is distinguishable from an empty one; no seeded figure appearing anywhere in an Operator's body under any name; and every other key of every response value-for-value a Manager's) and, at the mapper, `MachineJsonContractTests` (the redacted machine projection keeping all seventeen keys in order with the thirteen figures `null` and identity intact, and the redacted product projection withholding `inventoryValue` alone while unit cost, catalogue price and the slot price are untouched). The existing byte-for-byte contract tests now pin the `Visible` projection explicitly, which is what asserts a Manager's and an Owner's response is unchanged.
+**What proves this slice.** `MachineAndProductFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue, fee rate and pair of sales, and a pinned clock so the business day, week and month the figures are summed over are fixed: every restricted field `null` for an Operator on the machine list, both machine details, the machine product list and the product list and detail; the real revenue, a real direct profit and the real profitability status for a Manager and an Owner, including a genuine `0` on a period with no sale, so a withheld figure is distinguishable from an empty one; no seeded figure appearing anywhere in an Operator's body under any name; and every other key of every response value-for-value a Manager's) and, at the mapper, `MachineJsonContractTests` (the redacted machine projection keeping every key in order with every restricted figure `null` and identity intact, and the redacted product projection withholding `inventoryValue` alone while unit cost, catalogue price and the slot price are untouched). The existing byte-for-byte contract tests now pin the `Visible` projection explicitly, which is what asserts a Manager's and an Owner's response is unchanged.
 
 #### Operator-readable financial disclosure (issue #700)
 
@@ -1820,8 +1823,8 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/multi-machine-refills` (issue #897) | none — the submitted quantities, the machines and products they name, the recorded movement ids and the per-allocation refusal sentences (whose only figure is a storage quantity `GET api/pick-list` already serves) | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here**. Since 7 November 2026 the `GET api/products` listing omits `stockAdjustments` altogether (no reader of the listing used the history, and it made each search a large download); the other endpoints in this row still carry it, redacted |
-| `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
-| `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue`, `monthToDateRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
+| `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus`, `previousComparableDayGrossRevenue` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
+| `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue`, `monthToDateRevenue`, `previousComparableDayRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
 | `Inventory.Operate` | `GET api/products/{productId}/stock`, `POST api/products/{productId}/stock` | each movement's `inventoryValueAfter` | **Redacted here** |
 | `Inventory.Operate` | `GET api/stock-history` | each movement's `inventoryValueAfter` | **Redacted here** |
 | `Inventory.Operate` | `GET api/products/{id}/price-history`, `GET api/products/{productId}/stock/restock-cost-suggestion` | none — supplier unit costs and the suggested restock unit cost | Already safe (unit cost, kept visible by the decision) |
@@ -1829,7 +1832,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Inventory.Operate` | `POST api/machines/{id}/sync-restock` and its `apply`/`resolve-duplicate`/`resolve-manual` actions, `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts` | none — machine-stock quantities, discrepancies and per-event outcomes | Already safe |
 | `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}`, `POST api/purchases/{id}/file` (issue #976) | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
 | `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice`, `outstandingQuantity` and (issue #974) `undeliveredQuantity`/`completedWithUndeliveredAt` stay visible |
-| `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, `POST api/supplierorders/{id}/completion-preview` (issue #974), the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail, GST classifications, and the completion preview's ordered/received/outstanding quantities and its opaque decision fingerprint | Already safe |
+| `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, `POST api/supplierorders/{id}/completion-preview` (issue #974), `POST api/purchases/scan` (issue #1163), the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail, GST classifications, the completion preview's ordered/received/outstanding quantities and its opaque decision fingerprint, and the scan draft's figures, which are the receipt's own costs and totals plus a product **id** and carry no nested product object and so no `inventoryValue` | Already safe |
 | *(none — reachable by any signed-in caller)* | `GET api/me/access`, `GET api/me/account-state`, `POST api/invites/redeem`, `POST api/onboarding/business-applications` | none | Already safe |
 
 Nothing was deferred: the audit found no leak that needed a frontend change or a contract decision, so no follow-up issue was filed under #328 for one. The two figures it closes were already nullable on every one of these responses and already optional in the frontend's `models.ts` (`StockAdjustment.inventoryValueAfter`, `StockHistoryEntry.inventoryValueAfter`, `Product.inventoryValue`), and no component renders a movement's inventory value at all, so there was no `$0.00`/`NaN` rendering to fix first the way #699 had to precede #697.
@@ -2899,27 +2902,37 @@ administrator is answered without the header, each surface's withheld fields are
 rather than `0`, none of the four seeded amounts appears anywhere in a previewed body, and a `Manager`
 preview is still given the figures.
 
-### Switchable Admin option visibility (issue #873)
+### Switchable Admin menu visibility (issues #873 and #1148)
 
-**One option, one shared answer, and it is about what is *offered* rather than about what anybody may do.** Historical GST Classification (see [Historical GST classification: Preview and Apply](#historical-gst-classification-preview-and-apply-issue-433)) is an occasional maintenance tool: once a business's historical purchase components have been classified, it is a page nobody needs again. Issue #873 lets a Super Admin stop offering it to everybody else while keeping it themselves.
+**Fifteen destinations, one shared answer each, and it is about what is *offered* rather than about what anybody may do.** The Admin group's maintenance destinations are occasional tools: once a business's historical purchase components have been classified, Historical GST Classification (see [Historical GST classification: Preview and Apply](#historical-gst-classification-preview-and-apply-issue-433)) is a page nobody needs again, and the same is true of the costing and timestamp repairs beside it. Issue #873 let a Super Admin stop offering **one** of them to everybody else while keeping it themselves; issue #1148 generalises that to a closed catalogue of the seven Admin destinations and delivers the storage, the Super Admin API and the access contract; issue #1151 delivers the Super Admin page every switch is managed from and the navigation that applies them; **issue #1153 adds the eight business Reports destinations to that same catalogue**, deliberately deferred from the first two (owner's decision, 9 November 2026), with no storage change and nothing new in the mechanism at all.
 
-**Who owns the setting.** The platform, not a business. It is one row of `PlatformOptionVisibility`, the **second platform table** in this schema (the first is `SupplierPreset`, issue #848): the answer is shared by the whole application, so there is no business whose key the row could carry, no query filter to apply and no ownership stamp to make. It is declared in `PlatformEntities` in `BusinessOwnershipCoverageTests` beside the supplier presets, never in `DeliberatelyGlobalEntities`; see [Tenant ownership](#tenant-ownership-issue-64).
+**The catalogue is closed and compiled, which supersedes #873's "named field, never a map" rule.** `Inventory.Application.PlatformOptions.MenuVisibilityCatalogue` declares exactly fifteen keys in two groups, each with the destination's own display label and the menu group it belongs to (`Inventory.Application.PlatformOptions.MenuVisibilityGroups`, `Reports` or `Admin`). The **Reports** group comes first, in menu order: `reports.bookkeeping`, `reports.daily`, `reports.transactions`, `reports.reconciliation`, `reports.machines`, `reports.products`, `reports.site-commissions` and `reports.gst` (#1153). The **Admin** group follows: `admin.site-commission-agreements`, `admin.imports`, `admin.historical-cost-recovery`, `admin.avco-transition`, `admin.costing-repair`, `admin.historical-gst-classification` and `admin.nayax-sale-timestamp-repair` (#1148). Issue #873 ruled that a second switchable option must be a second named boolean field and never a key in a map, because a map of arbitrary keys is how a general feature-flag framework starts. **That rule is deliberately superseded here, and the reason behind it is kept**: the keys are a compiled list decided in one reviewed place, a caller cannot invent one, and a key the catalogue does not declare is refused with nothing stored. What changed is only that fifteen destinations no longer need fifteen columns. **A key names a destination, not a route**: which menu entries use a key is the frontend's decision (#1151), so several entries may share one — the Reimbursement Report of #1152 shares `admin.imports`, and no key is added for it. The keys are namespaced by their own group's name, which is the whole of the generality the storage has: the `reports.` keys of #1153 arrived with **no migration and no schema change at all**, because the table is keyed by that string and knows nothing about groups. **Integrations, Users, Roles and Business Settings are never in the catalogue** (owner's decision, 9 November 2026): an Owner needs them to connect Nayax and run their business, so they always follow their normal capability, plan and provider rules. Nor is any Super Admin tool, nor any destination outside the Reports and Admin groups — a Reports landing page is not one either, because none exists.
 
-**Persistence and the default.** The row's key is the fixed constant `PlatformOptionVisibility.SingletonId` and the database assigns nothing, so two writes that both find no row collide on the primary key and `EfOptionVisibilityStore` resolves that into the update it should have been — one row, never two answers. **No row at all is the shipped state and means every option is offered**, which is why `AddPlatformOptionVisibility` creates the table and inserts nothing: every existing installation keeps exactly the visibility it has today until a Super Admin switches something off, and there is nothing to backfill. `Inventory.Application.PlatformOptions.OptionVisibilitySettings.Default` is the one statement of that default, applied by `GetOptionVisibility` alone — the adapter reports the absence of the row as `null`, because "nothing stored" and "this is the answer" are different facts.
+**Who owns the setting.** The platform, not a business. It is `PlatformMenuVisibility`, one row per destination somebody has switched, and the **twelfth platform table** in this schema: the answer is shared by the whole application, so there is no business whose key a row could carry, no query filter to apply and no ownership stamp to make. It is declared in `PlatformEntities` in `BusinessOwnershipCoverageTests` beside the supplier presets, never in `DeliberatelyGlobalEntities`; see [Tenant ownership](#tenant-ownership-issue-64).
 
-**Who may change it.** Only the platform administrator. `PUT /api/super-admin/option-visibility` sits behind `PlatformAdminPolicy` and the `PlatformDiagnosticsEndpointAttribute` marker — class 2 of the [endpoint authorization classes](#capability-authorization), the same as the diagnostics, Super Admin businesses, support-session and supplier-preset surfaces — and keeps `[Authorize]` and the `access_as_user` scope. The authority is the configured Entra `(tid, oid)` pair and nothing else: an Owner is refused exactly as any other member is, a member who presents an `X-Support-Session` id is still an ordinary member, and the shipped state (no administrator configured) means nobody can reach it at all. A role preview is refused by `RolePreviewMiddleware`, like every other write. The request carries a **denied** `BusinessScope`, so nothing tenant-owned is reachable; the write passes `BusinessOwnershipEnforcer` because the entity is not `IBusinessOwned`, not because anything was relaxed. Each committed change emits one structured `ILogger` audit event with the acting administrator's `(tid, oid)`, the resulting state and the instant — and nothing about a business, a member or anybody's data, because the setting is about none of them. A refused write is not audited, because nothing happened.
+**Persistence and the default.** A row's key is the destination's catalogue key and the database assigns nothing, so two writes to the **same** destination that both find no row collide on the primary key and `EfMenuVisibilityStore` resolves that into the update it should have been — one row per destination, never two answers — while two writes to **different** destinations are two different rows and cannot overwrite each other. **No row for a key means that destination is offered**: `GetMenuVisibility` is the one place that turns a missing row into On, so an installation that has never switched anything and one that switched everything back on are answered identically, and a stored key the catalogue no longer declares is ignored on the way out rather than deleted. Nothing is written to answer a read.
 
-**Who may read it, and the one boundary decision in this feature.** Every signed-in caller, through `GET /api/me/access`, which now reports `historicalGstClassificationVisible` beside the capability set. That is the **one documented exception** to "only the platform-admin surface reaches a platform table": an option the application has switched off has to stop being offered to the people it was switched off for, and the shell builds one menu from one read. It is as narrow as the exception can be — one boolean, one column, no caller-supplied input, read through the one-method `IOptionVisibilityStore` — and it publishes nothing about any business, any member or the supplier presets beside it. The invariant is recorded in AGENTS.md § Tenant ownership and data isolation; a second platform-table read from a member-facing endpoint is a boundary change needing its own reviewed issue.
+**The GST answer is carried over, and the old table is left alone.** `AddPlatformMenuVisibility` is additive: it creates the table and copies exactly one value, a stored `PlatformOptionVisibility.HistoricalGstClassificationVisible = 0`, as the single row `admin.historical-gst-classification` = off, keeping the old row's own `UpdatedAtUtc` rather than inventing one. A stored `1`, and no row at all, carry over **nothing** — a missing row means On, so both keep every destination offered, which is exactly the visibility they have today. `PlatformOptionVisibility` and its own migration are **left in place and are no longer written**; dropping them, the legacy field and the legacy `PUT` is a later issue, after a release.
 
-**It is not a permission, and nothing about the tool's authorization changed.** `POST /api/admin/historical-gst-classification/preview` and `.../apply` keep requiring `Data.Repair` in both states, with the Preview-then-Apply fingerprint contract untouched, so the route entered directly still resolves and still refuses exactly whom it refused before. The reported capability set is byte-for-byte identical in both states. The switch therefore **hides a page rather than protecting one**, which is the same thing a capability-hidden menu entry has always done (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)), and switching the option back on restores the entry only to members whose capabilities already allowed it — it grants nothing.
+**Who may list and change it.** Only the platform administrator. `GET /api/super-admin/menu-visibility` answers every catalogue key with its **group**, its label and its current state, stored or defaulted — grouped and in menu order, Reports first (#1153) — and `PUT /api/super-admin/menu-visibility/{key}` with `{ "visible": bool }` switches exactly that one destination and answers with the stored state; an undeclared key is `404` with nothing stored, and a body that omits `visible` is `400` (it is a `bool`, so a missing value would otherwise be indistinguishable from an explicit `false`). Both sit behind `PlatformAdminPolicy` and the `PlatformDiagnosticsEndpointAttribute` marker — class 2 of the [endpoint authorization classes](#capability-authorization), the same as the diagnostics, Super Admin businesses, support-session and supplier-preset surfaces — and keep `[Authorize]` and the `access_as_user` scope. The authority is the configured Entra `(tid, oid)` pair and nothing else: an Owner is refused exactly as any other member is, a member who presents an `X-Support-Session` id is still an ordinary member, and the shipped state (no administrator configured) means nobody can reach either endpoint at all. A role preview is refused by `RolePreviewMiddleware`, like every other write. The request carries a **denied** `BusinessScope`, so nothing tenant-owned is reachable; the write passes `BusinessOwnershipEnforcer` because the entity is not `IBusinessOwned`, not because anything was relaxed. Each committed change emits one structured `ILogger` audit event with the acting administrator's `(tid, oid)`, the key, the resulting state and the instant — and nothing about a business, a member or anybody's data, because the setting is about none of them. A refused write, and a write for an undeclared key, are not audited, because nothing happened. **The legacy `PUT /api/super-admin/option-visibility` still works** and writes that same `admin.historical-gst-classification` row through the same use case and the same audit, because the API deploys before the frontend; it adds no second way to store anything.
 
-**What the frontend does with it.** `AccessService` carries the answer as `MemberAccess.optionVisibility` (`access/option-visibility.ts`), so it is invalidated and re-read on exactly the triggers the capability set is. `navigationFor` applies it in the same pass as the capability set: the one destination `switchableOptionRoute` names is left out while the setting says it is switched off and the viewer is not the platform administrator, and `optionSwitchedOff` is the one rule both the sidebar and the Admin hub render from. A Super Admin keeps the entry in both states, with a pill reading exactly **`Off`** immediately after `Historical GST Classification` and the sentence a screen reader is given beside it, in the sidebar and on the hub's card alike. An **unread or unreported** answer hides nothing and shows no pill — the fail-open rule an unreadable capability set already follows. A role preview withholds the administrator's own treatment, exactly as it withholds the `Super Admin` menu group (issue #721): what a preview shows is what the previewed role sees.
+**Who may read it, and the one boundary decision in this feature.** Every signed-in caller, through `GET /api/me/access`, which reports `menuVisibility.switchedOffKeys` — the keys that are switched off, empty when none is — beside the capability set. That is the **one documented exception** to "only the platform-admin surface reaches a platform table", widened by #1148 from one boolean to that list: a destination the application has switched off has to stop being offered to the people it was switched off for, and the shell builds one menu from one read. It is as narrow as the exception can be — the switched-off keys and nothing else, no label, no instant, no caller-supplied input, read through the two-method `IMenuVisibilityStore` — and it publishes nothing about any business, any member or the supplier presets beside it. The catalogue's labels stay on the Super Admin surface: a member has no use for the name of a destination they are not being offered. The invariant is recorded in AGENTS.md § Tenant ownership and data isolation; a second platform-table read from a member-facing endpoint is a boundary change needing its own reviewed issue.
 
-**The switch itself** is `HistoricalGstVisibilityToggleComponent`, composed into the Admin hub beside that card and offered to a Super Admin alone. It is a button rather than a checkbox on purpose: a checkbox carries its own state, which the browser flips on the click, so a refused save would leave it reading as the new setting while the server still holds the old one. What it displays is the state the server reported; a successful save reports the **server's** answer to the hub; a refused save changes nothing on screen, keeps the `Off` pill and the menu as the stored setting has them, and says that the change was not saved.
+**`historicalGstClassificationVisible` is still reported, and it is derived.** The same response keeps that field for the duration of the rollout, computed as `admin.historical-gst-classification`'s own state and from nothing else, so the current frontend keeps working unchanged against the new API and a client reading either field reads one answer. Removing it is the same later issue that drops the old table.
 
-**The save and the re-read are one lifecycle, and nothing inside it invents an answer.** The two are not simultaneous: the `PUT` answers for the signed-in identity straight away, and the `GET /api/me/access` that publishes the new setting to every other surface takes a moment, keeps the previous answer published while it runs (a same-identity re-read does, by design — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)), and may fail outright. `AdminComponent` therefore **holds the answer the save confirmed** and re-reads in the same step: the held answer is what the hub states — the card, the `Off` pill and the switch's own label all render from it — until the read carries one of its own, at which point the hub drops its copy; and it is dropped with the published answer when an identity change or a sign-out republishes `unread`, because a setting one administrator stored is not the next identity's answer. A read that could not answer leaves the held answer standing, says that the menus may still show the previous state, and offers reading the setting again. The **unknown** answers are rendered as themselves: the switch is offered only for `on` and `off`, and an `unread` or `unavailable` setting is described as being read or as unreadable, with no control offering to change it — the opposite of a value nothing reported is not what an administrator asked for. The navigation's fail-open rule is unchanged and is a different statement: leaving an entry in place over an unknown answer is the state the application was in before the setting existed, while telling the administrator the option is definitely `On` would be a claim nobody made. The pill and the withheld card still come from `optionSwitchedOff` alone, over that one resolved answer, so the two cannot disagree.
+**It is not a permission, and no endpoint's authorization changed.** Every switchable destination's own endpoints keep their existing capability, plan and provider checks in both states — `POST /api/admin/historical-gst-classification/preview` and `.../apply` still require `Data.Repair` with the Preview-then-Apply fingerprint contract untouched, the imports still require theirs, and a route entered directly still resolves and still refuses exactly whom it refused before. The reported capability set is byte-for-byte identical whatever the switches say. A switch therefore **hides a page rather than protecting one**, which is the same thing a capability-hidden menu entry has always done (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)), and switching a destination back on restores the entry only to members whose capabilities already allowed it — it grants nothing.
 
-**Tests.** `Inventory.UnitTests/Application/PlatformOptions/OptionVisibilityTests` is the default rule and the write: nothing stored reads as offered and writes nothing, a stored answer is reported in both directions, a switch stores what was asked and audits it once with the actor's own identity, switching to the state already held is still one ordinary write, and an unidentifiable actor is denied with nothing written. `Inventory.IntegrationTests/Controllers/SuperAdminOptionVisibilityApiTests` is the pipeline: the default with no row at all, the administrator switching it off and on with every member read reporting the stored answer from a separate request, an Owner, a Manager, an applicant and a stranger each refused without mutation, a refusal leaving an already-switched-off setting switched off, the unauthenticated `401` and the scope-less `403`, the support-session header refused as an ordinary member's, the audit event and the absence of one for a refused write — and that switching the option off leaves the Owner's own `POST .../preview` answering `200`, which is the test that fails if this switch ever starts restricting the tool. The frontend specs are `layout/navigation.spec.ts`, `layout/sidebar-nav.component.spec.ts`, `components/admin/admin.component.spec.ts`, `components/admin/historical-gst-classification/historical-gst-visibility-toggle.component.spec.ts`, `services/option-visibility.service.spec.ts` and `access/access.service.spec.ts`. The save-and-re-read lifecycle has its own block in the hub's spec — a stored `Off` kept accurate while the re-read has not answered and after it has failed, with the next switch asking for `on`; the hub handing the answer back to the shared read once it carries it; the held answer dropped when the published answer goes back to `unread`; and an unreadable or unread setting offering no switch and claiming nothing — and the toggle's own spec covers the four displayed states, the refused re-read's message and that applying an unknown setting submits nothing.
+**What the frontend does with it (issue #1151).** `AccessService` reads `menuVisibility.switchedOffKeys` — and deliberately **not** the derived `historicalGstClassificationVisible` field beside it, because one question has one answer — and carries it as `MemberAccess.optionVisibility` (`access/option-visibility.ts`), so it is invalidated and re-read on exactly the triggers the capability set is. An absent block is "not known", which hides nothing; a block with no list is an answer that nothing is off.
+
+**The key is declared on the menu entry, and an entry may share one.** Each switchable entry in `layout/navigation.ts` declares its own `visibilityKey`: every child of `reportsNavGroup` (#1153) and every switchable child of `adminNavGroup`, with the four destinations an Owner needs to run their business on the explicit `neverSwitchableAdminRoutes` list instead (Integrations, Users, Roles, Business Settings) — exactly one of the two, which `layout/navigation.spec.ts` asserts for every leaf of both groups, together with "every declared key exists in the catalogue" and "every catalogue key is used by at least one entry", so a new Reports or Admin destination cannot arrive with no decision made about it. The two groups are named once, in menu order, as `switchableNavGroups`, which is also what `entriesWithVisibilityKey` reads; **there is no Reports counterpart to the never-switchable list**, because a report is a reading rather than something a business needs to keep running, so every Reports leaf declares a key. That replaces #873's route-based `switchableOptionRoute` rule. **Several entries may declare the same key**, which is the whole of the shared-route mechanism: the Reimbursement Report of #1152 (`/admin/imports/reimbursement-report`) declares `admin.imports` and gets no key of its own, so one switch hides both ways into the imports, and the frontend's own copy of the catalogue keys (`MENU_VISIBILITY_KEYS`) exists only so that alignment can be checked at build time — the page itself lists the keys and labels the API reports.
+
+**`navigationFor` applies it in the same pass as the capability set**, and `optionSwitchedOff(entry, options)` is the one rule the sidebar, the bottom nav and the Admin hub all render from. Every entry whose declared key is switched off is left out while the viewer is not the platform administrator; a group left with no child goes with them and a section heading left with nothing under it goes too, exactly as they do when the capability set withholds every child — so a business with every report switched off is offered no `Reports` group, and the `Finance & reports` heading survives on `Expenses`, which no switch reaches (#1153). **A switched-off report keeps everything else it had**: its own capability, its `[RequirePlan]` plan feature and its provider dependency are unchanged in both states, `/reports` still redirects to Bookkeeping, a contextual link such as Dashboard → Bookkeeping is not a menu entry and is untouched, and the Site Commissions *report* and the Admin *agreements* page are two destinations with two keys, each switch reaching only its own. The administrator keeps every entry in both states, each switched-off one marked with a pill reading exactly **`Off`** immediately after its own label, with the sentence a screen reader is given beside it, in the sidebar and on the hub's card alike. An **unread or unreported** answer hides nothing and shows no pill — the fail-open rule an unreadable capability set already follows. A role preview withholds the administrator's own treatment, exactly as it withholds the `Super Admin` menu group (issue #721): what a preview shows is what the previewed role sees. The **Admin hub** renders the same answer over its own cards and, since #1151, says so when a member has no card left rather than rendering an empty grid — but only once the capability read has answered, because an unread answer is not an empty hub. A switched-off page's **own URL is unchanged**: it still resolves, still carries its existing guards, and its endpoints still authorize every request themselves.
+
+**The switch itself is the Super Admin Menu Visibility page** (`/super-admin/menu-visibility`, `components/super-admin/menu-visibility/`), a new entry in the `Super Admin` nav group behind the same `platformAdminGuard` as every other `/super-admin/*` page — and, being a Super Admin destination, never affected by the switches it manages. It lists what `GET /api/super-admin/menu-visibility` reports, in catalogue order, as **one section per reported group — `Reports` above `Admin`** (#1153), which is the order the server reported them in rather than an order chosen here: every key, whatever the viewing business's plan, provider or capabilities are, because the setting is the platform's and the page reads nothing of a business. A report its own business's plan or Nayax connection would lock is listed here exactly like any other, because what is being switched is whether the destination is offered at all. Each row carries one control whose accessible name is the destination ("Costing Repair visibility"), and a row for a key two entries share says which other destination it also covers, read from the declared menu entries rather than from a second list. The control is a **button** rather than a checkbox on purpose: a checkbox carries its own state, which the browser flips on the click, so a refused save would leave it reading as the new setting while the server still holds the old one; `aria-checked` is the server's own answer and changes only when that answer does. Issue #873's `HistoricalGstVisibilityToggleComponent` and its single-option client are **removed** with it — the GST setting is managed here now, with its stored state unchanged.
+
+**One row, one write, and nothing on screen invents an answer.** Each save is `PUT /api/super-admin/menu-visibility/{key}` for that row alone, so a refusal on one destination leaves every other row exactly as it was; the row then keeps the last state the **server** confirmed and says that the change was not saved, and nothing is re-read, because nothing was stored. A successful save renders the state the server returned — not the value that was requested — and re-reads `GET /api/me/access`, which is the one answer the sidebar, the bottom nav and the Admin hub build their menus from, so the menus follow in one step from one source. A second click while that row's write is in flight submits nothing. A catalogue read that could not answer lists **nothing** and offers reading it again, rather than offering controls over states nobody reported: the navigation's fail-open rule is a different statement — leaving an entry in place over an unknown answer is the state the application was in before the setting existed, while telling an administrator a destination is definitely on would be a claim nobody made.
+
+**Tests.** `Inventory.UnitTests/Application/PlatformOptions/MenuVisibilityCatalogueTests` pins the catalogue literally — the fifteen keys in menu order, their groups (Reports first, each group contiguous), their labels, their uniqueness, the namespacing of each key under its own group, and that only a declared key is found, case included — because a renamed key would silently switch a destination back on for every installation that had switched it off. `MenuVisibilityTests` is the default rule and the write: nothing stored reads as offered and writes nothing, every answered destination carries its catalogue group, each of the eight Reports keys defaults to offered and is switched, stored and audited exactly as an Admin one is, a stored answer is reported for its own key alone, several switched-off keys are reported as exactly those, a stored key the catalogue no longer declares is ignored, a switch stores what was asked for one key and audits it once with the actor's own identity, a second write to another key leaves the first alone, switching to the state already held is still one ordinary write, an undeclared key stores and audits nothing, an unidentifiable actor is denied with nothing written, and the legacy GST answer is that key's own state. `Application/Access/GetCurrentAccessTests` proves the answer travels with the capability set without changing it. `Inventory.IntegrationTests/Controllers/SuperAdminMenuVisibilityApiTests` is the pipeline: the whole labelled catalogue read with nothing stored, the eight Reports keys reported with their group above the Admin ones and each of them switched off and on again by the administrator with every member read reporting that one key, a Reports key refused to an Owner, a Manager, an applicant, a stranger and a support-session caller, `GET /api/reports/bookkeeping` answering the Owner exactly what it answered before its own key was switched off, one destination switched off and on with every member read reporting the stored answer from a separate request, two destinations switched independently, seven undeclared keys each `404` with nothing stored, an Owner, a Manager, an applicant and a stranger each refused on **both** endpoints without mutation, a refusal leaving an already-switched-off destination switched off, the missing-field `400`, the unauthenticated `401` and the scope-less `403`, the support-session header refused as an ordinary member's, `/api/me/access` reporting the switched-off keys with a byte-for-byte identical capability set and the derived legacy field, the audit event and the absence of one for a refused write or an undeclared key — and that switching a destination off leaves the Owner's own `POST .../preview` answering `200`, which is the test that fails if a switch ever starts restricting a tool. `SuperAdminOptionVisibilityApiTests` is the legacy endpoint's unchanged contract over the new storage, including that the superseded table is never written and that what the legacy `PUT` stores is the answer both new surfaces report. `Adapters/Persistence/AddPlatformMenuVisibilityMigrationTests` is the upgrade: a stored GST `false` carried over as the one switched-off key with the old row's instant, a stored `true` and an absent row carrying over nothing, one table added and no other changed, no business column and no database-assigned key, the primary key refusing a second row for one destination, and `Down` dropping the table while the superseded row survives. The frontend specs are `layout/navigation.spec.ts`, `layout/sidebar-nav.component.spec.ts`, `layout/bottom-nav.component.spec.ts`, `components/admin/admin.component.spec.ts`, `components/super-admin/menu-visibility/super-admin-menu-visibility.component.spec.ts`, `services/menu-visibility.service.spec.ts` and `access/access.service.spec.ts`. `navigation.spec.ts` is the rule itself: each key off leaving out exactly the entries that declare it and nothing else, the administrator keeping them, an unknown and an unreported answer hiding nothing, the never-switchable four surviving every key being off, an emptied group and its heading dropped, nothing outside the two switchable groups changing in either state, the alignment spec over any list of children (a new entry declaring neither fails, an undeclared key fails, a second entry declaring an existing key passes) run over both groups, and the shared-key rule over the two entries that declare `admin.imports` — Imports and the Reimbursement Report #1152 built, which replaced the fixture entry this spec stood that rule up against before the page existed. Its Reports half (#1153) is the same rule again, written out per key: each report left out exactly while its own key is off, kept for the administrator with the pill, the group and then its heading dropped as the last of them goes, the Site Commissions report and the Admin agreements page switched independently, and an Operator offered no report in either state. `sidebar-nav.component.spec.ts` renders that, and `bottom-nav.component.spec.ts` asserts the bar's four shortcuts declare no key at all, so the whole catalogue being off leaves it unchanged. The page's own spec is the surface: every reported key listed in order, the `Reports` section above the `Admin` one with each group's own rows under it, a report switched with the same control and the same per-row save, each control's accessible name and keyboard-operable button, a successful save rendering the server's answer and re-reading the shared access answer, a failed save keeping the confirmed state and saying so with nothing re-read, one row's failure leaving the others untouched, a second click while a write is in flight submitting nothing, and an unreadable catalogue listing nothing and offering to be read again. The hub's spec covers the withheld card, the per-destination pill, the never-switchable cards, the empty state and that the hub now offers no switch of its own.
 
 ### Business subscriptions and plan entitlements (issue #966)
 
@@ -3135,9 +3148,9 @@ reads Free.
 
 ### Plan enforcement on reports and Nayax operations (issue #967)
 
-**One table of plan requirements, two enforcement points, and nothing stored is ever removed.** Issue #967 — a child of #965, after #966 — is what makes a plan withhold anything. It adds no table, no migration and no new read of a business's records beyond the one #966 already defined: it reuses that slice's `GetEffectiveEntitlement` and asks one more question of it. **While the rollout setting is off, which is the shipped state, nothing changes for any business**: `PlanFeaturePolicy.Allows` is `true` for every feature on an unenforced entitlement, so every call site behaves exactly as it did before plans existed and no extra query is made.
+**One table of plan requirements, two enforcement points, and nothing stored is ever removed.** Issue #967 — a child of #965, after #966 — is what makes a plan withhold anything. It adds no table, no migration and no new read of a business's records beyond the one #966 already defined: it reuses that slice's `GetEffectiveEntitlement` and asks one more question of it. **While the rollout setting is off, which is the shipped state, nothing changes for any business**: `PlanFeaturePolicy.Allows` is `true` for every feature on an unenforced entitlement, so every call site behaves exactly as it did before plans existed and no extra query is made. **There is one declared exception, added by issue #1163**: a feature `PlanFeaturePolicy.FailsClosedWhileUnenforced` names is refused in that state rather than opened to everybody, because it costs money at an external service on every use and "unrestricted" there would mean every business in the deployment at the application owner's expense. Today that is exactly `ReceiptScanning` — a feature that did not exist before plans did, so nothing a business could already use is affected — and it is a row in the same table rather than a check at a call site, for the reason every other plan decision is. Adding a second one is a commercial decision about who pays for a feature, which `PlanFeaturePolicyTests` and `EndpointPlanRequirementTests` both pin by value.
 
-**Which plan a feature needs is `Inventory.Domain.Subscriptions.PlanFeaturePolicy`, and nowhere else.** `PlanFeature` is the whole vocabulary — `SalesProviderIntegration`, `BookkeepingAndGstReports`, `ProviderSalesReports`, `SiteCommissions`, `SalesFileImport`, and `ObservedSupplierPrices` since issue #977 ([Plan enforcement on supplier price data](#plan-enforcement-on-supplier-price-data-issue-977)) — and `RequiredPlan` is the one table: the two reports that need no sales provider and the observed supplier prices are **Starter**, and everything behind the provider, plus the uploaded Nayax sales file, is **Pro** (decided on #965 and its review of 29 October 2026). An endpoint declares a **feature**, never a plan, for the reason a controller declares a capability and never a role: a price or a plan restated at a call site is one that can disagree with the catalogue. No feature is Free, which is asserted: Free's own features are not plan features at all, so a `Free` requirement would be a feature nothing could ever withhold. `Allows` fails closed in the one direction that matters — an entitlement that is enforced and carries no plan, or a plan this deployment does not declare, includes nothing that is not free — and refuses an undeclared `PlanFeature` outright rather than letting the unenforced branch pass it.
+**Which plan a feature needs is `Inventory.Domain.Subscriptions.PlanFeaturePolicy`, and nowhere else.** `PlanFeature` is the whole vocabulary — `SalesProviderIntegration`, `BookkeepingAndGstReports`, `ProviderSalesReports`, `SiteCommissions`, `SalesFileImport`, `ObservedSupplierPrices` since issue #977 ([Plan enforcement on supplier price data](#plan-enforcement-on-supplier-price-data-issue-977)), and `ReceiptScanning` since issue #1163 ([Receipt scanning](#receipt-scanning-issue-975)) — and `RequiredPlan` is the one table: the two reports that need no sales provider and the observed supplier prices are **Starter**, and everything behind the provider, plus the uploaded Nayax sales file, is **Pro** (decided on #965 and its review of 29 October 2026). An endpoint declares a **feature**, never a plan, for the reason a controller declares a capability and never a role: a price or a plan restated at a call site is one that can disagree with the catalogue. No feature is Free, which is asserted: Free's own features are not plan features at all, so a `Free` requirement would be a feature nothing could ever withhold. `Allows` fails closed in the one direction that matters — an entitlement that is enforced and carries no plan, or a plan this deployment does not declare, includes nothing that is not free — and refuses an undeclared `PlanFeature` outright rather than letting the unenforced branch pass it.
 
 **The Application asks through one memoised read.** `Inventory.Application.Subscriptions.CurrentPlan` is the Application-layer companion to `CurrentCapabilities`: it takes no identifier and no plan, only a `PlanFeature`, and it memoises the one entitlement read per request. That memoisation is what keeps a bounded Nayax fan-out from turning one plan question into one database read per machine — the fan-outs resolve credentials once per call, deliberately and still do, and the first asker's read is the one every other asker awaits, concurrent ones included. A failed read is not retried: a database that cannot be reached is an error for every asker, exactly as it is for `GET /api/me/access`, because answering "not included" over a transport failure would lock a paying business out of what it bought.
 
@@ -3147,7 +3160,7 @@ reads Free.
 
 **The second enforcement point is the endpoint, for what a plan refuses outright.** `InventoryApi.Auth.RequirePlanAttribute` declares the feature an endpoint needs and is an **MVC authorization filter, not an authorization policy**. That is the design rather than a detail: a second `AuthorizeAttribute` would be evaluated together with the capability policy by one middleware in no defined order, and a caller holding neither could be told about the plan instead of simply being refused. An MVC filter runs after the authorization middleware has finished, so **a role refusal stays exactly the bodiless `403` it is today**, a plan is only ever asked about for a caller the role already allowed, and the check happens before model binding and before the action — which is what makes "a refused save leaves the stored credentials unchanged" and "a refused import stores nothing" properties of the pipeline rather than of a use case. A plan never grants a role more access: every endpoint that declares a plan requirement still declares its capability, which an architecture test asserts. The refusal is one shape everywhere, `InventoryApi.Auth.PlanRequirement`: `403` with the stable code `plan_required`, the plan the business would need and the feature, and nothing about the caller, their role, the capability or a price.
 
-**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report, the agreements and the payments — a site is known only from the live fleet read, so commission is a provider feature throughout), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
+**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report, the agreements and the payments — a site is known only from the live fleet read, so commission is a provider feature throughout), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. Pro also, since issue #1163: `POST /api/purchases/scan` — the one purchasing endpoint a plan decides, and the one that is refused while enforcement is off ([Receipt scanning](#receipt-scanning-issue-975)). **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
 
 **A report and its own export cannot need different plans.** `GET /api/reports/{report}/export` is one endpoint serving every report family, so its requirement cannot be a constant: it declares `[RequirePlanPerReport]` and resolves the feature through `Inventory.Domain.Subscriptions.ReportPlanRequirements`, the same table the report actions' declared features are asserted against. A report name this application does not recognise resolves to the **most restricted** feature, because the export's own row builder falls through to product profitability for one — so misspelling a URL is not a way to download a Pro report.
 
@@ -3177,6 +3190,78 @@ Why the eligibility is decided *behind* the work-list port rather than in front 
 **And until enforcement is switched on, nothing changes for any business.** With the rollout setting off, or with the grandfathering step not completed, `PlanFeaturePolicy.Allows` is `true` for the feature, the endpoint refuses nobody, and the work list reads **no plan record at all** — both mapping statements are exactly the ones issue #923 shipped.
 
 **What proves it.** `PriceCollectionEligibilityPolicyTests` pins the feature, its Starter requirement, the plan-by-plan answer, both unenforced states and the fail-closed direction; `PlanFeaturePolicyTests` gains the new feature in the declared vocabulary, the required-plan table and the plan × feature matrix. `EndpointPlanRequirementTests` records the endpoint's declared feature, asserts it is the **same** feature the collection gate names, and keeps the three tracking endpoints in the "included in every plan" list. `PlanEnforcementApiTests` covers the whole pipeline over real HTTP: the summary served or refused plan by plan with the refusal naming Starter and the feature, a Free business switching tracking on and off and reading its own state, a downgrade keeping the mapping while the prices are refused and an upgrade restoring them, and — with the rollout setting off — the summary served to a business with no plan record at all. `PriceCollectorPlanEligibilityTests` is the relational half over two businesses and the denied scope a collector carries: a matched product only a Free business tracks not issued with the mapping, master product and listing all still there, the same product issued on Starter and on Pro, a product a Free and an entitled business both track issued once, a paid subscription deciding it the same way a grant does and a cancelled one not, an ended grant stopping it, a waiting key issued only while an entitled business folds to it, a mixed-plan work list carrying no business id or name, both unenforced states collecting for everybody, and a run issued before a grant ended still being completed afterwards while the next run omits the product. On the frontend, `cheapest-suppliers.component.spec.ts` covers the refused read leaving the rest of the page working.
+
+### Receipt scanning (issue #975)
+
+**One endpoint turns a receipt image or PDF into a suggested purchase draft, and it stores nothing about the receipt.** Issue #1163 — sub-issue B of #975 — adds `POST /api/purchases/scan` (multipart, one `file` part). It writes no file, no draft and no purchase: the receipt's bytes are read into memory, sent once to an external reader, and dropped. The operator edits the suggestion and submits it through the ordinary `POST /api/purchases`, which is where a purchase is created and validated. That slice had **no migration, no table and no new entity**; issue #1164 adds exactly one table, the monthly scan counter described in [The monthly scan cap](#the-monthly-scan-cap-issue-1164) below, which holds a month and a number and nothing about what was scanned.
+
+**The port is in Application and the adapter is in Infrastructure.** `Inventory.Application.ReceiptScanning.IReceiptReader` is the narrow port — the file, this business's product and supplier names, in; the model's JSON text, out — and `Inventory.Infrastructure.ReceiptScanning.ClaudeReceiptReader` is the one adapter, a typed `HttpClient` registered by `AddReceiptScanning`, in the shape the Nayax Lynx client already has ([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)). The adapter deliberately **does not parse** the answer: validating it against the published schema is `ReceiptScanPayloadParser`'s single responsibility, so a second reader could not come to accept a different shape. Three further ports keep configuration and the file format out of the use case: `IReceiptScanSettings` (is a key configured, and the limits), `IPdfPageCounter` (how many pages, because counting them means parsing a file format) and `IReceiptScanLog` (the one log line). The controller is thin: it adapts `IFormFile` to the same transport-free `PurchaseFileInput` the create and attach paths use, invokes `ScanReceipt`, and maps the outcome to a status code.
+
+**The plan feature is `ReceiptScanning`, only Pro includes it, and it is the one feature that fails closed.** `[RequirePlan(PlanFeature.ReceiptScanning)]` on the action runs before model binding, so a refused request never has its file read and never costs anything, and the capability is this controller's existing `Purchasing.Operate` — exactly the permission creating a purchase needs, and no more. Unlike every other feature, it is **also refused while plan enforcement is off**: that is `PlanFeaturePolicy.FailsClosedWhileUnenforced`'s one entry, described in [Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967), and the reason is that every scan spends real money — there is no state in which opening it to every business in the deployment is the cautious answer. The refusal is the ordinary `403` with the stable `plan_required` code, the plan the business would need and the feature, so a client learns one word for one answer.
+
+**The upload is bounded twice, and a PDF's page count is verified rather than believed.** The action carries both `[RequestSizeLimit]` and `[RequestFormLimits(MultipartBodyLengthLimit = …)]` at eight million bytes: the first caps the raw body through the host's max-request-body-size feature, the second caps what the multipart reader consumes in process, which would otherwise read up to `FormOptions`' 128 MB default whatever the first one says. That cap is deliberately tighter than the 10 MB ceiling a **stored** purchase document may be — a scanned receipt is read into memory, sent once and dropped, and the reader's own documented image limit is lower again — and it is the cap the evidence-export upload settled on for the same reason ([Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)). Inside it, `PdfPageCounter` answers the page count by **walking the page tree from the catalogue the active trailer's `/Root` names and counting the `/Type /Page` leaves it reaches**. A `/Count` written on a page-tree node is **not read at all**: it is the document's own claim about itself, and a file declaring `/Count 1` while reaching two hundred pages would otherwise be forwarded to the reader whole, the page limit bypassed by a number anybody can type (the repair of 10 November 2026). It is a bounded structural parser, not a PDF library — the objects indexed, the bytes read per dictionary, the tree's depth and width and the pages counted all have ceilings — and **anything it cannot verify counts as nothing**: a file that is not a PDF, one with no trailer or no readable catalogue, a node with no `/Type` or no readable `/Kids`, a tree that revisits a node, or a document past those ceilings. `ReceiptScanFilePolicy.CheckPdfPages` then refuses it with "try a photo of the receipt instead", which is the conservative direction: a refusal the operator can work around, never a page limit silently bypassed.
+
+**Which definition of an object is current is the cross-reference table's answer, never the bytes', and one format is supported.** An incremental update can replace a page-tree object, and a scan of the raw bytes for `N G obj` headers cannot tell the current definition from a stale one — worse, a replacement kept in a compressed object stream and named by a cross-reference stream is invisible to such a scan, which then walks the old, smaller tree while the reader at the other end sees the larger one (the second repair of 10 November 2026). So the counter starts at the file's **last `startxref`**, reads that cross-reference section and follows its **`/Prev` chain** backwards, the **newest entry** for each object number winning; the **active trailer alone** names the catalogue; and every reference resolves through that table only, an entry being required to be in use, of the referenced generation, and to **point at the object header it claims**. **The one supported format is a classic cross-reference table.** A cross-reference stream (PDF 1.5's compressed form), a hybrid-reference file (`/XRefStm`), an encrypted document (`/Encrypt`), a `startxref` that is missing or does not point at a table, a `/Prev` chain that loops or exceeds 32 revisions, and a free, missing or mismatched entry all count as nothing. The operator-visible cost is that some PDFs modern writers produce are refused with the photo suggestion; the alternative within this scope was a page limit the document could set for itself, and a real PDF reader is a follow-up if the restriction proves too strict.
+
+**What leaves this application is the receipt and two columns of the business's catalogue.** `IReceiptScanCatalogueStore` (`EfReceiptScanCatalogueStore`) selects an id and a name from the business's active products and its suppliers it still uses — no cost, no stock, no price, no GST rule, no contact detail — through the ordinary tenant query filters, with no business id in either direction and no `IgnoreQueryFilters`. Those names and the file are the whole of what is sent to Anthropic; the adapter test asserts it on the **built request** rather than on the port's input, so an adapter that quietly added a figure would fail the build. The request carries the fixed system prompt, the fixed output schema through `output_config.format`, and **no `tools` member at all** — structured output rather than forced tool use, no tools and no web access. Receipt text is treated as data: the prompt says so once, and the answer is validated against the schema regardless, because a prompt is not a security boundary.
+
+**Nothing in the answer is trusted.** `ReceiptScanPayloadParser` reads each field only for the JSON kind the schema documents for it — a quoted number is not a number, an unrecognised token is not a default, a date is read only as `yyyy-MM-dd` — and drops anything that does not match: a line without readable text, a declared kind, a declared pack-size answer or a stated GST basis is left out, extra fields are ignored, and a partly readable receipt is still a draft. Only an answer with no usable line at all becomes "Could not read this receipt". **A product or supplier id that is not in the lists this business was read against is dropped** and the line keeps its printed text, which is the tenancy invariant here: a scan can never surface another business's product or supplier, even as an id. Only a `stock` line carries a product suggestion at all.
+
+**The arithmetic is the backend's, and it is the Domain's.** `Inventory.Domain.ReceiptScanning` holds every rule as a pure function. A line's amount is the printed total less its attached discounts; an ex-GST taxable price has 10% added and is rounded to the cent away from zero, which is the rounding every purchase amount in this application uses ([Purchase GST classification](#purchase-gst-classification-issue-429)), so the cost matches the GST-inclusive convention. `units = packs × unitsPerPack`, both whole and above zero; `unitCost = amount / units` **unrounded**, which is exactly what the purchase form submits today and what makes the saved line's own `round(quantity × unitCost, 2)` come back to the printed amount. A pack size the receipt does not print leaves the units `null` — **never 1**: the schema makes the reader choose between "printed", "single" and "notPrinted" explicitly, because a reader simply asked for a pack size supplies one from general product knowledge (the failure the model test of 8 November 2026 found). Issue #1165 then offers one from the business's own purchase history, as the paragraph below describes — a *suggestion*, which is a different thing from a reading and from a guess. Quantities are the **delivered** ones, a line with nothing delivered is left out, and `delivery` and `package` lines are summed into the draft's delivery and package costs rather than returned as lines. A charge whose GST basis the receipt did not state is withheld rather than recorded possibly 10% wrong. Every value in the draft is marked `read` (printed on the receipt) or `suggested` (matched or calculated here).
+
+**A pack size the receipt does not print is suggested from what the business paid last time, and only when the price is essentially unchanged** (issue #1165, sub-issue E of #975). JB Metro's online orders never print a carton size and some Costco and Coles lines do not either, so a `stock` line with a suggested product, a known GST-inclusive amount, a readable delivered pack count and no pack size gets one deterministic step: find this business's **most recent recorded purchase line for that product from the same suggested supplier**, and take `unitsPerPack = round(lineAmount / (packs × thatLine's unitCost))` — only while the ratio is **within 0.25** of that whole number and the whole number is at least 1. `Inventory.Domain.ReceiptScanning.ReceiptPackSizeSuggestionPolicy` is the one rule and it is a pure function. Every part of it is a refusal somewhere: **the packs are divided out** because dividing by the unit cost alone gives the units on the whole line, which multiplied by the packs again would be twice the stock — so a line whose pack count could not be read gets **no** suggestion rather than one that is out by a factor of the packs; the tolerance is **a quarter of a unit and not a percentage**, because a loose percentage band accepts almost any ratio for a large carton (a 3% price rise turns 24 into 24.7, which rounds to 25), so the rule fires only while the price is essentially unchanged and a carton whose price moved is left for the operator; a ratio that rounds below 1, an absent or non-positive amount, an absent or non-positive recorded unit cost, and a quotient beyond any real pack are each nothing rather than a number. **A pack size printed on the receipt is never replaced** — a line that printed one is never given a suggestion at all — and a suggested one is published as `unitsPerPack` marked `suggested` beside `unitsPerPackSuggestion: { suggestedFrom: "lastPurchase", purchaseDate }`, so the operator can see which purchase the number came from. The ratio is judged against the line's **own printed, discounted, GST-inclusive amount, before any levy share**: the levy is allocated per unit, so judging it after allocation would make the suggestion depend on the pack size being suggested; the line is then evaluated again through `ReceiptLineArithmeticPolicy` with that pack size, so its units, its unit cost and its own `missing` list all come from the one arithmetic policy, and a drink line whose pack size was suggested finally has a unit count the levy can be shared by. **It reads and writes nothing else.** `IReceiptScanPurchaseHistoryStore` (`EfReceiptScanPurchaseHistoryStore`) is a second narrow read-only port beside the catalogue one: one statement, `AsNoTracking`, projecting a product id, a purchase-item id, a unit cost and a purchase date, with no business id in either direction and no `IgnoreQueryFilters`, so only the caller's own business's purchases are readable. The statement is the matched history — the requested products, and only the purchases that recorded the suggested supplier — read in one bounded query for the whole receipt, never one per line or one per product. It reads that matched history rather than one row per product deliberately: narrowing it to one row in SQL is exactly what would restate the tie-break in a second place, and the rows are bounded twice over by the receipt's own unpriced lines and by one supplier's purchases of them. **Which of those lines is the latest is not decided there.** `Inventory.Domain.Purchases.SupplierPurchaseRecency` is the one ordering rule — the purchase date descending, then the purchase-item id descending, which is total because a purchase-item id is unique — and `SupplierPriceComparisonPolicy` (issue #63) orders its own history with that same rule, so a product bought twice on one day gives both paths the same line, and revising that tie-break on its own issue cannot leave this adapter behind (AGENTS.md § Architecture rules: one authoritative calculation must feed all presentations). It is deliberately not a widening of issue #63's `IProductPurchasePriceHistoryProvider`, which answers a product's whole history across every supplier for a feature that presents it. The read is made **after** the reader has answered and only when the answer names something it could apply to — no suggested supplier of this business, or no candidate line, and no purchase history is read at all — and it is one call for the whole receipt rather than one per line. The scan still stores nothing: no pack size is written to a product or a supplier, no purchase is created, and the suggestion lives only in the response the operator edits.
+
+**A container deposit levy is part of the cost of the drinks it was charged for, and the totals decide whether it already is.** `ReceiptLevyPolicy` compares the lines — the stock lines **and** the `other` lines, plus delivery and package — against the printed total, on **one** GST basis: the printed total's own, with each line's printed amount converted onto it, never converted and converted back. Three outcomes: **already included** (the sum matches the printed total without the levy — JB Metro's online order, which puts the levy in each drink's price and prints it again as a disclosure — so nothing is added and the levy is not returned as a line); **not included** (the sum matches only with the levy added, so the reader's own drink-container marks decide which stock lines share it, by number of units, with the remainder cents on the last line); and **unresolved** (neither matches, or one amount could not be put on the comparison basis, or no line is marked as a drink) — in which case **no line's cost changes** and the levy comes back as its own `levy` entry with its printed amount and an `unresolved` flag. "Already included" is tested first, so a receipt both readings would fit keeps the one that changes no line cost.
+
+**Errors map to one outcome each, and each is a different thing to tell the operator.** Switched off is `503` with "Receipt scanning is not available" — the shipped state, with no outbound call at all; a refused file is `400` with the reason (a HEIC photograph gets "Convert the photo to JPEG and try again", which is the one refusal somebody can act on); an answer with nothing usable in it is `422`; a timeout is `504`; an unusable reader is `502`; and a business that has used its whole month's allowance is `429` (issue #1164, below). The timeout is the configured one, applied by the `HttpClient`, and there is **no resilience handler on this client, deliberately** — unlike the Nayax client — because a retried scan is a second payment. An upstream error body is never echoed: a vendor error can quote the request, and the request held a receipt.
+
+**The log line is the privacy rule, structurally.** `IReceiptScanLog.Completed` takes a business id, an outcome, a duration, a page count and two token counts, and has no parameter that could carry receipt text, a file name, a product name, a supplier name or any part of the draft — the same reason `INayaxSqsReaderLog` has the shape it has ([The Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103)). Every attempt is logged, refusals included, so a scan is countable; the absence of a token count is what says nothing was spent.
+
+**Configuration, and the launch gate.** `ReceiptScanning:ApiKey` is a secret and its absence is the shipped state: no key means the feature is off, so deploying without it is safe. `ReceiptScanning:Model` defaults to the model decided on 10 November 2026 after a test on 8 real receipts; `ReceiptScanning:TimeoutSeconds` defaults to 60; `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` default to the reader's documented limits and are settings rather than constants precisely because a vendor's limits change. A key configured beside a broken setting fails at startup with the setting named. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** — the launch gate recorded on #1163, which the cap below satisfies — and until then the fail-closed plan rule refuses every scan anyway. **The cap itself is not configuration**: it is compiled into `PlanCatalogue`, for the reason the storage allowance is, so a setting cannot disagree with what was actually spent. See [Configuration and secrets](../README.md#configuration-and-secrets).
+
+**Two things this slice is deliberately not.** It shipped with no frontend — issue #1166's Scan receipt screen, [below](#the-scan-receipt-screen-issue-1166), is that half — and issue #1163 itself had no usage limit: the fail-closed plan rule and the human-held key were what bounded the spend until the cap of #1164, below, existed. It also remembers nothing about a receipt — no mapping between a receipt's text and a product is stored, so a second scan of the same receipt matches from scratch (#1165 is the related pack-size suggestion).
+
+#### The monthly scan cap (issue #1164)
+
+**A business may scan 100 receipts in one calendar month of its own time zone, and the 101st is refused before the reader is called.** Issue #1164 — sub-issue C of #975, under the cap decided 10 November 2026 — is what makes the spend bounded rather than merely gated: at about US$0.04 per scan, which the 10 November receipt test measured, a hundred scans is about US$3.80 per business per month. It is a **safety limit, not a selling point**: it is far above what recording a month of vending purchases needs, nothing in the product is priced on it, and buying extra scans, billing and a different cap per plan are all explicitly out of scope.
+
+**The number lives in one place, and it is not configuration.** `Inventory.Domain.Subscriptions.PlanCatalogue.MonthlyReceiptScanLimit` is the cap, compiled beside the attachment storage allowance for the same reason that one is, and `Inventory.Domain.ReceiptScanning.ReceiptScanQuotaPolicy` is the one rule that applies it: which month a business date belongs to (`year * 100 + month`), whether one more scan fits (`used < limit`, so the hundredth runs and the hundred-and-first does not), how many are left (never negative), and the refusal sentence — which substitutes the cap rather than restating it, so the message and the number enforced cannot drift apart. It is deliberately **one number for every plan** rather than a `PlanDefinition` column: a per-plan cap is out of scope, and a column would have had to invent a figure for the two plans that cannot scan at all.
+
+**A scan is counted when the reader is about to be called — the last thing before the money is spent.** `ScanReceipt` checks the deployment's configuration, then the file rules, then the page count, and only then counts; everything refused before that point is **not counted**, which covers the plan refusal (`[RequirePlan]`, before model binding), a switched-off deployment, a missing file, a wrong type, an oversized file and a PDF over or outside the page limit. A failure **after** the call — a timeout, an unusable reader, an answer with nothing readable in it — **stays counted**, because the money went. There is deliberately **no release path**: the counter is a plain increment with nothing to undo, which is also why it needs no expiry and no housekeeping, unlike the attachment-storage reservation it otherwise resembles.
+
+**Counting is one serialised operation, which is the whole of the concurrency guarantee.** `EfReceiptScanUsageStore` reads the month's counter, compares it with the cap and writes the increment inside one `BEGIN IMMEDIATE` transaction (`SqliteWriteLockTransaction`), so the second of two simultaneous scans waits, reads the first one's committed count and is refused. Without that write lock around the read both would see 99, both would be allowed, and the business would make 101 scans and 101 payments. The unique index over `(ReceiptScanUsages.BusinessId, MonthKey)` is the backstop under the comparison: a month with two counters is a month whose cap no single comparison can enforce. It is **per business**, as every uniqueness rule over tenant-owned data here is — two businesses are each counting their own month.
+
+**The month is the business's own calendar month.** The key comes from a business date `Inventory.Application.Time.IBusinessCalendar` derives in the business's configured zone — `Australia/Sydney` for the business this application runs for — so a scan at 11pm on the 30th and one an hour later belong to different months exactly when the business's own calendar says so, and the count starts again at zero on its own ([Per-business time zone](#per-business-time-zone-issue-499)). A month that has passed keeps its count: nothing deletes or rewrites a counter, because what was spent is evidence. No server-local or UTC month boundary is involved anywhere.
+
+**The counter is tenant-owned and holds nothing about any receipt.** `ReceiptScanUsage` is `IBusinessOwned`, so the business key, its index, the central query filter and the ownership stamp are the central mechanism's with nothing added, and `IReceiptScanUsageStore` takes no business id and no predicate — so "usage is per business, and another business's scans never count" is structural rather than a filter somebody has to remember. The row holds a business, a month, a count and two instants: there is **no column** that could carry a file name, a supplier, a product, an amount, a draft or an outcome, which is `IReceiptScanLog`'s privacy rule in the schema. The migration `AddReceiptScanUsage` is purely additive and backfills nothing — there is nothing to backfill, because a scan leaves no record of itself anywhere, so every business starts the month the cap is deployed in at zero rather than at a number somebody guessed.
+
+**Two endpoints report it, and one of them is not gated by the plan.** The scan's own `200` answer carries `usage` — the month as `yyyy-MM`, used, remaining and the cap — and `GET /api/purchases/scan/usage` answers the same object on its own. The usage read carries `PurchasesController`'s existing `Purchasing.Operate` capability and **no `[RequirePlan]`**, deliberately: asking how many scans are left is not scanning, it makes no outbound call and it counts nothing, and the scan itself is the only endpoint in the API that may be unavailable while plan enforcement is off (`EndpointPlanRequirementTests.Exactly_the_receipt_scan_declares_the_fail_closed_feature`) — a second such surface would be a commercial decision. A business over the cap gets `429` with the cap's own sentence; `429` rather than a plan or payment refusal, because the plan *does* include scanning and the same request succeeds next month without anything being bought.
+
+**The Super Admin sees one business's count, and cannot change it.** `GET /api/super-admin/businesses/{businessId}/purchase-scan-usage` — named `purchase-scan`, never `receipt-scan`, by issue #127's rule that no published schema, tag or vocabulary carries a Receipt name, which is also why its response type is `SuperAdminPurchaseScanUsageResponse` — is class 2 under the same `PlatformAdminPolicy` and the same `PlatformDiagnosticsEndpointAttribute` marker as every other platform-admin surface — no new class and no second marker — and the **Receipt scans** card on the Super Admin Businesses page is what shows it. There is one route, it is a `GET`, and the Application port behind it (`IPlatformReceiptScanUsageStore`) has one method that returns a count: there is no route that would reset a counter or grant extra scans, which is the "buying extra scans is out of scope" decision made structurally. `IPlatformBusinessDirectoryStore` is deliberately **not** widened — a scan count is tenant-owned, and the directory is a list across businesses — so `EfPlatformReceiptScanUsageStore` is its own adapter, making the **eighth** reviewed `IgnoreQueryFilters` statement in a request ([Tenant ownership](#tenant-ownership-issue-64)): one statement, in one place, pinned to the single business id the route named and to the one month that business is in, projecting one integer, with **no write lease of any kind** because it writes nothing. The month is resolved from the time zone stored on the business row — `IBusinessCalendar` cannot be used, because a platform-admin request resolves no business whose zone it could read — and a stored zone this host cannot resolve **fails closed** rather than being answered in `Australia/Sydney`, the host's zone or UTC: a count reported against the wrong month is a count reported against the wrong cap.
+
+**What proves it.** `ReceiptScanQuotaPolicyTests` pins the cap, the month key, the `used < limit` boundary, the non-negative remainder and the refusal sentence by value. `ScanReceiptTests` covers the hundredth scan running with none left, the refusal that calls nothing, the single count against the current month, a scan counted into the next month while the previous month's count stands, every refusal that is **not** counted, and every failure after the call that **stays** counted. `Adapters/Persistence/ReceiptScanUsageStoreTests` is the relational half against a real database **file** with one connection per writer — the two-at-once race with one scan left (exactly one counted, and the stored count never past the cap), the same race from an empty month (two counted, one row), the month rollover, tenant isolation in both directions, the unique index as the backstop, and the platform read's business pinning, its zero-versus-not-found distinction, its two-businesses-two-zones month and its fail-closed refusal of an unresolvable zone. `Adapters/Persistence/AddReceiptScanUsageMigrationTests` is the upgrade test: the table and both indexes arrive, the column list is asserted **in full** because what is absent from it is the privacy rule, recorded purchases are untouched, no business starts with a count, and the rollback removes exactly that table. `Controllers/ReceiptScanApiTests` adds the whole pipeline over real HTTP — the `429` with the reader uncalled and the count unmoved, the hundredth scan's own `usage`, the usage endpoint on every plan, a stranger refused, and another business at its cap not stopping this one — and `Controllers/SuperAdminReceiptScanUsageApiTests` covers who may reach the platform read, what it reports, the unknown business, and that every other method on its route is refused with every counter unchanged.
+
+**What proves it.** `ReceiptLineArithmeticPolicyTests` and `ReceiptLevyPolicyTests` pin the money rules by value, including the issue's own worked examples and all three levy outcomes; `ReceiptScanFilePolicyTests` and `ReceiptPurchaseDatePolicyTests` pin the file verdicts and the date choice; `ReceiptScanPayloadParserTests` covers malformed JSON, extra fields, every dropped-line reason and the strict value kinds; `ReceiptScanDraftBuilderTests` covers the foreign and unknown ids, the charges, the `other` line counting towards the reconciliation, and each levy outcome end to end; `ScanReceiptTests` covers what is refused before the reader is reached, the one call with no retry, and the log line. `Controllers/ReceiptScanApiTests` is the whole pipeline over real HTTP against relational SQLite — the plan gate plan by plan, the fail-closed refusal with enforcement off, the switched-off `503`, the file refusals, the timeout, and **no writes**: a row-count comparison plus a strict document-storage mock with no write configured, so a scan that saved a byte fails the request. Its page-limit cases are the repairs' regressions — a complete PDF that declares `/Count 1` and reaches one page more than the limit is refused with **no call to the reader at all**, a page tree replaced through a cross-reference stream is refused as unreadable with no call, an ordinary incremental update whose active tree is over the limit is refused with the page-limit message and no call, and a two-page one is scanned with the verified count — and `Controllers/ReceiptScanUploadLimitTests` pins both upload caps and the absence of `[DisableRequestSizeLimit]`. `ReceiptScanning/ClaudeReceiptReaderTests` asserts the built request against a fake HTTP handler (the model from configuration, the schema present, no tools, the base64 block, the key and version headers, and only the two columns of catalogue), and `PdfPageCounterTests` counts the pages of real PDF files built by `ReceiptScanning/PdfFixture` — header, objects, a cross-reference table with offsets the test itself verifies, trailer — covering an understated and an overstated `/Count`, a nested tree, both sides of the counter's own ceiling, an incremental update counted from its active tree in both directions, and every structure and format it refuses to count; `The_cross_reference_stream_fixture_really_does_replace_the_page_tree` takes the finding's file apart to prove the page tree is defined once in the plain bytes as the old two-page tree while its object stream holds the 101-page one. **No test makes a live call to the reader**, which issue #1163 excludes.
+
+#### The Scan receipt screen (issue #1166)
+
+**The frontend half of #975, and it adds no backend change of any kind.** Issue #1166 — sub-issue D, after #1161, #1162 and #1163 — puts a **Scan receipt** button on Add Purchase, sends the chosen file to `POST /api/purchases/scan`, and fills the existing form with the draft that comes back. **Saving is the create request that already existed**: the operator checks and edits the suggestion and presses Save purchase, which sends exactly one `POST /api/purchases` with the same file as the purchase's document, through the endpoint, the payload and the validation of [A purchase's document is optional](#a-purchases-document-is-optional-issue-976) and [the shared Add/Edit purchase layout](#shared-addedit-purchase-layout-issue-1029), unchanged. No endpoint, DTO, use case, policy or migration is touched; the whole slice is Angular.
+
+**The workflow is its own feature component, and the page is composition.** `PurchaseReceiptScanComponent` (`components/purchases/purchase-receipt-scan/`) owns the plan lock, the file preparation, the request and its cancellation, the "replace what is already there?" question and every error state, and reports one thing: `{ draft, file }` on a scan that actually succeeded. `PurchaseUploadComponent` composes it through two inputs and one output and decides what the draft does to its own form — which is the [page composition boundary](#page-composition-boundary-issue-191) the automated `page-composition.guard.ts` check enforces, and why the replace question's modal `<dialog>` lives in the child rather than in the page's template. A failed or cancelled scan emits nothing at all, so the form is left exactly as the operator left it and manual entry carries on.
+
+**The draft becomes form fields through one pure module, which calculates no money.** `purchase-form/purchase-scan-draft.ts` is the single translation: `purchaseScanFill` maps the published `PurchaseScan*` contract (`models/purchase-scan.ts`, mirrored from `PurchaseScanResponseDto`) onto the form's fields and lines, and every figure is carried through exactly as `Inventory.Domain.ReceiptScanning` decided it — the units, the **unrounded** unit cost the purchase line submits, the printed line amount, the receipt total and the two charges. The only arithmetic is the form's own existing `purchase-line-price` module showing the complementary field beside an entered one. **A value the receipt did not carry establishes nothing**, so the form keeps what it had and a receipt with no date leaves the purchase date on today. A line arrives with the draft's unit cost as the *entered* figure and the line total derived from it; when there is no unit cost — which is exactly when the pack size or the amount was not readable — the **printed amount** is entered instead, so typing the units produces the cost rather than asking for the price a second time. **Nothing is classified for GST**: the receipt's GST markers are the receipt's claim and an input GST classification is only ever a person's or a rule's ([Purchase GST classification](#purchase-gst-classification-issue-429)). A suggested product or supplier the form does not actually have is dropped rather than bound to a picker with no option for it; the backend only ever suggests ids of this business, so that is belt and braces rather than the tenancy rule.
+
+**A line that is not stock, and an unresolved levy, are shown and not saved.** A `stock` or `other` line becomes a form line; an `other` one starts with **Not stock, skip** ticked, which keeps it out of validation and out of the create request, and choosing a product for it is what puts it in. A `levy` line is never a form line at all: it gets a row of its own outside the items, with its printed amount and "Container levy not added to any product: check the receipt", no product picker and no way to turn it into one. Both are counted by the **receipt-total check** — `compareReceiptTotal` gained one optional `amountOutsideLines`, zero for every form that has scanned nothing — so a receipt whose printed total includes an office item or a levy this purchase does not record reconciles instead of showing a difference nobody can act on. None of it is ever part of the purchase total, the items subtotal or anything that is saved.
+
+**What the scan could not complete is asked for in the receipt's own words, and the form's existing validation is what blocks Save.** Each line carries the draft's `missing` markers as sentences ("The pack size is not printed on the receipt. Enter the units."), shown beside the line's ordinary product and price problems — which a scanned line shows **immediately** rather than after a blur or a Save, because the application filled it in and is asking for it to be checked. Those sentences stop being shown once the line is complete, since the scan's list is a record of what it read and never changes. Save itself is blocked by nothing new: a line with no product fails the existing product check and a line with no units fails the existing quantity check. Values this application suggested rather than read are marked — a matched product as **Suggested product**, and a pack size suggested from the business's own purchase history (issue #1165's `suggested` provenance on `unitsPerPack`) as **from your last purchase**.
+
+**The plan lock mirrors the backend rule, including its one exception.** `access/plan-feature.ts` gains `ReceiptScanning` (Pro) **and** `failsClosedWhileUnenforced`, the frontend's copy of `PlanFeaturePolicy.FailsClosedWhileUnenforced`: receipt scanning is the one feature refused while plan enforcement is switched off as well as below Pro, so the button is locked rather than offered for a request the endpoint would refuse. An unknown entitlement still fails open, exactly as every other feature does. A `403 plan_required` answered to a scan anyway locks it the same way, with the plan the refusal itself named — the inline treatment of [plan-locked navigation](#plan-locked-navigation-issue-979) rather than a Retry for an answer that will not change.
+
+**The receipt is shown beside the lines.** `PurchaseReceiptPreviewComponent` renders the file the page already holds — the prepared bytes that were scanned and that the save will upload — through one object URL it revokes when the file changes or the component goes away, as a picture for a photo and through the browser's own viewer for a PDF, with **Open full size** beside it. It is first in the document and placed in the grid's second column from `xl` up, which is what puts it above the lines on a phone and beside them on a wide screen.
+
+**Two refusals the form answers rather than losing work.** A scan that fails shows its reason and changes nothing. A **save** refused because the receipt would take the business past its attachment storage allowance ([#968](#attachment-storage-quotas-issue-968)) keeps the whole filled form and offers **Save the purchase without the receipt**, which is the one way forward: the purchase is always recordable without a document (#976) and the document can be attached later. Nothing is saved until that is explicitly chosen. The refusal is matched on the storage sentence the create endpoint answers as a bare `400` string, which is written to depend on as little of it as possible and whose only cost if it ever missed is that the shortcut is not offered — the reason is still shown in full and nothing is saved.
+
+**What proves it.** `purchase-scan-draft.spec.ts` pins the whole translation by value — the fields established and the ones deliberately left alone, the unit-cost and printed-amount entry modes, the dropped foreign ids, the pack maths string, each missing marker's sentence and an unrecognised one, the `other` line starting skipped, the levy never becoming a line, and the amount outside the lines. `purchase-receipt-scan.component.spec.ts` covers the whole workflow: the scan and what it reports, the progress state, Cancel ignoring an answer that arrives afterwards, the `503`/`422`/`504`/`429` and transport failures each showing their own sentence with no draft reported, the plan lock from the entitlement and from a `403`, and the replace question sending nothing while it is open and nothing at all when the typed items are kept. `purchase-upload.component.spec.ts` covers the page: three filled lines with the draft's products, units and costs and nothing saved, exactly one create request carrying the scanned file, Save blocked until a missing product or pack size is filled, the skipped line and the levy saving no purchase line, no GST classification submitted, the supplier-order question asked again after a scan replaced the lines, and the storage refusal keeping the form and saving only once "without the receipt" is chosen. `purchase-form-layout.component.spec.ts` covers the rendering — the receipt text and pack maths, the "from your last purchase" mark, the immediate highlight, the skip checkbox in both directions, the levy row with no picker, the reconciled comparison, and the preview's document order and column. `purchase-receipt-comparison.spec.ts` pins that the amount outside the lines changes the comparison and never the purchase total, and `plan-feature.spec.ts` pins the fail-closed feature as the only one. The browser evidence is `e2e/visual/purchase-receipt-scan.visual.ts` into `docs/screenshots/issue-1166/`: the button, the filled form, the reconciled form and the plan lock at 1440px and 390px, plus the measurements jsdom cannot make — no sideways scroll at 1440px, 390px or 360px, and the preview beside the lines at 1440px and above them below `xl`. Like every visual run it is human-invoked, is not part of `scripts/validate.sh`, answers every `/api/` request with synthetic data, draws its own receipt rather than committing a real one, and refuses every write except the scan itself, which stores nothing.
 
 ### The Plan page (issue #970)
 
@@ -4406,6 +4491,38 @@ all: `SaveAsync` is called only when there is something to store, and the purcha
 values are stored as `NULL` together (see
 [A purchase's document is optional](#a-purchases-document-is-optional-issue-976)).
 
+**The browser may shrink or convert an image before it uploads it (issue #1161), and no server rule
+changes.** One shared frontend helper,
+`frontend/inventory-app/src/app/components/shared/image-upload-preparation.ts`, runs on the file a
+person chose, before it is sent, at all three upload places: the purchase form's receipt field
+(`purchase-receipt-field.component.ts`, which Add Purchase and Edit purchase both compose), the
+Purchases list's attach-document row (`purchase-document-attach.component.ts`), and the operating
+expense's supporting document (`expense-form.component.ts`, the form Add expense and Edit expense
+share since issue #1167; it was `operating-expense.component.ts` while that form was a card the
+register opened above itself). It decodes the image with
+`createImageBitmap(file, { imageOrientation: 'from-image' })` — which is what applies the camera's
+orientation flag — draws it onto a canvas at a longest side of at most 2000 px, and encodes JPEG at
+quality 0.8. The result is used only when it is smaller than the original, or when the original is
+HEIC/HEIF, which has to be converted whatever it weighs because most browsers cannot read it at all;
+the file is then renamed to the same base name with a `.jpg` extension, so the extension, the
+content type and the bytes agree. A PDF, an image already under 1 MiB and within 2000 px, a format
+this browser cannot decode, a browser with no `createImageBitmap`, a missing canvas context and an
+encoder that produces nothing all return the **original file unchanged**, and none of them is
+reported to the person: the server's own rules are what refuse a file. HEIC is therefore converted
+only where the browser decodes it (Safari today) — no decoding library is bundled, so there is no
+new dependency and no third-party notice. The page holds the prepared file, so the size it shows,
+the bytes that reach `IDocumentStorage` and the bytes charged against the business's attachment
+storage quota (issue #968) are the same file; preparing is asynchronous, so each of the three places
+disables its own save while it is in progress rather than uploading nothing. For the same reason the
+expense form ties each preparation to the selection that started it: choosing another file, and
+reopening the form on a freshly read expense (what "Reload the expense" does after a conflicting
+save), each invalidate the preparation still running, and a photo that finishes afterwards is
+discarded rather than attached to the expense the form is showing by then, and cannot clear the
+preparing state that is holding Save for a newer photo.
+`Inventory.Domain.Purchases.PurchaseDocumentPolicy` and
+`Inventory.Domain.Expenses.ExpenseAttachmentPolicy` are untouched: the 10 MiB ceiling and the allowed
+extensions still decide, and nothing on the server converts, inspects or resizes an image.
+
 `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
 `{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
 the legacy `{WebRoot}/{category}/` location, and refuses to overwrite an existing document or to
@@ -4627,7 +4744,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts; a route marked with the public layout is rendered with none of that chrome (issue #954) |
-| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954) |
+| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954); `legal/` holds the development-only Privacy Policy and Terms of Use page layouts (issue #1190) — see [The Privacy Policy and Terms of Use page layouts](#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190) |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
@@ -5102,15 +5219,25 @@ flag these pages now read instead, for the same reason: it is presentation only,
 read-only method rule is still what would refuse the write if a page failed to hide or disable it.
 
 **What each page hides or disables, and why hidden rather than disabled differs by control.**
-`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
-entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete), and disables
-Save on the open edit form (following `ProductFormComponent`) - a session cannot open an edit form in
-the first place once Edit is hidden, but Save still checks the flag so a form already open when a
-session starts cannot submit. `SiteCommissionAgreementsComponent` disables its single Save agreement
+`OperatingExpenseComponent` hides Add expense (a page action, like the rest of this build's create
+entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete). Since issue
+#1170 Delete is a menu item in each row's (and each card's) overflow menu, so what the register
+withholds there is the whole menu - exactly as `ProductListComponent` withholds its row menu - and
+nothing else in it is lost, because Delete is all it holds. Since issue
+#1167 Add expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
+that open a card on the register, so `ExpenseFormPageComponent` refuses the write on its own account
+as well - and must, because those addresses can be reached directly: `/expenses/new` shows no form at
+all during a session, `/expenses/:id/edit` shows the expense read-only with no primary action, and
+the page's save handler checks the flag before it calls the API. Both addresses show **one shared
+notice**, `EXPENSE_SUPPORT_SESSION_NOTE` ("Expenses can't be added during a support session."), and
+deliberately not a sentence worded per page: Add and Edit refuse the same thing - any write to an
+expense from outside the business - and one sentence is what issue #1167 asks both pages for.
+`SiteCommissionAgreementsComponent` disables its single Save agreement
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
 Payment control - the input group and the button together - hides rather than disables, since (like
 Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
-guarded handler (`startCreate`, `startEdit`, `save`, `remove` on the expense page;
+guarded handler (`confirmDelete` and `deleteConfirmed` on the expense register - since issue #1170
+both halves of a delete, the ask and the write, check the flag - and `onSave` on the expense form page;
 `saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
@@ -5121,9 +5248,11 @@ session; only the controls that attempt a write are touched. Server-side enforce
 rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
 
 **What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
-Expense/Edit/Delete being hidden and Save being disabled while a session is active, each guarded
-handler (`startCreate`, `startEdit`, `save`, `remove`) refusing to call the service when invoked
-directly, and normal create/edit/delete behaviour while no session is active.
+Expense/Edit/Delete being hidden while a session is active, `remove` refusing to call the service
+when invoked directly, and normal delete behaviour while no session is active;
+`expense-form-page.component.spec.ts` covers the same rule on the two form pages since issue #1167 -
+no Add form, a read-only Edit, `onSave` refusing to call the service when invoked directly, and the
+one shared notice being the same sentence on both addresses.
 `site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
 agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
 is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
@@ -5261,7 +5390,15 @@ Receive is navigation to the already-guarded upload page, so only the control ne
 new guard. `SupplierListComponent` disables the Create/Update submit button and hides Delete,
 guarding `save()` and `remove()` the same way; Edit is left alone because it only sets local form
 state and issues no request of its own - the control that matters is the Save/Create button it
-leads to. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
+leads to. Since issue #1174 moved that form into a dialog the rule is unchanged and lives in the
+same two places: the page passes `[sessionActive]` to `SupplierFormDialogComponent`, which disables
+its own primary action and returns from `save()` before calling the API, the page still hides Delete
+and guards `askDelete()`/`remove()`, and Edit still opens the dialog for the same reason it was left
+alone here (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). The one
+thing that issue did add is a control of its own: the page header's **Add supplier** button, which
+the inline form never had, so it is *hidden* in a session on the same terms as Add Purchase on the
+purchase list and `addSupplier()` is guarded beneath it - a create is a write on the capability a
+session grants, so a form the server could only refuse is not offered at all. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
 it is on `Purchasing.Operate`, which a session grants, so the page hides the control and
 `setNotUsed()` returns before calling the API
 ([The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934)).
@@ -5282,9 +5419,13 @@ disabled and `submit()` emitting nothing while `sessionActive` is set directly o
 `purchase-edit-page.component.spec.ts` covers the page passing its own `active$` subscription down
 as that input and `onSave` refusing to call the API. `supplier-orders.component.spec.ts` covers
 Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
-`supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
-`save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
-resuming once a session ends.
+`supplier-list.component.spec.ts` (new) covers Delete being hidden, `remove()` refusing to call the
+API while a session is active, and normal behaviour resuming once a session ends; since issue #1174
+the save half of that is `supplier-form-dialog.component.spec.ts` (the primary action disabled and
+`save()` refusing to call the API) plus the page spec asserting, on the rendered page, that the
+header **Add supplier** button is absent in a session and `addSupplier()` opens nothing when
+invoked anyway, that the row's Edit button is still there and opens the dialog filled in with its
+submit disabled, and that the header button returns once the session ends.
 
 ### Auditing the remaining write actions across the support view UI (issue #661)
 
@@ -5309,13 +5450,17 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 **What changed, page by page.**
 
-- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file and Import
-  XML files, and `onSalesSelected` and `importXml` each return before calling `ImportService`.
-  Download template stays enabled: it builds a CSV in the browser and calls no API. Its Import
-  products card is a link to `/products/import` since issue #888 and is left in place, because it
-  starts nothing; `ProductImportPageComponent` applies this same rule at the destination, rendering
-  a short "imports are unavailable during a support session" notice instead of the catalogue review
-  — withheld rather than disabled, because the review reads the catalogue as soon as it renders.
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, and
+  `onSalesSelected` returns before calling `ImportService`. Download template stays enabled: it
+  builds a CSV in the browser and calls no API. Its two cards that are links — Import products to
+  `/products/import` since issue #888, and Reimbursement Report to
+  `/admin/imports/reimbursement-report` since issue #1152 — are left in place, because a link starts
+  nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
+  short "imports are unavailable during a support session" notice instead of the catalogue review —
+  withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
+  `ReimbursementReportPageComponent` renders the same notice, disables the ZIP upload and the
+  pending-XML action and guards both handlers, while leaving its recent-uploads list alone, because
+  those reads are `GET`s a read-only session may make.
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -5859,7 +6004,7 @@ by `navigationFor` after them: whether the application still *offers* `Historica
 Classification`, which a Super Admin may switch off for everybody else. It can only remove an entry
 the capabilities already allowed - it grants nothing, changes no capability, and leaves the page's own
 `Data.Repair` authorization exactly as it was. See
-[Switchable Admin option visibility](#switchable-admin-option-visibility-issue-873).
+[Switchable Admin menu visibility](#switchable-admin-menu-visibility-issues-873-and-1148).
 
 **During a Super Admin's role preview the answer here is the narrowed one** (issues #720 and
 #721), and it is still the API's answer: `GET /api/me/access` is re-read with `X-Role-Preview`, the
@@ -6907,12 +7052,14 @@ the page reports on.
 - **The stock adjustment form** (`StockAdjustmentFormComponent`) takes its machine list from the page
   as an input and is no longer on this signal either (issue #746). It keeps the rule the signal
   taught: a failed read is an error in place of the field, never an empty one.
-- **Expenses** (`OperatingExpenseComponent`) is on this signal for its categories and its wording
-  only: without `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and
-  drops the Nayax sentence from its subtitle. An expense already recorded under that category
-  **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
-  whenever the expense being edited carries it - because a recorded expense is a fact about the past
-  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+- **Expenses** (`OperatingExpenseComponent`, and `ExpenseFormComponent` since issue #1167 moved the
+  form onto its own pages) is on this signal for its categories and its wording
+  only: without `providerRecords` the form stops offering "Nayax monthly fee" for a **new** expense
+  and the register drops the Nayax sentence from its subtitle. An expense already recorded under that
+  category **keeps** it - in the table, in the Category filter and on the edit page, whose form offers
+  the category whenever the expense being edited carries it - because a recorded expense is a fact
+  about the past and these pages must never quietly reclassify one. The machine field and the
+  register's machine filter are
   the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
@@ -6938,9 +7085,11 @@ permission refusal prevents while an unrelated feature stays loadable, and the f
 errors.
 `pick-list.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
-`stock-history-page.component.provider-optional.spec.ts` and
-`operating-expense.component.provider-optional.spec.ts` cover what is left of this signal on those
-two screens after issue #746 - the source option, the Nayax fee category and the subtitle;
+`stock-history-page.component.provider-optional.spec.ts`,
+`operating-expense.component.provider-optional.spec.ts` and (since issue #1167, where the expense
+form moved to its own pages) `expense-form.component.provider-optional.spec.ts` cover what is left of
+this signal on those two screens after issue #746 - the source option, the expense register's
+subtitle and the Nayax fee category the form offers;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
@@ -7376,8 +7525,8 @@ keep working unchanged once that one file knows the new word:
   alerts (#939), Needs Ordering and Products (#940) all share is the one place this had to be taught.
 - **The Nayax sales import card** (`SalesFileImport`, `Pro`) is the second inline lock of that same
   `403 plan_required` shape, and it is inline rather than route-level **because the page is mixed**:
-  `/admin/imports` also runs the pending reimbursement XML import, links to the product-catalogue
-  review's own page and downloads a CSV template that calls no API, and none of those is a
+  `/admin/imports` also links to the product-catalogue review's own page and (since issue #1152) to
+  the Reimbursement Report's, and downloads a CSV template that calls no API, and none of those is a
   higher-plan feature. Locking the route would withhold three working workflows over one locked
   card, so `admin-imports.component.ts` locks the card instead and the route keeps its
   `requireCapability('Imports.Run')` alone - stated by name in `app.routes.spec.ts` rather than
@@ -7418,7 +7567,7 @@ own lock - `Free` and `Starter` withholding the controls with **no** import call
 normally and still refused during a support session, enforcement off and the three not-known
 entitlement answers locking nothing, a `plan_required` refusal rendered in the card instead of a
 toast and not repeatable, an ordinary failure still reported as the error it is, the re-read that
-clears the refusal and the one that keeps it, and the other three import workflows on the page
+clears the refusal and the one that keeps it, and the other import workflows and links on the page
 untouched.
 
 ### Target feature boundaries
@@ -7535,6 +7684,43 @@ order, and it loads its purchase from the route id rather than from navigation s
 edit URL and a refresh both work, and Save and Cancel both return to `/purchases`. See [Purchase
 edit page](#purchase-edit-page-issue-475) for the page, its states and what moved out of the list.
 
+`/expenses/new` and `/expenses/:id/edit` (issue #1167) are Add expense and Edit expense, both served
+by `ExpenseFormPageComponent`, which replaced the card the `/expenses` register used to open above
+itself. They carry exactly the three guards `/expenses` carries — `MsalGuard`, `accountStateGuard`
+and `requireCapability('Expenses.Manage')` — plus `canDeactivate: [confirmExpenseFormLeave]`, the
+same `PendingWorkGuarded` arrangement New/Edit Product uses (`expense-form-leave.guard.ts` beside
+`product-form-leave.guard.ts`): an in-app departure from unsaved changes asks first, the page raises
+the browser's own `beforeunload` prompt for a reload or a closed tab, and a successful save leaves
+without asking. `/expenses/new` is a two-segment path and `/expenses/:id/edit` a three-segment one,
+so neither can shadow the other or the single-segment `/expenses` in any declaration order, and the
+page loads its expense from the route id through `OperatingExpenseService.getById` rather than from
+navigation state — a bookmarked edit URL and a refresh both work, a non-numeric id is the same
+"not found" as a missing expense, and the register keeps no form of its own. Both pages use the
+full content width inside the standard `.page` gutters, with no max-width cap (issue #1187).
+Rendered geometry is checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
+`docs/screenshots/issue-1167/` at 1440px and 390px, overflow measured down to 360px, Tab order and
+touch-target heights); like every visual run it is human-invoked and runs in neither
+`scripts/validate.sh` nor CI.
+
+**The register's filters and its page are the return context.** `/expenses` reads and writes its
+applied filters as the query parameters `from`, `to`, `category`, `supplierId` and `machineId`, and
+since issue #1170 the page of that filtered list as `page` (1-based, as a reader counts it) and
+`pageSize` — all seven parsed in one place, `components/expenses/expense-register-filters.ts`: Apply
+filters writes the filters, turning a page or changing the size writes the page, opening `/expenses`
+with them opens exactly that register, and a parameter carrying a value the application cannot use is
+ignored rather than refused, so a stale bookmark opens the register instead of an error. The first
+page at the default size (10, from the Products options 5, 10, 20, 50 and 100) is the plain
+`/expenses` address, so only a page or size that differs from the default appears. **Paging is
+client-side over the one list `GET /api/operating-expenses` already answered in full**, the same
+strategy `ProductListComponent` uses: turning a page requests nothing, the Totals footer sums every
+filtered row rather than the page on screen, and the pager's counts are the real filtered counts.
+Applying or clearing filters returns to page 1; a `page` the filtered list does not have — a stale
+bookmark, or the page a deleted last row leaves behind — settles onto the last page that exists and
+is rewritten into the address in place. Add expense and Edit expense receive those same parameters
+and return to `/expenses` carrying them on a successful save, on Cancel and on Back to expenses;
+without them they return to the plain `/expenses`. The sidebar link stays `/expenses` and is
+unaffected.
+
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
 **Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` was decomposed into
@@ -7552,13 +7738,14 @@ unchanged fee-rate editor — see
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
 authenticated UI entry point for the Nayax import workflows, moved out of `AdminComponent`: the
-Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and the pending
+Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and — until issue
+#1152 moved it to the Reimbursement Report's own page — the pending
 reimbursement XML import. The page is an
-entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
-`POST api/imports/pending-xml`) with the same request shapes, keeps
+entry point only — it calls the same `ImportService` method (`POST api/imports/nayax-sales`)
+with the same request shape, keeps
 the same client-side extension validation, template columns/sample row, success and failure
 messages, and the same single `loading` flag that disables every import action while one is in
-flight. No import boundary or contract changed with the move: Nayax sales parsing and timestamp
+flight. No import boundary or contract changed with either move: Nayax sales parsing and timestamp
 semantics, import deduplication, product matching, reimbursement parsing and persistence all stay
 exactly where they were (see [Uploaded transaction export import (issue
 #301)](#uploaded-transaction-export-import-issue-301) and [Reimbursement import and
@@ -7579,6 +7766,15 @@ withholds the review and shows its own notice (see
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
 the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
 import went rather than implying it still runs here.
+
+**And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
+is now a short **Reimbursement Report** card whose control is a `routerLink` to
+`/admin/imports/reimbursement-report`, where #1149's ZIP upload, its job status list and that same
+pending-XML action now live; this page runs no reimbursement import of its own and
+`AdminImportsComponent.importXml` is gone. The link is neither hidden nor disabled during a support
+session, for the reason the Import products link is not. See
+[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
+card description names that destination too.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -7626,12 +7822,12 @@ rule exists in the frontend - and carries the preview's `fingerprint` back uncha
 nothing on arrival: this maintenance action runs only because a person pressed Preview and then
 Apply.
 
-Its folder also holds `HistoricalGstVisibilityToggleComponent` (issue #873), which belongs to the
-**Admin hub** rather than to this page: it is the Super Admin's switch over whether this option is
-offered to anybody else, composed into the hub beside this destination's card, and it reaches the
-platform-admin endpoint rather than either of the two above. Nothing on this page is conditioned by
-that setting - it hides the way in, never the page - and the page's own authorization is unchanged.
-See [Switchable Admin option visibility](#switchable-admin-option-visibility-issue-873).
+Whether this destination is **offered** to anybody but a Super Admin is a switch, and since issue
+#1151 it lives on the Super Admin **Menu Visibility** page rather than beside this destination's card
+on the Admin hub (where issue #873's `HistoricalGstVisibilityToggleComponent` used to be, in this
+folder; it is removed). Nothing on this page is conditioned by that setting - it hides the way in,
+never the page - and the page's own authorization is unchanged.
+See [Switchable Admin menu visibility](#switchable-admin-menu-visibility-issues-873-and-1148).
 
 **Nayax Sale Timestamp Repair (issue #487)** is the Admin UI over issue #472's Preview/Apply API,
 and follows the same shape again:
@@ -7735,11 +7931,11 @@ request to an account, business, access or Nayax endpoint. `public/public-routin
 
 **Its actions reuse the existing journeys.** **Sign in** follows the header's own decision - the
 `/sign-in` chooser when a customer identity authority is configured, otherwise a workforce redirect
-whose start page is `/`. **Get started** navigates to `/apply`, the business application route:
-being guarded, it takes a signed-out visitor through sign-in first (with the `/apply` destination
-held), and the application form sends anyone it is not for - a member, or anyone while
-`SelfServiceOnboarding:Enabled` is off - to the page their account state calls for. No new account
-flow exists.
+whose start page is `/`. **Start free** (labelled **Get started** before issue #1191's public-beta
+copy refresh) navigates to `/apply`, the business application route: being guarded, it takes a
+signed-out visitor through sign-in first (with the `/apply` destination held), and the application
+form sends anyone it is not for - a member, or anyone while `SelfServiceOnboarding:Enabled` is off -
+to the page their account state calls for. No new account flow exists.
 
 **Page composition.** The routed page lays out the sections and owns the in-page navigation (scroll
 to a section and move focus to it, instant under `prefers-reduced-motion`), the skip link, the
@@ -7756,34 +7952,63 @@ intentional copy change are recorded in [docs/design/restockroo-landing-page.md]
 The application is client-rendered, so the title and description are set in the browser; nothing
 here adds server rendering or promises search-engine indexing.
 
-**Pricing section (issue #971).** A fifth entry, `{ id: 'pricing', label: 'Pricing' }`, was added to
-`LANDING_SECTIONS` before `'faqs'`, so the header, its mobile menu and the footer navigation pick it
-up with no component change; the routed page places the `#pricing` section itself between
-`#how-it-works` and `#faqs`, as the issue required. The section renders `LANDING_PLANS` — Free,
-Starter and Pro, each a plain object (name, price, billing note, description, feature strings, an
-optional badge and an optional note) — with no new injected service and no request, preserving the
-page's "makes no request" guarantee; the catalogue is the plan proposal [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed (1 GB/20 GB/20 GB attachment allowances, Starter's supplier comparisons and Bookkeeping/GST
-reports, Pro's Nayax connection and connected reports, 5 included connected machines and A$2/month
-per extra one), reproduced here only as static marketing copy — it is not read from, and does not
-have to stay byte-for-byte in step with, a backend plan catalogue, because issue #965's catalogue
-endpoint does not exist yet. Free carries an "Available now" badge; Starter and Pro carry "Coming
-soon" and every plan's action is the same `getStarted()`/**Open app** the rest of the page uses, so
-there is no second, parallel purchase flow and nothing to keep anonymous. Pro's card carries its own
-`note` making the plan-entitlement/usable-connection distinction explicit, matching issue #965's
-rule that the two are never promised together. **A plan limit is copy about the future, never a
-described current behaviour**: attachment quota enforcement (issue #968) and document-optional
-purchases (issue #976) have not shipped, so the section's lead paragraph, Free's own `note` and the
-storage FAQ all say the allowances — and the 80% warning and 100% upload pause — start when the paid
-plans launch, and that storage is unlimited today; nothing on the page claims a cap, a blocked
-upload or a purchase recorded without its document now. That is the same rule as the rest of the
-page's copy, and it is guarded as a copy regression in `landing-page.component.spec.ts`. The GST tax treatment of the advertised prices is
-one of #965's open launch decisions and is deliberately not stated here until it is decided — see
-[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for how the rest of the
-page's copy is kept inside what the application actually does, which is the same rule applied to the
-"Optional sales connection", "Optional integration" and the renamed "Inventory value at cost" facts
-this issue reconciled with the plan catalogue (each now says what is free today versus what Pro will
-gate once paid plans are live, instead of implying Nayax or reporting are unconditionally free).
+**It fits a phone, and that is measured in a browser (issue #1191).** The page's layout rule is that
+it never scrolls sideways between 320px and 390px wide, with the `index.html` viewport meta tag
+(`width=device-width, initial-scale=1`, no `maximum-scale` and no `user-scalable=no`) still allowing
+pinch zoom. jsdom computes no layout, so the component specs cannot answer that;
+`e2e/visual/landing-page-public-beta.visual.ts` does, in Chromium, at every width in the range, and
+captures the signed-out page at 1440px and 390px into `docs/screenshots/issue-1191/` as the evidence
+a person reads. It is part of the human-invoked visual evidence run, not of `scripts/validate.sh` —
+see [Frontend tests](#frontend-tests) for why a browser download stays out of validation.
+
+**Pricing section (issue #971, removed by issue #1191).** Issue #971 added a fifth `LANDING_SECTIONS`
+entry, `{ id: 'pricing', label: 'Pricing' }`, and a `#pricing` section rendering `LANDING_PLANS` -
+Free, Starter and Pro plan cards matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed. Issue #1191 removed the section, `LANDING_SECTIONS`' `'pricing'` entry, `LANDING_PLANS` and
+its `LandingPlan` type entirely for the public beta: every business gets full access at no cost while
+the beta runs, so the page shows no price, plan card or "Coming soon" badge, and the three FAQs that
+only made sense next to pricing ("When can I subscribe…", "What happens if I reach my storage
+limit?", "Will connecting Nayax cost extra?") were dropped with it. The beta and export notices under
+the hero (`landing-beta-notice`, `landing-export-notice`) are what the page says about cost and
+exports instead. The "Optional sales connection" and "Optional integration" Nayax facts, which issue
+#971 had tied to Pro, were reworded again to drop every paid-plan reference, and the Nayax heading is
+now "Use core inventory on its own. Connect Nayax for sales integration." The backend plan catalogue issue #965
+agreed (see [README § Business plans](../README.md#business-plans-free-starter-and-pro)) is
+unaffected; only its landing-page presentation is off. See
+[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for the full before/after
+copy table.
+
+### The Privacy Policy and Terms of Use page layouts (issue #1190)
+
+The owner has approved Stitch designs for a Privacy Policy and a Terms of Use page, but the legal
+copy itself is not approved yet, so this issue builds the two page layouts only - reachable in a
+development build and **never in a production build**, following the design-system fixture's own
+pattern (issue #411, `createDesignSystemRoutes(isDevMode())`,
+[Routing and loading](#routing-and-loading) above). `public/legal/legal-routes.ts` declares
+`createLegalRoutes(isDevelopmentBuild)`, asserted for both branches exactly as the fixture's factory
+is; `app.routes.ts` spreads its result (`legalRoutes`) above the wildcard route, after the
+design-system fixture's own spread. Nothing links to either path - not the homepage footer, the
+header, the sign-in page or the application shell - and each route carries `PUBLIC_LAYOUT_DATA` and
+no guard, so a signed-out visitor can open either directly, exactly as `/home` already can be; the
+pages inject no API service, so opening one makes no request either.
+
+**Shared layout, two typed content files.** `legal/legal-page.component.ts` is the one presentational
+component both pages render through: the Restockroo brand and a **Back to home** link (the `/sign-in`
+page's own pattern, issue #957), a table of contents built from the content's own sections (each
+entry an in-page anchor), the numbered sections themselves, the business display details (Eunhye
+Chung, ABN 69 235 469 430, a plain `mailto:admin@restockroo.com.au` link) and a link to the other
+legal page. Moving to a section from the table of contents scrolls to it and moves keyboard focus to
+its heading, the same approach the landing page's own in-page navigation uses
+(`scrollToSection`, [The public landing page](#the-public-landing-page-issue-954) above).
+`legal/privacy-policy-content.ts` and `legal/terms-of-use-content.ts` are each page's own typed
+`LegalPageContent` (title, effective-date label, an optional introduction, and the sections, each an
+id, heading and body) - filled only with the Stitch export's own section headings and its two
+placeholders, `"[Approved content to be inserted]"` and `"[Effective date]"`: no legal wording and no
+invented date. `legal/privacy-policy-page.component.ts` and `legal/terms-of-use-page.component.ts`
+are the two thin wrapper components the routes load, each supplying its own content file and the
+other page's cross-link. See
+[docs/design/restockroo-legal-pages.md](design/restockroo-legal-pages.md) for the export these are
+adapted from and every intentional omission from it.
 
 ### Runtime configuration and API contracts
 
@@ -7820,6 +8045,8 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
+**The shared dialog UI.** `components/shared/confirmation-dialog.component.ts` (`ConfirmationDialogComponent`) is the one shared confirmation: a title, a message, and a confirm/cancel pair, with the caller owning the write it guards. `components/shared/modal-dialog/modal-dialog.component.ts` (`ModalDialogComponent`, issue #1174) is the shared **shell** for a dialog that holds a workflow rather than a question: a labelled, centred panel of at most 600px that becomes a full-screen sheet below 640px, with a fixed header carrying the heading and a labelled Close control, a scrollable body (the default content slot) and a fixed action row (anything projected with `dialog-actions`). It is a native modal `<dialog>` opened with `showModal()`, so the top layer, the inert page behind it and the `::backdrop` are the platform's, and it carries **no** `role` or `aria-modal` of its own because the platform maps a modal `<dialog>` to both; its Tab cycle, its Escape handling and its focus return to the control that opened it are written in the component so a regression test can hold it to them. It never closes itself: Escape, the backdrop and Close all report `closeRequested` and the owner decides, which is what lets a dirty form ask before it is discarded. A dialog that needs a question *over* an open dialog uses a second instance of this shell rather than `ConfirmationDialogComponent`, because a `z-index` backdrop cannot paint above the top layer. `ConfirmationDialogComponent` still has the focus-trap gap described under [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930) and its own follow-up; new dialog UI should use the shell.
+
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 
 Tailwind classes in templates, `src/styles.scss`, and component styles are the styling sources. `npm run build:styles` generates `src/styles.css` before Angular builds, so do not make a manual fix only in the generated CSS. Keep production bundle and component-style budgets in `angular.json` passing.
@@ -7836,7 +8063,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. `landing-page-public-beta.visual.ts` (issue #1191) captures the **signed-out** public homepage into `docs/screenshots/issue-1191/`: the whole page at 1440px and at 390px. It is the one visual run that asks the E2E auth stub for the signed-out application (`e2e-signed-out` in `sessionStorage`, set before the bundle loads — see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), because `/` shows the landing page only to a visitor nobody has signed in as. It needs no `/api/` stubbing at all, since the page injects no API service, and it asserts in the browser what jsdom cannot: no page-level horizontal overflow at **every** width from 320px to 390px — the issue's own acceptance criterion, measured at each width rather than at the two ends — and the same at both captured widths, alongside the viewport meta tag that still allows pinch zoom. `suppliers-dialogs.visual.ts` (issue #1174) captures the Suppliers page's Add/Edit dialog into `docs/screenshots/issue-1174/`: the empty Add modal and a linked supplier's Edit modal at 1440px, the full-screen phone sheet at 390px and 360px, and the *Discard changes?* question standing over the form it belongs to. It answers every `/api/` request with synthetic suppliers and refuses every non-`GET`, so no supplier is created, updated or deleted, and it measures what jsdom cannot — the 600px desktop panel, the full-screen sheet with its action row still inside the viewport, no sideways scroll of the page, the panel or its scrollable body at 1440px, 390px or 360px, pinch zoom still permitted, 44px touch targets, and Escape dismissal with focus returning to the control that opened the dialog (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -7871,6 +8098,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 - Alerts: `.alert` with `.alert-success|warning|danger|info` and `.alert-title`
 - Forms: `.field`, `.field-label`, `.field-hint`, `.field-error`
 - Values: `.value-positive`, `.value-negative`, `.value-muted`
+- Dialogs: no shared class — `ModalDialogComponent` (above) owns the panel, header, body and action row in its own component styles, and a caller styles only what it projects.
 
 **Focus and disabled states.** Every interactive element — buttons, links, inputs, selects, nav items, table row actions — shows a `focus-visible` 2px `md-info` outline at 2px offset (4.51:1 against white, above the 3:1 non-text minimum). Never remove a focus outline without putting that one in its place. Every button and form control renders its disabled state as opacity 0.5 with `cursor-not-allowed`, no hover change and no shadow; WCAG 1.4.3 exempts disabled controls from the contrast minimum.
 
@@ -8274,6 +8502,46 @@ page still authors no dialog markup itself (`page-composition.guard.ts`). Render
 `frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
 `docs/screenshots/issue-1093/`.
 
+#### The comparison's scope notice and the Lowest unit price badge (issue #1183)
+
+`SupplierComparisonDialogComponent` states the comparison's own scope and limits before it shows a
+result. The owner-approved notice (`SUPPLIER_COMPARISON_NOTICE` in `cheapest-supplier-format.ts`) is
+the **first element inside the dialog's scrollable content**, above the table, so it is read without
+hovering and without scrolling past any supplier row. The row badge is
+`LOWEST_UNIT_PRICE_LABEL` - **"Lowest unit price"**, which replaced "Cheapest", because the old word
+could be read as a guarantee across the whole market rather than a statement about the offers this
+business has recorded. `LOWEST_UNIT_PRICE_EXPLAINER` says once, in visible text beside the table's
+existing observed-prices note rather than on hover or on every badged row, what the badge means; it
+renders only while `hasLowestUnitPriceOffer` is true, so the explainer never explains a badge that
+is not on screen.
+
+**This is wording only.** No eligibility, ranking, tie, freshness or GST rule moved, and no internal
+contract was renamed: `isCheapest`, `CheapestUnitOfferPolicy`, `SupplierPriceFreshnessPolicy`,
+`CheapestSupplierOffer` and the "Cheapest supplier" column name are all unchanged. The dialog still
+renders the server's offers in the server's own order and still badges exactly the offers whose
+`isCheapest` the server set - so an offer with a *lower* unit price that the server ruled ineligible
+is still listed with its reason and still takes no badge, and every offer in a tie still carries one.
+
+The exact wording and the badge's presence or absence are pinned by Jest in
+`supplier-comparison-dialog.component.spec.ts`. What Jest cannot see - that the notice is actually
+*visible* above the results, that it wraps, and that nothing is clipped or scrolls sideways - is
+measured in a browser by `frontend/inventory-app/e2e/visual/supplier-comparison-notice.visual.ts`,
+written to `docs/screenshots/issue-1183/`. At 1440px and 390px that run asserts the dialog's
+scroller is still at `scrollTop === 0` when the comparison opens, the whole notice is inside that
+scroller's visible box with the first supplier row below it, the notice and the explainer each
+occupy more than one line box and are not clipped by their own box
+(`scrollHeight <= clientHeight`), do not scroll sideways (`scrollWidth <= clientWidth`) and stay
+inside the viewport while the page itself never scrolls horizontally; it also re-asserts the ranking
+and eligibility rules above and that the related **Cheapest supplier** help opens and closes from
+the keyboard, returning focus to its trigger.
+
+It is a spec of its own rather than another block in `products-redesign.visual.ts` for a mechanical
+reason worth recording: the `e2e:visual` script chain (`npm run e2e:visual -- <path>`) forwards a
+**positional path** but npm swallows Playwright's own flags, so `--grep` cannot narrow a shared
+file. Running one issue's cases inside a shared spec therefore re-renders every other issue's
+committed captures and leaves them modified in the working tree, which the repair workflow's
+`git diff --quiet` check refuses to publish. A file is the unit the script can actually select.
+
 ### The Sites overview layout (issue #1128)
 
 **Sites** (`SiteListComponent`, route `/sites`) was redesigned on the Products page's `rr` scale. It
@@ -8322,6 +8590,56 @@ now in the business's time zone, compared with the same point last week - rather
 dates of its own. Showing the actual dates would need the site read (or another existing read) to
 publish the window's business dates; that is a backend change outside issue #1128.
 
+### The Operating Expenses register layout (issue #1170)
+
+**Operating expenses** (`OperatingExpenseComponent`, route `/expenses`) was redesigned on the
+Products page's `rr` scale, after issue #1167 moved Add and Edit onto their own pages. It is a
+presentation change: the page still makes exactly one `GET api/operating-expenses` per applied
+filter set, with the same five filter parameters, keeps its route guards, its `Expenses.Manage`
+capability, the machine-filter visibility rules of issue #746, the Nayax wording rule of issue #728
+and the support-session rules of issue #659, and no expense-inclusion, GST or currency rule moved or
+changed.
+
+**Layout.** The heading and the primary **Add expense** sit above one card holding the toolbar, the
+register and the pager. The toolbar is compact — From, To and Category directly on it, with
+**Supplier** and **Machine** behind a **More filters** disclosure (`aria-expanded`/`aria-controls`
+over a region that stays in the DOM, so the machine read's own loading and failure states are never
+lost, and that opens by itself when the address already applies one of the two). Filters still apply
+only on **Apply filters**; **Clear filters** appears as soon as there is something to clear, resets
+to no filters at all and returns to page 1, and the toolbar reports how many filters are applied.
+At `md` and wider the register is a table with the columns Date, Description, Category, Supplier,
+Document, Ex GST, GST, Total and Actions, the amounts right-aligned and Description and Total
+emphasised, a missing supplier or document shown as `—` and a recorded zero as `$0.00`. Below `md`
+the same page of expenses is compact cards: the description wrapping in full (`overflow-wrap:
+anywhere`, so a record is always identifiable), its date and category, the supplier, the prominent
+total above an Ex GST/GST line, View document where there is one, and the same Edit and overflow
+actions, each at least 44px tall. The **Totals** row is kept in both layouts and says what it
+covers ("Totals (all 23 filtered expenses)"), because it sums the whole filtered list rather than
+the page on screen. Loading, empty (with Add expense), no-match (with Clear filters) and
+load-error (with Retry) are distinct states — `ListLoadState` is what tells an outstanding or failed
+read from a confirmed empty register, which the page previously could not do at all.
+
+**Row actions and the delete flow.** Each row and card keeps **Edit** (the existing
+`/expenses/:id/edit` link, carrying the return context) and holds **Delete** in the shared
+`action-menu` (`kind="menu"`). Opening the menu writes nothing; choosing Delete opens
+`ExpenseDeleteConfirmationComponent`, which composes the shared `confirmation-dialog`, names the
+expense by description, date and total, and adds the keyboard behaviour that dialog does not own —
+initial focus on **Cancel**, Tab contained, Escape to cancel, and focus returned to the menu that
+opened it. "The menu that opened it" is the menu's **trigger**, not the focused **Delete** item: the
+shared `action-menu` removes its whole panel as it closes, so the item focus actually came from is
+gone by the time the confirmation is dismissed, and the component resolves the trigger the panel
+names with `aria-labelledby` instead. A real browser is the only thing that shows this — jsdom keeps
+a detached element focusable — so the visual run below is what proved it. The shared dialog itself is
+unchanged (out of scope for issue #1170), and the page
+authors no dialog markup of its own (`page-composition.guard.ts`). A confirmed delete re-reads the
+register with the same filters and stays on the same page, stepping back one when the page it was on
+no longer exists; a refusal keeps the row exactly as it was fetched and states the server's own
+message in a page-level `role="alert"`, never a success. A failed **View document** read is stated
+the same way rather than only logged. Rendered evidence:
+`frontend/inventory-app/e2e/visual/expenses-register-redesign.visual.ts`, written to
+`docs/screenshots/issue-1170/`; like every visual run it is human-invoked and runs in neither
+`scripts/validate.sh` nor CI.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
@@ -8335,7 +8653,7 @@ publish the window's business dates; that is a backend change outside issue #112
 
 **The API contract (breaking, as issue #792 permits).** `ProductResponse` no longer carries `unitPrice`, and neither does the product snapshot nested in a purchase line, a supplier-order line or a machine slot — removed, never sent as `null`. `ProductCreateDto`/`ProductUpdateDto` bind none either, so a submitted `unitPrice` is simply not bound and nothing is stored for it; `initialUnitCost` on the create is a cost and is unaffected. `ProductCataloguePolicy` is down to one invariant, that a product has a name, and `ProductCataloguePolicy.NegativeUnitPriceMessage` is gone with the bound it expressed.
 
-**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary is three tiles rather than four. The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
+**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary shows no price (three tiles then; one compact summary since issue #1156). The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
 
 **The catalogue review proposes no price** (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). The Nayax `ProductDefaultRetailPrice` is not read, a review entry records no provider price, a created row is initialised without one, and a submitted selling-price decision is refused outright rather than dropped. A review **stored** before this change still carries the provider prices it meant to negotiate, so it is refused whole as stale — `ApplyCatalogueReview.StaleSellingPriceReviewMessage`, decided on the authoritative row inside the apply's own transaction and before anything is staged — and the operator starts a fresh one.
 
@@ -8516,7 +8834,7 @@ Issue #430 added rules that *could* classify a component; this is the one place 
 - `HistoricalGstClassificationController` publishes `POST /api/admin/historical-gst-classification/preview` and `.../apply`. Both are POST: the preview writes nothing, but its response carries a fingerprint that is only valid for the exact state it was computed from, and a cached `GET` would hand a caller a fingerprint for data it never read.
 - `components/admin/historical-gst-classification` holds the routed page and the `HistoricalGstClassificationWorkflowComponent` it composes through the page composition boundary. Angular performs no GST arithmetic and no eligibility decision: it renders the API's own counts and totals and carries the fingerprint back unchanged.
 
-**Whether the page is *offered* is a separate question from who may use it (issue #873).** A Super Admin may stop offering this option to everybody else, which hides its sidebar entry and its Admin card from every other member and marks it `Off` for the administrator. That changes nothing here: both endpoints keep requiring `Data.Repair`, the fingerprint contract is untouched, the reported capability set is identical in both states, and the route entered directly still resolves and still refuses exactly whom it refused before. See [Switchable Admin option visibility](#switchable-admin-option-visibility-issue-873).
+**Whether the page is *offered* is a separate question from who may use it (issues #873 and #1148).** A Super Admin may stop offering this option to everybody else — since #1148 as the catalogue key `admin.historical-gst-classification`, one of seven switchable Admin destinations — which hides its sidebar entry and its Admin card from every other member and marks it `Off` for the administrator. That changes nothing here: both endpoints keep requiring `Data.Repair`, the fingerprint contract is untouched, the reported capability set is identical in both states, and the route entered directly still resolves and still refuses exactly whom it refused before. See [Switchable Admin menu visibility](#switchable-admin-menu-visibility-issues-873-and-1148).
 
 **The maintenance boundaries, which are the reason this is a separate named operation:**
 
@@ -8564,9 +8882,24 @@ applies to **both** paths and the request-driven one needed it as much as the qu
 replay that failed was simply forgotten, because the sale was already stored and the next
 synchronization therefore reported no affected products and never came back to it, leaving that
 product's costing position stale until its next sale. `SyncLatestNayaxSales` now drains every pending
-row after every persist and raises a still-failing product as the one `InventoryCostDataQualityException`
-it always did. The row records no quantity, cost, value or sale, so losing one would mean a replay is
+row after every persist. A product that still fails no longer fails the sync (10 November 2026): the
+sales are stored and every other product was rebuilt, so the run completes, and the failed product keeps
+its row and failure code and is reported by name on the Dashboard through `GET api/inventory-cost-attention`
+(see [Products needing cost attention](#products-needing-cost-attention)). The row records no quantity, cost, value or sale, so losing one would mean a replay is
 not retried, never a wrong figure. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+
+**A sale past the recorded stock is costed by fallback, not failed** (repository owner's decision of
+10 November 2026). When `WeightedAverageCostReplay` reaches a completed sale and the ledger has no known
+cost (no costed stock was recorded before it, or it had run out), it costs the sale at the unit cost of
+the latest costed purchase (a `Restock` with a valid unit cost) replayed *before* that sale, else at the
+sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` issue. The sale is staged
+as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
+it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
+fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
+before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
+earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
+purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -9687,10 +10020,22 @@ stays readable at 360px, and flipped above the button when there is no room belo
 on scroll and resize outside the Angular zone, since placing it changes nothing Angular renders. A
 browser with no Popover API still renders and places the panel; only the top layer is lost.
 
+The help text always wraps within the panel's viewport-constrained width and the panel never
+scrolls horizontally (issue #1179). The top layer does not stop CSS inheritance: the panel still
+inherits from the element it is placed in, and the Products page's Cheapest supplier heading is
+`whitespace-nowrap`, which once put the whole explanation on one line inside the 288px panel with a
+sideways scrollbar (the browser's default `[popover]` style is `overflow: auto`). The panel therefore
+resets `white-space` itself (`whitespace-normal`) and lets a long word or URL break (`break-words`),
+so a caller's heading or cell styles cannot widen it; the caller's own `whitespace-nowrap` on the
+heading text stays as it is.
+
 Jest covers everything the component itself decides (`help-toggletip.component.spec.ts`). The top
 layer, hit testing and layout are the platform's and are not emulated under jsdom, so the
 not-clipped, inside-the-viewport result is proved in a real browser by the Playwright captures named
-above instead.
+above instead. The wrapping is proved the same way: the Cheapest supplier help tests in
+`e2e/visual/products-redesign.visual.ts` (1440px, 390px and 360px, plus keyboard open and Escape)
+and `e2e/visual/dashboard-redesign.visual.ts` (1440px, 390px and 360px) assert the open panel's
+`scrollWidth` is no wider than its `clientWidth` and that it stays inside the viewport.
 
 #### Site and machine performance (issue #987)
 
@@ -9731,17 +10076,45 @@ the same treatment under its own heading, and the one unheaded fallback group - 
 at all - is not `isCollapsible`, so it keeps neither indent nor rule.
 
 **One set of columns, one period.** Site and machine rows share Site / machine, Stock, Low / empty,
-the selected period's sales, the applicable comparison and Actions. One `<fieldset>` of Today / This
-week / Last week / Month to date buttons - shared by both layouts, defaulting to This week - chooses
-the period, and the sales heading names it (`Sales · This week`), so no figure is shown under a
-heading that does not say which period it is. The comparison column is "vs same time last week" only
-while This week is selected, because that published part-week comparison is the only one either
-response carries; the other periods get a neutral heading and say there is no comparison for them
-rather than borrowing one. Both responses publish all four periods since issue #1012, so a site row
-shows its own figure for whichever one is selected — `$0.00` for a period with no completed sale,
-`Unavailable` for one the response withheld — and the card no longer carries a note about periods a
-site is silent for. `siteSales` returns a figure or `null`, with no third "not published" answer, and
-nothing in the component sums or derives a site figure.
+the selected period's sales, that period's comparison and Actions. One `<fieldset>` of Today / This
+week / This month buttons - shared by both layouts, defaulting to This week - chooses the period
+(issue #1178 narrowed the four of issue #972 to these three; see **Three comparison modes** below),
+and the sales heading names it (`Sales · This week`), so no figure is shown under a heading that does
+not say which period it is. Both responses publish every period the card offers since issue #1012,
+so a site row shows its own figure for whichever one is selected — `$0.00` for a period with no
+completed sale, `Unavailable` for one the response withheld — and the card no longer carries a note
+about periods a site is silent for. `siteSales` returns a figure or `null`, with no third "not
+published" answer, and nothing in the component sums or derives a site figure.
+
+**Three comparison modes (issue #1178).** The owner reviewed the card on 11 November 2026 and asked
+for a comparison in every mode, each with the baseline amount on screen beside the percentage. The
+card therefore offers exactly the three periods both responses publish a comparable baseline for:
+Today against the previous business date to this time of day
+([issue #1177](#yesterdays-same-time-sales-as-todays-baseline-issue-1177)), This week against the
+existing previous comparable week, and This month - the existing `monthToDateRevenue` /
+`monthToDateGrossRevenue` figures - against the previous calendar month to the same point
+([issue #1180](#last-months-same-point-sales-as-this-months-baseline-issue-1180)). The headings are
+"vs same time yesterday", "vs same time last week" and "vs same time last month", and each
+percentage carries the amount it was worked out from, labelled "Yesterday to this time", "Last week
+to this time" or "Last month to this time", on the site rows, the expanded machine rows, the fleet
+total and both layouts. `COMPARISON_HEADINGS` and `BASELINE_LABELS` hold that wording once per
+period, and `siteComparison`/`machineComparison` answer one period's own current-and-baseline pair,
+so a figure is never compared against a window it is not about. The period id stays `monthToDate`
+because it still names the figure it shows. **Last week is gone from this card only**: it is a whole
+previous week, which no same-elapsed-time baseline exists for, and a whole period is never a
+baseline. Every API field, `lastWeek*` included, is untouched and is still read elsewhere, and
+nothing published, redacted or calculated on the server changed - this is a frontend, read-only
+change over the two existing responses.
+
+The three answers a comparison can give are the shared `trendLabel`/`trendClass` ones, unchanged: the
+arrow and percentage, **No prior sales** for a baseline that is a known `0` - shown with the `$0.00`
+it is, because a window with no sale is a fact - and **Unavailable** when either figure was withheld,
+which is never rendered as `$0.00`. A row whose current figure is `null` while its baseline is
+published says Unavailable for the percentage and still states the published baseline amount, because
+that amount is a figure the response carries. A member without `Dashboard.ViewFinancials` sees no
+period control, no sales, no percentage and no baseline amount, exactly as before: all of it is
+inside the card's existing capability condition. The former `NO_PERIOD_COMPARISON` state
+("No comparison for this period") no longer exists, because no period is without one.
 
 **Stock comes from the sites read, and since issue #1013 each machine row carries its own.** The
 sites read is still the only authoritative source for a stock figure, and nothing derives one in
@@ -9778,10 +10151,14 @@ and the machine name keeps being the row's real anchor with issue #494's row-lin
 totals row covers the machine fleet, summed over `machines` rather than over the groups, so
 collapsing a group cannot change it and a site figure is never added into a machine total; a period
 total appears only when every machine's figure for that period is known, and is "Unavailable"
-otherwise. The pre-existing inconsistency #972 reported is carried across unchanged and is still not
-fixed here (a comparison change is out of scope): the fleet total's week comparison falls back to a
-machine's full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`,
-mixing a full week into a part-week comparison.
+otherwise. **The fleet comparison follows the same rule since issue #1178**: `comparisonTotals()`
+sums every machine's current figure and every machine's baseline for the selected period and
+compares the two sums, and one `null` - either figure, any machine - makes both sums unknown, so the
+percentage *and* the baseline amount report Unavailable. That replaces the inconsistency issue #972
+introduced and issue #987 carried across: the week comparison used to substitute a machine's full
+`lastWeekGrossRevenue` for a missing `previousComparableWeekGrossRevenue`, mixing a whole week into a
+part-week comparison, and to count a missing current figure as `0`, which understated the fleet and
+made the change look worse than it was. Neither substitution exists now, in any of the three modes.
 
 **The title help button (issue #1015).** The owner reviewed the card on 31 October 2026 and asked
 for the explanations beside the title rather than as full-width rows between the header and the
@@ -9840,8 +10217,11 @@ began. The comparison column is unchanged: `PreviousComparableWeekRevenue` is st
 baseline either response carries and still belongs to the current week.
 
 **The read is bounded by the window, not by a day count.** The completed-sales read's lower bound is
-`EarliestPublishedPeriodStartUtc(window)` — the minimum of the five published periods' `StartUtc`,
-which is month-to-date's start for most of a month and last week's in the first half of one.
+`EarliestPublishedPeriodStartUtc(window)` — the minimum of the published periods' `StartUtc`, which
+when this issue shipped was month-to-date's start for most of a month and last week's in the first
+half of one (it is the previous comparable month's on every date since issue #1180 added that period
+to the same minimum; see [Last month's same-point sales as This month's
+baseline](#last-months-same-point-sales-as-this-months-baseline-issue-1180)).
 `TwoWeeksAgo` is deliberately not in that minimum, because a site row publishes no figure for it. The
 former fixed `NowUtc.AddDays(-16)` was wrong for the new fields rather than merely unlucky: it
 covered last week, but after about the sixteenth of a month it reached only part of month to date, so
@@ -9873,6 +10253,112 @@ re-decides nothing and `site-machine-performance` calculates nothing. The card's
 `SITE_PERIOD_NOT_PUBLISHED` placeholder and its "Sites publish sales for Today and This week only…"
 note are removed, because there is no longer a period a site is silent about. No schema change, no
 migration and no new Nayax call: the data was already persisted and already read.
+
+#### Yesterday's same-time sales as Today's baseline (issue #1177)
+
+<a id="yesterdays-same-time-sales-as-todays-baseline-issue-1177"></a>
+
+Both dashboard reads published a baseline for This week and none for Today, so the combined card
+showed "No comparison for this period" whenever Today was selected. Issue #1177 publishes that
+baseline on the server; the card reads it as Today's comparison since issue #1178 (see
+[Site and machine performance](#site-and-machine-performance-issue-987), **Three comparison modes**).
+
+**One new period on the shared window, and no new calendar member.**
+`MachineDashboardWindow.PreviousComparableDay` is described in full under [Time](#time) above: the
+previous business date from its own business-local midnight to the time elapsed into today, from the
+same captured `NowUtc` as every other period, clamped to one millisecond before today's start so the
+two can never count the same sale. It is derived from `IBusinessCalendar.StartOfBusinessDayUtc` and
+the business date through the *same* `ComparableEndUtc` rule the previous comparable week uses, so
+"the same time last week" and "the same time yesterday" cannot come to mean two different things,
+and `IBusinessCalendar` gained nothing.
+
+**Each read publishes it as one more sum over sales it already read.** A site row carries
+`previousComparableDayRevenue` (`SiteSummary`/`SiteSummaryDto`, appended last) and a machine carries
+`previousComparableDayGrossRevenue` (`MachineSummary`/`MachineResponse`, appended last), each the
+completed-sale revenue of that period for the same machines, through the same
+`NayaxSaleCountingPolicy` and the same inclusive instant comparison as `todayRevenue` and
+`todayGrossRevenue`. Site membership is the machine's current `CustomerID` in the new period exactly
+as in the four before it, so `SiteRevenueMatchesMachineRevenueTests` holds for five periods now: a
+site's figure is the sum of the gross revenue of the machines standing at it. The site read's
+lower bound lists the new period for completeness and is unchanged in value — yesterday's start is
+inside the current business week, or inside last week on a Monday, and both were already in that
+minimum.
+
+**Revenue only.** There is deliberately no `previousComparableDayDirectProfit`:
+`MachineDashboardFacts.PreviousComparableDayGrossRevenue` is a bare `decimal` rather than a
+`MachineDashboardPeriodFacts`, so the period resolves no commission agreement and makes **no
+processing-fee lookup** (`EfMachineDashboardFactsStoreTests` asserts the fee engine is still asked
+for exactly the six periods that carry a profit, and never for this one), and the missing-fee-rate
+profitability status is decided from the same six profits as before.
+
+**Redaction, zero and the contract.** The new fields are `null` in exactly the places the existing
+revenue fields are: a site caller without `Dashboard.ViewFinancials` has no completed sale read at
+all ([#697](#site-financial-redaction-issue-697)) and a machine caller without it gets
+`MachineResponseMapper.Redacted`, which now writes fourteen explicit `null`s
+([#698](#machine-and-product-financial-redaction-issue-698)). A period a caller may see that holds no
+completed sale is an honest `0`. Both fields are appended after every existing key, so the pinned
+machine wire contract stays "the old shape, with fields added at the end"; no other field, period or
+comparison changed, the This week baseline included. No schema change, no migration, no Nayax call
+and no new query: the sales were already read.
+
+#### Last month's same-point sales as This month's baseline (issue #1180)
+
+<a id="last-months-same-point-sales-as-this-months-baseline-issue-1180"></a>
+
+Issue #1177 gave Today a baseline and This week already had one, so Month to date was the remaining
+period the combined card had nothing to compare against. Issue #1180 publishes that baseline on the
+server; the card reads it as This month's comparison since issue #1178 (see
+[Site and machine performance](#site-and-machine-performance-issue-987), **Three comparison modes**).
+
+**One new period on the shared window, and no new calendar member.**
+`MachineDashboardWindow.PreviousComparableMonth` is described in full under [Time](#time) above: the
+previous calendar month from its own first business day's midnight to the same point into that
+month's comparable day — today's day of the month, held at that month's last day when it is shorter —
+as now is into today, from the same captured `NowUtc` as every other period. It reuses the
+`ComparableEndUtc` rule the week and the day baselines use, passing it the comparable day's own end as
+the holding point, and `IBusinessCalendar` gained nothing. The shorter-month clamp and the
+daylight-saving clamp are both what stop the period reaching past the comparable day, past the
+previous month's end, or into month to date.
+
+**Each read publishes it as one more sum over sales it reads.** A site row carries
+`previousComparableMonthRevenue` (`SiteSummary`/`SiteSummaryDto`, appended last) and a machine
+carries `previousComparableMonthGrossRevenue` (`MachineSummary`/`MachineResponse`, appended last),
+each the completed-sale revenue of that period for the same machines, through the same
+`NayaxSaleCountingPolicy` and the same inclusive instant comparison as `monthToDateRevenue` and
+`monthToDateGrossRevenue`. Site membership is the machine's current `CustomerID` in the new period
+exactly as in the five before it, so `SiteRevenueMatchesMachineRevenueTests` holds for six periods
+now: a site's figure is the sum of the gross revenue of the machines standing at it.
+
+**Both reads reach further back, and nothing else does.** The site read's lower bound,
+`EarliestPublishedPeriodStartUtc`, now includes the new period and therefore *is* it on every date:
+the previous calendar month begins before this month, this week and last week always. The machine
+adapter's own single query reached one month back from "now" (`NowUtc.AddMonths(-1)`), which does not
+reach the start of the previous calendar month at all, so it now reads from the earlier of that
+instant and the new period's first instant — one query still, with the bound taken one millisecond
+earlier because it is exclusive and a sale at exactly a period's `StartUtc` is inside that period.
+**The wider read feeds the new figure and nothing else.** The commission agreements
+(`agreementFrom`) and `MachineProfitabilityStatusInputs` are resolved from exactly the sales they were
+resolved from before — the last month — because an older sale would otherwise pull an expired
+agreement into the resolution or report a missing COGS for a period no figure covers, and every other
+period's figures are selected from the read by that period's own instants, as they always were. So no
+existing field, period, comparison or `profitabilityStatus` changes.
+
+**Revenue only.** There is deliberately no `previousComparableMonthDirectProfit`:
+`MachineDashboardFacts.PreviousComparableMonthGrossRevenue` is a bare `decimal` rather than a
+`MachineDashboardPeriodFacts`, so the period resolves no commission agreement and makes **no
+processing-fee lookup** (`EfMachineDashboardFactsStoreTests` asserts the fee engine is still asked for
+exactly the six periods that carry a profit, and for neither baseline), and the missing-fee-rate
+profitability status is decided from the same six profits as before.
+
+**Redaction, zero and the contract.** The new fields are `null` in exactly the places the existing
+revenue fields are: a site caller without `Dashboard.ViewFinancials` has no completed sale read at
+all ([#697](#site-financial-redaction-issue-697)) and a machine caller without it gets
+`MachineResponseMapper.Redacted`, which now writes fifteen explicit `null`s
+([#698](#machine-and-product-financial-redaction-issue-698)). A period a caller may see that holds no
+completed sale is an honest `0`. Both fields are appended after every existing key, so the pinned
+machine wire contract stays "the old shape, with fields added at the end". No schema change, no
+migration and no Nayax call: the sales were already persisted, and the only change to what is read is
+how far back one query reaches.
 
 #### Per-machine stock levels on the site read (issue #1013)
 
@@ -10043,10 +10529,11 @@ rebuilds the same batch produced for the other products - that silently left the
 and value stale until their own next sale. `EfLatestNayaxSalesStore.RebuildInventoryCostsAsync`
 therefore rebuilds every affected product it can, saves them in one `SaveChangesAsync`, leaves a
 product whose replay has a fatal issue exactly as it was (the rebuild use case stages nothing for
-it), and only then raises the collected failures together as one
-`InventoryCostDataQualityException`. The failure is never swallowed: like any other fatal costing
-data-quality failure it is an internal data-integrity error, so it still surfaces as a logged,
-generic `500`. Products a previous failed sync left stale recover on their next rebuild, because a
+it), and only then reports the collected failures. The failure is never swallowed: the product
+keeps its pending rebuild row with its attempt count and failure code, every later run retries it,
+and the Dashboard names it (see [Products needing cost attention](#products-needing-cost-attention)).
+Since 10 November 2026 it no longer fails `POST api/nayax-sales-sync` with a generic `500`: one
+product's gap in its stock history used to stop the whole business's sales sync on every visit. Products a previous failed sync left stale recover on their next rebuild, because a
 rebuild always replays the product's full history after its transition baseline.
 
 `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
@@ -10171,8 +10658,10 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
 
-- **The Sites and Machines dashboards use the current business's business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next business day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the business day, not server-local time; since issue #499 that is the current business's own configured zone.
+- **The Sites and Machines dashboards use the current business's business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' rolling comparison periods - six of them until issue #1177 added the previous comparable day and issue #1180 the previous comparable month, so eight now (today, the previous comparable day, week-to-date, the previous comparable week, last full week, month-to-date, the previous comparable month, two weeks ago) - once per request: it takes the current instant from `IClock`, converts it to the business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next business day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the business day, not server-local time; since issue #499 that is the current business's own configured zone.
   - *Both endpoints of a comparison period are resolved in the business's time zone, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
+  - *The previous comparable day is Today's own baseline, built by that same rule* (issue #1177). It runs from the start of the previous business date — `IBusinessCalendar.StartOfBusinessDayUtc(BusinessToday - 1 day)`, no new calendar member — to that start plus the time elapsed since today's business-local midnight, from the one captured `NowUtc` every other period is measured from, and **clamped to one millisecond before today's start**. The clamp is what makes the day the week's mirror image: the day daylight saving starts is 23 hours long, so on the day after it the same elapsed time would reach into today and count a sale in both periods; the day it ends is 25 hours, so the clamp never applies there and the baseline simply ends an hour earlier by wall clock than it began. That hour of difference on a transition day is the recorded decision (the owner, 10 November 2026): "the same time yesterday" means the same elapsed time since business-local midnight, as This week already meant, not literal wall-clock time. Both of the period's business dates are the previous business date, which is what its instants cover, so the `FirstBusinessDate`/`LastBusinessDate` contract below holds for it unchanged.
+  - *The previous comparable month is Month to date's own baseline, built by that same rule one month back* (issue #1180). It runs from the **previous calendar month's own first business day's midnight** — `IBusinessCalendar.StartOfBusinessDayUtc(first of the previous month)`, again with no new calendar member — to the same point into that month's **comparable day** as now is into today: today's day of the month, **held at the previous month's last day when that month is shorter**, so a 29, 30 or 31 March compares with 28 February (29 in a leap year) and a 31 May with 30 April rather than with a date that does not exist. The end is `StartOfBusinessDayUtc(comparable day)` plus the time elapsed since today's business-local midnight, from the same captured `NowUtc`, and it is clamped **twice over**: when today's day of the month is past the previous month's length the period is that month in full and ends one millisecond before the current month began, and otherwise it is held at one millisecond before the business day after the comparable day — the shared `ComparableEndUtc` rule, which the month passes its own holding point to because its elapsed time is measured into one *day* of the period rather than into the period as a whole. So a comparable day that is itself a daylight-saving change day (a 23-hour day, where the same elapsed time would reach into the day after it) ends at its own last instant, and the period can never reach past the comparable day, past the previous month's end, or into month to date. The two business dates it carries are the previous month's first day and the comparable day, which is exactly what its instants cover. The owner decided (11 November 2026) that "the same point last month" is the same day of the month — clamped to a shorter month's last day — plus the same elapsed time since business-local midnight, matching the day baseline and This week rather than literal wall-clock time.
   - *Each period also carries the business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
   - *The home Dashboard summary shares the same window* (issue #459). `Inventory.Application.Dashboard.GetDashboardSummary` resolves one `MachineDashboardWindow` per request and takes its week-to-date and previous-comparable-week periods from it unchanged, so the "Sales this week" card, a site row and a machine row all mean the same Sydney business week. See [Home Dashboard summary API](#home-dashboard-summary-api-issue-459).
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
@@ -11069,6 +11558,62 @@ sentence, and it is hidden while a support session is active for exactly the rea
 grants `Purchasing.Operate`, so this page hides its own writes (see
 [Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
 Replacing a document is still not offered anywhere, so the Edit Purchase page is unchanged.
+
+#### A purchase's invoice number (issue #1162)
+
+A purchase records the supplier's own receipt or invoice number, so a user can see on the purchase which
+document it came from - and so receipt scanning (the rest of #975) has somewhere to put the number it reads.
+It is **one optional field and nothing else**: `Receipts.InvoiceNumber`, nullable, at most 100 characters,
+added by the additive `AddPurchaseInvoiceNumber` migration with **no backfill**, because a purchase recorded
+before it holds no supplier document number anywhere in this database and deriving one from the title, the
+notes or a document's file name would state an invoice number nobody entered.
+
+**Blank is none, and what is stored is trimmed.** `Inventory.Domain.Purchases.PurchaseInvoiceNumberPolicy` is
+the one place those rules live: `Normalize` trims the submission and answers `null` for anything that is only
+whitespace, and `IsWithinLimit` measures the trimmed value against `MaxLength` (100), which is also the
+mapped column's length - so the column and the refusal cannot disagree about what fits. "Nothing was typed",
+"spaces were typed" and "the field was cleared" are therefore one stored state rather than three blanks a
+reader would have to tell apart, and only the surrounding whitespace is removed: the case, the inner spacing
+and the punctuation are the supplier's own. An over-long number is **refused by name**
+(`PurchaseInvoiceNumberPolicy.TooLongMessage`, answered as `400`) rather than truncated, because a truncated
+invoice number is a different invoice number and would be reported back as though it were what the supplier
+printed.
+
+**Both write paths apply those rules in the same place, before anything is written.**
+`Inventory.Application.Purchases.PurchaseInvoiceNumberSubmission.Normalized` is called by `UploadPurchase` -
+after the existing GST check and **before** the document is stored or the purchase is written - and by
+`UpdatePurchase` before it hands the edit to the store's transaction, exactly as `PurchaseGstSubmission`
+already is. So a refused request leaves no purchase, no line, no stock movement and no bytes in storage, and
+an accepted one reaches `EfPurchaseStore` already normalised. The store then writes the value it is given,
+which is what lets an edit clear the number: it is assigned like `Notes`, so submitting none stores none.
+
+**Nothing about money or stock is involved.** An invoice number is a reference to paperwork, so the purchase's
+amounts, its lines, its GST classification and provenance, its restock movements, the affected products'
+costing quantity, inventory value and weighted-average cost, and its supplier-order allocation are all
+untouched by recording, changing or clearing one - `PurchaseInvoiceNumberApiTests` asserts that over HTTP by
+comparing the purchase's own fields, its lines, its restock movement and the product's whole costing position
+across an edit that changes only this field.
+
+**Tenant boundary.** The number is a column on a tenant-owned row, read and written through the ordinary
+query filters and the ownership enforcer with nothing added: another business's purchase is simply not there,
+so neither its invoice number nor the fact that it has one is readable, by id or in the list.
+
+**Contract change.** The published `Purchase` schema gains the nullable `invoiceNumber` beside `notes`, and
+the purchase read, the purchase list, the create and the attach responses all carry it - `null` for a purchase
+that records none, never `""` and never omitted, so a client reads "no invoice number" the way it already
+reads "no document". `PublishedResponseSchemaContractTests` records that as the third movement of its
+baselines since issue #304, and `PurchaseResponseJsonContractTests` pins the key's position. The create and
+edit requests take one more optional `invoiceNumber` form field; omitting it is what every existing client
+does, which records none and - on an edit - clears what was there, the same way an omitted `notes` field
+already behaves.
+
+**The frontend.** The field is one optional input in the shared Add/Edit layout's **Purchase details** header
+section (`PurchaseFormLayoutComponent`), labelled "Invoice number (optional)" and capped at 100 characters by
+the input itself; it is never validated in the browser, because the server is the only thing that decides what
+is too long. Both pages send what was typed rather than trimming it themselves, and send nothing for an empty
+field. The Purchases list has its own **Invoice number** column showing the number where there is one and the
+same muted dash the table already uses elsewhere where there is none. There is no search, no filter and no
+duplicate warning: those are explicitly out of this issue's scope.
 
 #### Reorder-alert machine-product fan-out (issue #47)
 
@@ -12277,7 +12822,7 @@ supplier order, and its "Unable to load supplier order" and Cancel links point a
 
 #### Shared Add/Edit purchase layout (issue #1029)
 
-Add Purchase and Edit Purchase render one presentational layout, `components/purchases/purchase-form/purchase-form-layout.component.ts`, from the owner-approved Stitch design: Purchase details (supplier, date, title and the receipt control), Purchased items, the collapsible Additional costs and Notes, the Purchase summary and a sticky Cancel / Save purchase bar. Screenshots at 360/390/768/1440px are in `docs/screenshots/issue-1029/`, produced by `frontend/inventory-app/e2e/visual/purchase-form-redesign.visual.ts` against synthetic API answers.
+Add Purchase and Edit Purchase render one presentational layout, `components/purchases/purchase-form/purchase-form-layout.component.ts`, from the owner-approved Stitch design: Purchase details (supplier, date, title, the optional invoice number of [A purchase's invoice number](#a-purchases-invoice-number-issue-1162) and the receipt control), Purchased items, the collapsible Additional costs and Notes, the Purchase summary and a sticky Cancel / Save purchase bar. Screenshots at 360/390/768/1440px are in `docs/screenshots/issue-1029/`, produced by `frontend/inventory-app/e2e/visual/purchase-form-redesign.visual.ts` against synthetic API answers.
 
 - **Who owns what.** The layout owns presentation state only: which optional sections are expanded, which lines were touched and whether Save was pressed (the touched/submitted validation display). `PurchaseUploadComponent` (Add) and `PurchaseEditFormComponent` (Edit) still own their form object and lines, pass them in by reference, and keep every rule that differs between creating and editing - what a save submits, which GST classifications are sent (Add omits Not classified; Edit sends only changed ones with each stored line's `id`), how the date becomes an instant, and where Cancel goes. Field ids and `data-testid`s are prefixed per form (`editTitle`, `edit-purchase-item`), so both pages keep the ids their tests and the end-to-end suite use.
 - **One line-price module.** Every quantity and price change goes through the existing `purchase-line-price.ts` (`enterLineTotal`, `enterUnitCost`, `syncPurchaseLinePrice`), so the last-edited-field rule, the unrounded submitted unit cost and the four-decimal calculated display are unchanged. A line now starts with no product (`productId` 0) and both forms refuse to submit a line without one.
@@ -12333,7 +12878,9 @@ boundary](#page-composition-boundary-issue-191):
   the same validation. Issue #707 then added per-line price entry and the line-price validation this
   form now performs before it emits a payload, and issue #878 made it the two linked Unit price and
   Total price inputs described in
-  [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707); every other field
+  [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707), and issue #1162 added
+  the optional invoice number of
+  [A purchase's invoice number](#a-purchases-invoice-number-issue-1162) beside the title; every other field
   is still the one listed here. Every issue #431 rule still holds and its tests moved with the code: only a
   changed classification is submitted, a stored line travels with its own `id` and keeps its product,
   an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
@@ -12433,7 +12980,13 @@ is the one authoritative calculation: it selects the lowest and most recent reco
 deterministic tie-breaks (lowest-cost ties break to the earliest occurrence; latest-date ties break to
 the higher purchase item id), computes the absolute/percentage difference between them - leaving the
 percentage unset rather than dividing by a zero lowest cost - and returns every recorded entry
-newest-first without discarding a tied record. `Inventory.Application.Purchases.GetProductPriceComparison`
+newest-first without discarding a tied record. **Newest-first is its own extracted rule**:
+`Inventory.Domain.Purchases.SupplierPurchaseRecency` holds the ordering - the purchase date
+descending, then the purchase-item id descending - because issue #1165's receipt-scan pack-size lookup
+needs the same "latest purchase" over a narrower projection of the same `PurchaseItem` history, and a
+second copy of the tie-break would be free to drift from this one. Both paths consume that rule and
+neither restates it, so a product bought twice on one day is the same line in both.
+`Inventory.Application.Purchases.GetProductPriceComparison`
 is the use case; `Inventory.Application.Purchases.IProductPurchasePriceHistoryProvider` is the narrow
 port a product's actual Purchase-item history is read through, implemented by
 `Inventory.Infrastructure.Persistence.EfProductPurchasePriceHistoryProvider` (API-owned until issue
@@ -12887,6 +13440,44 @@ experience filtered to that product, with its adjustment form. The former
 list still has its movements listed, but no adjustment form, because an adjustment needs a product
 the catalogue can resolve.
 
+**The page layout: a responsive ledger with an Adjust stock panel (issue #1156).** The page is laid
+out on the Products list's `rr` scale and changes no request, rule or contract above:
+
+- **Header and summary.** Back to Products, the Stock history heading with its newest-first and
+  business time zone note, and **Adjust stock**, offered only while the selected product is one the
+  catalogue resolved. A compact summary shows that product's name, its current storage stock and low
+  stock threshold in **units**, and its unit label as the **pack size**, kept apart from every
+  quantity. Current stock is read from the product list, not from the filtered history, so a date or
+  other filter never changes it; a recorded `0` is shown as `0` and only an absent value as `—`.
+- **Toolbar and filters.** Product and the business-day date range sit in a compact toolbar; Reason,
+  Machine and Source are under **More filters**, an in-page disclosure (not a popover), so its
+  selects keep their ids and labels. A filter applies as soon as it changes, from page 1, with the
+  same `GET /api/stock-history` parameters and defaults the former Apply filters button sent. Applied
+  More filters are listed as removable chips with a count on the toggle, and **Reset filters**
+  clears every filter but keeps the page size. **Rows per page** (25, 50, 100, 200, still capped by
+  the server) moved to the shared `ListPaginationComponent` under the results, mapped onto the
+  server's one-based page.
+- **Ledger.** From `md` a table of Date and time, Product (left out when the page shown was read
+  for one product), Change (signed, `+12` / `−3`), Stock after, Reason, Source and Machine, with
+  quantities right-aligned and times through `BusinessDateTimePipe`. Below `md` the same page of
+  movements renders as cards: change and reason first, then date and time, stock after, source, the
+  machine where one was recorded and the product while several are listed. Each movement's **unit
+  cost, eat-before date and notes** are behind its own Details disclosure (`aria-expanded`/
+  `aria-controls`), collapsed again whenever another page is read. Unit cost stays visible to every
+  role that may open the page, as before; `inventoryValueAfter` is still not shown.
+- **Adjust stock panel.** `StockAdjustmentPanelComponent` (a dedicated feature component, so the
+  routed page authors no dialog markup) is a native modal `<dialog>`: a drawer on the right from
+  `md`, full screen below it, over the ledger, whose selection, filters and page stay in place behind
+  it. It names the product and its current stock and hosts `StockAdjustmentFormComponent` with its
+  existing fields, options and validation, plus Cancel. Focus moves to Quantity change on open and
+  back to Adjust stock on close; Escape, the backdrop, Close and Cancel are all refused while an
+  adjustment is saving, and the form ignores a second Apply while the first is in flight. A failed
+  save keeps everything entered and shows the server's message. Since this issue the **Machine field
+  is enabled only for Machine refill**: changing the reason away from it drops the chosen machine,
+  and the form never submits a machine with another reason. After a successful save the panel
+  closes, a status message is announced, and the product list and the history are re-read with the
+  filters unchanged, so a new movement outside them stays outside the results.
+
 Tenant isolation is the central query filter's, as everywhere else: the query adds no `BusinessId`
 predicate of its own, and `EfStockHistoryQueryTests` proves with two synthetic businesses (plus an
 unresolved caller) that neither the rows, the total count, nor an explicit request for another
@@ -13126,7 +13717,11 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
   parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
   attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
-  `row` fragment retried wrapped in a root element. Filesystem and XML failures are translated here
+  `row` fragment retried wrapped in a root element. Since issue #1149's review one further decision
+  joins them: a file whose element names one attribute *twice* — the same local name in two
+  namespaces — is refused as unreadable rather than recorded with one of the two values dropped,
+  because nothing here may decide which half of a settlement figure to keep. Filesystem and XML
+  failures are translated here
   and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
   by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
   "translated to a plain answer at that layer's own boundary" rule in the
@@ -13148,6 +13743,245 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
   (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
   deleted `ImportService`/`IImportService` entirely.
+- Since issue #1149 the **per-file steps** — the hash dedupe, the atomic write and the coverage the
+  committed file proves — are `Inventory.Application.Imports.ImportReimbursementXmlFile`, shared with
+  the uploaded-archive import below. Nothing about this use case's behaviour changed: the same
+  counters move in the same order, a persistence failure still propagates rather than being reported
+  as a handful of failed files, and the pending folder is still the only place it looks. The parsing
+  moved the same way, into `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, which is now the
+  one parser of reimbursement XML in the application; every parsing decision listed above is
+  unchanged, and `FileSystemPendingReimbursementXmlSource` still owns discovery, the folder
+  confinement and removal, and still translates its own failures into `null`/`false` at the port.
+
+### Reimbursement Report ZIP upload and background import (issue #1149)
+
+Nayax emails the reimbursement report as a ZIP, and until this issue the only way to import one was
+to unzip it twice by hand and get the XML files onto the server's own pending folder. This adds the
+second route: an authorised operator uploads the attachment exactly as it arrived, the upload is
+accepted in seconds, and the import happens in the background with the same pipeline.
+
+**The HTTP surface, on `ImportsController` under the existing `Imports.Run` capability.**
+`POST api/imports/reimbursement-report` takes one multipart file, checks the archive, stores it as a
+queued job and answers `202` with the job id; a bad archive is `400` with a readable sentence and
+nothing stored at all. `GET api/imports/reimbursement-report/jobs` answers the caller's own
+business's latest 20 jobs and `GET .../jobs/{jobId}` one of them with every file outcome; a job of
+another business is `404`, and not because of a comparison made at the endpoint — the lookup is
+tenant-scoped centrally, so another business's job is not found. The business is always the caller's
+resolved business: nothing in the request can choose one. A role preview and a read-only support
+session are refused on the upload centrally, because it is a `POST`, exactly as the two import writes
+beside it are; the two reads are `GET`s, so a support session may make them. None of the three
+carries a plan requirement, for the reason the pending-XML import carries none: a settlement
+statement the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
+
+**Reading the archive: `Inventory.Application.Imports.IReimbursementArchiveReader`, implemented by
+`Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader`.** The real shape is
+`Reports_DD-MM-YY.zip` holding `MM-YYYY/Reimbursments.zip` (Nayax's own spelling) holding a PDF, an
+XLSX and an XML per report day, so the rules are:
+
+- Folders are descended into — a ZIP has no folders, only entry names that contain them, so this
+  needs nothing — and the directory entries a ZIP tool writes are counted as ignored.
+- An archive found in the uploaded one is opened, **exactly one level deep**. An archive inside an
+  inner archive is counted as ignored and never opened: recursing into attacker-supplied archives is
+  how a decompression bomb is built, and nothing Nayax sends needs it.
+- Only `.xml` entries are imported, matched case-insensitively. PDFs, XLSXs, anything else and the
+  directory entries are ignored and **counted**, so the numbers a job reports add up to what was in
+  the archive. An entry this import does not expand cannot expand into anything.
+- An uploaded archive whose XML files sit directly in it works too, which is what an operator who
+  unzipped one level by hand sends.
+- **Entry names are untrusted and are never used as a path.** Every byte is read in memory, nothing is
+  ever extracted to disk, and `Inventory.Domain.Imports.ReimbursementArchivePolicy.SanitiseEntryName`
+  reduces a name to a label that is only recorded and displayed: both separators normalised, every
+  `.`/`..` segment dropped, a leading separator and a drive prefix removed, control characters
+  replaced, and the result capped. A name of nothing but traversal segments becomes a positional label
+  rather than a guess. The server's own pending import folder is not touched — this import has nothing
+  to do with it.
+- A file that is not a readable reimbursement report is **that entry's own** failure, answered across
+  the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
+  unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
+  the whole upload. "Not readable" includes an XML that is *well-formed* and still ambiguous — one
+  that names the same attribute twice on an element, in two namespaces — which the parser refuses as
+  its own declared parse failure (issue #1149's review); it used to escape the walk as an
+  `ArgumentException` and fail the whole upload, with no job and nothing to tell the operator which
+  file was at fault.
+- **What the adapter says about an entry it could not parse is the sanitised entry label and one
+  fixed failure category** (`ZipReimbursementArchiveReader.UnparsableXmlFailure`), at `Warning`. The
+  parser's exception is deliberately **not** attached: its message is assembled out of the uploaded
+  bytes — an attribute name, an element name, a position in the file — so attaching it publishes a
+  piece of a settlement statement into retained telemetry, the one thing this import's logging rule
+  forbids. It is the same withholding `NayaxUpstreamExceptionHandler` makes, for the same reason; see
+  the [exception ownership table](#exception-ownership-table). The label is the one thing about the
+  file that may appear, because an operator has to be able to find the entry that failed.
+
+**The limits, in the Domain and enforced while the bytes are read** (`ReimbursementArchivePolicy`,
+the repository owner's confirmation of 9 November 2026): a 10 MB request — the same ceiling the Nayax
+sales upload has carried since issue #301 — at most 20 inner archives, at most 2,000 entries in
+total, 5 MB per expanded entry, 100 MB expanded in total, and a 200:1 compression-ratio ceiling above
+a 64 KB floor, so the check refuses bombs rather than small, highly compressible reports. The entry's
+own declared length is deliberately **not** trusted as the bound: it comes from the archive's central
+directory, which is attacker-supplied, so the copy itself stops one byte past the limit. Breaking any
+limit **rejects the whole upload** — not the bytes, not a job, not one reimbursement row is stored —
+because a partially accepted settlement archive would leave the operator unable to say which half of
+their money landed. An archive with no XML at all is rejected too: there is nothing to import.
+
+**The job: two additive tenant-owned tables.** `ReimbursementImportJobs` holds the business, the
+uploading member (their validated Entra `(tid, oid)` pair — the identity the `BusinessMembership` row
+is itself keyed by; no display name, no email address, and neither half is published by any
+endpoint), the upload instant, the sanitised file name, the state (`Queued`, `Processing`,
+`Completed`, `CompletedWithFailures`, `Failed`), the attempt count, the not-before instant, the last
+safe error, and the uploaded bytes — which are kept until the job reaches a final state and deleted
+then, because a job resumed after a restart imports from the archive it was uploaded with and nothing
+else holds a copy. `ReimbursementImportJobFiles` holds one row per XML: its index in the archive walk
+(the job's per-file identity, unique per job by index — the walk over the same bytes is
+deterministic, whereas two inner archives may legitimately hold a report of the same name), its
+sanitised label, its outcome (`Imported`, `Skipped`, `Failed`) and a safe reason. **No count is
+stored**: what was imported, skipped and failed is counted from those rows every time it is asked
+for, because a total maintained beside them is a total that can disagree with them after a restart.
+
+**The worker: `ReimbursementImportJobRunner`, the fourth hosted background service.** It is the
+hourly reconciliation's arrangement exactly (issue #1104): the Application layer owns the loop, the
+cadence and the outcome, `InventoryApi.Adapters.ReimbursementImport.ReimbursementImportJobWorker` is
+a `BackgroundService` whose only dependency is that runner, and
+`ServiceScopeReimbursementImportJobScopes` is the one place a scope is opened. It takes the oldest
+**due** job, one at a time; a job's failure never stops another's, and only cancellation ends the
+loop. It is in-process for the reasons the queue reader and the reconciliation are — one writer on
+the one SQLite file, no second identity or configuration surface — and App Service **Always On** is
+the human prerequisite: without it a queued job waits until the next request wakes the app. The seven
+background-workload criteria are answered for it in [Azure Functions and background
+workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68).
+
+**The one cross-business read, and what makes it narrow.** `EfReimbursementImportJobQueue` is the
+**ninth** reviewed `IgnoreQueryFilters` path and the **second** that is not in a request at all
+(AGENTS.md § Tenant ownership and data isolation; the owner's approval of 9 November 2026). It has to
+ignore the filters because the business is the *answer*: the worker's loop is not a request, resolves
+no actor and has deliberately resolved no business, so the central filter would match no job row and
+the queue would be silently empty forever. One statement, over one table, projecting **two columns** —
+the job's key and the ownership key, which is not business data. No file name, no uploaded bytes, no
+uploader, no attempt count, no error text, no count of anything. One method taking no argument but a
+cancellation token, so there is nothing to widen it with; the ordering and the clock comparison are
+inside the adapter. Everything the chosen job then does happens in a scope resolved to that one
+business through `BusinessScope.ResolveForHostedWork`, where the ordinary filters and
+`BusinessOwnershipEnforcer` are fully in force, and every other statement about a job — the upload,
+the two status reads, the claim, the outcomes, the completion — is an ordinary filtered one with no
+business predicate of its own.
+
+**One XML, one transaction.** `ProcessReimbursementImportJob` claims the job (counting the attempt and
+moving it to `Processing` in one `BEGIN IMMEDIATE` write, so a counted attempt and a claimed job
+cannot come apart), reads the stored archive, and for every file with no recorded outcome opens one
+transaction (`IReimbursementImportFileTransactions`) around **the same parse → hash dedupe → save →
+coverage steps the pending-folder import uses** — `ImportReimbursementXmlFile`, shared, with no
+second parser and no second copy of the coverage rule — plus that file's own outcome row. The three
+adapters involved resolve the same scoped `AppDbContext`, so they all enlist in that one transaction
+without knowing it exists. There is therefore no moment at which a file is committed without the
+record of what happened to it, or an outcome exists for rows that were not committed, and a duplicate's
+`Skipped` and a bad file's `Failed` are written the same way. When every file has an outcome the job
+is finished through `ReimbursementImportJobCompletion.StateFor`: `Completed` when nothing failed,
+`CompletedWithFailures` when something did — a job all of whose files were skipped is a success, not a
+failure — and the uploaded bytes are deleted.
+
+**Why the `Skipped`-after-a-restart answer is correct rather than a guess.** A resumed job keeps every
+recorded outcome exactly as it is and processes only the files with none, so a file it imported before
+the restart still reports `Imported`. A file with no outcome whose hash turns out to be present was
+therefore imported by something *else* — a previous upload, or another job — because had this job
+imported it, the same transaction would have written its outcome.
+
+**Out of scope here**, and deliberately: email or Logic App automation (#1150), any change to XML
+parsing, reimbursement, coverage or reconciliation rules, row-level deduplication (dedupe stays the
+byte-identical file hash), the Reimbursement Report page and every frontend change (#1152), importing
+the PDF or XLSX, cancelling or deleting jobs, and notifications when a job finishes.
+
+### The Reimbursement Report page (issue #1152)
+
+The page over the surface above, and frontend only: it adds no endpoint, no rule and no calculation,
+and `ImportService` stays the one place the browser calls an import from.
+
+**Where it is.** `/admin/imports/reimbursement-report`, declared in `app.routes.ts` with exactly the
+three guards `/admin/imports` carries — `MsalGuard`, `accountStateGuard`,
+`requireCapability('Imports.Run')` — and deliberately **no provider guard**: the page makes no Nayax
+call at all, reading and writing only this business's own records, so a business whose connection has
+stopped working can still reach it by URL and finish importing a statement it was emailed. The
+sidebar entry is a `providerToolLink` directly after `Imports`, hidden while the connection is not
+usable for the reason Imports is hidden, and it declares `visibilityKey: 'admin.imports'` rather than
+a key of its own — the shared-key rule of [Switchable Admin menu
+visibility](#switchable-admin-menu-visibility-issues-873-and-1148). Its breadcrumb is the first
+three-item trail in `breadcrumbs/breadcrumb-routes.ts`: `BreadcrumbParent` may now declare a parent of
+its own, so Admin › Imports › Reimbursement Report is that chain read outwards rather than a second
+way of writing a trail. `/admin/imports` keeps the `Import XML files` card's place with a short
+**Reimbursement Report** card that links here, and the Nayax sales upload and the sale timestamp
+repair are untouched.
+
+**Composition.** Per [Page composition boundary](#page-composition-boundary-issue-191)
+`ReimbursementReportPageComponent` is the boundary: `ReimbursementReportUploadComponent` owns the
+chosen file, the in-flight upload and the refusal, and emits `(uploaded)` with the accepted job id;
+`ReimbursementImportJobsComponent` owns the list read, the refresh lifecycle, the per-row expansion
+and both reads' failures, and is told to read again through one `[reloadToken]`. The page itself keeps
+the support-session answer, that token, and the one-button pending-XML action that moved here
+unchanged — a single call with its own toast, which is not a workflow of its own.
+
+**What the page decides, which is nothing about an import.** Every state, count and reason on screen
+is the server's answer, counted there from its own per-file outcome rows;
+`reimbursement-import-job-display.ts` only names them, and a state this build does not recognise reads
+as `Unknown` rather than as one of the states it is not. The upload sends the file and shows the
+server's own `400` sentence beside the file it refused, because a refused upload stores nothing at all
+and a toast would leave the controls offering an upload that has already been answered; the `.zip`
+picker filter is a convenience and deliberately not a second archive rule. No XML content, figure or
+payment detail is rendered, and none is available to: the status contract carries none, and the upload
+reply carries the job id alone.
+
+**The refresh, and when it stops.** A job is live while the server reports `Queued` or `Processing`.
+After each successful read the list arms one `timer(REIMBURSEMENT_JOBS_REFRESH_MS)` if any job is
+live, and arms nothing otherwise — so a settled list polls nothing, an accepted upload reads once
+immediately through the token rather than waiting, and leaving and coming back reads the current state
+once on arrival. A failed read stops the refresh too, keeps whatever was already read on screen
+(it is still the last thing the server said) and offers the read again, rather than hammering an
+endpoint that is already answering badly. Every subscription is `takeUntil` the component's own
+destruction, so a closed page asks for nothing.
+
+**Only the newest list read may change the screen.** Reads overlap — an accepted upload reads again
+immediately while the arrival read or a refresh is still in flight — and whichever was asked for
+first can answer last. An answer older than the upload does not know about the job it accepted, so
+left alone it would put the pre-upload list back, take the queued job off screen and, finding nothing
+running, stop the refresh that was following it. `load()` therefore unsubscribes the read in flight
+before it makes the next one: the superseded request is cancelled outright, its answer and its
+failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
+newest read.
+
+**Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
+read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
+way — the page withholds the controls so no refusable request is sent.
+
+**Phone width.** The page is `.page` (a 16px gutter), and the list is a stacked `<ul>` rather than a
+table: at 390px a five-column table either scrolls sideways or truncates the one thing an operator
+came to read, so each upload is its own block whose summary lays out in a row only once there is room.
+The file names wrap rather than overflow. **Checked in a browser, because jsdom computes no layout:**
+`e2e/visual/reimbursement-report.visual.ts` opens the page at 1440px and 390px against synthetic job
+answers and asserts, before each capture, that the document does not scroll sideways, that `.page`
+computes a 16px left and right padding at 390px, that every upload's summary stacks at 390px and is a
+row at 1440px, and that the longest file name stays inside its own row. Its captures are
+`docs/screenshots/issue-1152/`. It is not part of `scripts/validate.sh`; see [Browser-level
+end-to-end suite](#browser-level-end-to-end-suite-issue-46).
+
+**Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
+pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
+(the picker and the note, the selection, the accepted upload and its emitted id, the server's `400`,
+a `ProblemDetails` body, the bodiless failure, the busy state and its second click, the withheld
+session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
+row's fields in the business's own zone, every state's wording, the expansion's failed files and its
+failure, the refresh that stops when nothing is running, the refresh that never starts, destruction,
+the first read that failed and its retry, a refresh failure that keeps the rows, the reload token,
+and the two overlapping-read cases — a superseded read answering last with the pre-upload list, and
+one failing after the newer read succeeded — neither of which may change the rows, the error or the
+refresh), `reimbursement-import-job-display.spec.ts` (the wording, the badges, the unknown state and the
+running rule), `import.service.spec.ts` (the three routes and the multipart body),
+`app.routes.spec.ts` (the three guards, the capability driven rather than counted, and
+`/admin/imports` still resolving to its own page), `navigation.spec.ts` (the entry, its order, the
+shared key off and on for a member and for the administrator, the provider-hidden rule and the
+catalogue alignment), `breadcrumb-routes.spec.ts` (the three-item trail and the parent chain itself
+over fixture entries) and `admin-imports.component.spec.ts` (the replaced card, and that the page runs
+no reimbursement import of its own any more). The rendered half is
+`e2e/visual/reimbursement-report.visual.ts`, described under **Phone width** above.
+
+**Out of scope**, as #1152 states: any backend change, cancelling or deleting a job, notifications,
+and any change to the Nayax sales upload, the timestamp repair or #1148's catalogue.
 
 ### Report availability model (issue #730)
 
@@ -13846,7 +14680,8 @@ lookup at all and leaves the field the shared wire shape carries `null`. A `null
 single-machine read therefore means only "this route does not resolve it" — a consumer that needs a
 machine's local id reads the fleet list, which is the read the expense form makes. Giving the detail
 route its own answer, or its own wire shape, is #741's decision to take. The expense form
-(`components/expenses/operating-expense.component.ts`) submits `machine.localMachineId`, and a listed
+(`components/expenses/expense-form.component.ts` since issue #1167, `operating-expense.component.ts`
+before it) submits `machine.localMachineId`, and a listed
 machine with no local record is not offered at all — there is no id to store for it. The server does
 not trust the form: `CreateOperatingExpense`/`UpdateOperatingExpense` check the submitted machine
 against the business's machines through `ILocalMachineStore` (which reads through the ordinary tenant
@@ -13933,7 +14768,9 @@ machine list, and so no machine field at all, even with machines of its own reco
 the G group exists to fix.
 
 **Three screens, one source.** `StockAdjustmentFormComponent` (fed by its page),
-`StockHistoryPageComponent` and `OperatingExpenseComponent` read `LocalMachineService.getAll()`
+`StockHistoryPageComponent` and the expense screens - `OperatingExpenseComponent` for the register's
+filter, and `ExpenseFormPageComponent` feeding `ExpenseFormComponent`'s field since issue #1167 -
+read `LocalMachineService.getAll()`
 (`GET /api/local-machines`, issue #740) and key every option by `LocalMachine.id`. That is the same
 id they submitted before, so nothing about a stored movement or expense changes; what changed is that
 the id now comes from the resource that owns it instead of from a provider read that could not be
@@ -13945,7 +14782,7 @@ number (it publishes `isProviderNamed`, the fact), so there is none to show and 
 
 | Surface | What it lists |
 | --- | --- |
-| Stock adjustment form (a new movement) | the **active** machines |
+| Stock adjustment form (a new movement) | the **active** machines, enabled only for a Machine refill since [issue #1156](#global-stock-history-issue-384) |
 | New expense | the **active** machines |
 | Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
 | Stock History machine filter | **every** recorded machine, deactivated included |
@@ -13994,7 +14831,10 @@ support-session guard changed. Every role that can reach these screens already h
 `operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
 without a provider, with one, with a deactivated machine, and with a failed read - plus the
 outstanding read and the id that is actually submitted; the Stock History spec also asserts the
-adjustment field through its page, which is where the form's list comes from. The expense spec covers
+adjustment field through its page, which is where the form's list comes from. Since issue #1167 the
+expense **field**'s half of those cases lives in `expense-form.component.local-machines.spec.ts`,
+where the form now does, and `expense-form-page.component.spec.ts` covers the page making the
+`/api/local-machines` read and reporting its failure in the field's place. The expense spec covers
 the list's Machine filter over the same four cases, including the deactivated machine it lists and the
 local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
 is sent as `machineId`, and no machine parameter is sent while none is chosen.
@@ -14886,8 +15726,9 @@ the link state beside it; `SupplierResponse` is untouched and is still the neste
 
 **The frontend mirrors the rule and links carefully.**
 `components/suppliers/supplier-url.ts` is the browser-side copy — same limit, same schemes, same two
-messages — used both by the create/edit form, which refuses before the request, and by the list,
-which renders a website as
+messages — used both by the create/edit form (in its own dialog since issue #1174, see
+[The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)), which refuses before the
+request, and by the list, which renders a website as
 `<a href=… target="_blank" rel="noopener noreferrer">` only when that same check still accepts the
 stored value. Anything else renders as plain text, so a value that somehow reached the database
 without passing the server rule is never clickable. Angular's own URL sanitisation stays in place
@@ -14907,6 +15748,95 @@ anything else happens — but on a linked copy the normalised value is then comp
 one, and a change is refused with `400` and that link rule's own sentence on the `url` field. A
 supplier the business created itself is unaffected. See
 [The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934).
+
+### The Suppliers page's dialogs (issue #1174)
+
+Adding or editing a supplier used to happen in a New/Edit form card above the list, with the GST
+defaults card appearing underneath it while a supplier was being edited. Both are gone: the Suppliers
+page is a list, and each thing done to one supplier happens in a dialog over it, so the operator
+keeps their place in the list. **No API, DTO, schema, Domain rule, capability or validation changed;
+this is the Angular page**, and the payload the form sends is byte-for-byte the one the inline form
+sent.
+
+**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191),
+`SupplierListComponent` keeps only *which* dialog is open and for which supplier
+(`formOpen`/`editing`, `gstDefaultsFor`, `deleting`) and the list's own reads, refusals and the
+"Not used", Delete and **Available to add** writes. The form — its values, its field rules, its
+submission state, its server refusal and its discard question — is `SupplierFormDialogComponent`
+(`components/suppliers/supplier-form-dialog/`), composed through `[supplier]`/`[sessionActive]` and
+reporting only `(saved)` and `(closed)`. `null` for `[supplier]` is an Add and an existing one is an
+Edit; the only differences are the title (*Add supplier* / *Edit supplier*), the primary action
+(*Create supplier* / *Save changes*) and which call is made. The page's own template authors no
+dialog markup at all, which is what `page-composition.guard.ts` checks.
+
+**Three dialogs, one shell.** All of them are `ModalDialogComponent`
+(see [Interaction and presentation](#interaction-and-presentation)) or the shared
+`ConfirmationDialogComponent`:
+
+- **Add/Edit** is the form dialog above. Its action row sits in the shell's footer and submits the
+  form through `form="supplier-form"` (the #892 mechanism), so it stays visible while the fields
+  scroll. Initial focus is the Name field, or **Contact name** when the name is locked — the first
+  field the operator can actually edit.
+- **GST defaults** is the existing `SupplierGstDefaultsComponent` projected into the shell from each
+  row's *GST defaults* action, unchanged: its own read, `switchMap` cancellation, save, messages and
+  `Suppliers.ManageGstDefaults` read/write split are its own (see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430)). The dialog's title
+  names the supplier, so the panel is not asked to name it a second time.
+- **Delete** is `ConfirmationDialogComponent`, naming the supplier, in place of the browser's
+  `confirm()`. `canDelete === false` and a support session still remove the button, and `askDelete()`
+  and `remove()` each check both, so a question the server would refuse is never asked and a write it
+  would refuse is never issued. A refused delete shows the server's sentence verbatim and **does not
+  reload the list**.
+- **Discard changes?** is a second instance of the shell, opened *over* the form dialog rather than
+  instead of it: the form behind it is inert while the question is open and comes back with every
+  entered value when the answer is *Keep editing*. It cannot be `ConfirmationDialogComponent`,
+  because a `z-index` backdrop cannot paint above the form dialog's top layer.
+
+**What the dialog decides, and what it does not.** Closing an unchanged form dismisses it; a dirty
+one (the values on screen compared with the ones it opened with) asks first, whether the dismissal
+came from Cancel, the Close control, Escape or the backdrop. A save holds everything still — the
+primary action, Cancel and Close are all disabled and the action shows *Saving…* — so a second
+submission cannot be issued, and only a successful write reports `saved`, which is what lets the page
+re-read the list and show its toast **after** the write rather than beside it. A refusal keeps every
+entered value and shows the server's own sentence (`supplier-refusal.ts`, the shared reader of the
+two shapes the API uses, which the list uses for its own refusals) above the fields. A support
+session disables the save and `save()` returns before calling the API, exactly as the inline form's
+submit did, and the header's **Add supplier** trigger is hidden outright with `addSupplier()`
+guarded beneath it, because a create in a session could only end in the server's refusal; Edit
+still **opens**, because opening a stored supplier's details issues no request, which is what lets
+a session read them (see
+[Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
+
+**What proves it.** `supplier-list.component.spec.ts` covers the page half — no inline form or GST
+card left, the header action opening an empty dialog, a row's Edit opening a filled one, the list
+re-read and the toast only after a successful save, the dialog kept open with no reload and no toast
+on a refusal, the GST dialog opened for the right supplier with its permission intact, the delete
+question naming the supplier with nothing written until it is confirmed and nothing written when it
+is dismissed, and the support-session paths. `supplier-form-dialog.component.spec.ts` covers the form
+— the #847 website rule and its two messages, the blank-name refusal, the #934 lock with the stored
+name and website sent back unchanged, the exact payload, duplicate-submit prevention with the values
+kept and the refusal shown verbatim on failure, the discard question from all four dismissal paths
+with *Keep editing* keeping every value, and the dialog's labelling and initial focus.
+`modal-dialog.component.spec.ts` covers the shell — opened modally and labelled by its own heading
+with no `role` of its own, projection into body and footer, the nominated initial focus, the three
+dismissal paths reporting rather than closing, the Tab cycle, and focus returning to the control that
+opened it. The rendered geometry is not something jsdom can answer — it computes no layout and has
+no native `<dialog>` top layer — so **the browser evidence is `e2e/visual/suppliers-dialogs.visual.ts`
+into `docs/screenshots/issue-1174/`**: the empty Add modal and a linked supplier's Edit modal at
+1440px and the full-screen sheet at 390px and 360px, plus the measurements the jsdom specs cannot
+make — the 600px desktop panel bounded by the window over a body whose `overflow-y` is `auto`,
+Contact name and Phone paired at 1440px and stacked below `sm`, the sheet filling the viewport with
+no border radius and its action row still inside it, no sideways scroll of the page, the panel or
+its body at any of the three widths, the viewport meta still permitting pinch zoom, every input,
+footer button and the square Close control at least 44px at 390px and 360px, and the keyboard half:
+Escape dismissing an unchanged form with focus returning to the header's **Add supplier** and to a
+row's **Edit** respectively, and Escape on a changed form opening the *Discard changes?* question
+with *Keep editing* focused, every typed value still there afterwards, and *Discard changes*
+returning focus to the opener. Like every visual run it answers each `/api/` request with synthetic
+suppliers, refuses every non-`GET` so no save can be photographed, and is human-invoked rather than
+part of `scripts/validate.sh`; see
+[Browser-level end-to-end suite](#browser-level-end-to-end-suite-issue-46) and the regeneration
+note under [Interaction and presentation](#interaction-and-presentation).
 
 ### A product carries no supplier (issue #787)
 
@@ -15634,7 +16564,7 @@ PUT  api/super-admin/master-products/{id}                                       
 
 **No business data, in either direction, and nothing tenant-owned is read or written.** The two reads reach four platform tables — `MasterProducts`, `SupplierListings`, the `SupplierPresets` that publish those listings and the `SupplierPriceObservation` a listing points at — and the two writes reach three: `MasterProducts`, written, `SupplierListings`, read for the single question the size safeguard turns on, and — since [#1138](#supplier-search-terms-on-master-products-issue-1138) — `SupplierPresets`, read for the single question of whether every supplier a saved search-terms entry names exists. **No tenant-owned table at all**: no product, no price-tracking mapping, no business. So this surface needs none of the reviewed cross-business reads the review and the collector surfaces have, adds no `IgnoreQueryFilters` statement anywhere, and opens **no write lease** — a platform table carries no business key and no query filter, so the **denied** `BusinessScope` these requests run under reads the whole catalogue and none of anybody's own rows, and the write passes `BusinessOwnershipEnforcer` because `MasterProduct` is not `IBusinessOwned` rather than because anything was relaxed. There is no business id, business name or business product id in any request or response and nowhere for one to travel, and — the owner's clarification of 31 October 2026, *master-catalogue management only* — **no count of the businesses tracking a product**, which is the one thing the review publishes and this surface deliberately does not.
 
-**The page.** `/super-admin/master-products` ("Master Products"), behind `MsalGuard` and `platformAdminGuard` like the four Super Admin routes beside it, in the Super Admin menu group and the breadcrumbs next to Supplier Price Review. The page owns the search box, the table and the page controls; the two workflows with their own state and lifecycle are dedicated feature components per [Page composition boundary](#page-composition-boundary-issue-191) — one product's supplier listings (`MasterProductDetailComponent`, through `[productId]` and `(closed)`) and, since #1024, the create/edit form (`MasterProductFormComponent`, through `[product]`, `(saved)`, `(savedAfterMovingOn)` and `(cancelled)`). Loading, empty and error states follow the Supplier presets page, and the error state offers a retry. The search and the paging are the server's: the page sends what was typed and displays the page the server says it served, because a client-side filter over one page of a paged catalogue would silently hide the matches on every other page. `super-admin/master-products` is in `PLATFORM_ADMIN_PREFIXES` (`frontend/inventory-app/src/app/access/member-endpoint.ts`), so a `403` from any of the four endpoints is not read as a member refusal and no request carries a role-preview or support-session header.
+**The page.** `/super-admin/master-products` ("Master Products"), behind `MsalGuard` and `platformAdminGuard` like the Super Admin routes beside it, in the Super Admin menu group and the breadcrumbs next to Supplier Price Review. The page owns the search box, the table and the page controls; the two workflows with their own state and lifecycle are dedicated feature components per [Page composition boundary](#page-composition-boundary-issue-191) — one product's supplier listings (`MasterProductDetailComponent`, through `[productId]` and `(closed)`) and, since #1024, the create/edit form (`MasterProductFormComponent`, through `[product]`, `(saved)`, `(savedAfterMovingOn)` and `(cancelled)`). Loading, empty and error states follow the Supplier presets page, and the error state offers a retry. The search and the paging are the server's: the page sends what was typed and displays the page the server says it served, because a client-side filter over one page of a paged catalogue would silently hide the matches on every other page. `super-admin/master-products` is in `PLATFORM_ADMIN_PREFIXES` (`frontend/inventory-app/src/app/access/member-endpoint.ts`), so a `403` from any of the four endpoints is not read as a member refusal and no request carries a role-preview or support-session header.
 
 **The form is one form for both writes, and it decides nothing.** A `null` `[product]` is a new master product and a given one is a correction of that row, because they are one set of values over one shape and the only difference is which request is sent. Every rule is the server's — the normalisation, the duplicate key, the size safeguard, the stale-edit refusal — so a refused write shows **the server's own sentence** (`extractReviewErrorMessage`, the review's helper) rather than a second copy of the rule, and the only thing withheld locally is a submission with no brand, no name or no size, because a request that cannot describe a product is not one. A correction sends back the `updatedAtUtc` the page read, unchanged. The confirmed-listing safeguard is *said* beside the size fields rather than enforced by disabling them: the refusal is the server's, and a page that hid the fields would also hide why the correction could not be made. **There is no Delete control**, because the API has no such route. An accepted write closes the form, says what happened, closes the listings panel and **re-reads the catalogue**, so what is on screen is what is stored — a corrected brand changes the row's position in the server's own ordering, and a new product may not be on the page being viewed at all. A search or a page step closes the form too, since the rows it was about are being replaced.
 
@@ -17562,9 +18492,23 @@ that product's costing position stayed stale until its next sale. A queue reader
   wrong figure.
 - **The request-driven synchronization records and drains the same rows.** The store is shared, so this
   fixes the existing failure mode on that path too: `SyncLatestNayaxSales` now drains every pending row
-  after *every* persist rather than only the products its own batch touched, and raises a still-failing
-  product as the one `InventoryCostDataQualityException` it always did. See [Historical inventory
+  after *every* persist rather than only the products its own batch touched. A still-failing product
+  does not fail the sync; it is reported on the Dashboard instead (see [Products needing cost
+  attention](#products-needing-cost-attention)), and the hourly reconciliation still records no
+  success while one is pending. See [Historical inventory
   cost](#historical-inventory-cost).
+
+#### Products needing cost attention
+
+`GET api/inventory-cost-attention` (`InventoryCostAttentionController`, Dashboard.View, no plan gate)
+lists the caller's products whose pending rebuild's last attempt failed - `PendingInventoryCostRebuilds`
+rows with a `LastFailureCode` - with the product's current name, attempt count and last attempt, oldest
+first. It is read through `GetProductsNeedingCostAttention` and the `IProductCostAttentionReader` port
+(`EfProductCostAttentionReader`); both tables are tenant-owned, so the central query filters keep it to
+the caller's business. It carries no price, cost, value or quantity. The Dashboard's Needs attention
+panel shows it as "Costs for N products could not be recalculated", naming the products. This is what
+replaced the business-wide "Latest Nayax sales could not be synchronized" warning that one product's
+failed rebuild used to cause on every visit; that warning now appears only when the sync itself fails.
 
 #### Queue outcomes
 
@@ -18668,7 +19612,7 @@ files" as the historical record of that slice, not as a test to look for today.
        - Routes, status codes and JSON are unchanged: the same keys in the same order (including `machineID`/`actorID`, which a `MachineId`/`ActorId` member would silently have renamed), the same explicit nulls for an unavailable profit or suggestion, and the same 404 for a machine Nayax does not return. `InventoryApi.Tests.DTOs.MachineJsonContractTests` compares the serialised bytes of both responses with the entity shapes they replaced, for a populated and a sparse case each; `MachineAndSiteRouteTests` pins the seven machine and two site routes through the MVC API explorer.
      - **Published OpenAPI.** The one client-visible change is in the generated document, not the payload: the dashboard operations now describe `MachineResponse` where they described `Machine`, and the machine-product operation describes `ProductResponse` where it described `Product` - the same schema-id derivation issue #303 settled when a migrated endpoint took its own response DTO. The legacy `Product` component stays published for the pinned purchase/supplier-order schemas that reference it (see [OpenAPI documentation](#openapi-documentation)); `Machine` is no longer published at all, since nothing serialises it. `PublishedResponseSchemaContractTests` pins both halves of that, and pins the unchanged `ProductResponse` property list, requiredness and `readOnly` set.
      - **Not in this slice.** The `Machine` type itself stays in `InventoryApi/Models`, unreferenced by the application and marked as such, because it is the reference value the contract tests compare the new response against and #302's acceptance criteria name the four service files to remove, not it; removing it belongs to item 11's legacy-structure cleanup. The dashboard rules, the Nayax fan-out, the `DateTime.Now` acquisition (issue #310 above), the schema and the API contracts are untouched, and `AppDbContext` and the adapters stay where they are. The actions keep their exact signatures, so the two reads that passed `CancellationToken.None` through the delegator still do; threading a real request token through them would change cancellation behaviour and belongs with the remaining `AppDbContext` migration.
-   - **Business-day clock acquisition done** (issue #310). This slice originally left the server-local `DateTime.Now`/`DateTime.Today` acquisition in place and moved only the range *arithmetic* to `MachineDashboardPeriods`; issue #310 removed the host-clock reads. `Inventory.Application.Machines.MachineDashboardWindow` now resolves the six rolling periods once per request from the `Australia/Sydney` business day through `IClock`/`IBusinessCalendar` and expresses their boundaries as UTC instants, the time base `MachineAuthorizationTime` is stored in; `IMachineDashboardFactsStore.GetFactsAsync` takes that window instead of a bare "now". `GetSiteSummaries` resolves one window per request (as it has read one instant per request since #313 batched its sales read), and `ListMachineDashboard` now resolves one per request instead of one per machine, so every machine in a listing shares identical periods. `GetSiteProducts` and `ResolveMachineProductPricing` select their effective-dated commission/fee configuration with `IBusinessCalendar.Today`. Each period also carries the Sydney business dates it covers, which is how the Nayax processing fee it subtracts is charged to exactly the sales its revenue counts. See [Time](#time) above for the complete rule and the architecture test that enforces it.
+   - **Business-day clock acquisition done** (issue #310). This slice originally left the server-local `DateTime.Now`/`DateTime.Today` acquisition in place and moved only the range *arithmetic* to `MachineDashboardPeriods`; issue #310 removed the host-clock reads. `Inventory.Application.Machines.MachineDashboardWindow` now resolves the rolling periods (six at the time, eight since issues #1177 and #1180) once per request from the `Australia/Sydney` business day through `IClock`/`IBusinessCalendar` and expresses their boundaries as UTC instants, the time base `MachineAuthorizationTime` is stored in; `IMachineDashboardFactsStore.GetFactsAsync` takes that window instead of a bare "now". `GetSiteSummaries` resolves one window per request (as it has read one instant per request since #313 batched its sales read), and `ListMachineDashboard` now resolves one per request instead of one per machine, so every machine in a listing shares identical periods. `GetSiteProducts` and `ResolveMachineProductPricing` select their effective-dated commission/fee configuration with `IBusinessCalendar.Today`. Each period also carries the Sydney business dates it covers, which is how the Nayax processing fee it subtracts is charged to exactly the sales its revenue counts. See [Time](#time) above for the complete rule and the architecture test that enforces it.
    - **The light site list for the site pickers (issue #841, child of #839).** <a id="the-light-site-list-issue-841"></a>`GET api/sites/list` is a second, read-only site endpoint: `Inventory.Application.Sites.ListSites` makes **one** `INayaxLynxClient.GetMachinesAsync` call and **no** `GetMachineProductsAsync` call at all, groups the fleet by `CustomerID`, names each group through the shared `ISiteNameResolver`, and returns one `SiteListItem(SiteId, Name, MachineCount)` per site ordered by name. `SitesController.GetList` invokes it with the request's own cancellation token - so an abandoned request abandons the fleet read, and unlike the two older site actions it does not pass `CancellationToken.None` - and maps the result onto `SiteListItemDto(SiteId, Name, MachineCount)` through `SiteResponseMapper`; a machine with no `CustomerID` stands at no site and is excluded, exactly as `GetSiteSummaries` excludes it, so it is counted at no site either. The endpoint inherits the controller's `[RequireCapability(Capability.InventoryOperate)]`, so it requires the same capability as `GET api/sites` and every role reaches it, and it answers the same Nayax states, because it fails on the same fleet read: `409 nayax_not_connected` or `409 nayax_permission_not_granted` through `NayaxConnectionExceptionHandler`, never `200` with an empty list. It reads no capability of its own and touches no local data: there is no financial figure here to withhold, so none of [issue #697](#site-financial-redaction-issue-697)'s redaction applies.
      - **The machine count is on the row because it is free.** `MachineCount` is the size of the site's `CustomerID` group - literally the same `machines.Count` `GetSiteSummaries` publishes as `SiteSummary.MachineCount`, over the same grouping of the same single fleet read - so the three-field row still costs exactly one `GetMachinesAsync` call and no per-machine read of any kind. It is counted **from the fleet, never from product mappings**: a machine with no mapped product is still one machine standing at that site, which is both why it cannot be inferred from product rows and why inferring it would have been wrong as well as expensive. The repository owner approved widening the response to carry it on **23 October 2026**, in preference to removing the Site Products subtitle that states it or making that page issue a second fleet request; the two other pickers show the name only and ignore the field. `ListSitesTests` pins the count over a fleet with two machines at one site, over a fleet whose machine has no mapped products (with the per-machine call count still zero), and over a fleet holding a machine with no `CustomerID`; `SiteListApiTests` pins the published property set as exactly `{ machineCount, name, siteId }` with the counts per site, beside the one-fleet-read assertion and the request-token assertion.
      - **Why the three site pickers needed it.** The Site commissions report, the Site commission agreements page and the Site Products page each called `GET api/sites` to get a site id, a site name and (on Site Products) a machine count, and that endpoint reads the machine list and then every machine's products - 1 + M Nayax calls - to build stock percentages, alert counts and revenue a picker never shows. All three of the fields they actually used come from the machine list alone. All three now call `SiteService.getList()` (`SiteListItem`, `frontend/inventory-app/src/app/models/models.ts`); the Site commissions report keeps loading it through `loadProviderList`, so the unavailable/failed/listed outcomes of [issue #728](#shared-provider-availability-and-error-versus-empty-states-issue-728) are unchanged. **The Dashboard and the Sites list page still read `GET api/sites`**, because they show those figures, and `GET api/sites` and `GET api/sites/{id}/products` are unchanged in route, shape and behaviour.
@@ -18938,6 +19882,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Uploaded reimbursement report import — `Inventory.Application.Imports.ProcessReimbursementImportJob` | In-process, in a hosted loop: an operator uploads the ZIP Nayax emails and the endpoint stores it as a queued job; the worker takes the oldest job that is **due**, one at a time, in a service scope resolved to that job's own business, and commits each XML's rows, its coverage and its per-file outcome in one transaction | Implemented (#1149); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file for its whole duration, so an out-of-process importer is outside the single-writer envelope; it needs no credential at all; and it is **not scheduled** — it is work an operator started, moved off the request so a 1.3 MB archive is acknowledged in seconds and a database problem becomes a bounded retry instead of a failed upload. It is assessed explicitly under each criterion below. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
 | Connected-machine counts — `snapshot-connected-machines` | `InventoryApi` CLI mode dispatched before the web host is built, invoking `Inventory.Application.ConnectedMachines.RecordConnectedMachineSnapshot` once per counted business; runnable by hand and intended for the same App Service WebJob mechanism as the backup (#333) | Implemented (#978); scheduling it in the App Service is outstanding human work — see [Counting connected machines](#counting-connected-machines-issue-978) | No. The published executable already is the job, it reaches the same `/home` database file and the same per-business credentials, and it is the single SQLite writer while it runs. It is the second workload that genuinely cannot stay request-driven — a day nobody signs in is still a day the account held machines — but it is **bounded and self-healing**: at most 100 fleet reads per run, one per business per day, and a missed run leaves the last complete count as a stale figure rather than a wrong one. |
@@ -19092,6 +20037,64 @@ here criterion by criterion rather than left to the general paragraphs above.
    same window again, because `lastSales` is a rolling window rather than a cursor. A pending
    inventory-cost rebuild left behind by any path is drained at the start of the next run. There is no
    state a human has to repair, and no step that is unsafe to repeat.
+
+#### The uploaded reimbursement report import against the seven criteria (issue #1149)
+
+The fourth in-process background workload and the first one that is **neither scheduled nor
+event-driven**: it is work a person started, deliberately moved off their request. So it is answered
+here criterion by criterion rather than left to the general paragraphs above.
+
+1. **Frequency.** It is not a schedule and does not poll an upstream. The worker looks for work about
+   30 seconds after startup, and then takes the oldest job that is **due** until there is none, waiting
+   15 seconds between empty passes. A pass that did something looks again immediately, so a backlog of
+   uploads drains in one go rather than one job every 15 seconds. There is no overlap to worry about,
+   because there is one loop and it runs one job at a time — which the single-writer SQLite file
+   requires anyway. Staleness is seconds: the operator's upload is acknowledged at once and its
+   importing starts on the next pass.
+2. **Retries.** The retry is the job's own, bounded, and counted on the row: a transient database
+   failure puts the job back to `Queued` with its attempt count increased and a not-before instant of
+   1 minute, 5 minutes, 15 minutes, then 1 hour, and after the fifth attempt the job becomes `Failed`
+   with the safe reason "Stopped after repeated database errors. Upload the ZIP again." An attempt is
+   counted when it **starts**, so a restart that finds a job `Processing` has already spent one — which
+   is what bounds a job that crashes its own host. A file this application cannot read is **never** a
+   retry: it is that file's own recorded outcome, because trying a malformed XML four more times
+   produces the same malformed XML. And because the worker takes the oldest job that is *due*, a job
+   waiting out its back-off never holds up another, of its own business or of any other.
+3. **Idempotency.** This is the criterion the whole design rests on, and it is a durable row rather
+   than a value in memory: each XML's reimbursement rows, the settlement coverage they prove and the
+   job's record of what happened to that file are written in **one** transaction. There is therefore no
+   moment at which a file is committed without its outcome, or an outcome exists for rows that were not
+   committed. A resumed job processes only the files with no outcome, so a file it imported before a
+   restart still reports `Imported` and nothing is imported twice; a file with no outcome whose content
+   hash is already present is reported `Skipped`, which is correct rather than a guess, precisely
+   because this job's own import would have written its outcome in the same transaction. Deduplication
+   stays the byte-identical file hash, per business, so re-uploading the same ZIP creates a new job
+   whose files all come out `Skipped`. Nothing is upserted and no recorded amount is changed.
+4. **Secrets.** **None at all**, and that is not a near miss: the import reads an uploaded file and
+   writes the database. It makes no Nayax call, holds no AWS credential, reads no stored token, and
+   needs no identity of its own. A Function App would have added one, plus a runtime storage account,
+   for a workload that authenticates to nothing.
+5. **Observability.** One structured line per job, carrying the business's key, the job's key, the
+   outcome and **counts only** — imported, skipped, failed, and how many files this attempt itself
+   processed. No XML content, reimbursement figure, fee, payment method, customer id or company name
+   can reach a sink, which the log port's own signatures enforce; a **file name may** appear, because
+   an operator has to be able to find the file a job is talking about. Beside the log, the job row and
+   its per-file outcomes are the durable answer to "what actually landed?", readable through
+   `GET api/imports/reimbursement-report/jobs`, and the job's counts are computed from those outcome
+   rows every time rather than stored beside them.
+6. **Cost.** No billed or quota-limited external call of any kind. The bounded resource is memory, and
+   it is bounded deliberately: a 10 MB request, at most 20 archives one level deep, at most 2,000
+   entries, 5 MB per expanded entry, 100 MB expanded in total, and a compression-ratio ceiling, each
+   enforced while the bytes are read rather than taken from the archive's own declared sizes. The
+   uploaded bytes live on the job row until it finishes and are deleted then. Nothing about the host is
+   new: no deployment unit, no runtime storage account, no role assignment, no second telemetry source.
+7. **Failure recovery.** **Operator replay**, which is what the retry stop rule is written for. A job
+   that ran out of attempts keeps every outcome it recorded and tells the operator to upload the ZIP
+   again; doing so creates a new job whose already-imported files come out `Skipped`, so a replay
+   imports exactly what is missing and nothing twice. A job that finished `CompletedWithFailures` is
+   the same shape at file granularity: the readable per-file reasons say which report could not be
+   read, and re-uploading a corrected archive imports only it. There is no partial state a human has to
+   unpick, because no file is ever half-committed.
 
 ### Why "no Functions yet" is the answer today
 

@@ -42,8 +42,25 @@ public sealed record SiteMachineStock(
 /// <see cref="MonthToDateRevenue"/> are the same four periods the machine rows publish, taken from
 /// the same <see cref="Inventory.Application.Machines.MachineDashboardWindow"/>, and each is the sum
 /// of the completed-sale settlement value of the machines currently standing at the site.
-/// <see cref="PreviousComparableWeekRevenue"/> is unchanged and remains the baseline of the one
-/// comparison these figures carry, which belongs to the current week.</para>
+/// <see cref="PreviousComparableWeekRevenue"/> is unchanged and remains the baseline of the
+/// comparison that belongs to the current week.</para>
+///
+/// <para><b>And Today's own baseline</b> (issue #1177). <see cref="PreviousComparableDayRevenue"/>
+/// is <see cref="Inventory.Application.Machines.MachineDashboardWindow.PreviousComparableDay"/>
+/// summed by the same rule as every figure above: yesterday's business day up to the same elapsed
+/// time since business-local midnight as now is into today's, so Today has a comparison period of
+/// its own exactly as This week already did. It is appended after
+/// <see cref="MachineStocks"/> so every field before it keeps its name, order and value, and
+/// membership is the machine's current <c>CustomerID</c> in that period too.</para>
+///
+/// <para><b>And Month to date's</b> (issue #1180). <see cref="PreviousComparableMonthRevenue"/> is
+/// <see cref="Inventory.Application.Machines.MachineDashboardWindow.PreviousComparableMonth"/>
+/// summed by that same rule: the previous calendar month up to the same point of the month - today's
+/// day of it, or its last day when it is shorter - as now is into this one. It is appended after the
+/// day baseline, is counted with the same policy and the same site membership as every figure above,
+/// and like them it is withheld from a caller without <c>Dashboard.ViewFinancials</c>. The
+/// completed-sales read reaches back to this period's own first instant, which is what makes the
+/// figure complete rather than short.</para>
 ///
 /// <para><b>Every revenue figure is withheld from a request without
 /// <c>Dashboard.ViewFinancials</c></b> (issue #697). They are <see langword="null"/> for such a
@@ -74,4 +91,6 @@ public sealed record SiteSummary(
     decimal? PreviousComparableWeekRevenue,
     decimal? LastWeekRevenue,
     decimal? MonthToDateRevenue,
-    IReadOnlyList<SiteMachineStock> MachineStocks);
+    IReadOnlyList<SiteMachineStock> MachineStocks,
+    decimal? PreviousComparableDayRevenue,
+    decimal? PreviousComparableMonthRevenue);

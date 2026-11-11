@@ -15,6 +15,7 @@ import { BusinessSettingsService } from '../../services/business-settings.servic
 import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
+import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
@@ -74,6 +75,9 @@ const MACHINE: Machine = {
   previousComparableWeekDirectProfit: 30,
   monthToDateGrossRevenue: 400,
   monthToDateDirectProfit: 180,
+  // The baselines Today and This month are compared against (issues #1177, #1180 and #1178).
+  previousComparableDayGrossRevenue: 48,
+  previousComparableMonthGrossRevenue: 320,
   profitabilityStatus: null
 };
 
@@ -86,7 +90,10 @@ const SITE: Site = {
   emptyProductCount: 1,
   todayRevenue: 57.6,
   currentWeekRevenue: 123.9,
-  previousComparableWeekRevenue: 75.9
+  previousComparableWeekRevenue: 75.9,
+  monthToDateRevenue: 400,
+  previousComparableDayRevenue: 48,
+  previousComparableMonthRevenue: 320
 };
 
 function reminder(): MachineRestockSyncReminder {
@@ -148,6 +155,7 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
       { provide: SiteService, useValue: { getAll: () => of(options.sites ?? [SITE]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
+      { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(options.summary ?? SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
@@ -279,18 +287,22 @@ describe('Dashboard narrow-screen performance cards (issues #972 and #987)', () 
     expect(cards().textContent).toContain('$123.90 sales');
     expect(cards().textContent).toContain('vs same time last week');
 
-    for (const [label, sales] of [
-      ['Today', '$57.60 sales'],
-      ['Last week', '$210.00 sales'],
-      ['Month to date', '$400.00 sales']
+    // Since issue #1178 the card offers exactly these three periods, and each one names its own
+    // comparison rather than borrowing or dropping the week's.
+    for (const [label, sales, comparison] of [
+      ['Today', '$57.60 sales', 'vs same time yesterday'],
+      ['This month', '$400.00 sales', 'vs same time last month']
     ]) {
       periodButton(label).click();
       fixture.detectChanges();
       expect(periodButton(label).getAttribute('aria-pressed')).toBe('true');
       expect(cards().textContent).toContain(sales);
       expect(host.querySelector('[data-testid="machine-totals-card"]')?.textContent).toContain(sales);
+      expect(cards().textContent).toContain(comparison);
       expect(cards().textContent).not.toContain('vs same time last week');
     }
+
+    expect(periodButton('Last week')).toBeUndefined();
   });
 
   it('shows an Operator no period control, sales, profit or total', async () => {

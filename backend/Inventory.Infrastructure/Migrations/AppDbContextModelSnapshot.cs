@@ -2116,6 +2116,23 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PickListRefillLines");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformMenuVisibility", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Visible")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("PlatformMenuVisibility");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformOptionVisibility", b =>
                 {
                     b.Property<int>("Id")
@@ -2684,6 +2701,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<long?>("FileSizeBytes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("InvoiceNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT");
 
@@ -2760,6 +2781,136 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("ReceiptId");
 
                     b.ToTable("ReceiptItems", (string)null);
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReceiptScanUsage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MonthKey")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ScanCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "MonthKey")
+                        .IsUnique();
+
+                    b.ToTable("ReceiptScanUsages");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReimbursementImportJob", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte[]>("Archive")
+                        .HasColumnType("BLOB");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("FinishedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("NextAttemptAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("State")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UploadedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UploadedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UploadedByObjectId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "UploadedAtUtc");
+
+                    b.HasIndex("State", "NextAttemptAtUtc", "UploadedAtUtc");
+
+                    b.ToTable("ReimbursementImportJobs");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReimbursementImportJobFile", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("EntryIndex")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EntryPath")
+                        .IsRequired()
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ReimbursementImportJobId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ReimbursementImportJobId");
+
+                    b.HasIndex("BusinessId", "ReimbursementImportJobId", "EntryIndex")
+                        .IsUnique();
+
+                    b.ToTable("ReimbursementImportJobFiles");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SiteCommissionAgreement", b =>
@@ -3850,6 +4001,17 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Purchase");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReimbursementImportJobFile", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.ReimbursementImportJob", "Job")
+                        .WithMany("Files")
+                        .HasForeignKey("ReimbursementImportJobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Job");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.StockAdjustment", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.Product", "Product")
@@ -4053,6 +4215,11 @@ namespace Inventory.Infrastructure.Migrations
             modelBuilder.Entity("Inventory.Infrastructure.Models.PurchaseItem", b =>
                 {
                     b.Navigation("SupplierOrderAllocations");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReimbursementImportJob", b =>
+                {
+                    b.Navigation("Files");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierOrder", b =>

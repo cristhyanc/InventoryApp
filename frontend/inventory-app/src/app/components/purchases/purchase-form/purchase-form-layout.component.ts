@@ -17,12 +17,26 @@ import {
 } from '../purchase-line-price';
 import { PurchaseProductPickerComponent } from './purchase-product-picker.component';
 import { PurchaseReceiptFieldComponent, StoredReceipt } from './purchase-receipt-field.component';
+import { PurchaseReceiptPreviewComponent } from './purchase-receipt-preview.component';
 import { ReceiptTotalComparison, compareReceiptTotal, purchaseTotal } from './purchase-receipt-comparison';
+import {
+  NOT_STOCK_SKIP_LABEL,
+  PACK_SIZE_FROM_LAST_PURCHASE_LABEL,
+  PurchaseScannedLevy,
+  PurchaseScannedLine,
+  isScannedLineSkipped,
+  scannedAmountOutsideLines
+} from './purchase-scan-draft';
 
 /** The purchase-level fields both forms edit, under the names both already used. */
 export interface PurchaseFormFields {
   title: string;
   notes: string;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162), as typed. Empty is "none": the form
+   * sends no number at all for it, and the API stores none.
+   */
+  invoiceNumber: string;
   totalAmount: number | null;
   deliveryCost: number | null;
   deliveryGstClassification: GstClassification;
@@ -37,6 +51,13 @@ export interface PurchaseFormLine extends PurchaseLinePrice {
   id?: number;
   productId: number;
   gstClassification: GstClassification;
+
+  /**
+   * What a scanned receipt said about this line (issue #1166), and `undefined` on every line a
+   * person typed. It carries the receipt's own text and pack maths, what the scan could not
+   * complete, and whether the line is kept out of the purchase as "Not stock, skip".
+   */
+  scan?: PurchaseScannedLine;
 }
 
 /** The message a line shows while it has no product chosen. */
@@ -71,7 +92,8 @@ export function missingProductErrorMessage(lineCount: number): string {
     IconComponent,
     HelpToggletipComponent,
     PurchaseProductPickerComponent,
-    PurchaseReceiptFieldComponent
+    PurchaseReceiptFieldComponent,
+    PurchaseReceiptPreviewComponent
   ],
   templateUrl: './purchase-form-layout.component.html'
 })
@@ -101,6 +123,27 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   @Input() storedReceipt: StoredReceipt | null = null;
 
   /**
+   * The receipt a scan read, shown beside the lines on a wide screen and above them on a phone
+   * (issue #1166), or `null` on a form that has scanned nothing - which is every Edit form.
+   */
+  @Input() scannedReceipt: File | null = null;
+
+  /**
+   * Levies a scanned receipt printed that its own totals could not place on any product (issue
+   * #1166). Each gets a row of its own outside the lines: it carries no product picker, it is never
+   * saved as a purchase line, and the receipt-total check counts it so the difference is explained.
+   */
+  @Input() scannedLevies: readonly PurchaseScannedLevy[] = [];
+
+  /**
+   * Whether to offer saving the purchase without its receipt (issue #1166), which is what the
+   * attachment-storage refusal of issue #968 leaves as the one way forward: the purchase itself is
+   * always recordable, and the document is optional since #976. Nothing is saved until the person
+   * chooses it.
+   */
+  @Input() offerSaveWithoutReceipt = false;
+
+  /**
    * The saved purchase's input GST as the API last calculated it, on Edit. `null` on Add, and
    * whenever the API sent none: GST is then shown as calculated on save, never as $0.
    */
@@ -113,6 +156,9 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   @Output() readonly pendingFileChange = new EventEmitter<File | null>();
   @Output() readonly previewStoredReceipt = new EventEmitter<void>();
 
+  /** The person chose to save the purchase without the receipt the storage allowance refused. */
+  @Output() readonly saveWithoutReceipt = new EventEmitter<void>();
+
   /** The supplier or the purchase date changed, which is what a suggested title is made from. */
   @Output() readonly detailsChange = new EventEmitter<void>();
 
@@ -121,10 +167,19 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
   readonly missingProductMessage = MISSING_PRODUCT_MESSAGE;
+  readonly notStockSkipLabel = NOT_STOCK_SKIP_LABEL;
+  readonly packSizeFromLastPurchaseLabel = PACK_SIZE_FROM_LAST_PURCHASE_LABEL;
 
   /** Save was pressed at least once, so every problem may be shown, not only touched ones. */
   submitAttempted = false;
   titleTouched = false;
+
+  /**
+   * Whether the receipt field is still shrinking or converting a chosen photo (issue #1161). Save
+   * waits for it: the file the page would upload does not exist yet, and saving now would record
+   * the purchase with no receipt at all.
+   */
+  receiptPreparing = false;
 
   /**
    * Whether the person opened (`true`) or closed (`false`) an optional section. `null` follows its
@@ -204,8 +259,35 @@ export class PurchaseFormLayoutComponent implements OnChanges {
     this.touchedLines.add(item);
   }
 
+  /**
+   * Whether this line is kept out of the purchase as "Not stock, skip" (issue #1166). Only a
+   * scanned line the receipt said is not stock for resale ever starts that way.
+   */
+  isSkippedLine(item: PurchaseFormLine): boolean {
+    return isScannedLineSkipped(item);
+  }
+
+  /** The lines the purchase will actually save: everything except a skipped one. */
+  get savedItems(): PurchaseFormLine[] {
+    return this.items.filter((item) => !this.isSkippedLine(item));
+  }
+
+  /**
+   * "Not stock, skip" was turned on or off. Turning it off asks for a product the way any other
+   * line does; turning it on takes the line back out of the purchase without discarding what the
+   * receipt said about it.
+   */
+  onSkipChange(item: PurchaseFormLine, skipped: boolean): void {
+    if (item.scan === undefined) return;
+    item.scan.skipped = skipped;
+  }
+
   private showsProblems(item: PurchaseFormLine): boolean {
-    return this.submitAttempted || this.touchedLines.has(item);
+    // A skipped line is not saved, so it has nothing to complete. A scanned line shows what it
+    // still needs straight away: the application filled it in and is asking for it to be checked,
+    // so waiting for a blur or a Save would hide exactly the figures that need attention.
+    if (this.isSkippedLine(item)) return false;
+    return this.submitAttempted || this.touchedLines.has(item) || item.scan !== undefined;
   }
 
   /** The missing product, shown once the line was touched or a save was attempted. */
@@ -218,8 +300,26 @@ export class PurchaseFormLayoutComponent implements OnChanges {
     return this.showsProblems(item) ? purchaseLinePriceProblem(item) : null;
   }
 
+  /**
+   * Why a scanned line is still incomplete, in the receipt's own terms - "the pack size is not
+   * printed", rather than only "enter the units" (issue #1166).
+   *
+   * It is shown **only while the line still has something to fill in**. The scan's list is a record
+   * of what it could not complete and never changes, so leaving it on a line somebody has since
+   * completed would leave an instruction nobody can act on standing beside a finished line.
+   */
+  scanMissing(item: PurchaseFormLine): readonly string[] {
+    const outstanding = this.productProblem(item) !== null || this.priceProblem(item) !== null;
+    return outstanding ? item.scan?.missing ?? [] : [];
+  }
+
   onProductChange(item: PurchaseFormLine, productId: number): void {
     item.productId = productId;
+    // Choosing a product for a line the receipt said is not stock is how the person says it is:
+    // that is the one change issue #1166 asks for, and it puts the line into the purchase.
+    if (productId && item.scan?.skipped) {
+      item.scan.skipped = false;
+    }
   }
 
   onQuantityChange(item: PurchaseFormLine, quantity: number | null): void {
@@ -275,20 +375,46 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   // ---- Summary ------------------------------------------------------------------------------
 
   get itemsSubtotal(): number {
-    return this.items.reduce((sum, item) => sum + savedLineAmount(item), 0);
+    return this.savedItems.reduce((sum, item) => sum + savedLineAmount(item), 0);
   }
 
   get total(): number {
-    return purchaseTotal(this.items, this.form.deliveryCost, this.form.packageCost);
+    return purchaseTotal(this.savedItems, this.form.deliveryCost, this.form.packageCost);
+  }
+
+  /**
+   * What the scanned receipt printed that this purchase does not record: every line still marked
+   * "Not stock, skip", and every unresolved levy (issue #1166). It is `0` on every form that has
+   * scanned nothing, it is never part of {@link total}, and none of it is saved.
+   */
+  get amountOutsideLines(): number {
+    return scannedAmountOutsideLines(this.items, this.scannedLevies);
   }
 
   get receiptComparison(): ReceiptTotalComparison {
-    return compareReceiptTotal(this.form.totalAmount, this.items, this.form.deliveryCost, this.form.packageCost);
+    return compareReceiptTotal(
+      this.form.totalAmount,
+      this.savedItems,
+      this.form.deliveryCost,
+      this.form.packageCost,
+      this.amountOutsideLines
+    );
   }
 
   // ---- Actions ------------------------------------------------------------------------------
 
+  /** The receipt field reports a photo being prepared, or finished with (issue #1161). */
+  onReceiptPreparing(preparing: boolean): void {
+    this.receiptPreparing = preparing;
+  }
+
   submit(): void {
+    // Checked here as well as disabled on the button, so a save that would lose the chosen receipt
+    // is actually unavailable rather than merely inert.
+    if (this.receiptPreparing) {
+      return;
+    }
+
     this.submitAttempted = true;
     this.submitted.emit();
   }

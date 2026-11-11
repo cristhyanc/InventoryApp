@@ -228,9 +228,74 @@ public class WeightedAverageCostReplayTests
     }
 
     [Fact]
+    public void Sale_with_no_ledger_cost_and_no_purchase_is_costed_at_its_Nayax_cost_without_consuming_inventory()
+    {
+        var result = Replay([], [new CostReplaySale(100, T0, NayaxProductCostPrice: 1.75m)]);
+
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(CostDataQualityIssueCodes.CostFallback, issue.Code);
+        Assert.False(issue.IsFatal);
+        Assert.False(result.HasFatalIssue);
+        var cost = Assert.Single(result.SaleCosts);
+        Assert.Equal(1.75m, cost.UnitCost);
+        Assert.Equal(CostReplaySaleCostSource.NayaxCost, cost.Source);
+        Assert.Empty(result.UncostableSales);
+        Assert.Equal(0, result.CostingQuantity);
+        Assert.Equal(0m, result.InventoryValue);
+    }
+
+    [Fact]
+    public void Sale_after_stock_is_exhausted_takes_the_latest_purchase_cost_before_it_over_the_Nayax_cost()
+    {
+        var result = Replay(
+            [
+                Adjustment(1, 0, StockAdjustmentReason.Restock, 1, 2m),
+                Adjustment(2, 2, StockAdjustmentReason.Restock, 1, 2.19m),
+                Adjustment(3, 20, StockAdjustmentReason.Restock, 2, 3m)
+            ],
+            [
+                Sale(100, 5),
+                Sale(101, 6),
+                new CostReplaySale(102, T0.AddMinutes(10), NayaxProductCostPrice: 1.10m),
+                Sale(103, 25)
+            ]);
+
+        Assert.False(result.HasFatalIssue);
+        Assert.Equal(
+            [
+                (100L, 2.095m, CostReplaySaleCostSource.Ledger),
+                (101L, 2.095m, CostReplaySaleCostSource.Ledger),
+                // Costed stock ran out: the latest purchase before the sale (2.19), not the Nayax cost
+                // and not the later 3.00 purchase.
+                (102L, 2.19m, CostReplaySaleCostSource.LastPurchase),
+                (103L, 3m, CostReplaySaleCostSource.Ledger)
+            ],
+            result.SaleCosts.Select(x => (x.Sale.TransactionId, x.UnitCost, x.Source)).ToArray());
+        Assert.Equal(1, result.CostingQuantity);
+        Assert.Equal(3m, result.InventoryValue);
+        Assert.Equal(CostDataQualityIssueCodes.CostFallback, Assert.Single(result.Issues).Code);
+    }
+
+    [Fact]
+    public void Sale_with_no_ledger_cost_no_purchase_and_no_valid_Nayax_cost_stays_a_fatal_missing_opening()
+    {
+        var result = Replay([], [new CostReplaySale(100, T0, NayaxProductCostPrice: -1m)]);
+
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(CostDataQualityIssueCodes.MissingOpening, issue.Code);
+        Assert.True(issue.IsFatal);
+        Assert.Empty(result.SaleCosts);
+        Assert.Single(result.UncostableSales);
+    }
+
+    [Fact]
     public void Sale_after_stock_is_exhausted_is_an_unknown_cost()
     {
-        var result = Replay([Adjustment(1, 0, StockAdjustmentReason.Restock, 1, 2m)], [Sale(100, 1), Sale(101, 2)]);
+        // A costing repair is a costed acquisition but not a purchase, so once it is used up there is
+        // no latest purchase to fall back on; with no Nayax cost either, the sale stays uncostable.
+        // (Past a recorded purchase the sale takes that purchase's cost instead - see the fallback
+        // tests above.)
+        var result = Replay([], [Sale(100, 1), Sale(101, 2)], repairs: [Repair(1, 0, 1, 2m)]);
 
         var issue = Assert.Single(result.Issues);
         Assert.Equal(CostDataQualityIssueCodes.UnknownCost, issue.Code);
@@ -494,8 +559,9 @@ public class WeightedAverageCostReplayTests
     public void Uncostable_sales_are_reported_in_replay_order_and_costed_sales_are_not()
     {
         var result = Replay(
-            [Adjustment(1, 0, StockAdjustmentReason.Restock, 1, 2m)],
-            [Sale(103, 9), Sale(101, 1), Sale(102, 9)]);
+            [],
+            [Sale(103, 9), Sale(101, 1), Sale(102, 9)],
+            repairs: [Repair(1, 0, 1, 2m)]);
 
         Assert.Equal([101L], result.SaleCosts.Select(x => x.Sale.TransactionId));
         Assert.Equal([102L, 103L], result.UncostableSales.Select(x => x.TransactionId));

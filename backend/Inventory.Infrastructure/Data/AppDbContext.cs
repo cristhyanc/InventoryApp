@@ -1,10 +1,12 @@
 using System.Linq.Expressions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Imports;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Purchases;
 using Inventory.Domain.Stock;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
@@ -604,6 +606,22 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<MachineStockCount> MachineStockCounts => Set<MachineStockCount>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
+
+    /// <summary>
+    /// The uploaded Nayax reimbursement report archives waiting to be, or already, imported (issue
+    /// #1149). Ordinary tenant-owned data; the uploaded bytes live on the row until the job reaches
+    /// a final state and are deleted then. See <see cref="ReimbursementImportJob"/>.
+    /// </summary>
+    public DbSet<ReimbursementImportJob> ReimbursementImportJobs => Set<ReimbursementImportJob>();
+
+    /// <summary>
+    /// What each XML file inside one of those archives turned into (issue #1149), written in the
+    /// same transaction as that file's reimbursement rows. Nothing updates or deletes one, and the
+    /// job's counts are computed from this set rather than stored. See
+    /// <see cref="ReimbursementImportJobFile"/>.
+    /// </summary>
+    public DbSet<ReimbursementImportJobFile> ReimbursementImportJobFiles =>
+        Set<ReimbursementImportJobFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
     public DbSet<ImportedDevicePayment> ImportedDevicePayments => Set<ImportedDevicePayment>();
@@ -724,6 +742,22 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<Models.PlatformOptionVisibility> PlatformOptionVisibility =>
         Set<Models.PlatformOptionVisibility>();
+
+    /// <summary>
+    /// Which switchable Admin menu destinations are offered to anybody but a Super Admin
+    /// (issue #1148): one row per destination somebody has switched, keyed by the destination's own
+    /// catalogue key. The twelfth <em>platform</em> table, on the same terms as
+    /// <see cref="SupplierPresets"/> above: about no business, so no business key, no index on one
+    /// and no query filter. No row for a key means that destination is offered; see
+    /// <see cref="Models.PlatformMenuVisibility"/>.
+    ///
+    /// <para>It supersedes the single-row <see cref="PlatformOptionVisibility"/> above, whose
+    /// stored answer the migration carries over to the
+    /// <c>admin.historical-gst-classification</c> key. That table is left in place and is no longer
+    /// written.</para>
+    /// </summary>
+    public DbSet<Models.PlatformMenuVisibility> PlatformMenuVisibility =>
+        Set<Models.PlatformMenuVisibility>();
 
     /// <summary>
     /// The shared catalogue's products (issue #923, parent #817): one row per product that is looked
@@ -868,6 +902,15 @@ public class AppDbContext : DbContext
         Set<AttachmentStorageReservation>();
 
     /// <summary>
+    /// Each business's receipt-scan count per calendar month of its own time zone (issue #1164):
+    /// ordinary tenant-owned data, so the business key, the index, the query filter and the ownership
+    /// stamp are the central mechanism's with nothing added. One row per business per month, holding
+    /// a number and two instants and nothing about any receipt. See <see cref="ReceiptScanUsage"/>
+    /// and <see cref="ConfigureReceiptScanUsages"/>.
+    /// </summary>
+    public DbSet<ReceiptScanUsage> ReceiptScanUsages => Set<ReceiptScanUsage>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -931,8 +974,10 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
+        ConfigurePlatformMenuVisibility(modelBuilder);
         ConfigureSubscriptions(modelBuilder);
         ConfigureAttachmentStorageReservations(modelBuilder);
+        ConfigureReceiptScanUsages(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -1132,6 +1177,12 @@ public class AppDbContext : DbContext
                 + @"OR (""StoredFileName"" IS NOT NULL AND ""ContentType"" IS NOT NULL "
                 + @"AND ""FileName"" IS NOT NULL AND ""FileSizeBytes"" IS NOT NULL)"));
         modelBuilder.Entity<PurchaseItem>().ToTable("ReceiptItems");
+
+        // The supplier's own receipt/invoice number (issue #1162). The length is the Domain's, so the
+        // column and the refusal the use cases give cannot disagree about what fits.
+        modelBuilder.Entity<Purchase>()
+            .Property(r => r.InvoiceNumber)
+            .HasMaxLength(PurchaseInvoiceNumberPolicy.MaxLength);
 
         modelBuilder.Entity<Purchase>()
             .Property(r => r.TotalAmount)
@@ -1977,6 +2028,38 @@ public class AppDbContext : DbContext
     }
 
     /// <summary>
+    /// Maps the keyed menu-visibility rows (issue #1148), which supersede the single row above.
+    ///
+    /// <para><strong>The key is the catalogue key.</strong> One row per switchable destination
+    /// somebody has switched, keyed by
+    /// <c>Inventory.Application.PlatformOptions.MenuVisibilityKeys</c>'s own string, so the database
+    /// assigns nothing: two writes to the <em>same</em> destination collide on the primary key -
+    /// which <c>EfMenuVisibilityStore</c> resolves into the update it should have been - while two
+    /// writes to different destinations are two different rows and cannot overwrite each other.
+    /// There is no index to add: the only question asked of this table is "every stored row", and
+    /// the lookup by key is the primary key itself.</para>
+    ///
+    /// <para>The twelfth <em>platform</em> table, on the terms
+    /// <see cref="ConfigureSupplierPresets"/> states: about no business, so no business key, no index
+    /// on one and no query filter. It is seeded with nothing; the one value the migration carries
+    /// over is the stored <c>false</c> of issue #873, so an installation that switched Historical GST
+    /// Classification off keeps it off.</para>
+    /// </summary>
+    private static void ConfigurePlatformMenuVisibility(ModelBuilder modelBuilder)
+    {
+        var visibility = modelBuilder.Entity<Models.PlatformMenuVisibility>();
+
+        visibility.HasKey(x => x.Key);
+        visibility.Property(x => x.Key).HasMaxLength(100).ValueGeneratedNever();
+
+        // Persisted UTC, and marked UTC on the way out for the reason the row above is: the SQLite
+        // provider returns an unspecified kind otherwise.
+        visibility.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
     /// Maps the business subscription state of issue #966: two tenant-owned tables about one
     /// business's plan, and one platform table about the grandfathering step itself.
     ///
@@ -2089,6 +2172,75 @@ public class AppDbContext : DbContext
                 : fromProvider);
 
         ConfigureConnectedMachineSnapshots(modelBuilder);
+
+        ConfigureReimbursementImportJobs(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the uploaded reimbursement report import jobs of issue #1149: one tenant-owned row per
+    /// uploaded Nayax ZIP, and one per XML file inside it saying what that file turned into.
+    ///
+    /// <para><strong>Both are ordinary tenant-owned data.</strong>
+    /// <see cref="ConfigureBusinessOwnership"/> gives each the business key, its index, the central
+    /// query filter and the ownership stamp, and nothing here replaces any of that. A settlement
+    /// archive and what became of it are facts about the business whose money it settles, so neither
+    /// is a platform table, declared or otherwise.</para>
+    ///
+    /// <para><strong>One outcome per file per job, enforced by the database.</strong> The unique
+    /// index over (business, job, entry index) is what makes the counts right: they are computed from
+    /// these rows every time they are asked for, so a second outcome for one file would be a second
+    /// vote. It is led by the business key like every other per-business uniqueness rule in this
+    /// schema (AGENTS.md § Tenant ownership and data isolation).</para>
+    ///
+    /// <para><strong>The discovery index is the worker's whole query.</strong> (state, next attempt,
+    /// upload instant) is the order the one cross-business statement reads in - the oldest job that
+    /// is due - and it deliberately does <em>not</em> lead with the business key, because that
+    /// statement has no business to narrow by: whose job is waiting is what it is for.</para>
+    ///
+    /// <para>Every instant is persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription records' are: the SQLite provider returns an unspecified kind otherwise, and
+    /// these instants are reported to the Reimbursement Report page.</para>
+    /// </summary>
+    private static void ConfigureReimbursementImportJobs(ModelBuilder modelBuilder)
+    {
+        var job = modelBuilder.Entity<ReimbursementImportJob>();
+
+        job.HasIndex(x => new { x.State, x.NextAttemptAtUtc, x.UploadedAtUtc });
+        job.HasIndex(x => new { x.BusinessId, x.UploadedAtUtc });
+
+        job.Property(x => x.FileName).HasMaxLength(ReimbursementArchivePolicy.MaxFileNameLength);
+        job.Property(x => x.UploadedByDirectoryTenantId).HasMaxLength(100);
+        job.Property(x => x.UploadedByObjectId).HasMaxLength(100);
+        job.Property(x => x.LastError).HasMaxLength(400);
+
+        job.Property(x => x.UploadedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        job.Property(x => x.NextAttemptAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        job.Property(x => x.FinishedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+
+        var file = modelBuilder.Entity<ReimbursementImportJobFile>();
+
+        file.HasOne(x => x.Job)
+            .WithMany(x => x.Files)
+            .HasForeignKey(x => x.ReimbursementImportJobId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        file.HasIndex(x => new { x.BusinessId, x.ReimbursementImportJobId, x.EntryIndex }).IsUnique();
+
+        file.Property(x => x.EntryPath).HasMaxLength(ReimbursementArchivePolicy.MaxEntryLabelLength);
+        file.Property(x => x.Reason).HasMaxLength(400);
+        file.Property(x => x.RecordedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>
@@ -2250,6 +2402,39 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
         reservation.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the monthly receipt-scan counter of issue #1164: one row per business per calendar month
+    /// of that business's own time zone.
+    ///
+    /// <para><strong>The unique index is the cap's backstop.</strong> <c>(BusinessId, MonthKey)</c>
+    /// is unique, so a month cannot come to hold two counters that each think they are the whole
+    /// count - which is the one way a cap over a counter could be exceeded without any single
+    /// comparison being wrong. It is <em>per business</em>, as every uniqueness rule over
+    /// tenant-owned data in this application is (AGENTS.md § Tenant ownership and data isolation):
+    /// two businesses are each counting their own month, and a global index over a month key would
+    /// let whichever scanned first deny the month to everybody else. It is also the index every
+    /// statement over this table uses, because every one of them asks the same question - what has
+    /// this business counted in this month.</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// reservations above are: the SQLite provider returns an unspecified kind otherwise.</para>
+    ///
+    /// <para>There is deliberately no foreign key to a product, a purchase or anything else: the row
+    /// is about a month, not about a receipt, and it holds nothing that could name one.</para>
+    /// </summary>
+    private static void ConfigureReceiptScanUsages(ModelBuilder modelBuilder)
+    {
+        var usage = modelBuilder.Entity<ReceiptScanUsage>();
+
+        usage.HasIndex(x => new { x.BusinessId, x.MonthKey }).IsUnique();
+        usage.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        usage.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }

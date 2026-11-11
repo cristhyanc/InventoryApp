@@ -20,6 +20,7 @@ import { SIGN_IN_ROUTE } from './auth/intended-destination';
 import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
+import { legalRoutes } from './public/legal/legal-routes';
 import { PLAN_LOCKED_PATH } from './access/plan-lock';
 import { requirePlan } from './access/plan-lock.guard';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
@@ -29,6 +30,7 @@ import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
 import { signedOutVisitorGuard } from './public/signed-out-visitor.guard';
 import { confirmPickListLeave } from './components/pick-list/pick-list-leave.guard';
 import { confirmProductFormLeave } from './components/products/product-form-leave.guard';
+import { confirmExpenseFormLeave } from './components/expenses/expense-form-leave.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -44,7 +46,8 @@ import { confirmProductFormLeave } from './components/products/product-form-leav
  * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
  * for the reason already documented beside it, and `/super-admin/diagnostics`,
- * `/super-admin/businesses` and `/super-admin/supplier-presets` (issues #546, #547, #848) carry
+ * `/super-admin/businesses`, `/super-admin/supplier-presets` and `/super-admin/menu-visibility`
+ * (issues #546, #547, #848, #1151) carry
  * neither guard: their authority is the
  * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
  * instead and sends a refusal to the dashboard rather than to any membership-handling destination
@@ -492,6 +495,20 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
+    // The dedicated Reimbursement Report page (issue #1152), reached from the Imports page's own
+    // card and from its own sidebar entry. It carries exactly the three guards `/admin/imports`
+    // carries - it is the same capability over the same imports - and deliberately no provider
+    // guard: the page makes no Nayax call at all, reading and writing only this business's own
+    // records, so it is reachable by URL for a business whose connection has stopped working. The
+    // menu hides the entry instead, exactly as it hides Imports.
+    path: 'admin/imports/reimbursement-report',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
+    loadComponent: () =>
+      import('./components/admin/imports/reimbursement-report/reimbursement-report-page.component').then(
+        (m) => m.ReimbursementReportPageComponent
+      )
+  },
+  {
     // Deliberately **not** provider-locked (issue #869, the user's decision of 24 October 2026):
     // this page makes no Nayax call at all - `BackfillNayaxHistoricalSaleCosts` reads the Nayax cost
     // already stored on imported sales - so a disconnected business with imported history can still
@@ -619,6 +636,19 @@ export const routes: Routes = [
       )
   },
   {
+    // The Super Admin Menu Visibility page (issue #1151): which Admin maintenance destinations are
+    // offered to anybody but a Super Admin. Platform-admin authority, not a business role, decides
+    // it - the same `platformAdminGuard` as the five super-admin routes above, and for the same
+    // reason - and it is deliberately never affected by the switches it manages, because an
+    // administrator must always be able to switch one back on.
+    path: 'super-admin/menu-visibility',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/menu-visibility/super-admin-menu-visibility.component').then(
+        (m) => m.SuperAdminMenuVisibilityComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
@@ -666,6 +696,25 @@ export const routes: Routes = [
       )
   },
   {
+    // Add expense (issue #1167): the card the register used to open above itself is now a page of
+    // its own. It is a two-segment path, so Angular's exact matching keeps it clear of the
+    // three-segment `expenses/:id/edit` whatever the declaration order.
+    path: 'expenses/new',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
+    // Unsaved expense changes ask before they are lost (issue #1167).
+    canDeactivate: [confirmExpenseFormLeave],
+    loadComponent: () =>
+      import('./components/expenses/expense-form-page.component').then((m) => m.ExpenseFormPageComponent)
+  },
+  {
+    path: 'expenses/:id/edit',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
+    // Unsaved expense changes ask before they are lost (issue #1167).
+    canDeactivate: [confirmExpenseFormLeave],
+    loadComponent: () =>
+      import('./components/expenses/expense-form-page.component').then((m) => m.ExpenseFormPageComponent)
+  },
+  {
     path: 'expenses',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
@@ -682,5 +731,9 @@ export const routes: Routes = [
   // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
   // fixture. Must stay above the wildcard, which would otherwise swallow it.
   ...designSystemRoutes,
+  // Empty in every optimized build, for the same reason: the Privacy Policy and Terms of Use page
+  // layouts (issue #1190) are reachable only in a development build, and nothing links to either
+  // path. Must stay above the wildcard, which would otherwise swallow them.
+  ...legalRoutes,
   { path: '**', redirectTo: '' }
 ];

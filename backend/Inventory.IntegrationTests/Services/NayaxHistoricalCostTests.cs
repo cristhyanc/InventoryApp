@@ -349,8 +349,9 @@ public class NayaxHistoricalCostTests
     /// <summary>
     /// Issue #362: one product whose cost history cannot be replayed must not discard the rebuilds
     /// the same sync already produced for the other products. The healthy product's rebuilt costing
-    /// position is saved, the failing product is left untouched, both sales stay persisted, and the
-    /// failure is still raised as a single data-quality error.
+    /// position is saved, the failing product is left untouched and both sales stay persisted. The
+    /// failure no longer fails the sync: it is kept as the product's pending rebuild with its failure
+    /// code, which is what the Dashboard's "costs need attention" read reports.
     /// </summary>
     [Fact]
     public async Task Latest_sales_sync_saves_other_products_costs_when_one_products_history_is_fatal()
@@ -375,11 +376,19 @@ public class NayaxHistoricalCostTests
                 LastSale(1001, 10, "Costed Snack")
             });
 
-        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
-            () => LatestSalesSync(db, nayax.Object).Handle());
+        var outcome = await LatestSalesSync(db, nayax.Object).Handle();
 
-        Assert.Contains("2001", exception.Message);
-        Assert.Contains("no known opening cost", exception.Message);
+        // A run that happened: not refused, not busy, not a recent-sync skip.
+
+        Assert.Null(outcome.RetryAfter);
+
+        Assert.False(outcome.IsBusy);
+
+        Assert.Null(outcome.RecentlySyncedAtUtc);
+        var pending = await db.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
+        Assert.Equal(20, pending.ProductId);
+        Assert.Equal("data_quality", pending.LastFailureCode);
+        Assert.Equal(1, pending.AttemptCount);
         // Read untracked, so these assert what the sync actually saved rather than what it staged.
         var costed = await db.Products.AsNoTracking().SingleAsync(product => product.Id == 10);
         Assert.Equal(9, costed.CostingQuantity);
@@ -393,6 +402,96 @@ public class NayaxHistoricalCostTests
             new long[] { 1001, 2001 },
             await db.NayaxSales.AsNoTracking().OrderBy(sale => sale.TransactionID)
                 .Select(sale => sale.TransactionID).ToArrayAsync());
+    }
+
+    /// <summary>
+    /// A sale the ledger cannot cost - the product has no costed stock or purchase recorded before it -
+    /// takes the transaction-level Nayax <c>Product Cost Price</c> it carries instead of failing the
+    /// rebuild. It consumes no costing inventory, because the ledger never held the unit,
+    /// and nothing is left pending.
+    /// </summary>
+    [Fact]
+    public async Task Latest_sales_sync_costs_a_sale_with_no_ledger_cost_and_no_purchase_at_its_Nayax_cost()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 20, Name = "Uncosted Water", QuantityInStock = 4 });
+        db.InventoryCostTransitionBaselines.Add(
+            Baseline(20, homeStockQuantity: 4, openingCostingQuantity: 0, inventoryValue: 0m));
+        await db.SaveChangesAsync();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine" } });
+        var sale = LastSale(2001, 20, "Uncosted Water");
+        sale.ProductCostPrice = 1.40m;
+        nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxLastSalesReport> { sale });
+
+        var outcome = await LatestSalesSync(db, nayax.Object).Handle();
+
+        // A run that happened: not refused, not busy, not a recent-sync skip.
+
+        Assert.Null(outcome.RetryAfter);
+
+        Assert.False(outcome.IsBusy);
+
+        Assert.Null(outcome.RecentlySyncedAtUtc);
+        var stored = await db.NayaxSales.AsNoTracking().SingleAsync();
+        Assert.Equal(1.40m, stored.UnitCostAtSale);
+        Assert.Equal(1.40m, stored.CostOfGoodsSold);
+        Assert.Equal(SaleCostingStatus.Costed, stored.CostingStatus);
+        Assert.Equal(SaleCostSource.NayaxTransactionExport, stored.CostSource);
+        var product = await db.Products.AsNoTracking().SingleAsync(candidate => candidate.Id == 20);
+        Assert.Equal(0, product.CostingQuantity);
+        Assert.Equal(0m, product.InventoryValue);
+        Assert.Empty(await db.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// When costed stock runs out, a sale takes the unit cost of the latest costed purchase replayed
+    /// before it (the repository owner's 10 November 2026 decision), ahead of its Nayax cost, and is
+    /// stored as Costed with an Estimated source so reports show it was not costed from real stock.
+    /// </summary>
+    [Fact]
+    public async Task Latest_sales_sync_costs_a_sale_past_the_recorded_stock_at_the_latest_purchase_cost()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 20, Name = "Monster Original", QuantityInStock = 0 });
+        db.InventoryCostTransitionBaselines.Add(
+            Baseline(20, homeStockQuantity: 0, openingCostingQuantity: 0, inventoryValue: 0m));
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 20,
+            Reason = StockAdjustmentReason.Restock,
+            QuantityChange = 1,
+            UnitCost = 2.19m,
+            TotalCost = 2.19m,
+            EffectiveAt = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        await db.SaveChangesAsync();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine" } });
+        var covered = LastSale(2001, 20, "Monster Original");
+        var pastTheStock = LastSale(2002, 20, "Monster Original");
+        pastTheStock.ProductCostPrice = 1.10m;
+        nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxLastSalesReport> { covered, pastTheStock });
+
+        var outcome = await LatestSalesSync(db, nayax.Object).Handle();
+
+        Assert.Null(outcome.RetryAfter);
+        var sales = await db.NayaxSales.AsNoTracking().OrderBy(sale => sale.TransactionID).ToListAsync();
+        Assert.Equal(2.19m, sales[0].UnitCostAtSale);
+        Assert.Equal(SaleCostSource.InventoryLedger, sales[0].CostSource);
+        Assert.Equal(2.19m, sales[1].UnitCostAtSale);
+        Assert.Equal(2.19m, sales[1].CostOfGoodsSold);
+        Assert.Equal(SaleCostingStatus.Costed, sales[1].CostingStatus);
+        Assert.Equal(SaleCostSource.Estimated, sales[1].CostSource);
+        var product = await db.Products.AsNoTracking().SingleAsync(candidate => candidate.Id == 20);
+        Assert.Equal(0, product.CostingQuantity);
+        Assert.Equal(0m, product.InventoryValue);
+        Assert.Empty(await db.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
     }
 
     private static NayaxLastSalesReport LastSale(long transactionId, long nayaxProductId, string productName) =>

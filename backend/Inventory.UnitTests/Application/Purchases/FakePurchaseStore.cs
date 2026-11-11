@@ -110,7 +110,7 @@ public sealed class FakePurchaseStore : IPurchaseStore
         var package = PurchaseGstPolicy.ClassifyCharge(
             fields.PackageCost, PurchaseGstPolicy.Classify(fields.PackageGstClassification));
         var record = new PurchaseRecord(
-            id, 1, fields.Title ?? string.Empty, fields.Notes, fields.TotalAmount,
+            id, 1, fields.Title ?? string.Empty, fields.Notes, fields.InvoiceNumber, fields.TotalAmount,
             fields.DeliveryCost, delivery.Classification, delivery.Source,
             fields.PackageCost, package.Classification, package.Source,
             fields.PurchaseDate ?? DateTime.UtcNow, fields.SupplierId, null,
@@ -164,7 +164,7 @@ public sealed class FakePurchaseStore : IPurchaseStore
     {
         var id = _nextId++;
         var record = new PurchaseRecord(
-            id, 1, "Weekly restock", null, null, null, GstClassification.Unknown, GstClassificationSource.Unknown,
+            id, 1, "Weekly restock", null, null, null, null, GstClassification.Unknown, GstClassificationSource.Unknown,
             null, GstClassification.Unknown, GstClassificationSource.Unknown, DateTime.UtcNow, null, null, [],
             document?.FileName, document?.StoredFileName, document?.ContentType, document?.FileSizeBytes,
             DateTime.UtcNow);

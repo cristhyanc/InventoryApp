@@ -4,7 +4,10 @@ import { CheapestSupplierOffer, CheapestSupplierProduct, SupplierPriceBasis } fr
 import { ProductPriceTrackingStatus } from '../../../models/models';
 import {
   AUTOMATIC_MATCH_NOTE,
+  LOWEST_UNIT_PRICE_EXPLAINER,
+  LOWEST_UNIT_PRICE_LABEL,
   OBSERVED_PRICES_NOTE,
+  SUPPLIER_COMPARISON_NOTICE,
   basisLabel,
   money,
   offerOnlinePriceNote,
@@ -73,6 +76,9 @@ export class SupplierComparisonDialogComponent implements OnDestroy {
 
   readonly observedPricesNote = OBSERVED_PRICES_NOTE;
   readonly automaticMatchNote = AUTOMATIC_MATCH_NOTE;
+  readonly comparisonNotice = SUPPLIER_COMPARISON_NOTICE;
+  readonly lowestUnitPriceLabel = LOWEST_UNIT_PRICE_LABEL;
+  readonly lowestUnitPriceExplainer = LOWEST_UNIT_PRICE_EXPLAINER;
 
   /** This dialog's own heading id, so several on one page never share one. */
   readonly titleId = `supplier-comparison-title-${++SupplierComparisonDialogComponent.instances}`;
@@ -107,6 +113,11 @@ export class SupplierComparisonDialogComponent implements OnDestroy {
 
   get suppliers(): CheapestSupplierOffer[] {
     return this.product?.suppliers ?? [];
+  }
+
+  /** Whether any row carries the Lowest unit price badge, so its explainer has something to explain. */
+  get hasLowestUnitPriceOffer(): boolean {
+    return this.suppliers.some((offer) => offer.isCheapest);
   }
 
   close(): void {

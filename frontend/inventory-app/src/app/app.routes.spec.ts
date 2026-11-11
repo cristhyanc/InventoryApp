@@ -1,5 +1,9 @@
 import { MsalGuard } from '@azure/msal-angular';
-import { Route } from '@angular/router';
+import { Component } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { CanActivateFn, Route, Router, provideRouter } from '@angular/router';
+import { of } from 'rxjs';
+import { AccessService } from './access/access.service';
 import { ACCESS_NOT_ALLOWED_PATH } from './access/capability.guard';
 import { accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
@@ -22,6 +26,7 @@ import { StockHistoryPageComponent } from './components/stock/stock-history-page
 import { ProductFormComponent } from './components/products/product-form.component';
 import { ProductImportPageComponent } from './components/products/product-import-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
+import { ReimbursementReportPageComponent } from './components/admin/imports/reimbursement-report/reimbursement-report-page.component';
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
@@ -32,6 +37,7 @@ import { SuperAdminBusinessesComponent } from './components/super-admin/business
 import { SuperAdminSupplierPresetsComponent } from './components/super-admin/supplier-presets/super-admin-supplier-presets.component';
 import { SuperAdminPriceCatalogueReviewComponent } from './components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component';
 import { SuperAdminMasterProductsComponent } from './components/super-admin/master-products/super-admin-master-products.component';
+import { SuperAdminMenuVisibilityComponent } from './components/super-admin/menu-visibility/super-admin-menu-visibility.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
@@ -40,6 +46,42 @@ import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
 import { SupplierOrdersComponent } from './components/purchases/supplier-orders.component';
+import { ExpenseFormPageComponent } from './components/expenses/expense-form-page.component';
+import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
+import { confirmExpenseFormLeave } from './components/expenses/expense-form-leave.guard';
+
+/** A stand-in for whichever page a guard under test is mounted in front of. */
+@Component({ standalone: true, template: 'guarded page' })
+class GuardedPageComponent {}
+
+/**
+ * Navigates a route guarded by `guard` alone, with a capability set holding exactly `capabilities`,
+ * and answers where the router ended up. `AccessService` is doubled at its one guard-facing method
+ * (`allowsAny`), whose own behaviour - including the fail-open rule for an unread set - is driven in
+ * `access/capability.guard.spec.ts` against the real service.
+ */
+async function navigateWithCapability(guard: CanActivateFn, capabilities: readonly string[]): Promise<string> {
+  // Each navigation gets its own module: two in one test are two separate capability sets.
+  TestBed.resetTestingModule();
+  await TestBed.configureTestingModule({
+    providers: [
+      provideRouter([
+        { path: 'target', component: GuardedPageComponent, canActivate: [guard] },
+        { path: ACCESS_NOT_ALLOWED_PATH, component: AccessNotAllowedComponent }
+      ]),
+      {
+        provide: AccessService,
+        useValue: {
+          allowsAny: (required: readonly string[]) => of(required.some((name) => capabilities.includes(name)))
+        }
+      }
+    ]
+  }).compileComponents();
+
+  const router = TestBed.inject(Router);
+  await router.navigateByUrl('/target');
+  return router.url;
+}
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -88,9 +130,103 @@ describe('Purchase edit route (issue #475)', () => {
   });
 });
 
+/**
+ * Add expense and Edit expense (issue #1167), which replaced the card the `/expenses` register used
+ * to open above itself. Both carry exactly the three guards `/expenses` carries - the same
+ * capability over the same expenses - and the leave guard that asks before unsaved changes are lost.
+ */
+describe('Expense form routes (issue #1167)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('serves the Add expense page at /expenses/new, behind the three Expenses.Manage guards', async () => {
+    const guards = route('expenses/new').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('expenses/new')).resolves.toBe(ExpenseFormPageComponent);
+  });
+
+  it('serves the Edit expense page at /expenses/:id/edit, behind the same three guards', async () => {
+    const guards = route('expenses/:id/edit').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('expenses/:id/edit')).resolves.toBe(ExpenseFormPageComponent);
+  });
+
+  it('requires Expenses.Manage, and nothing else, on both pages', async () => {
+    for (const path of ['expenses/new', 'expenses/:id/edit']) {
+      const capabilityGuard = (route(path).canActivate ?? [])[2] as CanActivateFn;
+
+      expect(await navigateWithCapability(capabilityGuard, ['Expenses.Manage'])).toBe('/target');
+      expect(await navigateWithCapability(capabilityGuard, ['Inventory.Operate', 'Reports.View'])).toBe(
+        `/${ACCESS_NOT_ALLOWED_PATH}`
+      );
+    }
+  });
+
+  it('asks before unsaved expense changes are lost, on both pages', () => {
+    expect(route('expenses/new').canDeactivate).toEqual([confirmExpenseFormLeave]);
+    expect(route('expenses/:id/edit').canDeactivate).toEqual([confirmExpenseFormLeave]);
+  });
+
+  it('leaves /expenses resolving to the register, which keeps no leave guard of its own', async () => {
+    await expect(loadedComponent('expenses')).resolves.toBe(OperatingExpenseComponent);
+    expect(route('expenses').canDeactivate).toBeUndefined();
+  });
+});
+
 describe('Admin Imports route (issue #389)', () => {
   it('serves the dedicated Admin Imports page at /admin/imports, behind authentication', async () => {
     expect(route('admin/imports').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
+  });
+});
+
+/**
+ * The dedicated Reimbursement Report page (issue #1152), which hosts #1149's ZIP upload, its job
+ * status list and the pending reimbursement XML import that used to run on Admin → Imports. It
+ * carries exactly the three guards `/admin/imports` carries - the same capability over the same
+ * imports - and no provider guard: the page makes no Nayax call at all, so a business whose
+ * connection has stopped working can still reach it by URL. The menu hides the entry instead.
+ */
+describe('Reimbursement Report route (issue #1152)', () => {
+  const PATH = 'admin/imports/reimbursement-report';
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('serves the page behind three guards, authentication and account state first', async () => {
+    const guards = route(PATH).canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent(PATH)).resolves.toBe(ReimbursementReportPageComponent);
+  });
+
+  /**
+   * And the third guard is the capability itself, driven rather than only counted: a member holding
+   * `Imports.Run` reaches the page, and one holding every other capability but that is sent to the
+   * access-not-allowed page. The guard is presentation either way - every endpoint behind the page
+   * checks the same capability itself (`capability.guard.ts`) - but a page the wrong role is shown
+   * is still a defect.
+   */
+  it('requires Imports.Run, and nothing else, through its capability guard', async () => {
+    const capabilityGuard = (route(PATH).canActivate ?? [])[2] as CanActivateFn;
+
+    expect(await navigateWithCapability(capabilityGuard, ['Imports.Run'])).toBe('/target');
+    expect(await navigateWithCapability(capabilityGuard, ['Data.Repair', 'Reports.View'])).toBe(
+      `/${ACCESS_NOT_ALLOWED_PATH}`
+    );
+  });
+
+  /**
+   * Three segments against `/admin/imports`'s two, so Angular's exact matching keeps them apart
+   * whatever the declaration order, and the Imports page still serves its own URL.
+   */
+  it('leaves /admin/imports resolving to the Imports page', async () => {
     await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
   });
 });
@@ -443,6 +579,24 @@ describe('super-admin routing (issue #546)', () => {
   it('loads the Super Admin Master products page component', async () => {
     await expect(loadedComponent('super-admin/master-products')).resolves.toBe(SuperAdminMasterProductsComponent);
   });
+
+  /**
+   * The Menu Visibility page (issue #1151) is guarded exactly like the five above, for the same
+   * reason: its authority is the platform-admin check and no business role or membership. It is also
+   * the page the Admin switches are managed from, so it must never be reachable only *because*
+   * something was switched on - and the switches never apply to a Super Admin destination.
+   */
+  it('guards /super-admin/menu-visibility with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/menu-visibility').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/menu-visibility either', () => {
+    expect(route('super-admin/menu-visibility').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Menu visibility page component', async () => {
+    await expect(loadedComponent('super-admin/menu-visibility')).resolves.toBe(SuperAdminMenuVisibilityComponent);
+  });
 });
 
 /**
@@ -565,6 +719,9 @@ describe('provider-locked routes (issues #729, #868)', () => {
    */
   it('leaves the Nayax imports and the sale timestamp repair routes unguarded by the provider', () => {
     expect(route('admin/imports').canActivate).toHaveLength(3);
+    // The Reimbursement Report page (issue #1152) is hidden from the menu the same way and keeps
+    // its URL working for the same reason.
+    expect(route('admin/imports/reimbursement-report').canActivate).toHaveLength(3);
     expect(route('admin/nayax-sale-timestamp-repair').canActivate).toHaveLength(3);
   });
 

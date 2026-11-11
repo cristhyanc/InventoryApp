@@ -314,6 +314,20 @@ public record PurchaseResponseDto(
 // machine whose selections were read and hold nothing to alert on. The site's own lowProductCount
 // and emptyProductCount are unchanged and are still counted over each product's combined stock
 // across the site's machines, so they need not equal the sum of the machine counts.
+//
+// previousComparableDayRevenue is additive too (issue #1177): yesterday's completed-sale revenue up
+// to the same elapsed time since business-local midnight as now is into today, which gives Today the
+// comparison baseline This week already had in previousComparableWeekRevenue. It is appended last so
+// every key before it keeps its name, order and value, it is the same sum over the same read as
+// todayRevenue, and it is governed by the same rule: null for a caller without
+// Dashboard.ViewFinancials, an honest 0 for a visible period that holds no completed sale. Every
+// other field, the route and the status codes are unchanged.
+//
+// previousComparableMonthRevenue is additive on exactly those terms (issue #1180): last month's
+// completed-sale revenue up to the same point of the month - today's day of it, or its last day when
+// that month is shorter - which gives Month to date the baseline This week and Today already have. It
+// is appended after previousComparableDayRevenue so every key before it keeps its name, order and
+// value, and it is governed by the same redaction and the same honest 0.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -326,7 +340,9 @@ public record SiteSummaryDto(
     decimal? PreviousComparableWeekRevenue,
     decimal? LastWeekRevenue,
     decimal? MonthToDateRevenue,
-    IReadOnlyList<SiteMachineStockDto> MachineStocks
+    IReadOnlyList<SiteMachineStockDto> MachineStocks,
+    decimal? PreviousComparableDayRevenue,
+    decimal? PreviousComparableMonthRevenue
 );
 
 // One machine on a GET /api/sites row (issues #1013 and #1019); see SiteSummaryDto above and

@@ -13,6 +13,12 @@ export interface PurchaseUploadPayload {
   file: File | null;
   title: string;
   notes?: string | null;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162). `null` or omitted sends no
+   * `invoiceNumber` part at all, which records none on a create and clears the stored one on an
+   * edit; the API trims what it is sent and stores blank as none.
+   */
+  invoiceNumber?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
   /**
@@ -177,24 +183,28 @@ export class PurchaseService {
     );
   }
 
-  /** The title/notes/amount/charge/GST/date/supplier fields shared by a create and an update multipart request. */
+  /**
+   * The title/notes/invoice-number/amount/charge/GST/date/supplier fields shared by a create and an
+   * update multipart request.
+   */
   private appendPurchaseFormFields(formData: FormData, payload: Omit<PurchaseUploadPayload, 'file' | 'items'>): void {
     formData.append('title', payload.title);
-    if (payload.notes !== undefined && payload.notes !== null)
-      formData.append('notes', payload.notes);
-    if (payload.totalAmount !== undefined && payload.totalAmount !== null)
-      formData.append('totalAmount', String(payload.totalAmount));
-    if (payload.deliveryCost !== undefined && payload.deliveryCost !== null)
-      formData.append('deliveryCost', String(payload.deliveryCost));
-    if (payload.deliveryGstClassification !== undefined && payload.deliveryGstClassification !== null)
-      formData.append('deliveryGstClassification', String(payload.deliveryGstClassification));
-    if (payload.packageCost !== undefined && payload.packageCost !== null)
-      formData.append('packageCost', String(payload.packageCost));
-    if (payload.packageGstClassification !== undefined && payload.packageGstClassification !== null)
-      formData.append('packageGstClassification', String(payload.packageGstClassification));
+    this.appendIfPresent(formData, 'notes', payload.notes);
+    // Omitted rather than sent empty when there is none (issue #1162), which is how an edit clears
+    // the stored number: the API stores no number for a part it is not sent and for a blank one.
+    this.appendIfPresent(formData, 'invoiceNumber', payload.invoiceNumber);
+    this.appendIfPresent(formData, 'totalAmount', payload.totalAmount);
+    this.appendIfPresent(formData, 'deliveryCost', payload.deliveryCost);
+    this.appendIfPresent(formData, 'deliveryGstClassification', payload.deliveryGstClassification);
+    this.appendIfPresent(formData, 'packageCost', payload.packageCost);
+    this.appendIfPresent(formData, 'packageGstClassification', payload.packageGstClassification);
     if (payload.purchaseDate) formData.append('purchaseDate', payload.purchaseDate);
-    if (payload.supplierId !== undefined && payload.supplierId !== null)
-      formData.append('supplierId', String(payload.supplierId));
+    this.appendIfPresent(formData, 'supplierId', payload.supplierId);
+  }
+
+  /** Appends `key` as `String(value)` unless `value` is `undefined` or `null`, in which case the part is omitted entirely. */
+  private appendIfPresent(formData: FormData, key: string, value: string | number | null | undefined): void {
+    if (value !== undefined && value !== null) formData.append(key, String(value));
   }
 
   delete(id: number): Observable<void> {

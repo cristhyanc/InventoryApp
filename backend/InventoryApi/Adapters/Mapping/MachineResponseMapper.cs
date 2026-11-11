@@ -14,8 +14,10 @@ namespace InventoryApi.Adapters.Mapping;
 ///
 /// <para>Since issue #698 the projection also depends on <see cref="FinancialFigureVisibility"/>:
 /// a caller who may not be shown the figures gets <see cref="Redacted"/>, which carries the machine's
-/// identity and withholds all thirteen of them as <c>null</c>. Every projection has to state which
-/// shape it wants, so a new call site cannot publish the figures by forgetting to ask.</para>
+/// identity and withholds all fifteen of them as <c>null</c> - the original thirteen, the previous
+/// comparable day's gross revenue (issue #1177) and the previous comparable month's (issue #1180).
+/// Every projection has to state which shape it wants, so a new call site cannot publish the figures
+/// by forgetting to ask.</para>
 /// </summary>
 public static class MachineResponseMapper
 {
@@ -43,10 +45,13 @@ public static class MachineResponseMapper
         ProfitabilityStatus = summary.ProfitabilityStatus,
         LocalMachineId = summary.LocalMachineId,
         SiteId = summary.SiteId,
+        PreviousComparableDayGrossRevenue = summary.PreviousComparableDayGrossRevenue,
+        PreviousComparableMonthGrossRevenue = summary.PreviousComparableMonthGrossRevenue,
     };
 
     /// <summary>
-    /// The machine without the figures <c>Dashboard.ViewFinancials</c> governs (issue #698). Each one
+    /// The machine without the figures <c>Dashboard.ViewFinancials</c> governs (issues #698, #1177
+    /// and #1180). Each one
     /// is written out as <c>null</c> rather than left to a default, so a revenue or profit field
     /// added to the response later has to be decided here too, and so a withheld figure can never
     /// arrive as the <c>0</c> a client would read as a real one. Identity, name, number and the
@@ -75,5 +80,7 @@ public static class MachineResponseMapper
         ProfitabilityStatus = null,
         LocalMachineId = summary.LocalMachineId,
         SiteId = summary.SiteId,
+        PreviousComparableDayGrossRevenue = null,
+        PreviousComparableMonthGrossRevenue = null,
     };
 }

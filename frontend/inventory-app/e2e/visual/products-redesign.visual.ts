@@ -1,6 +1,7 @@
-import { Page, Route, expect, test } from '@playwright/test';
+import { Page, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { expectNoHorizontalOverflow, openProductsPage, supplierOffer as offer } from './support/products-page';
 
 /**
  * The visual evidence for issue #1093, with the always-visible history fields and direct
@@ -20,24 +21,6 @@ import { join, resolve } from 'node:path';
  */
 const screenshotDirectory = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-1093');
 mkdirSync(screenshotDirectory, { recursive: true });
-
-const OWNER_CAPABILITIES = [
-  'Dashboard.View',
-  'Dashboard.ViewFinancials',
-  'PickList.View',
-  'Inventory.Operate',
-  'Purchasing.Operate',
-  'Suppliers.ManageGstDefaults',
-  'Expenses.Manage',
-  'Reports.View',
-  'Imports.Run',
-  'SiteCommissions.Manage',
-  'Integration.Manage',
-  'Data.Repair',
-  'Members.Manage',
-  'Roles.View',
-  'Business.Manage'
-];
 
 const categories = [
   { id: 1, name: 'Snacks' },
@@ -118,29 +101,6 @@ const purchaseCosts = [
   cost(10, 1.61, 'Sample Wholesale', '2026-10-10', 1.61, 'Sample Wholesale', '2026-10-10')
 ];
 
-function offer(supplierId: number, supplierName: string, packQuantity: number | null, packPrice: number | null, unitPrice: number | null, extra: Record<string, unknown> = {}) {
-  return {
-    supplierId,
-    supplierName,
-    hasListing: true,
-    hasPrice: unitPrice !== null || packPrice !== null,
-    packQuantity,
-    packPrice,
-    packPriceBasis: packPrice === null ? null : 2,
-    unitPrice,
-    unitPriceExGst: unitPrice === null ? null : Math.round((unitPrice / 1.1) * 10000) / 10000,
-    unitPriceIncGst: unitPrice,
-    isSpecial: false,
-    promotionEndsAtUtc: null,
-    stockStatus: 1,
-    lastCheckedAtUtc: '2026-11-04T02:00:00Z',
-    productUrl: `https://example.test/${supplierId}/${packQuantity ?? 0}`,
-    ineligibility: null,
-    isCheapest: false,
-    ...extra
-  };
-}
-
 const MATCHED = 3;
 const cheapestSuppliers = {
   displayBasis: 2,
@@ -178,40 +138,32 @@ const cheapestSuppliers = {
   ]
 };
 
-function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+function openProducts(page: Page, width: number): Promise<void> {
+  return openProductsPage(page, width, { products, categories, purchaseCosts, cheapestSuppliers });
 }
 
-async function answerApi(page: Page): Promise<void> {
-  await page.route('**/api/**', (route: Route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/me/access')) {
-      return json(route, { role: 'Owner', capabilities: OWNER_CAPABILITIES, businessName: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    }
-    if (path.endsWith('/me/account-state')) return json(route, { state: 'Member', onboardingEnabled: false, rejectionReason: null });
-    if (path.endsWith('/business/current')) return json(route, { name: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
-    if (path.endsWith('/api/products')) return json(route, products);
-    if (path.endsWith('/categories')) return json(route, categories);
-    if (path.endsWith('/products/purchase-cost-summary')) return json(route, purchaseCosts);
-    if (path.endsWith('/cheapest-suppliers/summary')) return json(route, cheapestSuppliers);
-    if (route.request().method() !== 'GET') return route.fulfill({ status: 204, body: '' });
-    return json(route, []);
+/**
+ * Issue #1179: the open help panel must wrap its whole explanation inside its own width. The
+ * desktop Cheapest supplier heading is `whitespace-nowrap`, and the panel - top layer or not -
+ * inherits from that heading in the DOM, so this is measured on the panel itself: a panel that
+ * scrolls sideways has a scrollWidth wider than its clientWidth (1px allows for rounding).
+ */
+async function expectHelpPanelWraps(page: Page): Promise<void> {
+  const panel = page.getByTestId('help-toggletip-panel');
+  await expect(panel).toBeVisible();
+  const size = await panel.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return {
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      left: box.left,
+      right: box.right,
+      viewport: window.innerWidth
+    };
   });
-}
-
-async function openProducts(page: Page, width: number): Promise<void> {
-  await page.setViewportSize({ width, height: width >= 1024 ? 1000 : 844 });
-  await answerApi(page);
-  await page.goto('/products');
-  await page.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
-  await expect(page.getByRole('heading', { name: 'Products', level: 1 })).toBeVisible();
-  await expect(page.locator('[data-testid="cheapest-supplier-compare"]:visible').first()).toBeVisible();
-}
-
-async function expectNoHorizontalOverflow(page: Page): Promise<void> {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth + 1);
+  expect(size.left).toBeGreaterThanOrEqual(0);
+  expect(size.right).toBeLessThanOrEqual(size.viewport);
 }
 
 async function capture(page: Page, name: string, fullPage = true): Promise<void> {
@@ -326,4 +278,41 @@ test.describe('Products redesign (issue #1093, issue #1098)', () => {
       await expect(compare).toBeFocused();
     });
   }
+});
+
+test.describe('Cheapest supplier help wraps without horizontal scrolling (issue #1179)', () => {
+  const issueScreenshots = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-1179');
+  mkdirSync(issueScreenshots, { recursive: true });
+
+  for (const width of [1440, 390, 360]) {
+    test(`Cheapest supplier help open at ${width}px`, async ({ page }) => {
+      await openProducts(page, width);
+      const trigger = page.locator('button[aria-label="About Cheapest supplier"]:visible').first();
+      await trigger.scrollIntoViewIfNeeded();
+      await trigger.click();
+
+      const panel = page.getByTestId('help-toggletip-panel');
+      await expect(panel).toHaveText(/when it was last checked\.$/);
+      await expectHelpPanelWraps(page);
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: join(issueScreenshots, `products-cheapest-supplier-help-${width}px.png`) });
+
+      await page.keyboard.press('Escape');
+      await expect(panel).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+    });
+  }
+
+  test('Cheapest supplier help opens and closes from the keyboard at 1440px', async ({ page }) => {
+    await openProducts(page, 1440);
+    const trigger = page.locator('button[aria-label="About Cheapest supplier"]:visible').first();
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expectHelpPanelWraps(page);
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('help-toggletip-panel')).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
 });

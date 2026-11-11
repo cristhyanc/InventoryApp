@@ -61,35 +61,56 @@ describe('LandingPageComponent (issue #954)', () => {
   });
 
   describe('content', () => {
-    it('has one h1, carrying the approved headline', async () => {
+    it('has one h1, carrying the public beta headline', async () => {
       const { host } = await render();
 
       const headings = host.querySelectorAll('h1');
       expect(headings).toHaveLength(1);
-      expect(text(headings[0])).toBe('Know your stock. Understand your costs.');
+      expect(text(headings[0])).toBe('Know what to buy. Pack what you need.');
     });
 
-    it('keeps the approved section order, with the section labels of the approved mobile design, plus pricing (issue #971)', async () => {
+    it('shows the public beta lead under the headline', async () => {
+      const { host } = await render();
+
+      const lead = Array.from(host.querySelectorAll('main section p')).find(
+        (p) => text(p) === 'Manage vending stock, compare supplier prices and plan your next refill in one place.'
+      );
+      expect(lead).toBeDefined();
+    });
+
+    it('shows the beta-access notice and the export notice directly under it, near the hero', async () => {
+      const { host } = await render();
+
+      const betaNotice = byTestId(host, 'landing-beta-notice')!;
+      const exportNotice = byTestId(host, 'landing-export-notice')!;
+      expect(text(betaNotice)).toBe('Pro access is free during our public beta. No credit card required.');
+      expect(text(exportNotice)).toBe(
+        'Data exports are not part of the free beta. Downloading your data as CSV or Excel will need a paid plan once paid plans launch.'
+      );
+      expect(betaNotice.nextElementSibling).toBe(exportNotice);
+    });
+
+    it('states no price, no beta end date and no checkout anywhere on the page', async () => {
+      const { host } = await render();
+      const page = text(host).toLowerCase();
+
+      for (const claim of ['a$', 'plan card', 'checkout', 'ends on', 'beta ends', 'until ']) {
+        expect(page).not.toContain(claim);
+      }
+    });
+
+    it('keeps the approved section order, with the section labels of the approved mobile design', async () => {
       const { host } = await render();
 
       const sectionIds = Array.from(host.querySelectorAll('main section[id]')).map((section) => section.id);
-      expect(sectionIds).toEqual(['features', 'nayax', 'how-it-works', 'pricing', 'faqs']);
+      expect(sectionIds).toEqual(['features', 'nayax', 'how-it-works', 'faqs']);
 
       const eyebrows = Array.from(host.querySelectorAll('main section p:first-child'))
         .map((label) => text(label))
         .filter((label) =>
-          ['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Pricing', 'Frequently asked questions'].includes(
-            label
-          )
+          ['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Frequently asked questions'].includes(label)
         );
-      expect(eyebrows).toEqual([
-        'Practical inventory management',
-        'Features',
-        'Optional integration',
-        'How it works',
-        'Pricing',
-        'Frequently asked questions'
-      ]);
+      expect(eyebrows).toEqual(['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Frequently asked questions']);
     });
 
     it('uses "Stock levels" only as the example dashboard\'s stock list', async () => {
@@ -119,33 +140,30 @@ describe('LandingPageComponent (issue #954)', () => {
     it('describes Nayax as optional, with core inventory working on its own', async () => {
       const { host } = await render();
 
-      expect(text(host.querySelector('#nayax h2'))).toBe('Core inventory works on its own. Connect Nayax when you need it.');
+      expect(text(host.querySelector('#nayax h2'))).toBe('Use core inventory on its own. Connect Nayax for sales integration.');
       expect(text(host.querySelector('#how-it-works'))).toContain(
         'Running vending machines? Connect Nayax for supported sales and reporting features.'
       );
       expect(text(host.querySelector('#faqs'))).toContain('No. Core inventory features work without connecting a sales provider.');
     });
 
-    it('says Nayax will be a Pro feature once paid plans are live, without claiming that today (issue #971)', async () => {
+    it('never ties Nayax to a paid plan on the public beta page', async () => {
       const { host } = await render();
-      const nayaxSection = text(host.querySelector('#nayax'));
+      const nayaxSection = text(host.querySelector('#nayax')).toLowerCase();
 
-      expect(nayaxSection).toContain('Nayax will be a Pro plan feature once paid plans are live');
-      expect(nayaxSection).toContain('Nayax will be a Pro feature once paid plans launch, and connecting it stays optional');
+      for (const claim of ['pro plan', 'pro feature', 'paid plan', 'starter', 'once paid plans']) {
+        expect(nayaxSection).not.toContain(claim);
+      }
     });
 
     it('lists the three workflow steps in order', async () => {
       const { host } = await render();
 
       const steps = Array.from(host.querySelectorAll('[data-testid="landing-steps"] h3')).map(text);
-      expect(steps).toEqual([
-        'Step 01: Create your business',
-        'Step 02: Add your products and opening stock',
-        'Step 03: Record purchases and stock movements'
-      ]);
+      expect(steps).toEqual(['Step 01: Set up your business', 'Step 02: Add products and machines', 'Step 03: Plan and record refills']);
     });
 
-    it('answers the FAQs without claiming a native app, including the new pricing and storage questions (issue #971)', async () => {
+    it('answers the FAQs without claiming a native app, and drops the three paid-plan FAQs', async () => {
       const { host } = await render();
 
       const questions = Array.from(host.querySelectorAll('[data-testid="landing-faqs"] h3')).map(text);
@@ -153,16 +171,23 @@ describe('LandingPageComponent (issue #954)', () => {
         'Do I need Nayax?',
         'Is Restockroo suitable for vending businesses?',
         'Can I manage purchases and suppliers?',
-        'Can I use Restockroo on my phone?',
-        'When can I subscribe to Starter or Pro?',
-        'What happens if I reach my storage limit?',
-        'Will connecting Nayax cost extra?'
+        'Can I use Restockroo on my phone?'
       ]);
       const faqText = text(host.querySelector('[data-testid="landing-faqs"]'));
       expect(faqText).toContain('There is no app to install.');
-      expect(faqText).toContain('Starter and Pro are coming soon');
-      expect(faqText).toContain("From then on you'll see a warning at 80% of your plan's attachment storage");
-      expect(faqText).toContain('5 connected machines');
+      expect(faqText).not.toContain('When can I subscribe');
+      expect(faqText).not.toContain('storage limit');
+      expect(faqText).not.toContain('cost extra');
+    });
+
+    it('makes no claim of receipt scanning or automatic reading of purchase documents', async () => {
+      const { host } = await render();
+      const page = text(host).toLowerCase();
+
+      for (const claim of ['scan', 'ocr', 'automatically read', 'auto-fill']) {
+        expect(page).not.toContain(claim);
+      }
+      expect(page).toContain('attach the receipt');
     });
 
     it('makes none of the claims the issue rules out', async () => {
@@ -179,148 +204,41 @@ describe('LandingPageComponent (issue #954)', () => {
         'free trial',
         'add-on',
         'testimonial',
-        'abn',
         'waitlist',
-        'checkout'
+        'checkout',
+        'pricing',
+        'plan card',
+        'starter',
+        'a$',
+        'beta ends',
+        'ends on'
       ]) {
         expect(page).not.toContain(claim);
       }
     });
 
-    it('links no legal or contact page that does not exist, and dates the copyright this year', async () => {
+    it('shows the footer contact details, no Privacy or Terms link, and dates the copyright this year', async () => {
       const { host } = await render();
       const footer = host.querySelector('footer')!;
 
-      expect(text(footer)).not.toMatch(/privacy|terms|contact/i);
-      expect(text(footer)).toContain(`© ${new Date().getFullYear()} Restockroo. All rights reserved.`);
-      for (const link of Array.from(footer.querySelectorAll('a'))) {
-        expect(link.getAttribute('href')).toMatch(/^#(features|how-it-works|nayax|pricing|faqs)$/);
-      }
-    });
-  });
+      expect(text(footer)).not.toMatch(/privacy|terms/i);
+      expect(text(footer)).toContain(`© ${new Date().getFullYear()} Restockroo`);
 
-  describe('pricing (issue #971)', () => {
-    it('shows Free, Starter and Pro with their approved prices and badges', async () => {
-      const { host } = await render();
+      const mailto = footer.querySelector<HTMLAnchorElement>('a[href="mailto:admin@restockroo.com.au"]');
+      expect(mailto?.textContent?.trim()).toBe('admin@restockroo.com.au');
+      expect(text(byTestId(footer as unknown as HTMLElement, 'landing-footer-contact'))).toContain('Eunhye Chung · ABN 69 235 469 430');
 
-      const cards = Array.from(host.querySelectorAll('[data-testid="landing-plans"] > li'));
-      expect(cards).toHaveLength(3);
-
-      const summaries = cards.map((card) => ({
-        name: text(card.querySelector('h3')),
-        price: text(card.querySelector('.text-3xl')),
-        badge: text(card.querySelector('span'))
-      }));
-      expect(summaries).toEqual([
-        { name: 'Free', price: 'A$0', badge: 'Available now' },
-        { name: 'Starter', price: 'A$7', badge: 'Coming soon' },
-        { name: 'Pro', price: 'A$15', badge: 'Coming soon' }
-      ]);
-    });
-
-    it('shows the 1 GB / 20 GB / 20 GB attachment allowances and the manual, comparison and report entitlements', async () => {
-      const { host } = await render();
-
-      expect(text(host.querySelector('[data-testid="landing-plan-free"]'))).toContain('1 GB of purchase and expense attachments');
-      expect(text(host.querySelector('[data-testid="landing-plan-free"]'))).toContain('Manual Pick List entry');
-
-      const starter = text(host.querySelector('[data-testid="landing-plan-starter"]'));
-      expect(starter).toContain('20 GB of purchase and expense attachments');
-      expect(starter).toContain('Daily cheapest-supplier comparisons');
-      expect(starter).toContain('Bookkeeping and GST reports');
-
-      const pro = text(host.querySelector('[data-testid="landing-plan-pro"]'));
-      expect(pro).toContain('20 GB of purchase and expense attachments');
-      expect(pro).toContain('Connect your Nayax account');
-      expect(pro).toContain('5 connected machines included, then A$2/month per additional connected machine');
-    });
-
-    it("distinguishes Pro's plan entitlement from needing a usable Nayax connection", async () => {
-      const { host } = await render();
-
-      expect(text(host.querySelector('[data-testid="landing-plan-pro"]'))).toContain(
-        'Plan entitlement and a usable Nayax connection are separate'
-      );
-    });
-
-    it('sends every plan card through the existing business application journey, never a checkout', async () => {
-      const { host, navigateByUrl } = await render();
-
-      byTestId(host, 'landing-plan-cta-free')!.click();
-      byTestId(host, 'landing-plan-cta-starter')!.click();
-      byTestId(host, 'landing-plan-cta-pro')!.click();
-
-      expect(navigateByUrl.mock.calls).toEqual([['/apply'], ['/apply'], ['/apply']]);
-    });
-
-    /**
-     * Copy regression for the plan limits that have not shipped: attachment quota enforcement
-     * (issue #968) and recording a purchase without its document (issue #976) are both still to
-     * come, and current develop refuses a purchase with no file. The page may therefore describe
-     * the allowances only as what happens once the paid plans launch, and must never present
-     * either as today's behaviour.
-     */
-    it('presents the storage allowances as future behaviour, and promises no document-free purchase', async () => {
-      const { host } = await render();
-
-      expect(text(host.querySelector('#pricing'))).toContain(
-        'The storage allowances and the connected-machine charge start when the paid plans launch - nothing is limited today.'
-      );
-      expect(text(byTestId(host, 'landing-plan-free'))).toContain(
-        'Attachment storage is not limited today. The 1 GB allowance starts when the paid plans launch.'
-      );
-
-      const storage = Array.from(host.querySelectorAll('[data-testid="landing-faqs"] li')).find(
-        (item) => text(item.querySelector('h3')) === 'What happens if I reach my storage limit?'
-      );
-      expect(text(storage?.querySelector('p'))).toBe(
-        'Nothing is limited today: attachment storage is unrestricted while Free is the only plan, and the allowances above ' +
-          "start when the paid plans launch. From then on you'll see a warning at 80% of your plan's attachment storage, and " +
-          'at 100% new uploads will pause until you free up space or upgrade, while existing attachments stay available to ' +
-          'view, download and delete.'
-      );
-
-      // Nothing anywhere on the page may say a limit, a paused upload or a per-machine charge
-      // applies now, or that a purchase or expense can be recorded with no document attached.
-      const page = text(host);
-      expect(page).not.toMatch(/without attaching/i);
-      expect(page).not.toMatch(/uploads pause/i);
-      expect(page).not.toMatch(/are A\$2\/month/i);
-    });
-
-    /**
-     * Keyboard reachability of the new section, as far as jsdom can carry it: every plan card's
-     * action is a native control, in card order, with no `tabindex` and no disabled state of its
-     * own, so it stays in the page's natural tab sequence and takes the shared `:focus-visible`
-     * outline. Rendered-layout and focus-ring checks at 360/390/768/1440px still need a browser.
-     */
-    it('makes every plan card action a native, keyboard-reachable control in card order', async () => {
-      const { host } = await render();
-
-      const actions = Array.from(
-        host.querySelectorAll<HTMLElement>('[data-testid="landing-plans"] [data-testid^="landing-plan-cta-"]')
-      );
-      expect(actions.map((action) => action.dataset['testid'])).toEqual([
-        'landing-plan-cta-free',
-        'landing-plan-cta-starter',
-        'landing-plan-cta-pro'
-      ]);
-      for (const action of actions) {
-        expect(action.tagName).toBe('BUTTON');
-        expect(action.getAttribute('type')).toBe('button');
-        expect(action.hasAttribute('tabindex')).toBe(false);
-        expect(action.hasAttribute('disabled')).toBe(false);
+      for (const link of Array.from(footer.querySelectorAll('nav a'))) {
+        expect(link.getAttribute('href')).toMatch(/^#(features|how-it-works|nayax|faqs)$/);
       }
     });
 
-    it('offers Open app from every plan card to a signed-in person, instead of Get started', async () => {
-      const { host } = await render({ signedIn: true });
+    it('has no Pricing link in the header, mobile menu or footer navigation', async () => {
+      const { host } = await render();
 
-      for (const id of ['free', 'starter', 'pro']) {
-        const cta = byTestId<HTMLAnchorElement>(host, `landing-plan-cta-${id}`)!;
-        expect(text(cta)).toBe('Open app');
-        expect(cta.getAttribute('href')).toBe('/');
-      }
+      expect(host.querySelector('header a[href="#pricing"]')).toBeNull();
+      expect(host.querySelector('[data-testid="landing-mobile-menu"] a[href="#pricing"]')).toBeNull();
+      expect(host.querySelector('footer a[href="#pricing"]')).toBeNull();
     });
   });
 
@@ -367,16 +285,16 @@ describe('LandingPageComponent (issue #954)', () => {
   });
 
   describe('actions for a signed-out visitor', () => {
-    it('offers Sign in and Get started, and no Open app', async () => {
+    it('offers Sign in and Start free, and no Open app', async () => {
       const { host } = await render();
 
       expect(byTestId(host, 'landing-sign-in')).not.toBeNull();
-      expect(byTestId(host, 'landing-get-started')).not.toBeNull();
-      expect(byTestId(host, 'landing-primary-get-started')).not.toBeNull();
+      expect(text(byTestId(host, 'landing-get-started'))).toBe('Start free');
+      expect(text(byTestId(host, 'landing-primary-get-started'))).toBe('Start free');
       expect(byTestId(host, 'landing-open-app')).toBeNull();
     });
 
-    it('starts the existing business application journey from Get started', async () => {
+    it('starts the existing business application journey from Start free', async () => {
       const { host, navigateByUrl } = await render();
 
       byTestId(host, 'landing-primary-get-started')!.click();
@@ -408,7 +326,7 @@ describe('LandingPageComponent (issue #954)', () => {
   });
 
   describe('actions for a signed-in person', () => {
-    it('offers Open app, to the app entry route, instead of Sign in and Get started', async () => {
+    it('offers Open app, to the app entry route, instead of Sign in and Start free', async () => {
       const { host } = await render({ signedIn: true });
 
       expect(byTestId(host, 'landing-open-app')?.getAttribute('href')).toBe('/');
@@ -431,22 +349,6 @@ describe('LandingPageComponent (issue #954)', () => {
       link.click();
 
       expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }));
-      expect(document.activeElement).toBe(section);
-      host.remove();
-    });
-
-    it('scrolls to Pricing and moves focus to it from the header link (issue #971)', async () => {
-      const { host } = await render();
-      const section = host.querySelector<HTMLElement>('#pricing')!;
-      const scrollIntoView = jest.fn();
-      section.scrollIntoView = scrollIntoView;
-      document.body.appendChild(host);
-
-      const link = Array.from(host.querySelectorAll<HTMLAnchorElement>('header nav a')).find((a) => text(a) === 'Pricing')!;
-      link.click();
-
-      expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }));
-      expect(section.getAttribute('tabindex')).toBe('-1');
       expect(document.activeElement).toBe(section);
       host.remove();
     });

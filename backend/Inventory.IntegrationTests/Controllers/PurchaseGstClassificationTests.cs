@@ -618,7 +618,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
         return await CreateController(db).Upload(
-            CreateFile(), "Weekly restock", null, null, deliveryCost, deliveryGst, packageCost, packageGst,
+            CreateFile(), "Weekly restock", null, null, null, deliveryCost, deliveryGst, packageCost, packageGst,
             new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items),
             completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
     }
@@ -646,7 +646,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
         return await CreateController(db).Update(
-            id, "Weekly restock", null, null, deliveryCost, deliveryGst, packageCost, packageGst,
+            id, "Weekly restock", null, null, null, deliveryCost, deliveryGst, packageCost, packageGst,
             new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items));
     }
 
@@ -691,6 +691,10 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),
+            // Receipt scanning in its shipped state - no reader configured (issue #1163).
+            TestPurchaseUseCases.Scan(),
+            // And its monthly usage read (issue #1164), which this file does not exercise either.
+            TestPurchaseUseCases.ScanUsage(),
             // An Owner: this file is about GST classification, not about who may see an inventory
             // value, which StockAndPurchasingFinancialRedactionApiTests covers (issue #700).
             TestCurrentCapabilities.Owner);

@@ -1,7 +1,9 @@
 using Inventory.Application.Access;
 using Inventory.Application.Imports;
+using Inventory.Domain.Imports;
 using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
+using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -42,13 +44,22 @@ public sealed class ImportsController : ControllerBase
 {
     private readonly ImportNayaxSales _importNayaxSales;
     private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
+    private readonly UploadReimbursementReportArchive _uploadReimbursementReport;
+    private readonly ListReimbursementImportJobs _listReimbursementImportJobs;
+    private readonly GetReimbursementImportJob _getReimbursementImportJob;
 
     public ImportsController(
         ImportNayaxSales importNayaxSales,
-        ImportPendingReimbursementXmlFiles importPendingXmlFiles)
+        ImportPendingReimbursementXmlFiles importPendingXmlFiles,
+        UploadReimbursementReportArchive uploadReimbursementReport,
+        ListReimbursementImportJobs listReimbursementImportJobs,
+        GetReimbursementImportJob getReimbursementImportJob)
     {
         _importNayaxSales = importNayaxSales;
         _importPendingXmlFiles = importPendingXmlFiles;
+        _uploadReimbursementReport = uploadReimbursementReport;
+        _listReimbursementImportJobs = listReimbursementImportJobs;
+        _getReimbursementImportJob = getReimbursementImportJob;
     }
 
     [HttpPost("nayax-sales")]
@@ -84,4 +95,87 @@ public sealed class ImportsController : ControllerBase
     public async Task<ActionResult<ImportedFileImportResult>> ImportPendingXmlFiles(
         CancellationToken cancellationToken) =>
         Ok(await _importPendingXmlFiles.Handle(cancellationToken));
+
+    /// <summary>
+    /// Accepts the ZIP Nayax emails, exactly as it arrives, and queues it for import (issue #1149).
+    ///
+    /// <para><strong>It imports nothing and waits for nothing.</strong> The archive is checked
+    /// against <c>Inventory.Domain.Imports.ReimbursementArchivePolicy</c> here and now - so a bad
+    /// archive is a <c>400</c> the operator sees in seconds - and, if it holds at least one
+    /// reimbursement XML and breaks no limit, stored as a queued job. The reply is <c>202</c> with
+    /// the job id, and the background worker does the importing.</para>
+    ///
+    /// <para><strong>The business is the caller's own resolved business.</strong> Nothing in the
+    /// request can choose one: there is no business id in the route, the form or a header. A role
+    /// preview and a read-only support session are refused centrally because this is a <c>POST</c>,
+    /// exactly as the two import writes above are - there is nothing endpoint-specific to get
+    /// wrong.</para>
+    ///
+    /// <para>No plan requirement, for the reason the reimbursement XML import beside it has none: a
+    /// settlement statement the business was sent feeds the Bookkeeping and GST reports a Starter
+    /// business includes.</para>
+    /// </summary>
+    [HttpPost("reimbursement-report")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(ReimbursementArchivePolicy.MaxUploadBytes)]
+    public async Task<ActionResult<ReimbursementReportUploadAccepted>> UploadReimbursementReport(
+        IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(ReimbursementArchivePolicy.EmptyUploadMessage);
+
+        if (file.Length > ReimbursementArchivePolicy.MaxUploadBytes)
+            return BadRequest(ReimbursementArchivePolicy.TooLargeMessage);
+
+        // The IFormFile stays here, at the HTTP boundary. The bytes are read into memory rather
+        // than to a path: nothing about this import touches the filesystem, and the request size
+        // limit above - plus the length check beside it, for a client that lied about it - is what
+        // bounds how much is read.
+        var archive = await ReadAsync(file, cancellationToken);
+
+        var result = await _uploadReimbursementReport.Handle(
+            file.FileName, archive, cancellationToken);
+
+        if (!result.IsAccepted) return BadRequest(result.Rejection);
+
+        return Accepted(new ReimbursementReportUploadAccepted(result.JobId!.Value));
+    }
+
+    /// <summary>
+    /// The caller's own business's latest reimbursement report import jobs (issue #1149), newest
+    /// first. Readable by the same members who may run the import, and - because it is a
+    /// <c>GET</c> - by a read-only support session, by that feature's own central method rule.
+    /// </summary>
+    [HttpGet("reimbursement-report/jobs")]
+    public async Task<ActionResult<IReadOnlyList<ReimbursementImportJobSummary>>>
+        ReimbursementReportJobs(CancellationToken cancellationToken) =>
+        Ok(await _listReimbursementImportJobs.Handle(cancellationToken));
+
+    /// <summary>
+    /// One of the caller's own business's reimbursement report import jobs, with what each file in
+    /// it turned into (issue #1149).
+    ///
+    /// <para>A job of another business is <c>404</c>, and not because of a comparison made here: the
+    /// lookup is tenant-scoped centrally, so another business's job is not found at all.</para>
+    /// </summary>
+    [HttpGet("reimbursement-report/jobs/{jobId:int}")]
+    public async Task<ActionResult<ReimbursementImportJobDetail>> ReimbursementReportJob(
+        int jobId,
+        CancellationToken cancellationToken)
+    {
+        var job = await _getReimbursementImportJob.Handle(jobId, cancellationToken);
+
+        return job is null ? NotFound() : Ok(job);
+    }
+
+    private static async Task<byte[]> ReadAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        await using var stream = file.OpenReadStream();
+
+        await stream.CopyToAsync(buffer, cancellationToken);
+
+        return buffer.ToArray();
+    }
 }

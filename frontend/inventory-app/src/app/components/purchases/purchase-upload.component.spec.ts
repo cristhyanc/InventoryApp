@@ -10,12 +10,18 @@ import { ToastService } from '../../services/toast.service';
 import { PurchaseItemPayload, PurchaseUploadPayload } from '../../services/purchase.service';
 import {
   GstClassification,
+  Product,
   Purchase,
   SupplierOrder,
   SupplierOrderCompletionPreview,
   SupplierOrderStatus
 } from '../../models/models';
+import { PurchaseScanDraft, PurchaseScanLine, PurchaseScanValue } from '../../models/purchase-scan';
+import { UNRESOLVED_LEVY_MESSAGE } from './purchase-form/purchase-scan-draft';
+import { savedLineAmount } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { AccessService } from '../../access/access.service';
+import { PurchaseScanService } from '../../services/purchase-scan.service';
 
 function supplierOrder(): SupplierOrder {
   return {
@@ -162,6 +168,32 @@ describe('PurchaseUploadComponent supplier-order receipt navigation (issue #387)
   });
 });
 
+describe('PurchaseUploadComponent invoice number (issue #1162)', () => {
+  it('starts a new purchase with no invoice number', () => {
+    const { component } = readyToUpload();
+
+    expect(component.form.invoiceNumber).toBe('');
+  });
+
+  it('submits the invoice number that was typed', () => {
+    const { component, upload } = readyToUpload();
+    component.form.invoiceNumber = ' INV-123 ';
+
+    component.upload();
+
+    // Sent as typed: the server trims it, so the form never has to agree with it about trimming.
+    expect(uploadedPayload(upload).invoiceNumber).toBe(' INV-123 ');
+  });
+
+  it('submits no invoice number when the field was left empty', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    expect(uploadedPayload(upload).invoiceNumber).toBeNull();
+  });
+});
+
 describe('PurchaseUploadComponent GST classification mapping (issue #431)', () => {
   it('starts a new line and both charges as Not classified', () => {
     const { component } = readyToUpload();
@@ -247,7 +279,7 @@ describe('PurchaseUploadComponent per-line price entry (issues #707, #878)', () 
     component.onLineTotalChange(item, 32.5);
 
     expect(item.unitCost).toBe(1.625);
-    expect(component.savedLineAmount(item)).toBe(32.5);
+    expect(savedLineAmount(item)).toBe(32.5);
 
     component.upload();
 
@@ -428,6 +460,8 @@ describe('PurchaseUploadComponent price entry controls (issue #878)', () => {
         { provide: ProductService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: PurchaseScanService, useValue: { scan: jest.fn() } },
+        { provide: AccessService, useValue: { allowsPlanFeature: () => of(true) } },
         { provide: ActivatedRoute, useValue: route },
         provideRouter([])
       ]
@@ -532,7 +566,7 @@ describe('PurchaseUploadComponent price entry controls (issue #878)', () => {
     // The displayed 0.3333 must not become the submitted value: 300 x 0.3333 is $99.99, not $100.
     expect(component.items[0].priceEntryMode).toBe('total');
     expect(component.items[0].unitCost).toBe(100 / 300);
-    expect(component.savedLineAmount(component.items[0])).toBe(100);
+    expect(savedLineAmount(component.items[0])).toBe(100);
   });
 });
 
@@ -571,6 +605,8 @@ describe('PurchaseUploadComponent write controls during a support session (issue
         { provide: ProductService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive$ } },
+        { provide: PurchaseScanService, useValue: { scan: jest.fn() } },
+        { provide: AccessService, useValue: { allowsPlanFeature: () => of(true) } },
         { provide: ActivatedRoute, useValue: route },
         provideRouter([])
       ]
@@ -895,5 +931,360 @@ describe('PurchaseUploadComponent redesigned form (issue #1029)', () => {
     const fromOrder = createHarness('9');
     fromOrder.component.cancel();
     expect(fromOrder.navigate).toHaveBeenCalledWith(['/purchases/orders']);
+  });
+});
+
+/**
+ * Scanning a receipt into the Add Purchase form (issue #1166, sub-issue D of #975).
+ *
+ * What a scan does to this page is the page's own business; the Scan receipt workflow itself - the
+ * plan lock, the request, its cancellation, the replace question and its error states - is
+ * `purchase-receipt-scan.component.spec.ts`. **Nothing a scan fills in is saved** until the ordinary
+ * create request this page has always sent.
+ */
+describe('PurchaseUploadComponent scanned receipt (issue #1166)', () => {
+  function value<T>(scanned: T, provenance: 'read' | 'suggested' = 'read'): PurchaseScanValue<T> {
+    return { value: scanned, provenance };
+  }
+
+  function line(overrides: Partial<PurchaseScanLine> = {}): PurchaseScanLine {
+    return {
+      kind: 'stock',
+      text: value('COKE 375ML 24PK'),
+      packs: value(2),
+      unitsPerPack: value(24),
+      units: value(48, 'suggested'),
+      lineTotal: value(60),
+      unitCost: value(1.25, 'suggested'),
+      productId: value(5, 'suggested'),
+      gst: { priceIncludesGst: 'yes', taxable: 'yes', marker: null },
+      levyUnresolved: false,
+      missing: [],
+      ...overrides
+    };
+  }
+
+  function scanDraft(overrides: Partial<PurchaseScanDraft> = {}): PurchaseScanDraft {
+    return {
+      supplierId: value(1, 'suggested'),
+      purchaseDate: value('2026-11-02'),
+      invoiceNumber: value('INV-77'),
+      receiptTotal: value(180),
+      lines: [
+        line(),
+        line({ productId: value(6, 'suggested'), units: value(24, 'suggested'), unitCost: value(2.5, 'suggested') }),
+        line({ productId: value(7, 'suggested'), units: value(12, 'suggested'), unitCost: value(5, 'suggested') })
+      ],
+      usage: { month: '2026-11', used: 1, remaining: 99, limit: 100 },
+      ...overrides
+    };
+  }
+
+  /** The page with this business's catalogue known, as its own reads establish it. */
+  function pageWithCatalogue(supplierOrderId: string | null = null) {
+    const harness = createHarness(supplierOrderId);
+    harness.component.products = [5, 6, 7].map((id) => ({ id, name: `Product ${id}` }) as Product);
+    harness.component.suppliers = [{ id: 1, name: 'Acme Supplies' }];
+    return harness;
+  }
+
+  /** The scan's own answer, handed to the page exactly as the workflow component reports it. */
+  function scan(component: PurchaseUploadComponent, draft: PurchaseScanDraft): File {
+    const file = new File(['receipt bytes'], 'receipt.jpg', { type: 'image/jpeg' });
+    component.onScanned({ draft, file });
+    return file;
+  }
+
+  it('fills three lines with the products, units and unit costs of the draft, and saves nothing yet', () => {
+    const { component, upload } = pageWithCatalogue();
+
+    const file = scan(component, scanDraft());
+
+    expect(component.items).toHaveLength(3);
+    expect(component.items.map((item) => item.productId)).toEqual([5, 6, 7]);
+    expect(component.items.map((item) => item.quantity)).toEqual([48, 24, 12]);
+    expect(component.items.map((item) => item.unitCost)).toEqual([1.25, 2.5, 5]);
+    expect(component.selectedFile).toBe(file);
+    expect(component.scannedReceipt).toBe(file);
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('fills the supplier, date, invoice number, receipt total and the charges the draft read', () => {
+    const { component } = pageWithCatalogue();
+
+    scan(component, scanDraft({ deliveryCost: value(9.5), packageCost: value(0.25) }));
+
+    expect(component.form.supplierId).toBe(1);
+    expect(component.form.purchaseDate).toBe('2026-11-02');
+    expect(component.form.invoiceNumber).toBe('INV-77');
+    expect(component.form.totalAmount).toBe(180);
+    expect(component.form.deliveryCost).toBe(9.5);
+    expect(component.form.packageCost).toBe(0.25);
+  });
+
+  it('leaves the date and the supplier alone when the receipt carried neither', () => {
+    const { component } = pageWithCatalogue();
+    const today = component.form.purchaseDate;
+
+    scan(component, scanDraft({ supplierId: null, purchaseDate: null }));
+
+    expect(component.form.purchaseDate).toBe(today);
+    expect(component.form.supplierId).toBe('');
+  });
+
+  it('sends exactly one create request, with the scanned file, through the existing endpoint', () => {
+    const { component, upload, navigate } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    const file = scan(component, scanDraft());
+
+    component.upload();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(uploadedPayload(upload).file).toBe(file);
+    expect(uploadedItems(upload)).toEqual([
+      { productId: 5, quantity: 48, unitCost: 1.25 },
+      { productId: 6, quantity: 24, unitCost: 2.5 },
+      { productId: 7, quantity: 12, unitCost: 5 }
+    ]);
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('blocks Save while a scanned line has no product, until one is chosen', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(component, scanDraft({ lines: [line({ productId: null })] }));
+
+    component.upload();
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toContain('Choose a product for every item');
+
+    component.items[0].productId = 5;
+    component.upload();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks Save while a scanned line has no pack size, until the units are filled in', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(
+      component,
+      scanDraft({ lines: [line({ unitsPerPack: null, units: null, unitCost: null, missing: ['unitsPerPack'] })] })
+    );
+
+    expect(component.items[0].quantity).toBeNull();
+    component.upload();
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toContain('whole number of units');
+
+    component.onLineQuantityChange(component.items[0], 48);
+    component.upload();
+
+    // The printed $60.00 over the 48 units typed: the price was never asked for again.
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 48, unitCost: 1.25 }]);
+  });
+
+  it('shows a line that is not stock as skipped and saves no purchase line for it', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(
+      component,
+      scanDraft({
+        lines: [
+          line(),
+          line({
+            kind: 'other',
+            text: value('A4 COPY PAPER'),
+            productId: null,
+            units: value(1, 'suggested'),
+            unitCost: value(8.5, 'suggested'),
+            lineTotal: value(8.5)
+          })
+        ]
+      })
+    );
+
+    expect(component.items).toHaveLength(2);
+    expect(component.items[1].scan?.skipped).toBe(true);
+
+    // Not validated either: a line that is not saved has nothing to complete.
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 48, unitCost: 1.25 }]);
+  });
+
+  it('saves a line that is not stock once a product is chosen for it', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(
+      component,
+      scanDraft({
+        lines: [
+          line({
+            kind: 'other',
+            productId: null,
+            units: value(1, 'suggested'),
+            unitCost: value(8.5, 'suggested'),
+            lineTotal: value(8.5)
+          })
+        ]
+      })
+    );
+
+    component.items[0].scan!.skipped = false;
+    component.items[0].productId = 6;
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 6, quantity: 1, unitCost: 8.5 }]);
+  });
+
+  it('keeps an unresolved levy out of the lines and saves no purchase line for it', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(
+      component,
+      scanDraft({
+        lines: [
+          line(),
+          line({
+            kind: 'levy',
+            text: value('CONTAINER DEPOSIT'),
+            packs: null,
+            unitsPerPack: null,
+            units: null,
+            unitCost: null,
+            productId: null,
+            lineTotal: value(1.1),
+            levyUnresolved: true
+          })
+        ]
+      })
+    );
+
+    expect(component.items).toHaveLength(1);
+    expect(component.scannedLevies).toEqual([
+      { text: 'CONTAINER DEPOSIT', amount: 1.1, message: UNRESOLVED_LEVY_MESSAGE }
+    ]);
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 48, unitCost: 1.25 }]);
+  });
+
+  it('classifies nothing for GST, which only a person or a rule decides', () => {
+    const { component, upload } = pageWithCatalogue();
+    component.form.title = 'Weekly restock';
+    scan(component, scanDraft());
+
+    component.upload();
+
+    expect(component.items.every((item) => item.gstClassification === GstClassification.Unknown)).toBe(true);
+    expect(uploadedItems(upload).every((item) => item.gstClassification === undefined)).toBe(true);
+  });
+
+  it('asks about the supplier order again, rather than reusing a projection of the replaced lines', () => {
+    const { component, upload } = pageWithCatalogue('9');
+    component.form.title = 'Weekly restock';
+    component.upload();
+    component.keepSupplierOrderOpen();
+    expect(upload).toHaveBeenCalledTimes(1);
+
+    scan(component, scanDraft());
+    component.upload();
+
+    expect(component.completionChoice).not.toBeNull();
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Issue #968: the receipt would take the business past its attachment storage allowance. The
+   * purchase itself is always recordable, so the filled form is kept and the one way forward is
+   * offered - and nothing is saved until it is chosen.
+   */
+  describe('a receipt the storage allowance refuses', () => {
+    const REFUSAL =
+      'This upload would exceed the business’s attachment storage allowance. ' +
+      'Delete attachments you no longer need, or upgrade the plan, and try again. ' +
+      'The record itself can still be saved without a document.';
+
+    function refusedOnce() {
+      const harness = pageWithCatalogue();
+      let attempt = 0;
+      harness.upload.mockImplementation(() => {
+        attempt += 1;
+        return attempt === 1 ? throwError(() => ({ error: REFUSAL })) : of({} as Purchase);
+      });
+      harness.component.form.title = 'Weekly restock';
+      scan(harness.component, scanDraft());
+      return harness;
+    }
+
+    it('keeps the filled form and offers to save the purchase without the receipt', () => {
+      const { component } = refusedOnce();
+
+      component.upload();
+
+      expect(component.error).toBe(REFUSAL);
+      expect(component.storageRefusedReceipt).toBe(true);
+      expect(component.items).toHaveLength(3);
+      expect(component.form.invoiceNumber).toBe('INV-77');
+      expect(component.selectedFile).not.toBeNull();
+    });
+
+    it('saves nothing more until that choice is made, and then saves without the document', () => {
+      const { component, upload, navigate } = refusedOnce();
+      component.upload();
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect(navigate).not.toHaveBeenCalled();
+
+      component.saveWithoutReceipt();
+
+      expect(upload).toHaveBeenCalledTimes(2);
+      const second = (upload as jest.Mock).mock.calls[1][0] as PurchaseUploadPayload;
+      expect(second.file).toBeNull();
+      expect(second.items).toHaveLength(3);
+      expect(component.storageRefusedReceipt).toBe(false);
+      expect(navigate).toHaveBeenCalledWith(['/purchases']);
+    });
+
+    it('offers nothing of the kind for another refusal, or for a purchase with no document', () => {
+      const other = pageWithCatalogue();
+      other.component.form.title = 'Weekly restock';
+      scan(other.component, scanDraft());
+      other.upload.mockImplementation(() => throwError(() => ({ error: 'One or more purchase products do not exist.' })));
+      other.component.upload();
+      expect(other.component.storageRefusedReceipt).toBe(false);
+
+      const noDocument = pageWithCatalogue();
+      noDocument.component.form.title = 'Weekly restock';
+      scan(noDocument.component, scanDraft());
+      noDocument.component.onReceiptChange(null);
+      noDocument.upload.mockImplementation(() => throwError(() => ({ error: REFUSAL })));
+      noDocument.component.upload();
+      expect(noDocument.component.storageRefusedReceipt).toBe(false);
+    });
+
+    it('withdraws the offer as soon as the next attempt is refused for something else', () => {
+      const { component } = refusedOnce();
+      component.upload();
+      expect(component.storageRefusedReceipt).toBe(true);
+
+      component.form.title = '  ';
+      component.upload();
+
+      expect(component.storageRefusedReceipt).toBe(false);
+      expect(component.error).toBe('Please enter a purchase title.');
+    });
+
+    it('does nothing at all if that choice is somehow made when no receipt was refused', () => {
+      const { component, upload } = pageWithCatalogue();
+      component.form.title = 'Weekly restock';
+      scan(component, scanDraft());
+
+      component.saveWithoutReceipt();
+
+      expect(upload).not.toHaveBeenCalled();
+      expect(component.selectedFile).not.toBeNull();
+    });
   });
 });

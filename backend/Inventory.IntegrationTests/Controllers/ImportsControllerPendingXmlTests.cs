@@ -46,7 +46,16 @@ public class ImportsControllerPendingXmlTests
                 Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ImportPendingReimbursementXmlFiles(
-                source.Object, store.Object, Mock.Of<IClock>(), new FakeProviderDataCoverageStore()));
+                source.Object,
+                new ImportReimbursementXmlFile(
+                    store.Object, Mock.Of<IClock>(), new FakeProviderDataCoverageStore())),
+            new UploadReimbursementReportArchive(
+                Mock.Of<IReimbursementArchiveReader>(),
+                Mock.Of<IReimbursementImportJobStore>(),
+                Mock.Of<Inventory.Application.Tenancy.IAuthenticatedActorAccessor>(),
+                Mock.Of<IClock>()),
+            new ListReimbursementImportJobs(Mock.Of<IReimbursementImportJobStore>()),
+            new GetReimbursementImportJob(Mock.Of<IReimbursementImportJobStore>()));
 
         var result = await controller.ImportPendingXmlFiles(CancellationToken.None);
 

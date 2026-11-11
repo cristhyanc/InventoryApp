@@ -29,9 +29,11 @@ using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
+using Inventory.Application.PlatformReceiptScans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
@@ -167,13 +169,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplierPreset>();
         services.AddScoped<UpdateSupplierPreset>();
 
-        // The shared switchable option visibility (issue #873). The write is the Super Admin's and
-        // runs under a denied business scope like the presets above; the read is every member's,
-        // through GetCurrentAccess, and runs under their ordinary resolved scope. Both are scoped
-        // because both go through the request's own AppDbContext, and the setting is about no
-        // business, so neither one's scope selects anything.
-        services.AddScoped<GetOptionVisibility>();
-        services.AddScoped<SetHistoricalGstClassificationVisibility>();
+        // The shared switchable menu visibility (issue #1148, replacing issue #873's single named
+        // option). The write is the Super Admin's and runs under a denied business scope like the
+        // presets above; the read is every member's, through GetCurrentAccess, and runs under their
+        // ordinary resolved scope. Both are scoped because both go through the request's own
+        // AppDbContext, and the setting is about no business, so neither one's scope selects
+        // anything.
+        services.AddScoped<GetMenuVisibility>();
+        services.AddScoped<SetMenuVisibility>();
 
         // What the business this request acts in has bought (issue #966). Scoped for the reason the
         // capability set is: the answer belongs to one request's resolved business - the viewed one
@@ -209,6 +212,12 @@ public static class ApplicationServiceCollectionExtensions
         // one BEGIN IMMEDIATE transaction on that same context, and the business it records is named
         // by the route - the subject of the decision rather than a tenancy scope.
         services.AddScoped<ManageBusinessNayaxSqsSender>();
+
+        // And the Super Admin's view of one business's monthly receipt-scan usage (issue #1164).
+        // Scoped like the surfaces above, and the narrowest of them: it reads one counter of the
+        // business the route names and writes nothing at all, so it takes no transaction and no
+        // lease. Looking at what a business has used cannot change it.
+        services.AddScoped<GetBusinessReceiptScanUsage>();
 
         // The attachment storage quota of issue #968, which reads the entitlement above for its
         // allowance. Scoped for the same reason: both the guard every upload path reserves through
@@ -423,6 +432,9 @@ public static class ApplicationServiceCollectionExtensions
         // because it is about the process rather than about one business.
         services.AddScoped<ReconcileNayaxSalesWithProvider>();
         services.AddScoped<ReviewNayaxSales>();
+        // The Dashboard's "costs need attention" read: products whose inventory-cost replay failed
+        // and is still pending, now that such a product no longer fails the sales sync.
+        services.AddScoped<GetProductsNeedingCostAttention>();
         // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
         // message cannot answer itself: it reports the machine's MDB slot and no product id.
         // Scoped like every other Nayax consumer, because the credentials, status gate and
@@ -444,6 +456,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<AttachPurchaseDocument>();
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();
+        // Reading a receipt into a suggested purchase draft (issue #1163). Scoped like every other
+        // use case. It stores no receipt, no draft and no purchase and never reaches document
+        // storage; the one thing it writes is issue #1164's monthly scan counter, which holds a
+        // number and nothing about what was scanned.
+        services.AddScoped<ScanReceipt>();
+        // And how much of the month's allowance is left (issue #1164). Asking is not scanning: it
+        // reads one counter of the caller's own business and makes no outbound call.
+        services.AddScoped<GetReceiptScanUsage>();
         services.AddScoped<ListActiveSupplierOrders>();
         services.AddScoped<GetSupplierOrder>();
         services.AddScoped<CreateSupplierOrder>();
@@ -508,6 +528,15 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
+        // The per-file steps both reimbursement import paths share (issue #1149): hash dedupe, the
+        // atomic write, and the settlement coverage a committed file proves.
+        services.AddScoped<ImportReimbursementXmlFile>();
+        // The uploaded Nayax ZIP of issue #1149: the upload, the two status reads, and the one job
+        // the background worker runs in a scope resolved to that job's own business.
+        services.AddScoped<UploadReimbursementReportArchive>();
+        services.AddScoped<ListReimbursementImportJobs>();
+        services.AddScoped<GetReimbursementImportJob>();
+        services.AddScoped<ProcessReimbursementImportJob>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<ListStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();

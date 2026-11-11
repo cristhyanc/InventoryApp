@@ -71,6 +71,27 @@ public static class PlanCatalogue
     public const string Currency = "AUD";
 
     /// <summary>
+    /// How many receipt scans one business may make in one calendar month of its own time zone
+    /// (issue #1164, the cap decided 10 November 2026). <c>Inventory.Domain.ReceiptScanning.ReceiptScanQuotaPolicy</c>
+    /// is the rule that applies it, and nothing else states the number.
+    ///
+    /// <para><strong>It is one number for every plan, not a column of
+    /// <see cref="PlanDefinition"/>.</strong> A cap that differed by plan is explicitly out of scope
+    /// on issue #1164, and a per-plan column would have had to invent a figure for the two plans that
+    /// do not include <c>PlanFeature.ReceiptScanning</c> at all - a business on one of them never
+    /// reaches a counter, because <c>[RequirePlan]</c> refuses it before the file is read. Compiled
+    /// here beside the storage allowance for the same reason that one is: this is a safety limit on
+    /// what an outside reader may be asked to do at the application owner's expense, and a table a
+    /// setting could edit is a table that can disagree with what was actually spent.</para>
+    ///
+    /// <para>At about US$0.04 per scan - what the 10 November 2026 receipt test measured - a hundred
+    /// scans is about US$3.80 per business per month. It is deliberately far above what recording a
+    /// month of vending purchases needs, so it bounds a runaway rather than rationing the
+    /// feature.</para>
+    /// </summary>
+    public const int MonthlyReceiptScanLimit = 100;
+
+    /// <summary>
     /// A gigabyte, as the attachment limits below count one: 1,000,000,000 bytes, the decimal SI
     /// gigabyte. Stated once, because "1 GB" and "20 GB" have to mean the same multiple everywhere a
     /// quota is measured or reported.

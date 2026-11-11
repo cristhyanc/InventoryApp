@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Application.Providers;
@@ -134,7 +135,15 @@ public class ImportsControllerNayaxSalesTests
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
-                Mock.Of<IImportedReimbursementStore>(),
-                Mock.Of<IClock>(),
-                new FakeProviderDataCoverageStore()));
+                new ImportReimbursementXmlFile(
+                    Mock.Of<IImportedReimbursementStore>(),
+                    Mock.Of<IClock>(),
+                    new FakeProviderDataCoverageStore())),
+            new UploadReimbursementReportArchive(
+                Mock.Of<IReimbursementArchiveReader>(),
+                Mock.Of<IReimbursementImportJobStore>(),
+                Mock.Of<IAuthenticatedActorAccessor>(),
+                Mock.Of<IClock>()),
+            new ListReimbursementImportJobs(Mock.Of<IReimbursementImportJobStore>()),
+            new GetReimbursementImportJob(Mock.Of<IReimbursementImportJobStore>()));
 }

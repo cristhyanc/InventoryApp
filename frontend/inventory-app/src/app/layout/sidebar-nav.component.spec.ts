@@ -391,7 +391,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       '/super-admin/businesses',
       '/super-admin/supplier-presets',
       '/super-admin/price-catalogue-review',
-      '/super-admin/master-products'
+      '/super-admin/master-products',
+      '/super-admin/menu-visibility'
     ]);
   });
 });
@@ -1910,17 +1911,28 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
 });
 
 /**
- * The one switchable Admin option in the menu (issue #873): a Super Admin may stop
- * `Historical GST Classification` being offered to everybody else, and keeps it themselves with an
- * `Off` pill beside its name.
+ * The switchable Admin destinations in the menu (issues #873, #1148 and #1151): a Super Admin may
+ * stop any of them being offered to everybody else, and keeps them themselves with an `Off` pill
+ * beside the name of each one that is off.
  *
  * The answer comes from the capability read - the sidebar decides nothing here either - and it is
  * applied after the capability rules, so it can only ever take away an entry the role already had.
  */
-describe('SidebarNavComponent switchable option visibility (issue #873)', () => {
+describe('SidebarNavComponent switchable menu visibility (issues #873, #1148 and #1151)', () => {
   const ROUTE = '/admin/historical-gst-classification';
-  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
-  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+  const GST_OFF: OptionVisibility = { switchedOffKeys: ['admin.historical-gst-classification'] };
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+  const EVERY_KEY_OFF: OptionVisibility = {
+    switchedOffKeys: [
+      'admin.site-commission-agreements',
+      'admin.imports',
+      'admin.historical-cost-recovery',
+      'admin.avco-transition',
+      'admin.costing-repair',
+      'admin.historical-gst-classification',
+      'admin.nayax-sale-timestamp-repair'
+    ]
+  };
 
   async function openAdmin(
     optionVisibility: OptionVisibility | undefined,
@@ -1936,17 +1948,30 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     return rendered;
   }
 
-  it('leaves the entry out for an eligible member while the option is off', async () => {
-    const { host } = await openAdmin(OFF);
+  it('leaves out only the entries whose key is off, for an eligible member', async () => {
+    const { host } = await openAdmin(GST_OFF);
 
     expect(link(host, ROUTE)).toBeNull();
-    // The rest of the Admin group is untouched: this is one option, not a section.
+    // The rest of the Admin group is untouched: this is one destination, not a section.
     expect(link(host, '/admin/costing-repair')).not.toBeNull();
     expect(link(host, '/admin/imports')).not.toBeNull();
   });
 
-  it('offers it, with no pill, while the option is on', async () => {
-    const { host } = await openAdmin(ON);
+  it('leaves out every switchable entry when every key is off, keeping the rest', async () => {
+    const { host } = await openAdmin(EVERY_KEY_OFF);
+
+    expect(link(host, ROUTE)).toBeNull();
+    expect(link(host, '/admin/costing-repair')).toBeNull();
+    expect(link(host, '/admin/imports')).toBeNull();
+    // Integrations, Users, Roles and Business Settings are never switchable (9 November 2026).
+    expect(link(host, '/admin/nayax-settings')).not.toBeNull();
+    expect(link(host, '/admin/users')).not.toBeNull();
+    expect(link(host, '/admin/roles')).not.toBeNull();
+    expect(link(host, '/admin/business-settings')).not.toBeNull();
+  });
+
+  it('offers it, with no pill, while nothing is switched off', async () => {
+    const { host } = await openAdmin(NOTHING_OFF);
 
     expect(link(host, ROUTE)).not.toBeNull();
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
@@ -1959,8 +1984,8 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
   });
 
-  it('keeps it for a super admin while the option is off, marked Off and still linked', async () => {
-    const { host } = await openAdmin(OFF, { diagnosticsAccess: true });
+  it('keeps it for a super admin while its key is off, marked Off and still linked', async () => {
+    const { host } = await openAdmin(GST_OFF, { diagnosticsAccess: true });
 
     const entry = link(host, ROUTE);
     expect(entry).not.toBeNull();
@@ -1969,10 +1994,38 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     expect(entry?.hasAttribute('aria-disabled')).toBe(false);
   });
 
-  it('marks nothing Off for a super admin while the option is on', async () => {
-    const { host } = await openAdmin(ON, { diagnosticsAccess: true });
+  /** The pill is per entry, so the administrator sees exactly which destinations are off. */
+  it('marks every switched-off entry for a super admin, and only those', async () => {
+    const { host } = await openAdmin(
+      { switchedOffKeys: ['admin.imports', 'admin.costing-repair'] },
+      { diagnosticsAccess: true }
+    );
+
+    expect(link(host, '/admin/imports')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/admin/costing-repair')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, ROUTE)?.querySelector('.badge')).toBeNull();
+    expect(link(host, '/admin/users')?.querySelector('.badge')).toBeNull();
+  });
+
+  it('marks nothing Off for a super admin while nothing is switched off', async () => {
+    const { host } = await openAdmin(NOTHING_OFF, { diagnosticsAccess: true });
 
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  /**
+   * Menu Visibility is a Super Admin destination, so no switch reaches it: the page the switches are
+   * managed from must always be reachable from the menu that shows them.
+   */
+  it('keeps the Menu Visibility entry for a super admin with every key off', async () => {
+    const { host, fixture } = await render({
+      access: of(granted(CAPABILITIES, EVERY_KEY_OFF)),
+      diagnosticsAccess: of(true)
+    });
+    groupToggle(host, 'Super Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/super-admin/menu-visibility')).not.toBeNull();
   });
 
   /**
@@ -1980,7 +2033,7 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
    * `Super Admin` group (issue #721): what the preview shows is what the previewed role sees.
    */
   it('withholds the entry inside a role preview, as it does the Super Admin group', async () => {
-    const { host } = await openAdmin(OFF, { diagnosticsAccess: true, rolePreviewActive: true });
+    const { host } = await openAdmin(GST_OFF, { diagnosticsAccess: true, rolePreviewActive: true });
 
     expect(link(host, ROUTE)).toBeNull();
   });
@@ -1999,12 +2052,122 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     ] as const;
 
     const { host, fixture } = await render({
-      access: of(granted(manager, ON)),
+      access: of(granted(manager, NOTHING_OFF)),
       diagnosticsAccess: of(true)
     });
     groupToggle(host, 'Admin').click();
     fixture.detectChanges();
 
     expect(link(host, ROUTE)).toBeNull();
+  });
+});
+
+/**
+ * The switchable **Reports** destinations in the menu (issue #1153): the same rule the Admin group
+ * has had since #1151, applied to the eight report keys, with nothing of its own.
+ *
+ * A switched-off report leaves the group for everybody but the platform administrator, the group goes
+ * with the last of them, and nothing about a report's own plan or provider rules is involved - the
+ * business here is connected and entitled throughout, so what is missing is missing because of the
+ * switch.
+ */
+describe('SidebarNavComponent switchable Reports destinations (issue #1153)', () => {
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+  const EVERY_REPORT_OFF: OptionVisibility = {
+    switchedOffKeys: [
+      'reports.bookkeeping',
+      'reports.daily',
+      'reports.transactions',
+      'reports.reconciliation',
+      'reports.machines',
+      'reports.products',
+      'reports.site-commissions',
+      'reports.gst'
+    ]
+  };
+
+  async function openReports(
+    optionVisibility: OptionVisibility | undefined,
+    options: { diagnosticsAccess?: boolean } = {}
+  ) {
+    const rendered = await render({
+      access: of(granted(CAPABILITIES, optionVisibility)),
+      diagnosticsAccess: of(options.diagnosticsAccess ?? false)
+    });
+    groupToggle(rendered.host, 'Reports').click();
+    rendered.fixture.detectChanges();
+    return rendered;
+  }
+
+  it('leaves out only the report whose key is off, for an eligible member', async () => {
+    const { host } = await openReports({ switchedOffKeys: ['reports.daily'] });
+
+    expect(link(host, '/reports/daily')).toBeNull();
+    expect(link(host, '/reports/bookkeeping')).not.toBeNull();
+    expect(link(host, '/reports/gst')).not.toBeNull();
+    expect(link(host, '/reports/site-commissions')).not.toBeNull();
+  });
+
+  /**
+   * The Site Commissions report and the Admin agreements page are two destinations with two keys:
+   * hiding the reading leaves the page the agreements are maintained from exactly as it was.
+   */
+  it('keeps the Admin agreements page when the Site Commissions report is switched off', async () => {
+    const { host, fixture } = await openReports({ switchedOffKeys: ['reports.site-commissions'] });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/reports/site-commissions')).toBeNull();
+    expect(link(host, '/admin/site-commission-agreements')).not.toBeNull();
+  });
+
+  it('drops the whole Reports group once every report is off, keeping the rest of its heading', async () => {
+    const { host } = await render({ access: of(granted(CAPABILITIES, EVERY_REPORT_OFF)) });
+
+    expect(Array.from(host.querySelectorAll('button')).some((button) => (button.textContent ?? '').includes('Reports'))).toBe(
+      false
+    );
+    // The heading over the group is shared with Expenses, which no switch reaches.
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(host.textContent).toContain('Finance & reports');
+  });
+
+  it('keeps every report for a super admin, marking exactly the switched-off ones Off', async () => {
+    const { host } = await openReports({ switchedOffKeys: ['reports.daily', 'reports.gst'] }, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/reports/gst')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/reports/daily')?.textContent).toContain('hidden from everybody but a Super Admin');
+    expect(link(host, '/reports/bookkeeping')?.querySelector('.badge')).toBeNull();
+  });
+
+  it('offers every report, with no pill, while nothing is switched off', async () => {
+    const { host } = await openReports(NOTHING_OFF, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')).not.toBeNull();
+    expect(link(host, '/reports/daily')?.textContent).not.toContain('Off');
+  });
+
+  /** The fail-open rule: an unreported setting hides nothing and shows no pill. */
+  it('offers every report, with no pill, while the setting has not been reported', async () => {
+    const { host } = await openReports(undefined, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')).not.toBeNull();
+    expect(link(host, '/reports/daily')?.textContent).not.toContain('Off');
+  });
+
+  /** A switch is not a capability: an Operator holds no `Reports.View` in either state. */
+  const OPERATOR = ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'] as const;
+
+  it('never offers a report to a role without Reports.View while nothing is off', async () => {
+    const { host } = await render({ access: of(granted(OPERATOR, NOTHING_OFF)) });
+
+    expect(link(host, '/reports/bookkeeping')).toBeNull();
+  });
+
+  it('never offers a report to a role without Reports.View while every key is off', async () => {
+    const { host } = await render({ access: of(granted(OPERATOR, EVERY_REPORT_OFF)) });
+
+    expect(link(host, '/reports/bookkeeping')).toBeNull();
   });
 });

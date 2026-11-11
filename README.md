@@ -429,7 +429,7 @@ Human-controlled setup this depends on, in addition to the External ID portal wo
 
 MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from `ConfigService.apiBaseUrl`, the same value every HTTP call uses (see [above](#2-how-the-frontend-finds-the-api)), so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code or configuration change between environments. `ConfigService` loads `assets/config.json` on the raw `HttpBackend` rather than the intercepted `HttpClient`, so the MSAL interceptor cannot be constructed — and cannot capture a stale API base URL — before that load has finished.
 
-Protected business documents (purchase documents and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/purchases/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL.
+Protected business documents (purchase documents and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/purchases/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL. Since issue #1167 an operating expense and its supporting document are added and edited on their own pages, `/expenses/new` and `/expenses/:id/edit`, rather than in a card on the `/expenses` register, under exactly the same attachment rules: the same upload, the same replacement of a stored document by a newly chosen one, no remove action, and the server still the sole authority on size, type and the business's storage quota.
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
@@ -491,73 +491,59 @@ The journey a second live business needs is now complete end to end. The applica
 
 ## The public landing page
 
-A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
-application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
-integration, a three-step workflow, pricing and FAQs. It makes no request to the API at all, so
-opening or refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954, refreshed for
+the public beta by issue #1191): what the application does, an example dashboard drawn from clearly
+labelled sample data, the optional Nayax integration, a three-step workflow and FAQs. It makes no
+request to the API at all, so opening or refreshing it never asks for a sign-in or reads any business,
+account or Nayax data.
 
+- The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
+  compare supplier prices and plan your next refill in one place." Directly under it sits the public
+  beta notice - "Pro access is free during our public beta. No credit card required." - and, directly
+  under that, the export notice: "Data exports are not part of the free beta. Downloading your data
+  as CSV or Excel will need a paid plan once paid plans launch." No price, plan card or beta end date
+  appears anywhere on the page (see [Pricing on the landing page](#pricing-on-the-landing-page-issue-971)
+  below).
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
   is configured, otherwise a redirect straight to Microsoft that returns to `/`.
-- **Get started** opens the business application at `/apply` (see
+- **Start free** opens the business application at `/apply` (see
   [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
-  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
-  page instead, exactly as before.
+  sign-in first - the same `/apply` journey the button used under its earlier "Get started" label.
+  While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome page instead,
+  exactly as before.
 - **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
   **Open app** button returns to `/`.
 
-Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
-the page presents Nayax only as an optional connection for supported sales data and the reports
-built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
-those pages exists yet; add them to its footer once they do. The approved design and every wording
-change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax; the
+Nayax section states "Use core inventory on its own. Connect Nayax for sales integration.", with no
+reference to a paid plan. The three workflow steps are "Set up your business", "Add products and
+machines" and "Plan and record refills". The footer carries a contact line - the
+`admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" - and **no Privacy
+Policy or Terms of Service link**: the Privacy Policy and Terms of Use page layouts exist (issue #1190,
+`frontend/inventory-app/src/app/public/legal/`), but the legal copy on them is not approved yet, so
+both pages are reachable only in a development build and nothing links to either one; add the footer
+link once the copy is approved and the pages are published. The approved designs and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md)
+and [docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
+
+The page never scrolls sideways on a phone: it was measured in Chromium at every width from 320px to
+390px, and the viewport meta tag still allows pinch zoom. Signed-out screenshots:
+[1440px](docs/screenshots/issue-1191/homepage-signed-out-1440px.png) and
+[390px](docs/screenshots/issue-1191/homepage-signed-out-390px.png), captured by
+`frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
+[docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
+them).
 
 ### Pricing on the landing page (issue #971)
 
-A **Pricing** link in the header, mobile menu and footer navigation scrolls to a section before the
-FAQs with three static plan cards - `landing-content.ts`'s `LANDING_PLANS`, read only by the page,
-never fetched - matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed: **Free** (A$0, 1 GB of purchase/expense attachments, every manual feature - Dashboard,
-Machines, Inventory, Purchases, Supplier orders, Suppliers, Expenses and manual Pick List entry -
-with no supplier comparisons and no reports), **Starter** (A$7 per business per month; Free plus
-20 GB of attachments, daily cheapest-supplier comparisons, and the Bookkeeping and GST reports with
-their CSV/XLSX export) and **Pro** (A$15 per business per month; Starter plus the Nayax connection
-and everything that needs it today - Sites, Site Commissions, the Daily, Transactions,
-Reconciliation, Machines and Products reports, machine latest sales, Sync Restock, dashboard sales
-refresh, the Nayax sales file import and the calculated Pick List matrix - with 5 connected
-machines included and A$2/month per additional connected machine).
-
-**Coming soon, not purchasable.** Paid enforcement, billing and the plan catalogue API (issue #965's
-other child tasks) are not live. Free carries an "Available now" badge; Starter and Pro carry a
-"Coming soon" badge. Every plan card's action is the same **Get started**/**Open app** as the rest
-of the page - the existing business application journey - so there is no checkout, trial promise or
-waitlist, nothing a visitor could mistake for a live purchase. The Pro card also states explicitly
-that plan entitlement and a *usable* Nayax connection are separate: Pro will include the Nayax
-connection, but connected features still need the business's own working Nayax credentials, exactly
-as today.
-
-**Existing copy reconciled with the plan catalogue.** The "Optional sales connection" and "Optional
-integration" facts in the Nayax section now say Nayax will be a Pro plan feature once paid plans go
-live (it stays open to every business today, and connecting it stays optional even on Pro), and the
-former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
-figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
-is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
-purchasable, what the storage allowances will do once the paid plans launch, and that the extra
-connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
-treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
-asserted here until it is decided.
-
-**Plan limits are still described as future behaviour, because none of them applies to a visitor
-today.** The attachment quota is implemented (issue #968) but applies only once a deployment
-switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
-needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
-allowances and the connected-machine charge start when the paid plans launch and that nothing is
-limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
-80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
-[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
-limit, a paused upload or a per-machine charge as today's behaviour;
-`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
-attaching a document has since shipped, issue #976, and the page claims nothing about it either
-way.)
+Issue #971 gave the landing page a **Pricing** section with Free/Starter/Pro plan cards, matching the
+catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965) agreed. Issue #1191
+removed it for the public beta: the page shows no Pricing section, no plan card and no price, because
+every business gets full access at no cost while the beta runs (see [The public landing
+page](#the-public-landing-page) above for the beta and export notices that replace it). The plan
+catalogue itself, `Business plans (Free, Starter and Pro)` below, is unaffected - only its landing-page
+presentation is off while plan enforcement and billing stay off. Reintroducing pricing on the page is
+tracked separately, for whenever paid plans actually launch.
 
 ## The dashboard and the menu
 
@@ -596,15 +582,31 @@ changed, and every "Unavailable" still means unavailable, never zero.
     closes it, and Escape hands focus back to the button. It appears only when the card has rows:
     while it is loading, after a failed read with nothing to show, or when the business has no
     sites or machines, there is no help button, exactly as there was no explanation row before.
-  - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
-    date buttons above the table choose the period for every row, and the sales column names it. The
-    comparison column shows the published "vs same time last week" figure while This week is
-    selected and says there is no comparison for the other periods, because that is the only
-    comparison these reads publish. Sites and machines both publish all four periods, so a site row
-    shows its own sales figure for whichever one you choose, on a wide screen and on a phone; a
-    period with no completed sale shows `$0.00`, and a figure your role may not see shows as
-    Unavailable. A site's figure is the sum of the machines standing at it, worked out on the server
-    for exactly the period and business days the column names.
+  - **One period at a time, shared by both layouts, and each one is a comparison** (issue #1178).
+    The Today / This week / This month buttons above the table choose the period for every row, and
+    the sales column names it; This week is what the card opens on. Each period is compared against
+    **the same elapsed window in the previous period**, not a whole previous day, week or month:
+    Today against "vs same time yesterday", This week against "vs same time last week", This month
+    against "vs same time last month". Every site row, every expanded machine row and the fleet
+    total show the percentage change *and*, beneath it, the amount it was worked out from -
+    "Yesterday to this time", "Last week to this time" or "Last month to this time" - so a
+    comparison is never a percentage with nothing behind it. For example, $150 this week against
+    $100 last week to this time reads `↑ 50.0%` with `$100.00` under it. Sites and machines publish
+    every one of the three periods, so a site row shows its own sales figure for whichever one you
+    choose, on a wide screen and on a phone; a period with no completed sale shows `$0.00`, and a
+    figure your role may not see shows as Unavailable. A site's figure is the sum of the machines
+    standing at it, worked out on the server for exactly the period and business days the column
+    names. Last week is not one of this card's periods any more: it is a whole week, which no
+    same-elapsed-time baseline exists for. Other screens still show it.
+  - **A baseline of nothing and a baseline nobody published are different answers.** A known zero
+    baseline shows `$0.00` with **No prior sales** instead of a percentage - there were no sales in
+    that window to compare against - while a figure the response withheld or did not know shows as
+    **Unavailable**, never as `$0.00`. The fleet total sums every machine's current figure and every
+    machine's baseline and compares the two sums; if any machine is missing either figure, the
+    fleet's percentage and its baseline amount both show Unavailable rather than a total that quietly
+    counts a missing machine as zero or falls back to a whole previous week. A role without
+    permission to see financial figures is shown no period buttons, no sales, no comparison and no
+    baseline amounts, exactly as before.
   - **Every machine row shows its own stock level** (issue #1013). `GET api/sites` already fetched
     every site machine's selections to work out the site percentage; it now publishes that split as
     well, so a machine row carries its own percentage, bar and status in words - worked out on the
@@ -691,14 +693,14 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
-  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
+  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports and Admin → Reimbursement Report, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
-  - **One Admin option can also be switched off by a Super Admin**, which is a different thing again: **Historical GST Classification** can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. That hides the sidebar entry and the Admin card and changes no permission at all — an Owner still holds `Data.Repair`, and the page and its API still work exactly as before. See [Hiding this option from other users](#hiding-this-option-from-other-users-super-admin).
+  - **The reports and the Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven Admin tools — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — and each of the eight reports — Bookkeeping, Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. The **Imports** switch covers two entries, because Reimbursement Report is the other way into the same imports (issue #1152): switching it off hides both. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, a Manager still holds `Reports.View`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
-  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue` and `monthToDateRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, which since issue #1019 each `machineStocks` entry carries for its own machine as well, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
+  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue`, `monthToDateRevenue` and `previousComparableDayRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, which since issue #1019 each `machineStocks` entry carries for its own machine as well, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
@@ -772,6 +774,7 @@ Prices are AUD per business per month, as agreed on issue #965. Whether the adve
 | Daily cheapest-supplier comparisons | — | Yes | Yes |
 | Bookkeeping and GST reports, with exports | — | Yes | Yes |
 | Nayax connection and everything that needs it (below) | — | — | Yes |
+| [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) | — | — | Up to 100 scans a month |
 | Connected machines included | — | — | 5, then A$2/month each |
 
 A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**. How that count is taken, how old it may be, and what happens when the Nayax account changes are in [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978).
@@ -784,7 +787,7 @@ The split is the same one the application already makes for a business with no u
 
 - **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
-- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), **up to 100 scans per month** (issue #1164), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan, with no limit.
 
 A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
 
@@ -843,7 +846,7 @@ Beside it, `entitlement.attachmentStorage` carries the business's attachment sto
 
 Each plan includes an amount of purchase and expense attachment storage, and that allowance is enforced once plans are being enforced (issue #968). It is about **documents only**: nothing here ever stops a purchase, an expense or any other record being saved.
 
-- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead.
+- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead. A phone photo is shrunk in the browser before it is sent, so what counts is that smaller file (see [Photos are shrunk before they are uploaded](#photos-are-shrunk-before-they-are-uploaded)).
 - **Deleting frees it immediately.** Deleting a purchase, an expense or an attachment releases its bytes as soon as that change is saved, whether or not the stored file is removed successfully.
 - **At 80% the business is warned**, and the warning state travels with the plan in the access read above, so the app can say so before anything is refused.
 - **At 100% only new uploads pause.** Viewing, downloading and deleting attachments keep working, and so does recording purchases and expenses — a purchase can be saved [without a receipt](#a-purchase-without-a-receipt) and the document added later. An upload that does not fit is refused with a sentence that says the record can still be saved without it, and nothing is written to storage.
@@ -878,6 +881,7 @@ The application stores almost no personal data. It holds a vending business's ow
 - **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
 - **An invite's note is free text an Owner typed** (issue #531), so it may well name the person being invited. It is stored on the invite row, shown back to that business's own Owners on the invite list, and nothing else: it decides nothing, nothing looks an invite up by it, and it is deliberately absent from the invite audit event. An invite stores no name and no email address of the person it is for — only the role it grants and the Entra pair of the Owner who created it.
 - **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
+- **A scanned receipt is sent to Anthropic to be read, and this application stores none of it** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **Nothing is stored by this application as a result**: not the file, not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it and forgotten. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. Since issue #1164 the business's own [monthly scan count](#100-scans-a-month-issue-1164) is stored too, and it is a count in the same sense — a business, a month and a number, with no column that could hold a file name, a supplier, a product, an amount or any part of a draft. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)), and no other feature sends anything to Anthropic. **Businesses must be told this before the feature is launched**, which belongs with the terms and privacy text the Scan receipt screen (issue #1166) is released behind.
 - **A platform administrator may be granted a time-limited, audited, read-only look at a business's data** (issues #550 and #551). A [support session](#super-admin-support-sessions) records which business, which administrator, why they needed to look, and when the session ran and ended; it lasts 60 minutes, only one may be open at a time, and the record cannot be edited or deleted by the surface that creates it. A request made inside one reads that business and can change nothing — not a row, not a document — and never uses the business's Nayax credentials; it cannot see the members page at all, so members' names and email addresses stay private. Every such request is audited with the endpoint it reached, never with what it read. **Businesses must be told this is possible**, which v1 does in the terms and privacy text; notifying a business's Owners in the app is a documented follow-up. The reason the administrator typed is stored and logged on purpose: it is what makes such access reviewable afterwards.
 
 See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.
@@ -899,6 +903,12 @@ NayaxSqs__Region
 NayaxSqs__AccessKeyId
 NayaxSqs__SecretAccessKey
 NayaxSqs__VisibilityTimeoutSeconds
+ReceiptScanning__ApiKey
+ReceiptScanning__Model
+ReceiptScanning__TimeoutSeconds
+ReceiptScanning__MaxImageBytes
+ReceiptScanning__MaxPdfBytes
+ReceiptScanning__MaxPdfPages
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 ExternalId__Instance
@@ -922,6 +932,8 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 `NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Since issue #520 that is what every Nayax call does, so **an environment that uses Nayax must have a key provisioned** — it is a human step, and it must happen before the existing business's credential is moved into the table by [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) (issue #519), which refuses with the setting named until it is. Keep the key configured afterwards: removing the key that encrypted a stored token is what makes that token undecryptable. An environment with no Nayax integration at all needs no key and is unaffected. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518) and [§ Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
 
 `NayaxSqs__*` are the six settings of the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) below. `NayaxSqs__SecretAccessKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. The other five are not secrets but are still **absent from `appsettings.json`, which is the shipped state**: with no `NayaxSqs__QueueUrl` the reader is not started at all, the API starts and runs exactly as it did before, and one information line says the reader is off. A queue URL **with** a missing region, key id or secret fails at startup with the setting named, because a deployment that asked for the reader and silently imported nothing would be worse than one that refused to start. `NayaxSqs__VisibilityTimeoutSeconds` must match the queue's own visibility timeout (120 seconds); blank or out of range falls back to that default. All six are read once at startup, so filling them in takes effect on the next restart.
+
+`ReceiptScanning__*` are the settings of [receipt scanning](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163). `ReceiptScanning__ApiKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. It is **absent from `appsettings.json`, which is the shipped state**: with no key, `POST /api/purchases/scan` answers `503 "Receipt scanning is not available"`, nothing leaves the process, and the rest of the API is untouched — so **deploying without the key is safe**. A key configured beside a broken setting beside it — a blank model, a timeout of zero, a limit of zero, a non-https base URL — fails at startup with the setting named. The other five are not secrets: `ReceiptScanning__Model` defaults to the model decided on issue #1163 on 10 November 2026 after a test on 8 real receipts, `ReceiptScanning__TimeoutSeconds` to 60 (there is **no automatic retry** — a retried scan is a second payment), and `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` to the reader's documented image, PDF and page limits; they are settings rather than constants because a vendor's limits change, and the endpoint's own 8,000,000-byte upload cap applies first in any case (raising that one is a code change, not a setting). All are read once at startup, so filling them in takes effect on the next restart. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** (the launch gate recorded on #1163, which [100 scans a month](#100-scans-a-month-issue-1164) satisfies); until plan enforcement is on, scanning is refused for every business whatever the key says, because it is the one plan feature that [fails closed](#how-a-plan-is-enforced). **The cap itself is not a setting**: it is compiled in, for the reason the storage allowances are, so no configuration change can raise or remove it.
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
@@ -1238,6 +1250,127 @@ first successful poll, and the Dashboard syncs on load in the meantime. The `200
 business-facing surface may read. See [docs/architecture.md § Dashboard sales live from the Nayax SQS
 queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106).
 
+## The Reimbursement Report import (issue #1149)
+
+Nayax emails the reimbursement report as a ZIP attachment. You can upload it **exactly as it
+arrived** — no unzipping, no copying files onto the server. The upload is accepted in seconds and the
+importing happens in the background, so a year of reports does not hold a browser open; the design is
+[docs/architecture.md § Reimbursement Report ZIP upload and background
+import](docs/architecture.md#reimbursement-report-zip-upload-and-background-import-issue-1149).
+
+**There is nothing to configure.** It has no settings of its own and needs no credential of any kind:
+it reads the file you uploaded and writes your own records. **Always On** is the one prerequisite, and
+it is the same one the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) has: without
+it the platform may idle the process out, and an idled process imports nothing — a queued upload would
+then wait until somebody's next request woke the application.
+
+It is open to exactly the members who may run an import (Manager and Owner — see [Roles and
+capabilities](#roles-and-capabilities)).
+
+### Where the page is, and what is on it
+
+**Admin → Reimbursement Report** (`/admin/imports/reimbursement-report`, issue #1152). It is in the
+sidebar's **Admin** group directly after **Imports**, and the Imports page itself carries a
+**Reimbursement Report** card that opens it; the breadcrumb reads Admin › Imports › Reimbursement
+Report. The entry needs the same access as Imports (`Imports.Run`), is left out of the menu while the
+Nayax connection is not usable for the same reason Imports is, and is covered by the **same**
+Super Admin menu switch as Imports — switching `admin.imports` off hides both ways in (see
+[Super Admin menu visibility](#super-admin-menu-visibility)). Its address still opens if you go to it
+directly, and every endpoint behind it checks the same access itself.
+
+The page has three things on it:
+
+- **Upload the reimbursement report.** Choose the ZIP and press **Upload**. Upload it **exactly as
+  Nayax emails it** — do not unzip it, rename it or take files out of it. An accepted upload says so
+  and is queued; a refused one shows the server's own sentence saying why, beside the file you chose,
+  and stores nothing at all.
+- **Recent uploads.** Each upload, newest first, with when it was uploaded in your business's own time
+  (Sydney for an Australian business), the file name, its state, and how many files it imported,
+  skipped and failed. An upload with failures offers **Show the files that failed**, which names each
+  failed file and the short reason recorded for it. While an upload is `Queued` or `Processing` the
+  list refreshes itself; once nothing is running it stops, and leaving the page and coming back shows
+  the current state. Nothing financial is on the page: no figure, no payment detail and no XML.
+- **Import XML files.** The older pending-folder import, moved here unchanged from Admin → Imports:
+  it processes reimbursement XML files already on the server and reports how many files and
+  reimbursements it imported.
+
+Both uploads and the pending-XML import are unavailable during a read-only support session, which the
+page says; the recent uploads are still shown, because reading them changes nothing.
+
+### What you upload, and what is refused
+
+`POST api/imports/reimbursement-report` takes one file as `multipart/form-data`. It answers **`202`
+with the job id** when the archive is accepted, and **`400` with a sentence saying why** when it is
+not. A refused upload stores **nothing at all** — not the file, not a job, not one reimbursement row —
+because a half-accepted settlement archive would leave you unable to say which half of your money
+landed.
+
+What is read, inside the ZIP:
+
+- the archives **inside** it are opened, one level deep — which is the shape Nayax sends,
+  `Reports_DD-MM-YY.zip` holding `MM-YYYY/Reimbursments.zip`;
+- folders inside either are descended into;
+- every `.xml` file in either is imported;
+- the PDF and the XLSX beside each report, and anything else, are **ignored and counted**;
+- an archive inside an inner archive is **ignored**, not opened;
+- an archive whose XML files sit directly in it works too, if you unzipped a level by hand.
+
+The limits, all checked by the server before the upload is accepted:
+
+| Limit | Value |
+|---|---|
+| Whole upload | 10 MB (the real file is about 1.3 MB) |
+| Archives inside the archive | 20 |
+| Entries in total | 2,000 |
+| Any one file, expanded | 5 MB |
+| Everything expanded | 100 MB |
+| How far one file may expand | 200× its compressed size |
+
+Breaking any one of them rejects the whole upload. So does a file that is not a readable ZIP, and an
+archive with no reimbursement XML in it at all — there would be nothing to import.
+
+### Following a job
+
+`GET api/imports/reimbursement-report/jobs` lists your business's **latest 20** uploads, newest
+first, and `GET api/imports/reimbursement-report/jobs/{jobId}` adds what each XML inside one turned
+into. A job of another business is a `404`. Each job reports:
+
+| State | On the page | What it means |
+|---|---|---|
+| `Queued` | Queued | Accepted and waiting. Nothing imported yet. |
+| `Processing` | Processing | Being worked through now. |
+| `Completed` | Completed | Every file in it was imported, or was already imported. |
+| `CompletedWithFailures` | Completed with failures | It finished, and at least one file in it could not be imported. The rest were. |
+| `Failed` | Failed | The job itself stopped. Whatever it had already imported stays imported. |
+
+and, per file, `Imported`, `Skipped` (your business had already imported a file with those exact
+bytes) or `Failed` with a short, safe reason. The counts are always counted from those per-file
+records, so what a job says is what actually landed. **No log line and no status field carries XML
+content, a figure or a payment detail** — a file name may appear, so you can find the file a job is
+talking about.
+
+### Recovering a file that did not import
+
+- **One file failed (`CompletedWithFailures`).** The others imported. Look at that file's reason, fix
+  or re-export it, and upload the archive again: the files already imported come out `Skipped`, so a
+  re-upload imports exactly what is missing and never anything twice. Duplicate detection is the
+  file's own bytes, per business.
+- **The job failed (`Failed`).** Either the database could not be written five times over — the job
+  says "Stopped after repeated database errors. Upload the ZIP again." — or its stored copy of the
+  archive could no longer be read. Everything it had imported keeps its record; upload the same ZIP
+  again and it imports the remainder.
+- **The application restarted mid-job.** Nothing to do: the job is picked up again and continues from
+  the first file with no recorded outcome. A file it had imported still reports `Imported`, and
+  nothing is imported twice — each file's rows and the record of them are written together or not at
+  all.
+- **A job seems stuck in `Queued`.** It is waiting for the worker. Check that **Always On** is on;
+  until a request wakes an idled process, nothing is imported. A job whose attempt failed is also
+  deliberately held back for 1, then 5, then 15 minutes and then an hour before the next attempt —
+  and a job waiting like that never holds up anybody else's.
+
+Re-uploading the same ZIP is always safe. It creates a new job, and every file in it that you already
+have comes out `Skipped`.
+
 ## Platform diagnostics API
 
 The tenant boundary fails closed, which is what makes a problem *in* it hard to see: a row assigned to the wrong business, or a child row whose parent belongs to another business, is invisible to the only person who would notice. The platform diagnostics API is one narrowly bounded, read-only, audited path for that investigation and nothing else. See [docs/architecture.md](docs/architecture.md#platform-diagnostics-issue-336) for the complete design.
@@ -1274,6 +1407,7 @@ PUT  /api/super-admin/businesses/{businessId}/plan-grant      { plan, endsOnUtc?
 POST /api/super-admin/businesses/{businessId}/plan-grant/end  { reason, revision }
 GET  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  the recorded sender, or 404
 PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  { awsSenderId, isEnabled, expectedRevision }
+GET  /api/super-admin/businesses/{businessId}/purchase-scan-usage  scans used this month (read-only)
 ```
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the diagnostics API, checked on every request, plus the ordinary authentication and `access_as_user` scope requirements. **With the pair unset — the shipped state — nobody reaches it at all.** An Owner holds the strongest business role there is and is refused here like anybody else: a business role is not platform authority.
@@ -1281,11 +1415,12 @@ PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  { awsSenderId, i
 - **Switching a business off, and on again.** **Deactivate** takes a trading business to `Deactivated` in one transaction, cancels every invite link of it that is still live, so no outstanding link survives, and ends every active [support session](#super-admin-support-sessions) for it; the response says how many invites were cancelled. **Nothing is deleted and no membership is changed** — the business simply stops resolving, so its members get the ordinary `403` on their next request. **Reactivate** brings it back, but only while it still has an active Owner membership: without one the business would trade with nobody able to administer it, so that is a `409` and nothing changes. A reactivation restores only the business — a released or revoked membership stays inactive, and a cancelled invite stays cancelled.
 - **Freeing somebody from a business that is off.** A person belongs to one business at a time, so a membership in a deactivated business would otherwise stop them joining anywhere else — and that business has no reachable Owner to release them. While a business is `Deactivated` (and only then) the Super Admin can **list its members** — membership id, display name, role and whether it is active, and nothing else — and **release** one, which marks that membership inactive and frees the person to accept an invite or apply for a business of their own. The usual "a business must keep an active Owner" rule deliberately does not apply here; the reactivation refusal above is what it is replaced by. Both endpoints answer `409` for a business in any other status: a trading business's members are its own Owner's to manage.
 - **Recording which AWS user sends a business's Nayax sales (issue #1101).** The last two routes above are the Super Admin's **Nayax SQS sender identity**. Nayax can deliver every transaction to one shared Amazon SQS queue, and a business's messages are told apart by the AWS IAM user that sent them — so before that queue can be read safely the application needs a trusted mapping from an IAM user id (what SQS reports as `SenderId`, for example `AIDAEXAMPLEUSERID123`) to exactly one business. **Only a Super Admin may set it**: a business that could choose its own sender id could claim another business's sales, so this record is on no business-facing screen at all, to read or to write. One business holds at most one sender, and **one sender id belongs to at most one business in the whole application** — enforced by the database, so a duplicate is `409` with a message that names no other business. The id must be 16 to 128 letters and digits; `isEnabled` can only be on while an id is recorded; only an `Active` business may be changed. Every write carries the row's current `expectedRevision`, which the `GET` reports and which is `null` for the first one; anything else is `409` with "reload it and try again", so two Super Admin tabs cannot overwrite each other. **Remove deletes nothing**: it clears the id, turns the mapping off and records the change, so the history survives and the id becomes free for another business — and every create, change, switch and removal appends an audit row in the same transaction. The sender id is an **identifier, not a secret**: an AWS access key or secret is never entered, stored or logged anywhere in this application. Nothing reads the queue yet (issue #1103). See [docs/architecture.md § Nayax SQS sender identity](docs/architecture.md#nayax-sqs-sender-identity-issue-1101).
+- **Seeing how many receipt scans a business has used this month (issue #1164).** The last route above reports that business's count for **its own** calendar month, how many are left and the cap — nothing else, and nothing about any receipt. It exists so the platform owner can see whether a business is near the [100-scan monthly cap](#100-scans-a-month-issue-1164) and can recognise a support request about "it says I have used all my scans" for what it is. **It is read-only, and there is no route that is not**: a counter cannot be reset and extra scans cannot be granted, by anybody, which is the "buying extra scans is out of scope" decision made structurally rather than by policy. The month is resolved in the time zone stored on that business, so the figure is the month the business is actually in rather than the month the administrator is in. A business that has never scanned reads `0` rather than `404`; an unknown business id is `404`. See [docs/architecture.md § The monthly scan cap](docs/architecture.md#the-monthly-scan-cap-issue-1164).
 - **Giving a business a plan without billing it (issue #982).** The three `plan-grant` routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site or a complimentary plan. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
-- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else. The Nayax SQS sender identity (issue #1101) is a third such store, over that business's sender row and the append-only record of each decision about it, with no way to look a sender id *up* across businesses — that lookup is the queue reader's and arrives with it.
+- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else. The Nayax SQS sender identity (issue #1101) is a third such store, over that business's sender row and the append-only record of each decision about it, with no way to look a sender id *up* across businesses — that lookup is the queue reader's and arrives with it. The receipt-scan count (issue #1164) is a fourth, and the narrowest: one method that returns one business's count for one month, and **no write at all**.
 - **Only a pending application may be decided.** An already-trading, already-refused or deactivated business is `409`; an unknown id is `404`. Approving also requires that the applicant's membership in the application is still active and that they hold no active membership in any other business — a person belongs to one business at a time — so an approval after they joined somewhere else is `409` and changes nothing. Two decisions arriving at once resolve to one recorded decision and one `409`: the business is re-read inside the write transaction that decides it.
 - **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and neither has an audit table. A **plan grant is the one platform action that does** (issue #982): each committed grant, change or end writes an append-only row — the actor, the business, the transition, the end instant, the revision, the reason as typed and the instant — in the **same transaction as the grant**, so a granted plan and the record of who gave it commit together or not at all, and nothing can later rewrite that row. The log event emitted beside it carries no reason text and no name at all. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
-- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **Nayax SQS sender** (issue #1101), offered for an `Active` business, opens its own card, which reads that business's recorded sender through the route above and shows the sender ID (or "None"), On/Off and the last message received in Sydney time (or "Never") - and, since issue #1106, that business's last successful reconciliation plus the queue reader's own last successful poll, consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can be explained from the same card (an unread depth reads "Unknown", never `0`) - with **Set**/**Change**, **Turn off** and **Remove** — each sending the revision the card was loaded with, Remove behind a confirmation that says plainly the ID becomes free for another business - the confirmation every path that would remove the ID reaches, including submitting a cleared field over a recorded sender - and a `409` reloading the card and saying it changed elsewhere. The card also says how to find the ID: in AWS CloudShell, `aws iam get-user --user-name <user> --query User.UserId`. The table itself shows no sender, for the reason it shows no plan. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
+- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **Nayax SQS sender** (issue #1101), offered for an `Active` business, opens its own card, which reads that business's recorded sender through the route above and shows the sender ID (or "None"), On/Off and the last message received in Sydney time (or "Never") - and, since issue #1106, that business's last successful reconciliation plus the queue reader's own last successful poll, consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can be explained from the same card (an unread depth reads "Unknown", never `0`) - with **Set**/**Change**, **Turn off** and **Remove** — each sending the revision the card was loaded with, Remove behind a confirmation that says plainly the ID becomes free for another business - the confirmation every path that would remove the ID reaches, including submitting a cleared field over a recorded sender - and a `409` reloading the card and saying it changed elsewhere. The card also says how to find the ID: in AWS CloudShell, `aws iam get-user --user-name <user> --query User.UserId`. The table itself shows no sender, for the reason it shows no plan. **Receipt scans** (issue #1164), offered for an `Active` business, opens its own card too, which reads that business's count for its own current month through the route above and shows the month, "N of 100" used and how many are left - with a note that the month is the business's own and not the administrator's, and, once the allowance is gone, what scanning now answers that business. It has **one** button, **Close**: there is no action on it at all, because a counter cannot be reset and extra scans cannot be granted. The table itself shows no count, for the reason it shows no plan and no sender. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
 ### Each business's Nayax connection status
 
@@ -1565,38 +1700,73 @@ PUT    /api/super-admin/master-products/{id}                      correct one (t
   typed into it, and a change the server accepted is still announced and the list still refreshed. See
   [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
-## Super Admin option visibility
+## Super Admin menu visibility
 
-The Super Admin also decides whether **one** Admin option is offered to anybody else: **Historical
-GST Classification**, the occasional maintenance tool that is only needed until historical purchase
-components have been classified. It is one shared, application-wide setting with one endpoint
-(issue #873):
+The Super Admin also decides which of the **reports** and the **Admin maintenance destinations** are
+offered to anybody else — the readings a business may not want everybody in it to open, and the
+occasional tools it needs for a while and then never again. There are fifteen, each a key in a
+closed, server-owned catalogue (issue #1148, generalising issue #873's single switch, with the
+Reports group added by issue #1153), in two groups.
+
+**Reports:** `reports.bookkeeping`, `reports.daily`, `reports.transactions`,
+`reports.reconciliation`, `reports.machines`, `reports.products`, `reports.site-commissions` and
+`reports.gst`. **Admin:** `admin.site-commission-agreements`, `admin.imports`,
+`admin.historical-cost-recovery`, `admin.avco-transition`, `admin.costing-repair`,
+`admin.historical-gst-classification` and `admin.nayax-sale-timestamp-repair`.
+
+**Integrations, Users, Roles and Business Settings are never switchable** — an Owner needs them to
+connect Nayax and run their business — and nor is anything outside those two groups.
 
 ```text
-PUT /api/super-admin/option-visibility   { "historicalGstClassificationVisible": true|false }
+GET /api/super-admin/menu-visibility                 → every key, its group, its label and its state
+PUT /api/super-admin/menu-visibility/{key}           { "visible": true|false }
+PUT /api/super-admin/option-visibility               { "historicalGstClassificationVisible": true|false }
 ```
+
+The third is the previous endpoint, kept for the rollout; it writes the
+`admin.historical-gst-classification` key like the second one does, and the Angular application no
+longer calls it — the page below drives all fifteen through the second one.
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the surfaces
   above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair
-  unset — the shipped state — nobody can change it.** An Owner is refused like anybody else, a member
-  who presents a support-session id is still an ordinary member, and a refused request changes
+  unset — the shipped state — nobody can read or change them.** An Owner is refused like anybody else, a
+  member who presents a support-session id is still an ordinary member, and a refused request changes
   nothing. A role preview is refused, as every write is.
+- **A key cannot be invented.** The catalogue is compiled, so a key it does not declare is answered
+  `404` and nothing is stored; a body that leaves `visible` out is answered `400` rather than quietly
+  switching a destination off. One write changes one key's own stored row and no other.
 - **Everyone reads it, nobody else writes it.** `GET /api/me/access` reports
-  `historicalGstClassificationVisible` beside the capability set, which is how the menu and the Admin
-  page know what to offer. That is the one thing a member reads from a platform-wide setting, and it
-  is one boolean: it names no business and nobody's data.
-- **It is visibility, not permission.** `POST /api/admin/historical-gst-classification/preview` and
-  `.../apply` keep requiring `Data.Repair` in both states, and the capability set a member is reported
-  is identical in both. Switching the option off hides the entry and the card; switching it on
-  restores them only to members whose role already allowed them.
-- **The default is shown**, and it is the absence of any stored setting, so every existing
-  installation keeps exactly the visibility it has today until a Super Admin switches it. The setting
-  is one row (`PlatformOptionVisibility`) that is created the first time it is switched.
+  `menuVisibility.switchedOffKeys` beside the capability set, which is how the menu and the Admin page
+  know what to offer, and keeps reporting the derived `historicalGstClassificationVisible` for now.
+  That is the one thing a member reads from a platform-wide setting, and it is only the keys that are
+  switched off: it names no business and nobody's data.
+- **It is visibility, not permission.** Every one of those destinations' endpoints keeps its existing
+  checks in both states — `POST /api/admin/historical-gst-classification/preview` and `.../apply` still
+  require `Data.Repair`, and every `GET /api/reports/...` still requires `Reports.View` with the same
+  plan and Nayax rules — and the capability set a member is reported is identical whatever the switches
+  say. Switching a destination off hides the entry and the card; switching it on restores them only to
+  members whose role already allowed them. A switched-off report's own address still opens, `/reports`
+  still goes to Bookkeeping, and a link into a report from somewhere else — the Dashboard's link to
+  Bookkeeping, for instance — is unchanged.
+- **The default is On**, and it is the absence of a stored row, so every existing installation keeps
+  exactly the visibility it has today until a Super Admin switches something. A row of
+  `PlatformMenuVisibility` is created the first time its destination is switched, and an installation
+  that had already switched Historical GST Classification off keeps it off: the upgrade carries that
+  one answer over.
 - **Audit.** Every committed change emits one structured `ILogger` event with the actor `(tid, oid)`,
-  the resulting state, the instant and the correlation id — and nothing about a business or a member,
-  because the setting is about neither. A refused change is not audited, because nothing happened.
-- **The page.** The switch is on the Admin page beside the tool's own card, offered to a Super Admin
-  alone; see [Hiding this option from other users](#hiding-this-option-from-other-users-super-admin).
+  the key, the resulting state, the instant and the correlation id — and nothing about a business or a
+  member, because the setting is about neither. A refused change, and a key the catalogue does not
+  declare, are not audited, because nothing happened.
+- **The page.** Every switch is on **Super Admin → Menu Visibility** (`/super-admin/menu-visibility`,
+  issue #1151), behind the same platform-admin check as the Super Admin pages above and never affected
+  by the switches it manages. It lists every destination the catalogue declares, in menu order, under
+  one section per group — **Reports** above **Admin** — with one On/Off control each whose accessible
+  name says which destination it is about; a row whose switch covers two menu entries says so. Every
+  destination is listed whatever the viewing business's plan, provider or capabilities are, because the
+  setting is the platform's. One save changes one destination: a refused save leaves that row
+  reading exactly as it is stored, says the change was not saved, and leaves every other row alone,
+  while a save the server accepted re-reads the menus so they follow immediately. See
+  [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
 
 ## Super Admin support sessions
 
@@ -2062,6 +2232,14 @@ Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px
 - **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
   (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
   your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Invoice number (optional).** The supplier's own receipt or invoice number, beside the supplier, date and
+  title in **Purchase details**. Leave it empty if you have none — nothing about the purchase changes either
+  way. What you type is stored without the spaces around it (" INV-123 " is saved as "INV-123"), up to 100
+  characters; a longer one is refused with a message and nothing is saved, rather than being shortened into a
+  different number. Editing a purchase shows the number it holds, and clearing the field removes it. The
+  Purchases list has an **Invoice number** column that shows it, with a dash for a purchase that records none
+  — including every purchase recorded before this field existed. Purchases are not searched or filtered by it,
+  and two purchases may carry the same number: nothing warns about a duplicate.
 - **Products.** Each line's product is a search box over your own products: type part of the name and pick it
   from the list, which shows the product's size or unit where it has one. A new line starts with no product
   chosen, and a line cannot be saved until it has one. **Quantity** is always individual units, never cartons.
@@ -2147,9 +2325,167 @@ downloads from the list like any other.
   and if somebody else attaches one between your choosing a file and pressing the button, you are told the
   purchase already has a document rather than having theirs quietly thrown away.
 - The receipt itself follows the same rules it always has: an image or a PDF, up to 10 MB. A file that is
-  refused leaves the purchase exactly as it was, with no document recorded.
+  refused leaves the purchase exactly as it was, with no document recorded. A photo is shrunk before it is
+  sent (see [Photos are shrunk before they are uploaded](#photos-are-shrunk-before-they-are-uploaded)).
 - **Add document** is not offered while a Super Admin is looking at your business in a support session, for
   the same reason Delete is not: a support session can read, never write.
+
+## Scanning a receipt into a purchase draft (issue #1163)
+
+A **Pro** business can have a receipt read for it instead of typing it in, **up to 100 receipts a month**.
+`POST /api/purchases/scan` takes one
+receipt — a JPEG, PNG or WebP photo, or a PDF, up to 8,000,000 bytes (a tighter cap than the 10 MB a receipt
+*attachment* may be, because a scanned receipt is read and dropped rather than stored, and the reader's own
+photo limit is 5 MB anyway) — and answers a
+**suggested purchase draft**: the supplier, the purchase date, the invoice number, the receipt total, the
+delivery and packaging charges, and one entry per line with its packs, units per pack, units, amount and unit
+cost. Every value says whether it was **read** off the receipt or **suggested** here, and each line lists what
+is still **missing** so the form can ask for exactly those figures.
+
+**Nothing is saved.** No file is stored, no draft is kept and no purchase is created: you edit the suggestion
+and record it through Add Purchase as usual, which is still where a purchase is created and validated.
+
+- **It needs the Pro plan and the same permission as recording a purchase.** A Free or Starter business is
+  refused with the usual "needs Pro" answer, and nothing is sent anywhere. It is also the one feature that is
+  refused while [plan enforcement](#how-a-plan-is-enforced) is switched off, because every scan costs real
+  money at an outside service — there is no state in which giving it to every business is the cautious answer.
+- **A HEIC photo is refused with "Convert the photo to JPEG and try again."** iPhones often save photos in a
+  format the reader cannot read, even though you can perfectly well attach one to a purchase.
+- **A PDF is only read if it is within the page limit** (100 pages by default), and the pages are counted from
+  the document's current version itself rather than from the count it declares, so a long document cannot slip
+  past by claiming to be one page, and an edited PDF is judged by its pages after the edit. A PDF whose pages
+  cannot be counted — an encrypted one, or one saved in the newer compressed PDF layout (a cross-reference
+  stream), which this application deliberately does not read — is refused with "This PDF could not be read.
+  Try a photo of the receipt instead." rather than being sent off anyway.
+- **Quantities are what was delivered, not what was ordered**, and a line delivered as nothing is left out.
+- **A pack size that is not printed on the receipt is suggested from your last purchase** — and never
+  guessed. Some suppliers never print how many units are in a carton. When one does not, the scan looks up
+  what you last paid that same supplier for that product: if the line works out to a whole number of units a
+  pack at essentially that price, it offers that pack size, marks it as coming from that purchase and shows
+  the purchase's date, and fills in the units and unit cost. If the price has moved, the packs delivered are
+  unclear, or you have never bought it from that supplier, the pack size stays unknown — never 1 — and the
+  line asks you for it, rather than quietly recording a carton's price as the price of one bottle. A pack
+  size the receipt *does* print is always used as printed.
+- **A container deposit levy goes to the drinks it was charged for**, when the receipt's own totals say it is
+  not already inside the drink prices. When they say it is — the usual case for an online order that prints it
+  twice — nothing is added. When the totals say neither, no line's cost is changed and the levy comes back as
+  its own line flagged for review.
+- **Delivery, freight and shipping become the delivery cost, and bags become the packaging cost.** A line that
+  is not stock for resale — an office item, a service fee — comes back as its own "other" line with no product
+  suggested.
+- **Prices are converted to the GST-inclusive figures this application records.** A line printed without GST
+  that the receipt marks as taxable has 10% added; one whose GST the receipt does not state comes back with no
+  unit cost rather than a figure that could be 10% out.
+- **A product or supplier is only ever suggested from your own list**, and a suggestion you do not want is
+  just an edit away. The line always keeps the text the receipt printed.
+- **If the receipt cannot be read** you are told so and nothing else happens: enter the purchase manually.
+  There is no automatic retry, because a retry is a second charge.
+
+Receipt scanning is off until a key is configured — see
+[`ReceiptScanning__ApiKey`](#configuration-and-secrets).
+
+### Scanning a receipt on Add Purchase (issue #1166)
+
+**Add Purchase** has a **Scan receipt** button above the form. Pick a photo or a PDF of the receipt and the
+form is filled in for you to check; **nothing is saved until you press Save purchase**, exactly as if you had
+typed it all in. The same file is attached as the purchase's receipt, so saving uploads it once.
+
+What the scan fills in:
+
+- The **supplier** (when one of yours was matched), the **purchase date**, the **invoice number**, the
+  **receipt total**, and the **delivery** and **packaging** costs. Anything the receipt did not say is left
+  exactly as it was — a receipt with no date leaves the date on today.
+- One **item** per stock line, with the suggested product, the number of **units** (packs × pack size) and the
+  **unit price**. Each line shows the text the receipt printed and the pack maths — `2 x 24-pack = 48` — so
+  you can check it at a glance. A pack size that came from your own purchase history rather than from the
+  docket is marked **from your last purchase**.
+- Nothing is classified for **GST**: each line starts as *Not classified*, as a line you typed does. The
+  receipt's GST markers are the receipt's claim, not a classification.
+
+What it asks you about:
+
+- **A line with no product, or no pack size, is highlighted in red and Save is blocked until you fill it in.**
+  The line says why — "The pack size is not printed on the receipt. Enter the units." — and the printed amount
+  is already in **Line total**, so typing the units is all it takes.
+- **A line that is not stock for resale** — office paper, a service fee — arrives with **Not stock, skip**
+  ticked. It is shown, it is not saved as a purchase line, and choosing a product for it puts it into the
+  purchase.
+- **A container deposit levy the receipt's own totals could not place** gets a row of its own, outside the
+  items, saying *Container levy not added to any product: check the receipt*. It has no product picker and is
+  never saved as a purchase line.
+- The **Receipt total** check counts the skipped items and the unresolved levy, because the receipt printed
+  them, so the total adds up instead of showing a difference you cannot act on. Neither is part of what the
+  purchase costs.
+
+The receipt itself sits **beside the items on a wide screen and above them on a phone**, with **Open full
+size** for a closer look.
+
+- **It needs the Pro plan.** On Free or Starter the button is replaced by "Scanning a receipt needs the Pro
+  plan." with a link to the Plan page, like every other Pro-only entry.
+- **Scanning again asks first** when you have already typed or scanned items: *Replace items* goes ahead,
+  *Keep what I typed* sends nothing at all — so a scan you did not want costs you nothing.
+- **Cancel stops waiting** while the receipt is being read.
+- **If the scan fails you are told why and the form is untouched** — "Receipt scanning is not available."
+  when it is switched off, "Could not read this receipt." when nothing usable came back, a message when it
+  timed out, and the monthly cap's own sentence when you are over it. Anything you had already typed is still
+  there, and you carry on by hand.
+- **If the receipt will not fit your storage allowance**, the purchase is *not* saved and nothing is lost:
+  the filled form stays on screen with the reason, and a **Save the purchase without the receipt** button
+  records the purchase with no document (see [A purchase without a receipt](#a-purchase-without-a-receipt)).
+  Nothing is saved until you choose it.
+
+### 100 scans a month (issue #1164)
+
+Each business may scan **100 receipts per calendar month**, and the month is **your own**: it starts and ends
+at midnight in your business's time zone, not in the browser's and not in UTC. At the start of your next
+month the count is back to zero on its own — there is nothing to reset and nothing to ask for.
+
+The cap exists because every scan costs real money at an outside service, so it keeps that cost predictable.
+It is a **safety limit, not a ration**: a hundred receipts is far more than a month of restocking produces,
+and nothing else about the plan is priced on it.
+
+- **The scan that reaches the cap still runs.** With 99 scans used this month, the hundredth is read as
+  usual; it is the hundred-and-first that is refused.
+- **Over the cap, scanning answers "You have used all 100 receipt scans for this month."** Nothing is sent
+  anywhere and nothing is charged. Everything else carries on exactly as before: you can still record the
+  purchase by hand, attach the same receipt to it, and use every other part of the application.
+- **A scan counts when the receipt is actually read.** A request that is refused first — your plan, a file
+  type or size the reader will not take, a PDF with too many pages, or a deployment with scanning switched
+  off — does not count, because nothing was spent on it. A scan that *was* read and then failed (it timed
+  out, or came back unreadable) **does** count, because the money went.
+- **Two scans at once cannot both take the last one.** With one scan left and two started together, exactly
+  one is read and the other is refused.
+- **The count is yours alone.** Another business's scanning never counts against yours.
+- **`GET /api/purchases/scan/usage`** answers the month, how many you have used, how many are left and the
+  cap, and every successful scan carries the same figures back with the draft. Asking costs nothing and
+  counts nothing, so it works on any plan.
+
+A Super Admin can see one business's count for the current month on the Super Admin **Businesses** page,
+under **Receipt scans**. It is a read: there is no way to reset a counter or to buy extra scans, for
+anybody.
+
+## Photos are shrunk before they are uploaded
+
+A photo taken on a phone is routinely 3-8 MB, and on an iPhone it is usually HEIC - a format most browsers
+cannot even display. So when you attach a **photo** to a purchase (on Add Purchase, on Edit purchase, or with
+**Add document** on the Purchases list) or to an **operating expense**, your browser prepares it before it
+leaves your device:
+
+- A photo longer than 2000 px on its longest side is scaled down to 2000 px and saved as a JPEG. A receipt
+  stays easy to read, and a 4 MB photo typically becomes about half a megabyte.
+- A photo taken sideways is uploaded the right way up: the camera's own orientation flag is applied.
+- An **iPhone HEIC** photo is converted to JPEG where your browser can read HEIC (Safari can; Chrome and
+  Firefox cannot). Where it cannot, the original HEIC is uploaded exactly as it is - it is still an accepted
+  file, and nothing stops you attaching it.
+- **PDFs are never touched**, and neither is an image that is already small (under 1 MB and within 2000 px).
+  Nothing is uploaded that is *larger* than what you chose: if shrinking would not help, your own file is sent.
+- The size shown beside the file name, what is stored, and what counts against your plan's
+  [attachment storage](#attachment-storage) are all the file that was actually uploaded.
+- Preparing a photo takes a moment, during which the form says **Preparing photo…** and Save waits for it, so
+  a purchase or an expense is never saved without the receipt you attached.
+
+Nothing about the server's rules changed: an attachment is still an image or a PDF of up to 10 MB, and the
+server decides, exactly as before.
 
 ## Receiving a supplier order: keep it open, or complete it
 
@@ -2584,6 +2920,19 @@ same column, cell and popup — everything below applies to all three.
   cannot be clicked or tabbed into: **Tab** and **Shift+Tab** cycle through the popup's own links and
   buttons and stay there. **Escape**, clicking outside the panel and **Close** all close it, and the
   keyboard goes back to the cell you opened it from.
+- **The comparison states its own scope and limits, visibly, above the table** (issue #1183), so
+  "Lowest unit price" — the badge wording that replaced "Cheapest" — is never read as a guarantee
+  across the whole market: "Check before buying: Prices and availability may change and can vary by
+  location, membership or promotion. Comparisons use recorded unit prices from supported suppliers
+  and exclude delivery and additional fees. Confirm the product, pack size and final total on the
+  supplier's website before purchasing." The badge itself is explained once, beside the table's
+  existing observed-prices note, rather than repeated on every row that carries it: "Lowest recorded
+  unit price among the eligible offers shown, excluding delivery and additional fees. Check the
+  supplier's final price before buying." The wording changes nothing about which supplier wins: the
+  same offers are ranked in the same order, a tie still badges every tied offer, and an offer the
+  comparison ruled out is still shown with its reason and still takes no badge — even when its unit
+  price is lower. Desktop and mobile evidence:
+  [`docs/screenshots/issue-1183/`](docs/screenshots/issue-1183/).
 - **The price you are compared on follows your GST registration.** A GST-registered business is
   shown and compared on **ex-GST** prices, because that is what it really pays for a can; a business
   that is not registered is shown the price it hands over, **inc-GST**. Both figures are in the
@@ -2663,6 +3012,52 @@ Every menu and dialog starts closed, opens one at a time, works from the keyboar
 Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
 `docs/screenshots/issue-1093/`.
 
+## Adding and editing a supplier
+
+The Suppliers page is a list, and everything you do to one supplier happens in a dialog over it, so
+you never lose your place in the list (issue #1174). There is no New/Edit form above the table any
+more.
+
+- **Add supplier** is in the page header and opens the dialog empty; each row's **Edit** opens the
+  same dialog filled in with that supplier. One form serves both: Name, Contact name, Phone, Email,
+  Website and Address, with **Create supplier** or **Save changes** as the primary action beside
+  **Cancel**.
+- **On a desktop** it is a centred panel about 600px wide that never grows past the window — the
+  fields scroll inside it and the action row stays visible. **On a phone** it is a full-screen form
+  with the fields stacked, clear of the notch and the home indicator, and you can still pinch to
+  zoom.
+- **Saving says so.** The primary action shows its progress and cannot be pressed twice. A refused
+  save keeps every value you typed and shows the server's own sentence above the fields — including
+  the refusals a supplier from the platform's list produces. The list is re-read and a success
+  message appears only after the save has actually gone through.
+- **Closing an unchanged form just closes it.** Cancel, the ✕, Escape and a click outside a form you
+  *have* changed ask first: **Discard changes** or **Keep editing**, and keeping takes you back to
+  the form exactly as you left it.
+- **GST defaults** is a button on each supplier's row and opens that supplier's
+  [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the same three
+  settings, with the same permission: a role that may read but not change them sees the choices
+  without a Save.
+- **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
+  A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
+  the list exactly as it was and shows the server's reason.
+- **In a read-only support session** neither **Add supplier** nor **Delete** is offered, for the
+  same reason the **Not used** switch is not: a Super Admin looking at your business can read it,
+  never write. Each row's **Edit** still opens the dialog, so a supplier's stored details can be
+  read there, with **Save changes** disabled.
+- **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
+  inside itself, closes on Escape and returns focus to the control that opened it; the page behind
+  it cannot be clicked or tabbed into while it is open.
+
+The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
+add** section are unchanged, and no API, model or stored field changed with this.
+
+Screenshots of the reviewed states, with sample suppliers, are in `docs/screenshots/issue-1174/`:
+[Add, 1440px](docs/screenshots/issue-1174/add-supplier-dialog-1440px.png),
+[Edit a supplier from the platform list, 1440px](docs/screenshots/issue-1174/edit-linked-supplier-dialog-1440px.png),
+[Add, 390px](docs/screenshots/issue-1174/add-supplier-dialog-390px.png),
+[Add, 360px](docs/screenshots/issue-1174/add-supplier-dialog-360px.png) and
+[Discard changes, 1440px](docs/screenshots/issue-1174/discard-changes-dialog-1440px.png).
+
 ## A supplier's website
 
 A supplier can record an optional **Website** beside its name, contact and address, so you can open
@@ -2712,9 +3107,10 @@ supplier with a **Platform list** label.
   has already been added and leaves one supplier; a supplier that serves another state is not offered
   and cannot be added.
 
-- **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
-  Website fields are read-only, with a note saying why. The API refuses a change to either with
-  `400` and a message you can read, whatever a client sends.
+- **Its name and website are the platform's.** Open a linked supplier in the Edit dialog (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)) and the Name and Website fields
+  are read-only, with a note saying why. The API refuses a change to either with `400` and a message
+  you can read, whatever a client sends.
 - **It cannot be deleted.** There is no Delete button on a linked row, and the endpoint refuses the
   delete.
 - **Its contact details and GST defaults are yours.** Contact name, phone, email and address save
@@ -2793,7 +3189,7 @@ its stored values are gone.
 
 - The **product form** has no Unit Price input. The **All Products** and **Needs Ordering** pages
   have no Price column or price sort, the home dashboard's **Reorder Alerts** table has no Unit
-  Price column, and the **Stock History** page's product summary shows three tiles instead of four.
+  Price column, and the **Stock History** page's product summary shows no price (since issue #1156 it is one compact summary of current stock, low stock threshold and unit label).
 - **Import products** (Products → Import products) no longer asks you to keep or take a Nayax price. Linking a
   product still replaces its **name and category** with the provider's, and those changes are still
   listed as applied automatically; there is simply no price to decide about any more.
@@ -2950,9 +3346,12 @@ classified:
   else changes, adds or removes a product while you are confirming, the change is refused rather
   than applied to a different set of products — the dialog says so, shows the new number and asks
   you to confirm again.
-- **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
+- **Suppliers → the supplier's row → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
-  defaults**. The three are independent: a charge never inherits the product-line default.
+  defaults**. The three are independent: a charge never inherits the product-line default. Since
+  issue #1174 this opens in its own dialog from the row, rather than appearing under the page while
+  a supplier is being edited (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)).
 
 The two single-record panels — a product's own GST rule and a supplier's GST defaults — read the
 stored setting first, and the save button stays disabled until it is on screen,
@@ -3021,18 +3420,27 @@ What it will and will not do:
 It applies to your own business's purchases only, and only to the purchases of the business you are
 signed in to.
 
-### Hiding this option from other users (Super Admin)
+### Hiding a maintenance tool from other users (Super Admin)
 
 Once historical data has been classified, this is a tool nobody needs again, so a **Super Admin**
-can stop offering it. The switch is on the Admin page beside this tool's own card: **Hide Historical
-GST Classification from other users**, and **Show Historical GST Classification to other users** to
-offer it again. It is one shared, application-wide setting, saved on the server — it is not a
-per-browser preference, so it survives a reload, a new tab and a different computer, and it stays as
-it was until a Super Admin switches it again. Every installation starts with the option **shown**.
+can stop offering it — and the same is true of the other occasional Admin tools beside it. Every one
+of those switches is on one page, **Super Admin → Menu Visibility** (issue #1151, which replaced the
+single switch that used to sit on the Admin page beside this tool's own card): each destination is
+listed with an On/Off control, and **Historical GST Classification** is one of them, with whatever
+state it was already in. Since issue #1153 the same page also lists the **reports** — Bookkeeping,
+Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — in their own
+**Reports** section above the Admin one, each switched the same way and with the same effect: the way
+in is hidden, and nothing about the report itself changes. It is one shared, application-wide setting per destination, saved on the
+server — it is not a per-browser preference, so it survives a reload, a new tab and a different
+computer, and it stays as it was until a Super Admin switches it again. Every installation starts
+with every tool **shown**.
 
-- **While it is hidden**, the sidebar's Admin group and the Admin page both leave it out for everybody
-  else. A Super Admin still sees it, in both places, with an **Off** pill beside its name — the mark
-  that says what you can see is hidden from everybody else.
+- **While it is hidden**, the sidebar's Admin group, the mobile menu and the Admin page all leave it
+  out for everybody else. A Super Admin still sees it, in all of them, with an **Off** pill beside its
+  name — the mark that says what you can see is hidden from everybody else.
+- **A change that was not saved changes nothing.** If a switch cannot be saved, that row keeps the
+  state the server is actually holding and says the change was not saved; the other rows are
+  untouched.
 - **A Super Admin never loses the tool**, and switching it back on restores it only to the people
   whose role already allowed it: it is a visibility switch, not a permission. Historical GST
   Classification still needs the same access it always did (an Owner's, see
@@ -3330,6 +3738,23 @@ machine list there was came from the fleet read.
   no error.
 - **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
   or disabled in a support session, exactly as before.
+- **Only a Machine refill names a machine (issue #1156).** On Stock History's **Adjust stock** panel
+  the Machine field is enabled only when the reason is **Machine refill**. Choosing another reason
+  clears a machine you had picked, so a Restock, Sale, Damaged, Expired or Correction movement is
+  recorded without one. Movements already recorded against a machine keep it.
+
+#### Stock History layout (issue #1156)
+
+Stock History opens on the movements themselves. A compact summary of the selected product shows its
+current stock and low stock threshold in units and its unit label (pack size); current stock is the
+product's storage stock now, whatever dates are filtered. The toolbar holds **Product** and the
+**date range**, with **Reason**, **Machine** and **Source** under **More filters**; each filter applies
+as soon as you change it, applied More filters are listed as chips you can remove, and **Reset
+filters** clears them all. **Rows per page** is with the pager under the results. On a wide screen the
+movements are a table (the Product column is left out when one product is selected); on a phone they
+are cards, change and reason first. **Details** on a movement shows its unit cost, eat-before date and
+notes. **Adjust stock** opens a panel on the right (full screen on a phone) over the same list, and
+after you apply an adjustment the stock and the list are refreshed with your filters kept.
 
 #### Recording a pick without a provider
 
@@ -3629,7 +4054,8 @@ out.
   The Nayax permission *key* behind a read is not named, because no published contract states it (see
   [docs/architecture.md § Provider-locked navigation](docs/architecture.md#provider-locked-navigation-issue-729)).
 - **The provider's repair and admin tools are hidden, not locked**: Admin → Imports (the Nayax sales
-  and settlement imports), Inventory → Import products (the catalogue review's own page, issue #888)
+  import), Admin → Reimbursement Report (the reimbursement report's own page, issue #1152),
+  Inventory → Import products (the catalogue review's own page, issue #888)
   and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
   connection is usable, because without a provider there is nothing of the provider's to import or
   repair. The costing and GST repairs are the business's own data and stay. **Admin → Nayax Settings
