@@ -4740,7 +4740,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts; a route marked with the public layout is rendered with none of that chrome (issue #954) |
-| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954) |
+| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954); `legal/` holds the development-only Privacy Policy and Terms of Use page layouts (issue #1190) — see [The Privacy Policy and Terms of Use page layouts](#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190) |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
@@ -7950,6 +7950,38 @@ page's copy is kept inside what the application actually does, which is the same
 "Optional sales connection", "Optional integration" and the renamed "Inventory value at cost" facts
 this issue reconciled with the plan catalogue (each now says what is free today versus what Pro will
 gate once paid plans are live, instead of implying Nayax or reporting are unconditionally free).
+
+### The Privacy Policy and Terms of Use page layouts (issue #1190)
+
+The owner has approved Stitch designs for a Privacy Policy and a Terms of Use page, but the legal
+copy itself is not approved yet, so this issue builds the two page layouts only - reachable in a
+development build and **never in a production build**, following the design-system fixture's own
+pattern (issue #411, `createDesignSystemRoutes(isDevMode())`,
+[Routing and loading](#routing-and-loading) above). `public/legal/legal-routes.ts` declares
+`createLegalRoutes(isDevelopmentBuild)`, asserted for both branches exactly as the fixture's factory
+is; `app.routes.ts` spreads its result (`legalRoutes`) above the wildcard route, after the
+design-system fixture's own spread. Nothing links to either path - not the homepage footer, the
+header, the sign-in page or the application shell - and each route carries `PUBLIC_LAYOUT_DATA` and
+no guard, so a signed-out visitor can open either directly, exactly as `/home` already can be; the
+pages inject no API service, so opening one makes no request either.
+
+**Shared layout, two typed content files.** `legal/legal-page.component.ts` is the one presentational
+component both pages render through: the Restockroo brand and a **Back to home** link (the `/sign-in`
+page's own pattern, issue #957), a table of contents built from the content's own sections (each
+entry an in-page anchor), the numbered sections themselves, the business display details (Eunhye
+Chung, ABN 69 235 469 430, a plain `mailto:admin@restockroo.com.au` link) and a link to the other
+legal page. Moving to a section from the table of contents scrolls to it and moves keyboard focus to
+its heading, the same approach the landing page's own in-page navigation uses
+(`scrollToSection`, [The public landing page](#the-public-landing-page-issue-954) above).
+`legal/privacy-policy-content.ts` and `legal/terms-of-use-content.ts` are each page's own typed
+`LegalPageContent` (title, effective-date label, an optional introduction, and the sections, each an
+id, heading and body) - filled only with the Stitch export's own section headings and its two
+placeholders, `"[Approved content to be inserted]"` and `"[Effective date]"`: no legal wording and no
+invented date. `legal/privacy-policy-page.component.ts` and `legal/terms-of-use-page.component.ts`
+are the two thin wrapper components the routes load, each supplying its own content file and the
+other page's cross-link. See
+[docs/design/restockroo-legal-pages.md](design/restockroo-legal-pages.md) for the export these are
+adapted from and every intentional omission from it.
 
 ### Runtime configuration and API contracts
 

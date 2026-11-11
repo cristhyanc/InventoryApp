@@ -1,0 +1,61 @@
+# Restockroo legal pages: design reference (issue #1190)
+
+The Privacy Policy and Terms of Use page layouts
+(`frontend/inventory-app/src/app/public/legal/`) implement the owner-approved Stitch designs. This
+note identifies that design and records every place where the implementation intentionally differs
+from it, so a later change - including the one that fills in the approved legal copy and publishes
+the pages - can tell a deliberate adjustment from drift. How the pages are routed, why they are
+reachable only in a development build and why they make no request is in
+[docs/architecture.md § The Privacy Policy and Terms of Use page layouts](../architecture.md#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190).
+
+## The approved export
+
+- **Source:** the Stitch export attached to the first comment on
+  [issue #1190](https://github.com/cristhyanc/InventoryApp/issues/1190), two desktop HTML files -
+  `privacy-policy-desktop.html` and `terms-of-use-desktop.html`. No mobile export exists; the
+  responsive behaviour below is adapted from the desktop export, the same way issue #954's landing
+  page adapted its own export.
+- **Authority:** rendered, the two files are the visual authority. Nothing from the export is
+  committed to this repository, and none of its markup, Tailwind CDN script, inline Tailwind
+  configuration, remote Google Fonts or Material Symbols links was copied - the same rule
+  [docs/design/restockroo-landing-page.md](restockroo-landing-page.md) applied to its own export.
+- **Content:** every section placeholder in the export already reads
+  `"[Approved content to be inserted]"`, and every date reads `"[Effective date]"`. The export
+  contains no legal text at all, and this task adds none - see the content files themselves
+  (`legal/privacy-policy-content.ts`, `legal/terms-of-use-content.ts`).
+
+## Omissions (issue #1190's acceptance criteria)
+
+The issue requires every one of these left out, because each is the export's own invented label,
+action or decoration rather than something this application has:
+
+| Export element | Omitted because |
+| --- | --- |
+| "Restockroo Operations / Legal & Regulatory" breadcrumb | Invented navigation structure; not a real section of the application. |
+| "Restockroo Compliance Administration" (Privacy sign-off card) | Invented department name. |
+| "Restockroo Governance" (Terms sign-off card) | Invented department name. |
+| "Contents Ledger" table-of-contents label | Invented branding for an ordinary table of contents, which the implementation labels plainly ("Table of contents"). |
+| "Contact Privacy Desk" / "Contact Support" buttons | Invented destinations. Replaced with the one plain `mailto:admin@restockroo.com.au` link the issue specifies. |
+| The header's user avatar | Decorative chrome with nothing behind it on an unauthenticated page. |
+| The header's "Start free" button | A second call to action beside Sign in and Get started, which the public layout already has on the real homepage; inventing a third here would duplicate it outside this issue's scope. |
+| Privacy export's "Operational Disclosure & Scope" eyebrow label on the introduction callout | An invented decorative label around the one placeholder paragraph the export marks as content; the implementation keeps the placeholder paragraph itself (the issue lists an effective-date line and the sections as required, and the export's own placeholder is kept rather than dropped) without the invented badge around it. |
+| Terms export's subtitle under its heading ("Stock management, supplier price comparisons and refill planning for vending operators.") | Not a placeholder - already-worded marketing copy, which the issue forbids inventing on a legal page. The Terms of Use layout has no introduction paragraph as a result; the Privacy Policy's own introduction is the export's actual `"[Approved content to be inserted]"` placeholder, which is kept. |
+| The "Sovereignity" typo (Privacy table of contents entry 6) | Fixed to "Sovereignty" everywhere, as the issue requires; the export's own section heading was already spelled correctly. |
+
+## How the export was adapted
+
+| Export | Implementation |
+| --- | --- |
+| Tailwind from a CDN with an inline configuration, and a bespoke colour/spacing/typography scale | The application's own Tailwind build and the `rr` tokens, font and `rr-button-*`/`rr-*` styles the public landing page and `/sign-in` already use (issue #954, issue #957) - one shared visual language across every public page, not a second one per page. |
+| Material Symbols from Google Fonts | The application's own `app-icon` geometry (`inventory_2` for the brand mark, `arrow_forward` rotated for "Back to home", as `/sign-in` already uses). |
+| Two separate desktop-only pages, with a two-column layout (a sticky left-rail table of contents, up to a `lg` breakpoint) | One responsive layout per page: the table of contents and the business details move above the sections at narrow widths instead of beside them, and the body column has no fixed `max-w` wider than the viewport, so there is no horizontal scroll at 390px. |
+| Two near-identical headers (brand, page nav links, Sign in/Start free, an avatar) and footers (brand, platform nav, compliance nav, a copyright line) | One minimal header (brand only, linking to `/home`) and one minimal footer (a copyright line), matching `/sign-in`'s own public-page chrome rather than reproducing the landing page's full marketing header and footer on an unlinked, placeholder-only page. |
+| Interactive scroll-spy script highlighting the active table-of-contents entry while scrolling | Omitted. It is a progressive-enhancement nicety the export implements with inline `<script>`, which this application does not commit; the table of contents still scrolls to and focuses the chosen section (`LegalPageComponent.scrollToSection`, the landing page's own in-page navigation pattern). |
+| Each sign-off card's "Authorised Operator" / "Principal Operator" framing | The business details are shown once, in the table-of-contents rail, without an invented title for who Eunhye Chung is beyond being the operator the ABN belongs to. |
+
+## Follow-up
+
+- **Legal copy, effective dates and publishing.** Both pages hold only the export's section
+  headings and its two placeholders. Authoring the approved copy, deciding the effective date and
+  making either page reachable in production or linked from anywhere are legal, business and product
+  work outside issue #1190 (see issue #1191 for the homepage link).
