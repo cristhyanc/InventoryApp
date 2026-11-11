@@ -35,6 +35,17 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
     <!--
+      First in the scrollable content, so it reads before any row without hovering or scrolling
+      (issue #1183): the comparison's scope and limits, stated once above the results.
+    -->
+    <div
+      class="mb-4 flex items-start gap-2 rounded-xl border border-rr-line-strong bg-rr-surface px-4 py-3 text-sm text-rr-navy"
+      data-testid="supplier-comparison-notice"
+    >
+      <span aria-hidden="true">ⓘ</span>
+      <p class="m-0 break-words font-medium">{{ comparisonNotice }}</p>
+    </div>
+    <!--
       Below `sm` each supplier row stacks into a small labelled grid (each cell names its column
       through `data-label`), so the comparison reads without sideways scrolling on a phone; from `sm`
       up it is the table, which scrolls inside the dialog if it must - the page behind never does.
@@ -65,7 +76,7 @@
               <td data-label="Supplier" class="max-sm:col-span-2 max-sm:block max-sm:py-1 px-3 py-3">
                 <span class="font-semibold">{{ offer.supplierName }}</span>
                 @if (offer.isCheapest) {
-                  <span class="ml-2 inline-flex rounded-md border border-rr-ok-text/20 bg-white px-1.5 py-0.5 text-xs font-semibold text-rr-ok-text">Cheapest</span>
+                  <span class="ml-2 inline-flex rounded-md border border-rr-ok-text/20 bg-white px-1.5 py-0.5 text-xs font-semibold text-rr-ok-text">{{ lowestUnitPriceLabel }}</span>
                 }
               </td>
               <td data-label="Pack size" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 whitespace-nowrap" data-testid="supplier-comparison-pack-size">
@@ -161,6 +172,9 @@
         {{ observedPricesNote }}
         @if (basisNote) {
           <span class="block">{{ basisNote }}</span>
+        }
+        @if (hasLowestUnitPriceOffer) {
+          <span class="block" data-testid="supplier-comparison-badge-explainer">{{ lowestUnitPriceExplainer }}</span>
         }
       </p>
     </div>

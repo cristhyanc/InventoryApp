@@ -272,7 +272,7 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
 
     const text = rows().map((row) => row.textContent ?? '');
     expect(text.map((row) => row.trim().startsWith('JB Metro') || row.includes('JB Metro'))).toEqual([true, false, false]);
-    expect(text[0]).toContain('Cheapest');
+    expect(text[0]).toContain('Lowest unit price');
     expect(text[0]).toContain('24 pack');
     expect(text[0]).toContain('$22.80');
     expect(text[0]).toContain('$0.95 inc GST');
