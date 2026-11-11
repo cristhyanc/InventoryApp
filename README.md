@@ -523,6 +523,14 @@ Policy or Terms of Service link**, because neither page exists yet; add them onc
 The approved design and every wording change are recorded in
 [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
 
+The page never scrolls sideways on a phone: it was measured in Chromium at every width from 320px to
+390px, and the viewport meta tag still allows pinch zoom. Signed-out screenshots:
+[1440px](docs/screenshots/issue-1191/homepage-signed-out-1440px.png) and
+[390px](docs/screenshots/issue-1191/homepage-signed-out-390px.png), captured by
+`frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
+[docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
+them).
+
 ### Pricing on the landing page (issue #971)
 
 Issue #971 gave the landing page a **Pricing** section with Free/Starter/Pro plan cards, matching the

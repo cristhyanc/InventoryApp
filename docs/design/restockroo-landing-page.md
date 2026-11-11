@@ -96,6 +96,14 @@ No claim of receipt scanning or automatic reading of a purchase document was add
 receipts" feature card and FAQ answer already only describe recording a purchase and attaching its
 receipt, which issue #1166's manual-assisted scan is consistent with, and that wording is unchanged.
 
+**What the refreshed page looks like, and that it fits a phone.** The signed-out page was rendered in
+Chromium and captured at 1440px and 390px into
+[docs/screenshots/issue-1191/](../screenshots/issue-1191/README.md); the same run measured the page at
+every width from 320px to 390px and found no page-level horizontal scrolling at any of them, with the
+viewport meta tag still allowing pinch zoom. The run is
+`frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts`; regenerate both pictures in
+the same commit as any later change to this page.
+
 ## Pricing copy (issue #971, removed from the page by issue #1191)
 
 **This section is history, not current behaviour.** The pricing section it describes was removed from
