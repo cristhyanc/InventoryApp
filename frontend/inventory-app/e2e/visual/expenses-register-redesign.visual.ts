@@ -220,6 +220,13 @@ test.describe('Operating Expenses register redesign (issue #1170)', () => {
     await expect(page.locator('[data-testid="list-pagination-range"]')).toContainText('Showing 1–10 of 23 expenses');
     await expect(page.locator('[data-testid="list-pagination-page"]')).toHaveText('Page 1 of 3');
     await expectNoHorizontalOverflow(page, 1440);
+    // The nine columns fit the width they are given, so Actions - the last of them - is on screen
+    // without scrolling the table sideways first.
+    const tableOverflow = await page
+      .locator('[data-testid="expenses-table"]')
+      .evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(tableOverflow, 'the nine columns fit at 1440px').toBeLessThanOrEqual(tolerance);
+    await expect(page.locator('[data-testid="expense-row-menu"]').first()).toBeInViewport();
     await capture(page, 'expenses-register-desktop-1440');
   });
 

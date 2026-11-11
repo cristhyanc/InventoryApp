@@ -8536,7 +8536,12 @@ read from a confirmed empty register, which the page previously could not do at 
 `ExpenseDeleteConfirmationComponent`, which composes the shared `confirmation-dialog`, names the
 expense by description, date and total, and adds the keyboard behaviour that dialog does not own —
 initial focus on **Cancel**, Tab contained, Escape to cancel, and focus returned to the menu that
-opened it. The shared dialog itself is unchanged (out of scope for issue #1170), and the page
+opened it. "The menu that opened it" is the menu's **trigger**, not the focused **Delete** item: the
+shared `action-menu` removes its whole panel as it closes, so the item focus actually came from is
+gone by the time the confirmation is dismissed, and the component resolves the trigger the panel
+names with `aria-labelledby` instead. A real browser is the only thing that shows this — jsdom keeps
+a detached element focusable — so the visual run below is what proved it. The shared dialog itself is
+unchanged (out of scope for issue #1170), and the page
 authors no dialog markup of its own (`page-composition.guard.ts`). A confirmed delete re-reads the
 register with the same filters and stays on the same page, stepping back one when the page it was on
 no longer exists; a refusal keeps the row exactly as it was fetched and states the server's own

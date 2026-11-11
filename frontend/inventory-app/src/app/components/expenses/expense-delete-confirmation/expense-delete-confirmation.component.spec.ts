@@ -16,12 +16,21 @@ function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
   };
 }
 
-/** A host with a button to open from, so focus restoration has somewhere real to return to. */
+/**
+ * A host with a button to open from, so focus restoration has somewhere real to return to, and -
+ * because the register opens this confirmation from a row's overflow menu - the menu panel that the
+ * button opens: `role="menu"`, named by its trigger with `aria-labelledby`, holding the Delete item
+ * that is actually focused at the moment the confirmation opens. The shared `action-menu` removes
+ * that panel as soon as it closes, which is the real shape this component has to restore focus from.
+ */
 @Component({
   standalone: true,
   imports: [ExpenseDeleteConfirmationComponent],
   template: `
-    <button type="button" id="trigger">Delete</button>
+    <button type="button" id="trigger" aria-haspopup="menu">More actions</button>
+    <div id="panel" role="menu" aria-labelledby="trigger">
+      <button type="button" role="menuitem" id="menu-delete">Delete</button>
+    </div>
     <app-expense-delete-confirmation
       [expense]="pending"
       (confirmed)="confirmed = confirmed + 1"
@@ -43,16 +52,35 @@ async function render() {
   document.body.appendChild(host);
 
   const trigger = host.querySelector('#trigger') as HTMLButtonElement;
+  const panel = host.querySelector('#panel') as HTMLElement;
+  const menuItem = host.querySelector('#menu-delete') as HTMLButtonElement;
   const open = (pending: OperatingExpense) => {
     trigger.focus();
     fixture.componentInstance.pending = pending;
     fixture.detectChanges();
   };
+  /** Exactly what the register does: the menu item is focused, and the menu closes behind it. */
+  const openFromRowMenu = (pending: OperatingExpense) => {
+    menuItem.focus();
+    fixture.componentInstance.pending = pending;
+    fixture.detectChanges();
+    panel.remove();
+  };
   const buttons = () =>
     Array.from(host.querySelectorAll('.confirm-modal button')) as HTMLButtonElement[];
   const named = (label: string) => buttons().find((button) => button.textContent?.trim() === label)!;
 
-  return { fixture, host, trigger, open, buttons, named, component: fixture.componentInstance };
+  return {
+    fixture,
+    host,
+    trigger,
+    menuItem,
+    open,
+    openFromRowMenu,
+    buttons,
+    named,
+    component: fixture.componentInstance
+  };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -127,6 +155,38 @@ describe('ExpenseDeleteConfirmationComponent (issue #1170)', () => {
 
     expect(component.confirmed).toBe(0);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  /**
+   * The browser-measured defect of issue #1170's visual run: the confirmation is opened from a row's
+   * overflow menu, so the element that has focus at that moment is the menu's Delete item, and the
+   * menu removes it as it closes. Focus has to come back to the menu's trigger, which is still on the
+   * row, rather than being lost to the body.
+   */
+  it('returns focus to the row menu trigger when the menu item that opened it has gone', async () => {
+    const { fixture, host, openFromRowMenu, trigger, menuItem, component } = await render();
+    openFromRowMenu(expense());
+    expect(menuItem.isConnected).toBe(false);
+
+    (host.querySelector('.confirm-modal') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    );
+    fixture.detectChanges();
+
+    expect(component.confirmed).toBe(0);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('restores no focus after a delete confirmed from the row menu', async () => {
+    const { fixture, openFromRowMenu, named, trigger, component } = await render();
+    openFromRowMenu(expense());
+
+    named('Delete').click();
+    component.pending = null;
+    fixture.detectChanges();
+
+    expect(component.confirmed).toBe(1);
+    expect(document.activeElement).not.toBe(trigger);
   });
 
   it('reports the confirmation once, and leaves the focus after a delete to the page', async () => {

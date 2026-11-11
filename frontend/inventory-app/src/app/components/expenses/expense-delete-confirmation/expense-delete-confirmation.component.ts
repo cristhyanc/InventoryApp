@@ -7,6 +7,26 @@ import { OperatingExpense } from '../../../services/operating-expense.service';
 const DIALOG_CONTROLS = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])';
 
 /**
+ * The control focus should come back to, given whatever had it when the confirmation opened.
+ *
+ * Usually that is the focused element itself. But the register opens this confirmation from a row's
+ * overflow menu, where the focused element is the menu's **Delete** item and the shared
+ * `action-menu` removes its whole panel as it closes - so returning focus there would return it to
+ * nothing (measured in the browser by the visual run of issue #1170; jsdom keeps a detached element
+ * focusable, so only a real layout engine shows it). The element to go back to is then the menu's
+ * own trigger, which stays on the row and which the panel names with `aria-labelledby`, as the
+ * WAI-ARIA menu-button pattern requires of any menu.
+ */
+function openerOf(active: Element | null): HTMLElement | null {
+  if (!(active instanceof HTMLElement)) {
+    return null;
+  }
+  const triggerId = active.closest('[role="menu"]')?.getAttribute('aria-labelledby');
+  const trigger = triggerId ? document.getElementById(triggerId) : null;
+  return trigger ?? active;
+}
+
+/**
  * The register's delete confirmation (issue #1170).
  *
  * It is the shared `confirmation-dialog`, named for the expense it would delete, plus the keyboard
@@ -50,7 +70,7 @@ export class ExpenseDeleteConfirmationComponent {
     }
     if (value !== null && this.pending === null) {
       // Recorded before the dialog renders, which is the last moment the opener still has focus.
-      this.opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      this.opener = openerOf(document.activeElement);
     }
     const closing = value === null && this.pending !== null;
     this.pending = value;
