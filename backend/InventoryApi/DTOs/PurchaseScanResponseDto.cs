@@ -18,6 +18,17 @@ namespace InventoryApi.DTOs;
 /// <typeparam name="T">The value's type.</typeparam>
 public sealed record PurchaseScanValueDto<T>(T Value, string Provenance);
 
+/// <summary>
+/// Where a suggested pack size came from (issue #1165), as published values: the token naming the
+/// step that suggested it, and the date of the purchase it was derived from.
+///
+/// <para>It is present only beside a pack size this application suggested. A pack size printed on the
+/// receipt carries none, because nothing suggested it.</para>
+/// </summary>
+/// <param name="SuggestedFrom"><c>lastPurchase</c> - today the only source there is.</param>
+/// <param name="PurchaseDate">The date of the purchase the pack size was derived from.</param>
+public sealed record PurchaseScanPackSizeSuggestionDto(string SuggestedFrom, DateOnly PurchaseDate);
+
 /// <summary>What the receipt said about one line's GST (issue #1163), as published tokens.</summary>
 /// <param name="PriceIncludesGst"><c>yes</c>, <c>no</c> or <c>unknown</c>.</param>
 /// <param name="Taxable"><c>yes</c>, <c>no</c> or <c>unknown</c>.</param>
@@ -32,7 +43,11 @@ public sealed record PurchaseScanGstHintDto(string PriceIncludesGst, string Taxa
 /// <param name="Kind"><c>stock</c>, <c>levy</c> or <c>other</c>.</param>
 /// <param name="Text">The line as printed.</param>
 /// <param name="Packs">Packs delivered.</param>
-/// <param name="UnitsPerPack">Units per pack as printed - <see langword="null"/>, never <c>1</c>, when not printed.</param>
+/// <param name="UnitsPerPack">
+/// Units per pack: as printed, or the pack size suggested from the last purchase (issue #1165), which
+/// is marked <c>suggested</c> and described by <paramref name="UnitsPerPackSuggestion"/>.
+/// <see langword="null"/>, never <c>1</c>, when it is neither printed nor suggested.
+/// </param>
 /// <param name="Units">Packs times units per pack.</param>
 /// <param name="LineTotal">The line's GST-inclusive amount.</param>
 /// <param name="UnitCost">The amount over the units, unrounded.</param>
@@ -40,6 +55,10 @@ public sealed record PurchaseScanGstHintDto(string PriceIncludesGst, string Taxa
 /// <param name="Gst">What the receipt said about the line's GST.</param>
 /// <param name="LevyUnresolved">Whether this is a levy the receipt's totals could not place.</param>
 /// <param name="Missing">Which values the line could not be completed with, as published tokens.</param>
+/// <param name="UnitsPerPackSuggestion">
+/// Where a suggested pack size came from, or <see langword="null"/> when the pack size was printed on
+/// the receipt or is still unknown.
+/// </param>
 public sealed record PurchaseScanLineDto(
     string Kind,
     PurchaseScanValueDto<string> Text,
@@ -51,7 +70,8 @@ public sealed record PurchaseScanLineDto(
     PurchaseScanValueDto<long>? ProductId,
     PurchaseScanGstHintDto Gst,
     bool LevyUnresolved,
-    IReadOnlyList<string> Missing);
+    IReadOnlyList<string> Missing,
+    PurchaseScanPackSizeSuggestionDto? UnitsPerPackSuggestion);
 
 /// <summary>
 /// The suggested purchase one scanned receipt produced (issue #1163).

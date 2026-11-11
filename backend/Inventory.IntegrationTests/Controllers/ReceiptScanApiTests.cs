@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -315,6 +316,184 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         Assert.Equal([ReceiptScanFactory.SupplierName], request.Suppliers.Select(supplier => supplier.Name));
     }
 
+    #region A pack size suggested from the last purchase (issue #1165)
+
+    /// <summary>
+    /// Issue #1165's first criterion over HTTP: a carton the receipt printed no pack size for is
+    /// suggested the 24 the business last paid this supplier for, marked as read from the last
+    /// purchase with that purchase's date, with the units and unit cost filled in - and
+    /// <strong>nothing is written</strong>, which is the same comparison the scan's own no-writes
+    /// criterion makes.
+    /// </summary>
+    [Fact]
+    public async Task A_missing_pack_size_is_suggested_from_the_last_purchase_and_nothing_is_written()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, _factory.SupplierId, 1.2067m);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, _factory.SupplierId);
+        var before = await _factory.StoredCountsAsync();
+
+        var line = await ScannedLine();
+
+        Assert.Equal(24, line.GetProperty("unitsPerPack").GetProperty("value").GetInt32());
+        Assert.Equal("suggested", line.GetProperty("unitsPerPack").GetProperty("provenance").GetString());
+        Assert.Equal(24, line.GetProperty("units").GetProperty("value").GetInt32());
+        Assert.Equal(28.96m / 24, line.GetProperty("unitCost").GetProperty("value").GetDecimal());
+        Assert.Empty(line.GetProperty("missing").EnumerateArray());
+
+        var suggestion = line.GetProperty("unitsPerPackSuggestion");
+        Assert.Equal("lastPurchase", suggestion.GetProperty("suggestedFrom").GetString());
+        Assert.Equal(Published(ReceiptScanFactory.LastPurchaseDate), SuggestedDate(line));
+
+        Assert.Equal(before, await _factory.StoredCountsAsync());
+        _factory.Documents.Verify(
+            storage => storage.SaveAsync(
+                It.IsAny<DocumentCategory>(),
+                It.IsAny<string>(),
+                It.IsAny<Stream>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// Issue #1165's two-carton criterion over HTTP: $57.92 for two cartons is a pack size of 24 and
+    /// 48 units - never 96.
+    /// </summary>
+    [Fact]
+    public async Task Two_cartons_on_one_line_are_forty_eight_units()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, _factory.SupplierId, 1.2067m);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(
+            _factory.ProductId, _factory.SupplierId, packs: 2, lineTotal: 57.92m);
+
+        var line = await ScannedLine();
+
+        Assert.Equal(24, line.GetProperty("unitsPerPack").GetProperty("value").GetInt32());
+        Assert.Equal(48, line.GetProperty("units").GetProperty("value").GetInt32());
+    }
+
+    /// <summary>
+    /// Issue #1165's supplier-match criterion: the history that counts is this supplier's. The same
+    /// product bought from another supplier of the same business at the same price suggests nothing,
+    /// because another supplier's carton is not evidence about this one's.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_from_another_supplier_suggests_nothing()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        var otherSupplierId = await _factory.SeedSecondSupplierAsync();
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, otherSupplierId, 1.2067m);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, _factory.SupplierId);
+
+        AssertNoSuggestion(await ScannedLine());
+    }
+
+    /// <summary>
+    /// Issue #1165's no-history criterion: a product this business has never bought leaves the line
+    /// missing its pack size and its unit cost, exactly as it was before this rule existed.
+    /// </summary>
+    [Fact]
+    public async Task A_product_with_no_purchase_history_suggests_nothing()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, _factory.SupplierId);
+
+        var line = await ScannedLine();
+
+        AssertNoSuggestion(line);
+        Assert.Equal(
+            ["unitsPerPack", "unitCost"],
+            line.GetProperty("missing").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    /// <summary>
+    /// And its other half: with no supplier of this business suggested there is no history to read at
+    /// all, however much of it the business has.
+    /// </summary>
+    [Fact]
+    public async Task A_receipt_with_no_suggested_supplier_suggests_nothing()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, _factory.SupplierId, 1.2067m);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, supplierId: 4242);
+
+        AssertNoSuggestion(await ScannedLine());
+    }
+
+    /// <summary>
+    /// The most recent purchase from that supplier decides, and the date published is that purchase's
+    /// own. The older line's $2.4133 would have suggested 12 for this receipt; the newer $1.2067
+    /// suggests 24.
+    /// </summary>
+    [Fact]
+    public async Task The_most_recent_purchase_from_that_supplier_decides()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId,
+            _factory.ProductId,
+            _factory.SupplierId,
+            2.4133m,
+            ReceiptScanFactory.LastPurchaseDate.AddMonths(-3));
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, _factory.SupplierId, 1.2067m);
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, _factory.SupplierId);
+
+        var line = await ScannedLine();
+
+        Assert.Equal(24, line.GetProperty("unitsPerPack").GetProperty("value").GetInt32());
+        Assert.Equal(Published(ReceiptScanFactory.LastPurchaseDate), SuggestedDate(line));
+    }
+
+    /// <summary>
+    /// Issue #1165's "never overwrite" criterion over HTTP: the receipt printed 24, so 24 is used, it
+    /// stays a quotation, and the $2.4133 history that would have suggested 12 changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_pack_size_printed_on_the_receipt_is_never_replaced()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedPurchaseAsync(
+            _factory.TradingBusinessId, _factory.ProductId, _factory.SupplierId, 2.4133m);
+        _factory.Reader.Answer = ReceiptScanFactory.PrintedPackSize(
+            _factory.ProductId, _factory.SupplierId, unitsPerPack: 24);
+
+        var line = await ScannedLine();
+
+        Assert.Equal(24, line.GetProperty("unitsPerPack").GetProperty("value").GetInt32());
+        Assert.Equal("read", line.GetProperty("unitsPerPack").GetProperty("provenance").GetString());
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("unitsPerPackSuggestion").ValueKind);
+    }
+
+    /// <summary>
+    /// Issue #1165's tenancy criterion, with two businesses: the other business really has bought
+    /// this product from a supplier of that name at $1.2067, and the trading business's scan is
+    /// suggested nothing - while the other business's own scan is suggested its own 24. A scan reads
+    /// one business's purchases, resolved from the caller's membership (AGENTS.md § Tenant ownership
+    /// and data isolation).
+    /// </summary>
+    [Fact]
+    public async Task Only_the_callers_own_businesss_purchases_are_read()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.GrantAsync(_factory.OtherBusinessId, SubscriptionPlan.Pro);
+        var (otherProductId, otherSupplierId) = await _factory.SeedOtherBusinessHistoryAsync(1.2067m);
+
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(_factory.ProductId, _factory.SupplierId);
+        AssertNoSuggestion(await ScannedLine());
+
+        _factory.Reader.Answer = ReceiptScanFactory.NoPackSize(otherProductId, otherSupplierId);
+        var theirs = await ScannedLine(_factory.AsOtherBusinessOwner());
+        Assert.Equal(24, theirs.GetProperty("unitsPerPack").GetProperty("value").GetInt32());
+    }
+
+    #endregion
+
     /// <summary>
     /// The issue's logging criterion: the log carries the business, the outcome, the duration, the
     /// pages and the tokens - and no receipt text, no file name and no product name.
@@ -380,6 +559,36 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+    }
+
+    /// <summary>The one line of a scanned draft, over real HTTP.</summary>
+    private async Task<JsonElement> ScannedLine(HttpClient? client = null)
+    {
+        var response = await (client ?? _factory.AsOwner()).PostAsync("/api/purchases/scan", Jpeg());
+        var draft = await Draft(response);
+
+        return Assert.Single(draft.GetProperty("lines").EnumerateArray());
+    }
+
+    /// <summary>The date a line's pack-size suggestion was read from, as published.</summary>
+    private static string? SuggestedDate(JsonElement line) =>
+        line.GetProperty("unitsPerPackSuggestion").GetProperty("purchaseDate").GetString();
+
+    /// <summary>A calendar date as this API publishes one.</summary>
+    private static string Published(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The line as it was before issue #1165 existed: no pack size, no units, no unit cost, and no
+    /// suggestion marker. Published as JSON <c>null</c> rather than omitted, as every other absent
+    /// value on this contract is.
+    /// </summary>
+    private static void AssertNoSuggestion(JsonElement line)
+    {
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("unitsPerPack").ValueKind);
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("units").ValueKind);
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("unitCost").ValueKind);
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("unitsPerPackSuggestion").ValueKind);
     }
 
     private static async Task<JsonElement> AssertPlanRefusalAsync(HttpResponseMessage response)
@@ -507,6 +716,15 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         /// <summary>The trading business's one supplier.</summary>
         public const string SupplierName = "Metro Drinks Wholesale";
 
+        /// <summary>A second supplier of the trading business, so "the same supplier" has a subject.</summary>
+        public const string OtherSupplierName = "Corner Cash And Carry";
+
+        /// <summary>
+        /// The date of the purchase issue #1165's suggestions are read from, and the instant it is
+        /// stored as. Deliberately a date rather than today's, so the published date is a statement.
+        /// </summary>
+        public static readonly DateOnly LastPurchaseDate = new(2026, 9, 14);
+
         private readonly CountingReceiptReader _reader = new();
         private readonly Mock<IDocumentStorage> _documents = new(MockBehavior.Strict);
 
@@ -534,6 +752,50 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         /// <summary>Whether this host has an API key, and so whether the feature is on.</summary>
         protected virtual bool ConfigureApiKey => true;
 
+        /// <summary>The trading business's one product, once seeded.</summary>
+        public long ProductId { get; private set; }
+
+        /// <summary>The trading business's own supplier, once seeded.</summary>
+        public int SupplierId { get; private set; }
+
+        /// <summary>
+        /// The reader's answer for a one-line receipt whose pack size the receipt did not print
+        /// (issue #1165): one carton of a matched product from a matched supplier, for
+        /// <paramref name="lineTotal"/> GST-inclusive.
+        /// </summary>
+        public static string NoPackSize(
+            long productId,
+            int supplierId,
+            int packs = 1,
+            decimal lineTotal = 28.96m) =>
+            $$"""
+            {
+              "supplierName": "Metro Beverages",
+              "supplierId": {{supplierId.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
+              "deliveryDate": "2026-10-27",
+              "receiptTotal": {{lineTotal.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
+              "receiptTotalIncludesGst": "yes",
+              "lines": [
+                { "text": "45G CC'S TASTY CHEESE", "kind": "stock",
+                  "deliveredPacks": {{packs.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
+                  "packSize": "notPrinted",
+                  "lineTotal": {{lineTotal.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
+                  "priceIncludesGst": "yes", "taxable": "yes",
+                  "productId": {{productId.ToString(System.Globalization.CultureInfo.InvariantCulture)}} }
+              ]
+            }
+            """;
+
+        /// <summary>
+        /// The same receipt with a printed pack size, so "a pack size read from the receipt is never
+        /// replaced" can be asserted against a history that would have said something else.
+        /// </summary>
+        public static string PrintedPackSize(long productId, int supplierId, int unitsPerPack) =>
+            NoPackSize(productId, supplierId).Replace(
+                "\"packSize\": \"notPrinted\"",
+                $"\"packSize\": \"printed\", \"unitsPerPack\": {unitsPerPack.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                StringComparison.Ordinal);
+
         /// <summary>The reader's answer for a one-line receipt, with an optional product match.</summary>
         public static string OneLine(long? productId = null) =>
             $$"""
@@ -557,6 +819,10 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         /// </summary>
         public async Task ResetScanAsync()
         {
+            // Before the reset: a purchase line names its product and its business with restricted
+            // foreign keys, so a purchase issue #1165's tests seeded has to go before the products
+            // and businesses the reset removes.
+            await ClearPurchasesAsync();
             await ResetAsync();
             await SeedCatalogueAsync();
 
@@ -627,21 +893,123 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
             });
         }
 
+        /// <summary>
+        /// One recorded purchase of <paramref name="productId"/> from <paramref name="supplierId"/>
+        /// at <paramref name="unitCost"/> a unit (issue #1165), for the business that owns them. The
+        /// quantity is deliberately not the pack size: what the suggestion reads is the unit cost,
+        /// and a test that seeded 24 units would not show that.
+        /// </summary>
+        public async Task SeedPurchaseAsync(
+            int businessId,
+            long productId,
+            int supplierId,
+            decimal unitCost,
+            DateOnly? purchaseDate = null)
+        {
+            await using var db = Database();
+            var purchase = new Inventory.Infrastructure.Models.Purchase
+            {
+                BusinessId = businessId,
+                Title = "Last delivery",
+                SupplierId = supplierId,
+                PurchaseDate = (purchaseDate ?? LastPurchaseDate).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            };
+
+            purchase.Items.Add(new Inventory.Infrastructure.Models.PurchaseItem
+            {
+                BusinessId = businessId,
+                ProductId = productId,
+                Quantity = 6m,
+                UnitCost = unitCost,
+            });
+
+            db.Receipts.Add(purchase);
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// The <em>other</em> business's own product, supplier and purchase history, so "only this
+        /// business's purchases are read" is asserted against a history that really exists and really
+        /// is not this business's (AGENTS.md § Tenant ownership and data isolation).
+        /// </summary>
+        public async Task<(long ProductId, int SupplierId)> SeedOtherBusinessHistoryAsync(decimal unitCost)
+        {
+            var product = new Inventory.Infrastructure.Models.Product
+            {
+                BusinessId = OtherBusinessId,
+                Name = ProductName,
+                Unit = "375mL",
+            };
+            var supplier = new Inventory.Infrastructure.Models.Supplier
+            {
+                BusinessId = OtherBusinessId,
+                Name = SupplierName,
+            };
+
+            await using (var db = Database())
+            {
+                db.Products.Add(product);
+                db.Suppliers.Add(supplier);
+                await db.SaveChangesAsync();
+            }
+
+            await SeedPurchaseAsync(OtherBusinessId, product.Id, supplier.Id, unitCost);
+
+            return (product.Id, supplier.Id);
+        }
+
+        /// <summary>
+        /// A second supplier of the trading business, seeded on demand so the scans that assert what
+        /// leaves the application still see exactly one supplier.
+        /// </summary>
+        public async Task<int> SeedSecondSupplierAsync()
+        {
+            await using var db = Database();
+            var supplier = new Inventory.Infrastructure.Models.Supplier
+            {
+                BusinessId = TradingBusinessId,
+                Name = OtherSupplierName,
+            };
+
+            db.Suppliers.Add(supplier);
+            await db.SaveChangesAsync();
+
+            return supplier.Id;
+        }
+
+        /// <summary>
+        /// Every recorded purchase and purchase line, removed: the lines first, because a line names
+        /// its purchase with a restricted foreign key.
+        /// </summary>
+        private async Task ClearPurchasesAsync()
+        {
+            await using var db = Database();
+            db.ReceiptItems.RemoveRange(await db.ReceiptItems.ToListAsync());
+            await db.SaveChangesAsync();
+            db.Receipts.RemoveRange(await db.Receipts.ToListAsync());
+            await db.SaveChangesAsync();
+        }
+
         private async Task SeedCatalogueAsync()
         {
             await using var db = Database();
-            db.Products.Add(new Inventory.Infrastructure.Models.Product
+            var product = new Inventory.Infrastructure.Models.Product
             {
                 BusinessId = TradingBusinessId,
                 Name = ProductName,
                 Unit = "375mL",
-            });
-            db.Suppliers.Add(new Inventory.Infrastructure.Models.Supplier
+            };
+            var supplier = new Inventory.Infrastructure.Models.Supplier
             {
                 BusinessId = TradingBusinessId,
                 Name = SupplierName,
-            });
+            };
+            db.Products.Add(product);
+            db.Suppliers.Add(supplier);
             await db.SaveChangesAsync();
+
+            ProductId = product.Id;
+            SupplierId = supplier.Id;
         }
 
         /// <summary>
