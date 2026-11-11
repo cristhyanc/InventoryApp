@@ -2353,9 +2353,14 @@ and record it through Add Purchase as usual, which is still where a purchase is 
   stream), which this application deliberately does not read — is refused with "This PDF could not be read.
   Try a photo of the receipt instead." rather than being sent off anyway.
 - **Quantities are what was delivered, not what was ordered**, and a line delivered as nothing is left out.
-- **A pack size that is not printed on the receipt stays unknown** — never 1. A carton whose size the receipt
-  does not state comes back with no units and asks you for the pack size, rather than quietly recording a
-  carton's price as the price of one bottle.
+- **A pack size that is not printed on the receipt is suggested from your last purchase** — and never
+  guessed. Some suppliers never print how many units are in a carton. When one does not, the scan looks up
+  what you last paid that same supplier for that product: if the line works out to a whole number of units a
+  pack at essentially that price, it offers that pack size, marks it as coming from that purchase and shows
+  the purchase's date, and fills in the units and unit cost. If the price has moved, the packs delivered are
+  unclear, or you have never bought it from that supplier, the pack size stays unknown — never 1 — and the
+  line asks you for it, rather than quietly recording a carton's price as the price of one bottle. A pack
+  size the receipt *does* print is always used as printed.
 - **A container deposit levy goes to the drinks it was charged for**, when the receipt's own totals say it is
   not already inside the drink prices. When they say it is — the usual case for an online order that prints it
   twice — nothing is added. When the totals say neither, no line's cost is changed and the levy comes back as
