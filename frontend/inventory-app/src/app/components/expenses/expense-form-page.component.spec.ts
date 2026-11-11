@@ -13,6 +13,7 @@ import {
 } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import {
   EXPENSE_SUPPORT_SESSION_NOTE,
   EXPENSE_UNSAVED_LEAVE_WARNING,
@@ -58,6 +59,8 @@ async function render(
     update?: jest.Mock;
     machines?: Observable<LocalMachine[]>;
     sessionActive?: boolean;
+    /** Published on `BusinessTimeZoneService` before the page is created; `undefined` leaves it unknown. */
+    timeZoneId?: string;
   } = {}
 ) {
   const getById = options.getById ?? jest.fn(() => of(detail()));
@@ -87,6 +90,10 @@ async function render(
       provideNayaxConnectionStatus()
     ]
   }).compileComponents();
+
+  if (options.timeZoneId !== undefined) {
+    TestBed.inject(BusinessTimeZoneService).publish(options.timeZoneId);
+  }
 
   const fixture = TestBed.createComponent(ExpenseFormPageComponent);
   fixture.detectChanges();
@@ -175,6 +182,34 @@ describe('ExpenseFormPageComponent adding an expense (issue #1167)', () => {
     const { fixture } = await render({ id: null, machines: NEVER });
 
     expect(testId(fixture.nativeElement as HTMLElement, 'machine-field-loading')).not.toBeNull();
+  });
+});
+
+/**
+ * A new expense's default date is today in the business's own time zone, never the UTC date (issue
+ * #1171), read from `BusinessTimeZoneService`.
+ */
+describe('ExpenseFormPageComponent default date for a new expense (issue #1171)', () => {
+  it("opens on the business's own calendar date once the time zone is known", async () => {
+    const instant = new Date('2026-11-10T21:30:00Z');
+    jest.useFakeTimers().setSystemTime(instant);
+
+    const { fixture } = await render({ id: null, timeZoneId: 'Australia/Sydney' });
+
+    expect(form(fixture).form.expenseDate).toBe('2026-11-11');
+    jest.useRealTimers();
+  });
+
+  it('falls back to the browser\'s own local date, never the UTC date, while the time zone is still loading', async () => {
+    const instant = new Date('2026-11-10T21:30:00Z');
+    jest.useFakeTimers().setSystemTime(instant);
+
+    const { fixture } = await render({ id: null });
+
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const expected = `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`;
+    expect(form(fixture).form.expenseDate).toBe(expected);
+    jest.useRealTimers();
   });
 });
 
@@ -287,6 +322,14 @@ describe('ExpenseFormPageComponent saving an edit (issue #1167)', () => {
       servicePeriodStart: '2026-02-01T00:00:00Z',
       servicePeriodEnd: '2027-01-31T00:00:00Z'
     });
+  });
+
+  it("keeps the expense's stored date, regardless of today's date or the business time zone (issue #1171)", async () => {
+    const { fixture, update } = await render({ id: '7', timeZoneId: 'Australia/Sydney' });
+
+    saveWith(fixture, 'Annual policy (renewed)');
+
+    expect(update.mock.calls[0][1]).toMatchObject({ expenseDate: '2026-01-15' });
   });
 
   it('sends no attachment when none was chosen, so the stored document is untouched', async () => {

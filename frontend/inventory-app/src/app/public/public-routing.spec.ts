@@ -100,8 +100,11 @@ describe('public root route (issue #954)', () => {
 
       // `auth`, `invite` and the design-system showcase were public before issue #954 (`sign-in`
       // carries only `signInPageGuard`, which is not an authentication guard); `home` is this
-      // issue's.
-      expect(unguardedPaths.sort()).toEqual(['__design-system/widgets', 'auth', 'home', 'invite'].sort());
+      // issue's. `privacy-policy` and `terms-of-use` are issue #1190's development-only page
+      // layouts, reachable by the same signed-out visitor `/home` already is.
+      expect(unguardedPaths.sort()).toEqual(
+        ['__design-system/widgets', 'auth', 'home', 'invite', 'privacy-policy', 'terms-of-use'].sort()
+      );
     });
   });
 
@@ -158,7 +161,7 @@ describe('public root route (issue #954)', () => {
 
       await tester.navigateByUrl('/');
 
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
@@ -186,7 +189,7 @@ describe('public root route (issue #954)', () => {
       await tester.navigateByUrl('/no-such-page');
 
       expect(TestBed.inject(Router).url).toBe('/');
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
@@ -220,7 +223,7 @@ describe('public root route (issue #954)', () => {
 
       await tester.navigateByUrl('/home');
 
-      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know your stock.');
+      expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain('Know what to buy.');
       expect(authenticationChecks).toEqual([]);
     });
 
@@ -238,5 +241,32 @@ describe('public root route (issue #954)', () => {
       expect(TestBed.inject(Router).url).toBe('/');
       expect(tester.routeNativeElement?.textContent).toContain('dashboard page');
     });
+  });
+});
+
+/**
+ * The Privacy Policy and Terms of Use page layouts (issue #1190), on the real route declarations.
+ * Jest always runs in development mode, so both are present; `legal-routes.spec.ts` covers the
+ * production build having neither.
+ */
+describe('legal page routes (issue #1190)', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it.each([
+    ['privacy-policy', 'Restockroo Privacy Policy'],
+    ['terms-of-use', 'Restockroo Terms of Use']
+  ])('opens /%s for a signed-out visitor with no sign-in redirect and no request', async (path, heading) => {
+    TestBed.configureTestingModule({
+      providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()]
+    });
+    const tester = await RouterTestingHarness.create();
+
+    await tester.navigateByUrl(`/${path}`);
+
+    expect(tester.routeNativeElement?.querySelector('h1')?.textContent).toContain(heading);
+    expect(TestBed.inject(Router).url).toBe(`/${path}`);
   });
 });

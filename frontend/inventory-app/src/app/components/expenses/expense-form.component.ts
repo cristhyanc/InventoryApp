@@ -5,6 +5,7 @@ import { Params, RouterLink } from '@angular/router';
 import { LocalMachine, Supplier } from '../../models/models';
 import { OperatingExpenseCategory, OperatingExpensePayload } from '../../services/operating-expense.service';
 import { prepareImageForUpload } from '../shared/image-upload-preparation';
+import { currentDateInTimeZone } from '../../formatting/business-time-zone';
 import { OPERATING_EXPENSE_CATEGORIES, expenseCategoryLabel } from './expense-categories';
 
 /** The `accept` list the supporting-document input has always offered. */
@@ -36,12 +37,29 @@ export interface ExpenseSaveRequest {
   readonly attachment: File | null;
 }
 
-/** A brand-new expense: today's date, category Other, three zero amounts, nothing attributed. */
-export function newExpenseFormValue(): ExpenseFormValue {
+/**
+ * Today's calendar date in `timeZoneId`, or the browser's own local date when the business time
+ * zone is not known yet (issue #1171) - never the UTC date, which is a different calendar day from
+ * late morning in a zone ahead of UTC (e.g. Sydney) until the UTC date catches up.
+ */
+function defaultExpenseDate(timeZoneId: string | null, now: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, '0');
+  if (timeZoneId !== null) {
+    const { year, month, day } = currentDateInTimeZone(now, timeZoneId);
+    return `${year}-${pad(month)}-${pad(day)}`;
+  }
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/**
+ * A brand-new expense: today's date in the business's own time zone (issue #1171; `timeZoneId`
+ * `null` while it is still loading, which falls back to the browser's local date rather than the
+ * UTC one), category Other, three zero amounts, nothing attributed.
+ */
+export function newExpenseFormValue(timeZoneId: string | null = null, now: Date = new Date()): ExpenseFormValue {
   return {
     payload: {
-      // The existing default date, unchanged: it is read in UTC, which is issue #1171's to fix.
-      expenseDate: new Date().toISOString().substring(0, 10),
+      expenseDate: defaultExpenseDate(timeZoneId, now),
       category: OperatingExpenseCategory.Other,
       description: '',
       amountExGst: 0,

@@ -1,0 +1,103 @@
+<div class="flex min-h-screen flex-col bg-rr-canvas font-rr text-rr-navy">
+  <header class="border-b border-rr-line bg-white">
+    <div class="mx-auto flex h-16 max-w-5xl items-center gap-4 px-4 sm:px-8">
+      <a
+        [routerLink]="homeLink"
+        class="flex min-h-11 items-center gap-2 rounded-lg text-lg font-bold text-rr-navy no-underline"
+        data-testid="legal-brand"
+      >
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
+          <app-icon name="inventory_2" [size]="18" />
+        </span>
+        Restockroo
+      </a>
+    </div>
+  </header>
+
+  <main class="flex-1 px-4 py-8 sm:px-8 sm:py-12">
+    <div class="mx-auto max-w-5xl">
+      <a
+        [routerLink]="homeLink"
+        class="mb-6 inline-flex min-h-11 items-center gap-1 rounded-lg text-sm font-semibold text-rr-teal no-underline hover:text-rr-teal-hover"
+        data-testid="legal-back-home"
+      >
+        <span class="inline-flex rotate-180" aria-hidden="true"><app-icon name="arrow_forward" [size]="18" /></span>
+        Back to home
+      </a>
+
+      <div class="grid gap-8 lg:grid-cols-[260px_1fr] lg:items-start">
+        <aside class="flex flex-col gap-4 lg:sticky lg:top-8">
+          <nav class="rounded-2xl border border-rr-line bg-white p-4" aria-label="Table of contents" data-testid="legal-toc">
+            <h2 class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">Table of contents</h2>
+            <ol class="m-0 mt-3 flex list-none flex-col gap-1 p-0">
+              @for (section of content.sections; track section.id) {
+                <li>
+                  <a
+                    [href]="'#' + section.id"
+                    class="flex min-h-11 items-center rounded-lg px-2 text-sm text-rr-muted no-underline hover:bg-rr-canvas hover:text-rr-navy"
+                    [attr.data-testid]="'legal-toc-link-' + section.id"
+                    (click)="scrollToSection(section.id, $event)"
+                  >{{ section.heading }}</a>
+                </li>
+              }
+            </ol>
+          </nav>
+
+          <div class="rounded-2xl border border-rr-line bg-white p-4" data-testid="legal-contact">
+            <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">Privacy &amp; terms enquiries</p>
+            <p class="m-0 mt-2 text-sm font-semibold text-rr-navy">{{ contact.operatorName }}</p>
+            <p class="m-0 text-sm text-rr-muted">{{ contact.abn }}</p>
+            <a
+              [href]="'mailto:' + contact.email"
+              class="mt-2 inline-block break-all text-sm font-semibold text-rr-teal no-underline hover:text-rr-teal-hover"
+              data-testid="legal-contact-email"
+            >{{ contact.email }}</a>
+          </div>
+        </aside>
+
+        <div class="min-w-0">
+          <h1 id="legal-title" class="m-0 text-3xl font-bold tracking-tight text-rr-navy sm:text-4xl" data-testid="legal-title">
+            {{ content.title }}
+          </h1>
+          <p class="m-0 mt-3 text-sm font-semibold text-rr-muted" data-testid="legal-effective-date">
+            {{ content.effectiveDateLabel }}
+          </p>
+
+          @if (content.introduction) {
+            <p class="m-0 mt-6 text-base leading-relaxed text-rr-muted" data-testid="legal-introduction">
+              {{ content.introduction }}
+            </p>
+          }
+
+          <div class="mt-8 flex flex-col gap-8">
+            @for (section of content.sections; track section.id; let i = $index) {
+              <section
+                [id]="section.id"
+                tabindex="-1"
+                class="scroll-mt-24 rounded-2xl border border-rr-line bg-white p-6 outline-none"
+                [attr.data-testid]="'legal-section-' + section.id"
+              >
+                <h2 class="m-0 text-lg font-semibold text-rr-navy">{{ i + 1 }}. {{ section.heading }}</h2>
+                <p class="m-0 mt-3 text-sm leading-relaxed text-rr-muted">{{ section.body }}</p>
+              </section>
+            }
+          </div>
+
+          <div class="mt-8 border-t border-rr-line pt-6">
+            <a
+              [routerLink]="'/' + crossLinkRoute"
+              class="inline-flex min-h-11 items-center text-sm font-semibold text-rr-teal no-underline hover:text-rr-teal-hover"
+              data-testid="legal-cross-link"
+            >{{ crossLinkLabel }}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="border-t border-rr-line bg-white">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-8">
+      <p class="m-0 text-sm text-rr-muted">© {{ year }} Restockroo. All rights reserved.</p>
+    </div>
+  </footer>
+</div>

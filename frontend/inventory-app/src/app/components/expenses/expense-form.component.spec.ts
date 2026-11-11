@@ -15,6 +15,12 @@ import {
   newExpenseFormValue
 } from './expense-form.component';
 
+/** `value`'s calendar date in the browser's own local timezone, as `yyyy-MM-dd`. */
+function localDateString(value: Date): string {
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
 /** A stored expense as the Edit page hands it to the form, with every carried-through field set. */
 function storedValue(overrides: Partial<ExpenseFormValue['payload']> = {}): ExpenseFormValue {
   return {
@@ -108,7 +114,7 @@ describe('ExpenseFormComponent layout and labels (issue #1167)', () => {
   it('opens a new expense on today, category Other and three zero amounts', async () => {
     const { component } = await render();
 
-    expect(component.form.expenseDate).toBe(new Date().toISOString().substring(0, 10));
+    expect(component.form.expenseDate).toBe(localDateString(new Date()));
     expect(component.form.category).toBe(OperatingExpenseCategory.Other);
     expect(component.form.amountExGst).toBe(0);
     expect(component.form.gstAmount).toBe(0);
@@ -135,6 +141,39 @@ describe('ExpenseFormComponent layout and labels (issue #1167)', () => {
     expect(host.querySelector('[data-testid="expense-form-cancel"]')?.getAttribute('href')).toBe(
       '/expenses?from=2026-01-01&supplierId=3'
     );
+  });
+});
+
+/**
+ * A new expense's default date is today in the business's own time zone, never the UTC date (issue
+ * #1171): in a zone ahead of UTC, such as Sydney, the UTC date is still yesterday until mid-morning.
+ */
+describe("newExpenseFormValue's default date (issue #1171)", () => {
+  it("uses the business's calendar date even where that is a day ahead of the UTC date", () => {
+    // 2026-11-10 21:30 UTC is 2026-11-11 08:30 in Sydney (UTC+11 in November, daylight saving).
+    const instant = new Date('2026-11-10T21:30:00Z');
+
+    const value = newExpenseFormValue('Australia/Sydney', instant);
+
+    expect(value.payload.expenseDate).toBe('2026-11-11');
+  });
+
+  it("uses the business's calendar date even where that is a day behind the UTC date", () => {
+    // 2026-11-10 21:30 UTC is 2026-11-10 13:30 in Los Angeles (UTC-8 in November).
+    const instant = new Date('2026-11-10T21:30:00Z');
+
+    const value = newExpenseFormValue('America/Los_Angeles', instant);
+
+    expect(value.payload.expenseDate).toBe('2026-11-10');
+  });
+
+  it('falls back to the browser\'s own local date, never the UTC date, while the zone is not known yet', () => {
+    // The same instant as above, with no business time zone published.
+    const instant = new Date('2026-11-10T21:30:00Z');
+
+    const value = newExpenseFormValue(null, instant);
+
+    expect(value.payload.expenseDate).toBe(localDateString(instant));
   });
 });
 

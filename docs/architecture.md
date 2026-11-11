@@ -1546,7 +1546,9 @@ There is exactly one exception to the two bullets above, and it exists so the br
 
 **The frontend half is a build replacement, not a runtime flag.** `src/app/auth/browser-auth-providers.ts` holds the real MSAL wiring (`MSAL_INSTANCE`, `MsalGuard`, `MsalInterceptor`, …) that `app.config.ts` spreads into the application config. The `e2e` build configuration in `angular.json` — and only that configuration — replaces that one module with `browser-auth-providers.e2e.ts`, which lets the router through, stubs `MsalService`/`MsalBroadcastService` so no MSAL call reaches `login.microsoftonline.com`, and registers no HTTP interceptor and therefore attaches no token. A production or development bundle does not contain that module at all, so there is nothing in it to enable.
 
-**What proves it.** `backend/Inventory.IntegrationTests/Auth/E2ETestAuthenticationCompositionTests` pins the gate and what each environment registers; `E2ETestAuthenticationFailsClosedTests` hosts the real pipeline as Production, Development, `Testing`, `Staging` and `e2etest` and asserts the synthetic header authenticates nobody (`401`), the scheme is not registered, and no fixture data is seeded; `E2ETestAuthenticationTests` hosts the E2E environment and asserts the `401`/`403`/`200` boundary and two-business isolation by listing and by id. `browser-auth-providers.spec.ts` asserts the production module keeps the real guard and interceptor and that the replacement is declared in one build configuration only. All of these run in `scripts/validate.sh`; the Playwright suite itself does not (see [Frontend tests](#frontend-tests)).
+**That stub reports the synthetic account by default, and signed out on request** (issue #1191). The workflow suite needs the application rendered as signed in, so one synthetic account is what `getAllAccounts()`/`getActiveAccount()` answer unless `sessionStorage` holds `e2e-signed-out` (`E2E_SIGNED_OUT_KEY`) set to `true` before the bundle loads, in which case the stub reports no account at all. It exists because the public landing page is shown at `/` only to a visitor nobody has signed in as (`signedOutVisitorGuard`) and offers Sign in and Start free on the same condition, so the signed-out homepage cannot be rendered in a browser any other way; `landing-page-public-beta.visual.ts` is its one caller. It grants nothing: this module is in the `e2e` build alone, reporting no account is strictly less than reporting one, and the E2E host still decides every request for itself from the synthetic actor header.
+
+**What proves it.** `backend/Inventory.IntegrationTests/Auth/E2ETestAuthenticationCompositionTests` pins the gate and what each environment registers; `E2ETestAuthenticationFailsClosedTests` hosts the real pipeline as Production, Development, `Testing`, `Staging` and `e2etest` and asserts the synthetic header authenticates nobody (`401`), the scheme is not registered, and no fixture data is seeded; `E2ETestAuthenticationTests` hosts the E2E environment and asserts the `401`/`403`/`200` boundary and two-business isolation by listing and by id. `browser-auth-providers.spec.ts` asserts the production module keeps the real guard and interceptor, that the replacement is declared in one build configuration only, and that the stub reports the synthetic account by default and no account under the signed-out key, whose literal it pins so the Playwright side cannot drift from it. All of these run in `scripts/validate.sh`; the Playwright suite itself does not (see [Frontend tests](#frontend-tests)).
 
 ### Tenant ownership (issue #64)
 
@@ -4740,7 +4742,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts; a route marked with the public layout is rendered with none of that chrome (issue #954) |
-| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954) |
+| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954); `legal/` holds the development-only Privacy Policy and Terms of Use page layouts (issue #1190) — see [The Privacy Policy and Terms of Use page layouts](#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190) |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
@@ -5215,9 +5217,12 @@ flag these pages now read instead, for the same reason: it is presentation only,
 read-only method rule is still what would refuse the write if a page failed to hide or disable it.
 
 **What each page hides or disables, and why hidden rather than disabled differs by control.**
-`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
+`OperatingExpenseComponent` hides Add expense (a page action, like the rest of this build's create
 entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete). Since issue
-#1167 Add Expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
+#1170 Delete is a menu item in each row's (and each card's) overflow menu, so what the register
+withholds there is the whole menu - exactly as `ProductListComponent` withholds its row menu - and
+nothing else in it is lost, because Delete is all it holds. Since issue
+#1167 Add expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
 that open a card on the register, so `ExpenseFormPageComponent` refuses the write on its own account
 as well - and must, because those addresses can be reached directly: `/expenses/new` shows no form at
 all during a session, `/expenses/:id/edit` shows the expense read-only with no primary action, and
@@ -5229,7 +5234,8 @@ expense from outside the business - and one sentence is what issue #1167 asks bo
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
 Payment control - the input group and the button together - hides rather than disables, since (like
 Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
-guarded handler (`remove` on the expense register and `onSave` on the expense form page;
+guarded handler (`confirmDelete` and `deleteConfirmed` on the expense register - since issue #1170
+both halves of a delete, the ask and the write, check the flag - and `onSave` on the expense form page;
 `saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
@@ -7687,20 +7693,31 @@ without asking. `/expenses/new` is a two-segment path and `/expenses/:id/edit` a
 so neither can shadow the other or the single-segment `/expenses` in any declaration order, and the
 page loads its expense from the route id through `OperatingExpenseService.getById` rather than from
 navigation state — a bookmarked edit URL and a refresh both work, a non-numeric id is the same
-"not found" as a missing expense, and the register keeps no form of its own. Rendered geometry is
-checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
+"not found" as a missing expense, and the register keeps no form of its own. Both pages use the
+full content width inside the standard `.page` gutters, with no max-width cap (issue #1187).
+Rendered geometry is checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
 `docs/screenshots/issue-1167/` at 1440px and 390px, overflow measured down to 360px, Tab order and
 touch-target heights); like every visual run it is human-invoked and runs in neither
 `scripts/validate.sh` nor CI.
 
-**The register's filters are the return context.** `/expenses` reads and writes its applied filters
-as the query parameters `from`, `to`, `category`, `supplierId` and `machineId` (parsed in one place,
-`components/expenses/expense-register-filters.ts`): Apply filters writes them to the address, opening
-`/expenses` with them applies them, and a parameter carrying a value the application cannot use is
-ignored rather than refused, so a stale bookmark opens the register instead of an error. Add expense
-and Edit expense receive those same parameters and return to `/expenses` carrying them on a
-successful save, on Cancel and on Back to expenses; without them they return to the plain `/expenses`.
-The sidebar link stays `/expenses` and is unaffected.
+**The register's filters and its page are the return context.** `/expenses` reads and writes its
+applied filters as the query parameters `from`, `to`, `category`, `supplierId` and `machineId`, and
+since issue #1170 the page of that filtered list as `page` (1-based, as a reader counts it) and
+`pageSize` — all seven parsed in one place, `components/expenses/expense-register-filters.ts`: Apply
+filters writes the filters, turning a page or changing the size writes the page, opening `/expenses`
+with them opens exactly that register, and a parameter carrying a value the application cannot use is
+ignored rather than refused, so a stale bookmark opens the register instead of an error. The first
+page at the default size (10, from the Products options 5, 10, 20, 50 and 100) is the plain
+`/expenses` address, so only a page or size that differs from the default appears. **Paging is
+client-side over the one list `GET /api/operating-expenses` already answered in full**, the same
+strategy `ProductListComponent` uses: turning a page requests nothing, the Totals footer sums every
+filtered row rather than the page on screen, and the pager's counts are the real filtered counts.
+Applying or clearing filters returns to page 1; a `page` the filtered list does not have — a stale
+bookmark, or the page a deleted last row leaves behind — settles onto the last page that exists and
+is rewritten into the address in place. Add expense and Edit expense receive those same parameters
+and return to `/expenses` carrying them on a successful save, on Cancel and on Back to expenses;
+without them they return to the plain `/expenses`. The sidebar link stays `/expenses` and is
+unaffected.
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
@@ -7912,11 +7929,11 @@ request to an account, business, access or Nayax endpoint. `public/public-routin
 
 **Its actions reuse the existing journeys.** **Sign in** follows the header's own decision - the
 `/sign-in` chooser when a customer identity authority is configured, otherwise a workforce redirect
-whose start page is `/`. **Get started** navigates to `/apply`, the business application route:
-being guarded, it takes a signed-out visitor through sign-in first (with the `/apply` destination
-held), and the application form sends anyone it is not for - a member, or anyone while
-`SelfServiceOnboarding:Enabled` is off - to the page their account state calls for. No new account
-flow exists.
+whose start page is `/`. **Start free** (labelled **Get started** before issue #1191's public-beta
+copy refresh) navigates to `/apply`, the business application route: being guarded, it takes a
+signed-out visitor through sign-in first (with the `/apply` destination held), and the application
+form sends anyone it is not for - a member, or anyone while `SelfServiceOnboarding:Enabled` is off -
+to the page their account state calls for. No new account flow exists.
 
 **Page composition.** The routed page lays out the sections and owns the in-page navigation (scroll
 to a section and move focus to it, instant under `prefers-reduced-motion`), the skip link, the
@@ -7933,34 +7950,63 @@ intentional copy change are recorded in [docs/design/restockroo-landing-page.md]
 The application is client-rendered, so the title and description are set in the browser; nothing
 here adds server rendering or promises search-engine indexing.
 
-**Pricing section (issue #971).** A fifth entry, `{ id: 'pricing', label: 'Pricing' }`, was added to
-`LANDING_SECTIONS` before `'faqs'`, so the header, its mobile menu and the footer navigation pick it
-up with no component change; the routed page places the `#pricing` section itself between
-`#how-it-works` and `#faqs`, as the issue required. The section renders `LANDING_PLANS` — Free,
-Starter and Pro, each a plain object (name, price, billing note, description, feature strings, an
-optional badge and an optional note) — with no new injected service and no request, preserving the
-page's "makes no request" guarantee; the catalogue is the plan proposal [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed (1 GB/20 GB/20 GB attachment allowances, Starter's supplier comparisons and Bookkeeping/GST
-reports, Pro's Nayax connection and connected reports, 5 included connected machines and A$2/month
-per extra one), reproduced here only as static marketing copy — it is not read from, and does not
-have to stay byte-for-byte in step with, a backend plan catalogue, because issue #965's catalogue
-endpoint does not exist yet. Free carries an "Available now" badge; Starter and Pro carry "Coming
-soon" and every plan's action is the same `getStarted()`/**Open app** the rest of the page uses, so
-there is no second, parallel purchase flow and nothing to keep anonymous. Pro's card carries its own
-`note` making the plan-entitlement/usable-connection distinction explicit, matching issue #965's
-rule that the two are never promised together. **A plan limit is copy about the future, never a
-described current behaviour**: attachment quota enforcement (issue #968) and document-optional
-purchases (issue #976) have not shipped, so the section's lead paragraph, Free's own `note` and the
-storage FAQ all say the allowances — and the 80% warning and 100% upload pause — start when the paid
-plans launch, and that storage is unlimited today; nothing on the page claims a cap, a blocked
-upload or a purchase recorded without its document now. That is the same rule as the rest of the
-page's copy, and it is guarded as a copy regression in `landing-page.component.spec.ts`. The GST tax treatment of the advertised prices is
-one of #965's open launch decisions and is deliberately not stated here until it is decided — see
-[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for how the rest of the
-page's copy is kept inside what the application actually does, which is the same rule applied to the
-"Optional sales connection", "Optional integration" and the renamed "Inventory value at cost" facts
-this issue reconciled with the plan catalogue (each now says what is free today versus what Pro will
-gate once paid plans are live, instead of implying Nayax or reporting are unconditionally free).
+**It fits a phone, and that is measured in a browser (issue #1191).** The page's layout rule is that
+it never scrolls sideways between 320px and 390px wide, with the `index.html` viewport meta tag
+(`width=device-width, initial-scale=1`, no `maximum-scale` and no `user-scalable=no`) still allowing
+pinch zoom. jsdom computes no layout, so the component specs cannot answer that;
+`e2e/visual/landing-page-public-beta.visual.ts` does, in Chromium, at every width in the range, and
+captures the signed-out page at 1440px and 390px into `docs/screenshots/issue-1191/` as the evidence
+a person reads. It is part of the human-invoked visual evidence run, not of `scripts/validate.sh` —
+see [Frontend tests](#frontend-tests) for why a browser download stays out of validation.
+
+**Pricing section (issue #971, removed by issue #1191).** Issue #971 added a fifth `LANDING_SECTIONS`
+entry, `{ id: 'pricing', label: 'Pricing' }`, and a `#pricing` section rendering `LANDING_PLANS` -
+Free, Starter and Pro plan cards matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed. Issue #1191 removed the section, `LANDING_SECTIONS`' `'pricing'` entry, `LANDING_PLANS` and
+its `LandingPlan` type entirely for the public beta: every business gets full access at no cost while
+the beta runs, so the page shows no price, plan card or "Coming soon" badge, and the three FAQs that
+only made sense next to pricing ("When can I subscribe…", "What happens if I reach my storage
+limit?", "Will connecting Nayax cost extra?") were dropped with it. The beta and export notices under
+the hero (`landing-beta-notice`, `landing-export-notice`) are what the page says about cost and
+exports instead. The "Optional sales connection" and "Optional integration" Nayax facts, which issue
+#971 had tied to Pro, were reworded again to drop every paid-plan reference, and the Nayax heading is
+now "Use core inventory on its own. Connect Nayax for sales integration." The backend plan catalogue issue #965
+agreed (see [README § Business plans](../README.md#business-plans-free-starter-and-pro)) is
+unaffected; only its landing-page presentation is off. See
+[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for the full before/after
+copy table.
+
+### The Privacy Policy and Terms of Use page layouts (issue #1190)
+
+The owner has approved Stitch designs for a Privacy Policy and a Terms of Use page, but the legal
+copy itself is not approved yet, so this issue builds the two page layouts only - reachable in a
+development build and **never in a production build**, following the design-system fixture's own
+pattern (issue #411, `createDesignSystemRoutes(isDevMode())`,
+[Routing and loading](#routing-and-loading) above). `public/legal/legal-routes.ts` declares
+`createLegalRoutes(isDevelopmentBuild)`, asserted for both branches exactly as the fixture's factory
+is; `app.routes.ts` spreads its result (`legalRoutes`) above the wildcard route, after the
+design-system fixture's own spread. Nothing links to either path - not the homepage footer, the
+header, the sign-in page or the application shell - and each route carries `PUBLIC_LAYOUT_DATA` and
+no guard, so a signed-out visitor can open either directly, exactly as `/home` already can be; the
+pages inject no API service, so opening one makes no request either.
+
+**Shared layout, two typed content files.** `legal/legal-page.component.ts` is the one presentational
+component both pages render through: the Restockroo brand and a **Back to home** link (the `/sign-in`
+page's own pattern, issue #957), a table of contents built from the content's own sections (each
+entry an in-page anchor), the numbered sections themselves, the business display details (Eunhye
+Chung, ABN 69 235 469 430, a plain `mailto:admin@restockroo.com.au` link) and a link to the other
+legal page. Moving to a section from the table of contents scrolls to it and moves keyboard focus to
+its heading, the same approach the landing page's own in-page navigation uses
+(`scrollToSection`, [The public landing page](#the-public-landing-page-issue-954) above).
+`legal/privacy-policy-content.ts` and `legal/terms-of-use-content.ts` are each page's own typed
+`LegalPageContent` (title, effective-date label, an optional introduction, and the sections, each an
+id, heading and body) - filled only with the Stitch export's own section headings and its two
+placeholders, `"[Approved content to be inserted]"` and `"[Effective date]"`: no legal wording and no
+invented date. `legal/privacy-policy-page.component.ts` and `legal/terms-of-use-page.component.ts`
+are the two thin wrapper components the routes load, each supplying its own content file and the
+other page's cross-link. See
+[docs/design/restockroo-legal-pages.md](design/restockroo-legal-pages.md) for the export these are
+adapted from and every intentional omission from it.
 
 ### Runtime configuration and API contracts
 
@@ -8015,7 +8061,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. `suppliers-dialogs.visual.ts` (issue #1174) captures the Suppliers page's Add/Edit dialog into `docs/screenshots/issue-1174/`: the empty Add modal and a linked supplier's Edit modal at 1440px, the full-screen phone sheet at 390px and 360px, and the *Discard changes?* question standing over the form it belongs to. It answers every `/api/` request with synthetic suppliers and refuses every non-`GET`, so no supplier is created, updated or deleted, and it measures what jsdom cannot — the 600px desktop panel, the full-screen sheet with its action row still inside the viewport, no sideways scroll of the page, the panel or its scrollable body at 1440px, 390px or 360px, pinch zoom still permitted, 44px touch targets, and Escape dismissal with focus returning to the control that opened the dialog (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. `landing-page-public-beta.visual.ts` (issue #1191) captures the **signed-out** public homepage into `docs/screenshots/issue-1191/`: the whole page at 1440px and at 390px. It is the one visual run that asks the E2E auth stub for the signed-out application (`e2e-signed-out` in `sessionStorage`, set before the bundle loads — see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), because `/` shows the landing page only to a visitor nobody has signed in as. It needs no `/api/` stubbing at all, since the page injects no API service, and it asserts in the browser what jsdom cannot: no page-level horizontal overflow at **every** width from 320px to 390px — the issue's own acceptance criterion, measured at each width rather than at the two ends — and the same at both captured widths, alongside the viewport meta tag that still allows pinch zoom. `suppliers-dialogs.visual.ts` (issue #1174) captures the Suppliers page's Add/Edit dialog into `docs/screenshots/issue-1174/`: the empty Add modal and a linked supplier's Edit modal at 1440px, the full-screen phone sheet at 390px and 360px, and the *Discard changes?* question standing over the form it belongs to. It answers every `/api/` request with synthetic suppliers and refuses every non-`GET`, so no supplier is created, updated or deleted, and it measures what jsdom cannot — the 600px desktop panel, the full-screen sheet with its action row still inside the viewport, no sideways scroll of the page, the panel or its scrollable body at 1440px, 390px or 360px, pinch zoom still permitted, 44px touch targets, and Escape dismissal with focus returning to the control that opened the dialog (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -8501,6 +8547,56 @@ has no copy of `MachineDashboardWindow`, so the page states the rule - this week
 now in the business's time zone, compared with the same point last week - rather than computing
 dates of its own. Showing the actual dates would need the site read (or another existing read) to
 publish the window's business dates; that is a backend change outside issue #1128.
+
+### The Operating Expenses register layout (issue #1170)
+
+**Operating expenses** (`OperatingExpenseComponent`, route `/expenses`) was redesigned on the
+Products page's `rr` scale, after issue #1167 moved Add and Edit onto their own pages. It is a
+presentation change: the page still makes exactly one `GET api/operating-expenses` per applied
+filter set, with the same five filter parameters, keeps its route guards, its `Expenses.Manage`
+capability, the machine-filter visibility rules of issue #746, the Nayax wording rule of issue #728
+and the support-session rules of issue #659, and no expense-inclusion, GST or currency rule moved or
+changed.
+
+**Layout.** The heading and the primary **Add expense** sit above one card holding the toolbar, the
+register and the pager. The toolbar is compact — From, To and Category directly on it, with
+**Supplier** and **Machine** behind a **More filters** disclosure (`aria-expanded`/`aria-controls`
+over a region that stays in the DOM, so the machine read's own loading and failure states are never
+lost, and that opens by itself when the address already applies one of the two). Filters still apply
+only on **Apply filters**; **Clear filters** appears as soon as there is something to clear, resets
+to no filters at all and returns to page 1, and the toolbar reports how many filters are applied.
+At `md` and wider the register is a table with the columns Date, Description, Category, Supplier,
+Document, Ex GST, GST, Total and Actions, the amounts right-aligned and Description and Total
+emphasised, a missing supplier or document shown as `—` and a recorded zero as `$0.00`. Below `md`
+the same page of expenses is compact cards: the description wrapping in full (`overflow-wrap:
+anywhere`, so a record is always identifiable), its date and category, the supplier, the prominent
+total above an Ex GST/GST line, View document where there is one, and the same Edit and overflow
+actions, each at least 44px tall. The **Totals** row is kept in both layouts and says what it
+covers ("Totals (all 23 filtered expenses)"), because it sums the whole filtered list rather than
+the page on screen. Loading, empty (with Add expense), no-match (with Clear filters) and
+load-error (with Retry) are distinct states — `ListLoadState` is what tells an outstanding or failed
+read from a confirmed empty register, which the page previously could not do at all.
+
+**Row actions and the delete flow.** Each row and card keeps **Edit** (the existing
+`/expenses/:id/edit` link, carrying the return context) and holds **Delete** in the shared
+`action-menu` (`kind="menu"`). Opening the menu writes nothing; choosing Delete opens
+`ExpenseDeleteConfirmationComponent`, which composes the shared `confirmation-dialog`, names the
+expense by description, date and total, and adds the keyboard behaviour that dialog does not own —
+initial focus on **Cancel**, Tab contained, Escape to cancel, and focus returned to the menu that
+opened it. "The menu that opened it" is the menu's **trigger**, not the focused **Delete** item: the
+shared `action-menu` removes its whole panel as it closes, so the item focus actually came from is
+gone by the time the confirmation is dismissed, and the component resolves the trigger the panel
+names with `aria-labelledby` instead. A real browser is the only thing that shows this — jsdom keeps
+a detached element focusable — so the visual run below is what proved it. The shared dialog itself is
+unchanged (out of scope for issue #1170), and the page
+authors no dialog markup of its own (`page-composition.guard.ts`). A confirmed delete re-reads the
+register with the same filters and stays on the same page, stepping back one when the page it was on
+no longer exists; a refusal keeps the row exactly as it was fetched and states the server's own
+message in a page-level `role="alert"`, never a success. A failed **View document** read is stated
+the same way rather than only logged. Rendered evidence:
+`frontend/inventory-app/e2e/visual/expenses-register-redesign.visual.ts`, written to
+`docs/screenshots/issue-1170/`; like every visual run it is human-invoked and runs in neither
+`scripts/validate.sh` nor CI.
 
 ### A product carries no selling price (issue #792)
 

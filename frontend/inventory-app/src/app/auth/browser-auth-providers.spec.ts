@@ -20,6 +20,7 @@ import { configureExternalId, unconfigureExternalId } from './external-id.spec-h
 import { INTENDED_DESTINATION_KEY, peekIntendedDestination } from './intended-destination';
 import { SELECTED_AUTHORITY_KEY, readSelectedAuthority, rememberSelectedAuthority } from './selected-authority';
 import {
+  E2E_SIGNED_OUT_KEY,
   E2ETestAuthGuard,
   browserAuthProviders as e2eBrowserAuthProviders,
   createE2ETestMsalService
@@ -299,6 +300,10 @@ describe('browser auth providers', () => {
   });
 
   describe('the end-to-end replacement', () => {
+    afterEach(() => {
+      sessionStorage.removeItem(E2E_SIGNED_OUT_KEY);
+    });
+
     it('lets the router through instead of redirecting to Entra', () => {
       expect(new E2ETestAuthGuard().canActivate()).toBe(true);
     });
@@ -321,6 +326,25 @@ describe('browser auth providers', () => {
 
       expect(msal.instance.getActiveAccount()?.name).toBe('E2E Test Actor');
       expect(msal.instance.getAllAccounts()).toHaveLength(1);
+    });
+
+    /**
+     * The signed-out opt-in of issue #1191. The public landing page is shown at `/` only to a
+     * visitor nobody has signed in as (`signedOutVisitorGuard`) and offers Sign in and Start free
+     * on the same condition, so a browser check of that page needs this stub to report no account -
+     * and signed in has to stay the default for the whole workflow suite.
+     */
+    it('reports no account at all once a run asks for the signed-out application', () => {
+      // The Playwright run sets this key from its own side of the browser, before the bundle loads,
+      // so the literal is part of the contract and not an implementation detail: see
+      // `e2e/visual/landing-page-public-beta.visual.ts`.
+      expect(E2E_SIGNED_OUT_KEY).toBe('e2e-signed-out');
+      sessionStorage.setItem(E2E_SIGNED_OUT_KEY, 'true');
+
+      const msal = createE2ETestMsalService();
+
+      expect(msal.instance.getAllAccounts()).toEqual([]);
+      expect(msal.instance.getActiveAccount()).toBeNull();
     });
 
     it('satisfies the MSAL application initializer, so the E2E build bootstraps at all', async () => {
