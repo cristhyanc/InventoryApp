@@ -42,7 +42,9 @@ public static class SiteResponseMapper
                 stock.MachineId, stock.StockPercentage, stock.LowProductCount, stock.EmptyProductCount))
             .ToList(),
         // Copied across like every other revenue figure (issue #1177), withheld null included.
-        summary.PreviousComparableDayRevenue);
+        summary.PreviousComparableDayRevenue,
+        // And the month baseline beside it (issue #1180), on the same terms.
+        summary.PreviousComparableMonthRevenue);
 
     /// <summary>
     /// The light site list row (issue #841). Three already-resolved values copied across: the site

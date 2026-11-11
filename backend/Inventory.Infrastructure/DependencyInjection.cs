@@ -30,6 +30,7 @@ using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
+using Inventory.Application.PlatformReceiptScans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
@@ -259,6 +260,14 @@ public static class InfrastructureServiceCollectionExtensions
         // transaction on it, which is also the only way that lease can be taken at all.
         services.AddScoped<IPlatformNayaxSqsSenderStore, EfPlatformNayaxSqsSenderStore>();
 
+        // The Super Admin's view of one business's monthly receipt-scan count (issue #1164). A
+        // separate adapter again, for the two adapters above's reason - the business is the subject
+        // of a platform read rather than the caller's own resolved scope - and the narrowest of the
+        // three: one business-pinned IgnoreQueryFilters read of one integer, no write of any kind and
+        // therefore no lease at all. Scoped like every adapter here, so it runs on the request's own
+        // context.
+        services.AddScoped<IPlatformReceiptScanUsageStore, EfPlatformReceiptScanUsageStore>();
+
         // The attachment storage accounting of issue #968: the business's own usage, and the
         // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
         // it runs on the request's own context and inside its resolved business.
@@ -389,6 +398,10 @@ public static class InfrastructureServiceCollectionExtensions
         // And the one read behind a suggested pack size (issue #1165): the latest recorded purchase
         // line for a few of this business's products from one supplier, through the same filters.
         services.AddScoped<IReceiptScanPurchaseHistoryStore, EfReceiptScanPurchaseHistoryStore>();
+        // And the business's own monthly scan counter (issue #1164): one row per business per
+        // calendar month of its own zone, counted inside one write-locked transaction so two
+        // simultaneous scans cannot both take the last one.
+        services.AddScoped<IReceiptScanUsageStore, EfReceiptScanUsageStore>();
         services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
         services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
         services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();

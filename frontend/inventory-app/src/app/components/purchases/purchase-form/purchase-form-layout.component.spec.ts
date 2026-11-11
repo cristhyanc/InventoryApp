@@ -1,6 +1,11 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { GstClassification, Product, PurchaseGstSummary } from '../../../models/models';
 import { PurchaseFormFields, PurchaseFormLayoutComponent, PurchaseFormLine } from './purchase-form-layout.component';
+import {
+  UNRESOLVED_LEVY_MESSAGE,
+  PurchaseScannedLevy,
+  PurchaseScannedLine
+} from './purchase-scan-draft';
 
 function product(id: number, name: string): Product {
   return { id, name, unit: null } as Product;
@@ -49,6 +54,10 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
     items?: PurchaseFormLine[];
     mode?: 'add' | 'edit';
     gstSummary?: PurchaseGstSummary | null;
+    scannedReceipt?: File | null;
+    scannedLevies?: readonly PurchaseScannedLevy[];
+    offerSaveWithoutReceipt?: boolean;
+    error?: string;
   } = {}): Promise<void> {
     await TestBed.configureTestingModule({ imports: [PurchaseFormLayoutComponent] }).compileComponents();
     fixture = TestBed.createComponent(PurchaseFormLayoutComponent);
@@ -59,6 +68,10 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
     fixture.componentRef.setInput('products', [product(1, 'Red Bull Energy Drink'), product(2, 'Coke')]);
     fixture.componentRef.setInput('suppliers', [{ id: 5, name: 'Acme' }]);
     fixture.componentRef.setInput('gstSummary', options.gstSummary ?? null);
+    fixture.componentRef.setInput('scannedReceipt', options.scannedReceipt ?? null);
+    fixture.componentRef.setInput('scannedLevies', options.scannedLevies ?? []);
+    fixture.componentRef.setInput('offerSaveWithoutReceipt', options.offerSaveWithoutReceipt ?? false);
+    fixture.componentRef.setInput('error', options.error ?? '');
     fixture.detectChanges();
     await fixture.whenStable();
     host = fixture.nativeElement as HTMLElement;
@@ -370,6 +383,224 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
 
       expect(form.totalAmount).toBe(108);
       expect(byTestId('purchase-summary-total')?.textContent).toContain('$108.00');
+    });
+  });
+
+  /** Issue #1166: what a scanned receipt adds to this layout, and what it must leave alone. */
+  describe('a scanned receipt', () => {
+    function scan(overrides: Partial<PurchaseScannedLine> = {}): PurchaseScannedLine {
+      return {
+        text: 'COKE 375ML 24PK',
+        kind: 'stock',
+        packs: 2,
+        unitsPerPack: 24,
+        units: 48,
+        packMaths: '2 x 24-pack = 48',
+        packSizeSuggested: false,
+        productSuggested: true,
+        receiptAmount: 60,
+        missing: [],
+        skipped: false,
+        ...overrides
+      };
+    }
+
+    function scannedLine(overrides: Partial<PurchaseFormLine> = {}, scanOverrides: Partial<PurchaseScannedLine> = {}): PurchaseFormLine {
+      return newLine({
+        productId: 1,
+        quantity: 48,
+        priceEntryMode: 'unit',
+        unitCost: 1.25,
+        lineTotal: 60,
+        scan: scan(scanOverrides),
+        ...overrides
+      });
+    }
+
+    const levy: PurchaseScannedLevy = {
+      text: 'CONTAINER DEPOSIT',
+      amount: 1.1,
+      message: UNRESOLVED_LEVY_MESSAGE
+    };
+
+    it('shows the receipt text and the pack maths on the line, so the pack maths can be checked', async () => {
+      await render({ items: [scannedLine()] });
+
+      expect(byTestId('purchase-item-scan-text')?.textContent?.trim()).toBe('COKE 375ML 24PK');
+      expect(byTestId('purchase-item-scan-pack-maths')?.textContent?.trim()).toBe('2 x 24-pack = 48');
+      expect(byTestId('purchase-item-scan-product-source')?.textContent).toContain('Suggested product');
+    });
+
+    it('marks a pack size that came from the last purchase rather than the receipt', async () => {
+      await render({ items: [scannedLine({}, { packSizeSuggested: true })] });
+
+      expect(byTestId('purchase-item-scan-pack-source')?.textContent).toContain('Pack size from your last purchase');
+    });
+
+    /**
+     * A scanned line is one the application filled in and is asking to have checked, so what it
+     * still needs is shown at once - not after a blur or a Save, which would hide exactly the
+     * figures that need attention.
+     */
+    it('highlights a scanned line with no product and no pack size straight away', async () => {
+      await render({
+        items: [
+          scannedLine(
+            { productId: 0, quantity: null, unitCost: null, lineTotal: 60, priceEntryMode: 'total' },
+            { units: null, unitsPerPack: null, packMaths: null, productSuggested: false, missing: ['The pack size is not printed on the receipt. Enter the units.'] }
+          )
+        ]
+      });
+
+      expect(text()).toContain('Choose a product.');
+      expect(text()).toContain('Enter a whole number of units above zero.');
+      expect(byTestId('purchase-item-scan-missing')?.textContent).toContain('The pack size is not printed');
+      expect(byTestId('purchase-item-scan-pack-maths')).toBeNull();
+    });
+
+    /**
+     * The scan's list of what it could not complete never changes, so it has to stop being shown
+     * once the person has completed the line: an instruction nobody can act on beside a finished
+     * line is worse than no instruction.
+     */
+    it('stops explaining what the receipt did not print once the line is complete', async () => {
+      const line = scannedLine(
+        { productId: 1, quantity: null, unitCost: null, lineTotal: 60, priceEntryMode: 'total' },
+        { units: null, unitsPerPack: null, packMaths: null, missing: ['The pack size is not printed on the receipt. Enter the units.'] }
+      );
+      await render({ items: [line] });
+      expect(byTestId('purchase-item-scan-missing')).not.toBeNull();
+
+      component.onQuantityChange(line, 80);
+      refresh();
+
+      expect(byTestId('purchase-item-scan-missing')).toBeNull();
+      // The receipt's own text and the pack maths that could be shown are still there.
+      expect(byTestId('purchase-item-scan-text')).not.toBeNull();
+    });
+
+    it('offers Not stock, skip on a line the receipt said is not stock, and counts it in neither total', async () => {
+      const skipped = scannedLine(
+        { productId: 0, quantity: 1, unitCost: 8.5, lineTotal: 8.5 },
+        { kind: 'other', text: 'A4 COPY PAPER', productSuggested: false, receiptAmount: 8.5, skipped: true }
+      );
+      await render({ items: [scannedLine(), skipped], form: emptyForm({ totalAmount: 68.5 }) });
+
+      expect((byTestId('purchase-item-skip') as HTMLInputElement).checked).toBe(true);
+      expect(byTestId('purchase-item-count')?.textContent?.trim()).toBe('1 item');
+      expect(byTestId('purchase-summary-subtotal')?.textContent).toContain('$60.00');
+      expect(byTestId('purchase-summary-total')?.textContent).toContain('$60.00');
+      // The skipped amount is what makes the receipt reconcile rather than show a difference.
+      expect(byTestId('purchase-receipt-comparison')?.textContent).toContain('Matches receipt');
+      expect(byTestId('purchase-receipt-outside-lines')?.textContent).toContain('$8.50');
+    });
+
+    it('shows no problems on a skipped line, because none of it is saved', async () => {
+      await render({
+        items: [
+          scannedLine(
+            { productId: 0, quantity: null, unitCost: null },
+            { kind: 'other', productSuggested: false, skipped: true, missing: ['Enter the price.'] }
+          )
+        ]
+      });
+
+      expect(host.querySelectorAll('.field-error')).toHaveLength(0);
+      expect(byTestId('purchase-item-scan-missing')).toBeNull();
+    });
+
+    it('puts a skipped line into the purchase when a product is chosen for it', async () => {
+      const line = scannedLine({ productId: 0 }, { kind: 'other', productSuggested: false, skipped: true });
+      await render({ items: [line] });
+
+      component.onProductChange(line, 2);
+      refresh();
+
+      expect(line.scan?.skipped).toBe(false);
+      expect((byTestId('purchase-item-skip') as HTMLInputElement).checked).toBe(false);
+      expect(byTestId('purchase-item-count')?.textContent?.trim()).toBe('1 item');
+    });
+
+    it('takes a line back out of the purchase when Not stock, skip is turned on again', async () => {
+      const line = scannedLine({}, { kind: 'other' });
+      await render({ items: [line] });
+
+      const checkbox = byTestId('purchase-item-skip') as HTMLInputElement;
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event('change'));
+      refresh();
+
+      expect(line.scan?.skipped).toBe(true);
+      expect(byTestId('purchase-item-count')?.textContent?.trim()).toBe('0 items');
+    });
+
+    it('shows an unresolved levy in its own row with no product picker, and counts it in the comparison', async () => {
+      await render({ items: [scannedLine()], scannedLevies: [levy], form: emptyForm({ totalAmount: 61.1 }) });
+
+      const row = byTestId('purchase-scan-levy')!;
+      expect(row.textContent).toContain('CONTAINER DEPOSIT');
+      expect(row.textContent).toContain(UNRESOLVED_LEVY_MESSAGE);
+      expect(byTestId('purchase-scan-levy-amount')?.textContent).toContain('$1.10');
+      expect(row.querySelector('app-purchase-product-picker')).toBeNull();
+      expect(row.querySelector('input')).toBeNull();
+      // One line only: a levy is never one of them.
+      expect(host.querySelectorAll('[data-testid="purchase-item"]')).toHaveLength(1);
+      expect(byTestId('purchase-summary-total')?.textContent).toContain('$60.00');
+      expect(byTestId('purchase-receipt-comparison')?.textContent).toContain('Matches receipt');
+    });
+
+    it('shows the scanned receipt before the lines in the document, so it sits above them on a phone', async () => {
+      const createObjectURL = jest.fn(() => 'blob:receipt');
+      Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true });
+      Object.defineProperty(URL, 'revokeObjectURL', { value: jest.fn(), configurable: true });
+
+      await render({
+        items: [scannedLine()],
+        scannedReceipt: new File(['bytes'], 'receipt.jpg', { type: 'image/jpeg' })
+      });
+
+      const preview = byTestId('purchase-scanned-receipt')!;
+      const firstLine = byTestId('purchase-item')!;
+      expect(preview.compareDocumentPosition(firstLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(byTestId('purchase-scanned-receipt-image')?.getAttribute('src')).toBe('blob:receipt');
+      // Second column from `xl` up, which is what puts it beside the lines on a wide screen.
+      expect(preview.closest('app-purchase-receipt-preview')?.parentElement?.className).toContain('xl:col-start-2');
+    });
+
+    it('renders no preview and no levy row on a form that has scanned nothing', async () => {
+      await render({ items: [pricedLine()] });
+
+      expect(byTestId('purchase-scanned-receipt')).toBeNull();
+      expect(byTestId('purchase-scan-levy')).toBeNull();
+      expect(byTestId('purchase-item-scan')).toBeNull();
+      expect(byTestId('purchase-receipt-outside-lines')).toBeNull();
+    });
+  });
+
+  /** Issue #1166 / #968: the storage allowance refused the receipt, and the purchase is still recordable. */
+  describe('saving without the receipt', () => {
+    it('offers the choice beside the refusal, and reports it only when it is chosen', async () => {
+      await render({
+        items: [pricedLine()],
+        error: 'This upload would exceed the business’s attachment storage allowance.',
+        offerSaveWithoutReceipt: true
+      });
+      const chosen = jest.fn();
+      component.saveWithoutReceipt.subscribe(chosen);
+
+      expect(byTestId('purchase-error')?.textContent).toContain('attachment storage allowance');
+      expect(chosen).not.toHaveBeenCalled();
+
+      (byTestId('purchase-save-without-receipt') as HTMLButtonElement).click();
+
+      expect(chosen).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers nothing of the kind for any other refusal', async () => {
+      await render({ items: [pricedLine()], error: 'One or more purchase products do not exist.' });
+
+      expect(byTestId('purchase-error')).not.toBeNull();
+      expect(byTestId('purchase-save-without-receipt')).toBeNull();
     });
   });
 });

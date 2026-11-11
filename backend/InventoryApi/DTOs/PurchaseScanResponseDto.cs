@@ -74,12 +74,28 @@ public sealed record PurchaseScanLineDto(
     PurchaseScanPackSizeSuggestionDto? UnitsPerPackSuggestion);
 
 /// <summary>
+/// How much of the business's monthly scan allowance is gone (issue #1164), as the scan response
+/// carries it and as <c>GET /api/purchases/scan/usage</c> answers on its own.
+///
+/// <para>It is a count and a cap, and nothing about any scan: no receipt, no file name, no supplier,
+/// no product and no instant. The month it is about is stated, because the allowance runs on the
+/// <strong>business's own</strong> calendar month - the zone <c>GET /api/business/current</c> reports
+/// - and not on the browser's or UTC's.</para>
+/// </summary>
+/// <param name="Month">The business's calendar month the count is for, as <c>yyyy-MM</c>.</param>
+/// <param name="Used">How many scans have been made in that month.</param>
+/// <param name="Remaining">How many are left in it. Never negative.</param>
+/// <param name="Limit">The cap, which is the same for every business.</param>
+public sealed record PurchaseScanUsageDto(string Month, int Used, int Remaining, int Limit);
+
+/// <summary>
 /// The suggested purchase one scanned receipt produced (issue #1163).
 ///
-/// <para><strong>Nothing about it has been stored</strong>: not the file, not this draft, not a
-/// purchase. It is a suggestion the operator edits and then submits through the ordinary
+/// <para><strong>Nothing about the receipt has been stored</strong>: not the file, not this draft,
+/// not a purchase. It is a suggestion the operator edits and then submits through the ordinary
 /// <c>POST /api/purchases</c>, which is where a purchase is created and where its own validation
-/// applies.</para>
+/// applies. The one thing the scan recorded is the month's counter in <see cref="Usage"/>, which
+/// holds a number and nothing about what was read (issue #1164).</para>
 /// </summary>
 public sealed record PurchaseScanResponseDto(
     PurchaseScanValueDto<string>? Supplier,
@@ -90,4 +106,5 @@ public sealed record PurchaseScanResponseDto(
     PurchaseScanValueDto<decimal>? GstTotal,
     PurchaseScanValueDto<decimal>? DeliveryCost,
     PurchaseScanValueDto<decimal>? PackageCost,
-    IReadOnlyList<PurchaseScanLineDto> Lines);
+    IReadOnlyList<PurchaseScanLineDto> Lines,
+    PurchaseScanUsageDto Usage);

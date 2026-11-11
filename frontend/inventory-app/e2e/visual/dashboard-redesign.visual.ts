@@ -29,8 +29,9 @@ import { join, resolve } from 'node:path';
  * and its withholding in storage-only mode, which the synthetic reorder read declares with the same
  * `X-Reorder-Mode` header the API publishes. Issue #987's own interaction evidence
  * is here as well: a collapsed group at 1440 and 390px, the
- * shared period control switched to Last week, and the keyboard focus ring on a site expander with
- * the group toggled from the keyboard alone. Issue #1080's **Items per page** selector is measured
+ * shared period control switched to This month - one of the three comparison periods issue #1178
+ * leaves the card, each showing its percentage and its baseline amount - and the keyboard focus
+ * ring on a site expander with the group toggled from the keyboard alone. Issue #1080's **Items per page** selector is measured
  * here too, at both widths the issue names: every offered size applied to a deliberately long
  * synthetic list, the pager's range and navigation moving with it, a size change returning to page
  * 1, a one-page list keeping the selector while Previous and Next go away, the selector reached and
@@ -114,6 +115,9 @@ const sites = [
     previousComparableWeekRevenue: 75.9,
     lastWeekRevenue: 318.4,
     monthToDateRevenue: 1042.7,
+    // The baselines Today and This month are compared against (issues #1177, #1180 and #1178).
+    previousComparableDayRevenue: 44.2,
+    previousComparableMonthRevenue: 902.15,
     // Each machine's own stock level (issue #1013) and its own low/empty counts (issue #1019),
     // keyed by the provider machine id the machine read uses. The figures are deliberately not the
     // site's, so a capture shows a machine row's own percentage and counts rather than repeated
@@ -134,6 +138,8 @@ const sites = [
     previousComparableWeekRevenue: 392.0,
     lastWeekRevenue: 1187.25,
     monthToDateRevenue: 3904.8,
+    previousComparableDayRevenue: 188.4,
+    previousComparableMonthRevenue: 4120.55,
     // Two machines in different stock bands under one site in the warning band, so a capture shows
     // the per-machine colours and words differing from the site's and from each other. Their
     // low/empty counts differ from the site's 15 and 3 as well (issue #1019): a product low on both
@@ -158,6 +164,10 @@ const sites = [
     previousComparableWeekRevenue: 0,
     lastWeekRevenue: 0,
     monthToDateRevenue: 0,
+    // A site with no sale in any window: a known zero baseline, which a row calls "No prior sales"
+    // beside the $0.00 it is, rather than unavailable (issue #1178).
+    previousComparableDayRevenue: 0,
+    previousComparableMonthRevenue: 0,
     // No machine stood at it, so there is no machine figure either.
     machineStocks: []
   }
@@ -181,6 +191,10 @@ function machine(id: number, name: string, today: number, week: number, lastWeek
     previousComparableWeekDirectProfit: Math.round(comparable * 44) / 100,
     monthToDateGrossRevenue: mtd,
     monthToDateDirectProfit: Math.round(mtd * 45) / 100,
+    // The day and month baselines (issues #1177 and #1180), each a little under the figure it is
+    // compared against, so every one of issue #1178's three modes paints a real change.
+    previousComparableDayGrossRevenue: Math.round(today * 85) / 100,
+    previousComparableMonthGrossRevenue: Math.round(mtd * 85) / 100,
     profitabilityStatus: null
   };
 }
@@ -1130,19 +1144,26 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       const control = page.locator('[data-testid="performance-period"]:visible');
 
       await expect(control.getByRole('button', { name: 'This week' })).toHaveAttribute('aria-pressed', 'true');
-      await control.getByRole('button', { name: 'Last week' }).click();
+      // Issue #1178 leaves the card exactly three periods, each with a baseline of its own, so
+      // Last week is no longer offered here and This month is the furthest one.
+      await expect(control.getByRole('button', { name: 'Last week' })).toHaveCount(0);
+      await control.getByRole('button', { name: 'This month' }).click();
 
-      await expect(control.getByRole('button', { name: 'Last week' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(control.getByRole('button', { name: 'This month' })).toHaveAttribute('aria-pressed', 'true');
       // Sites publish this period too since issue #1012, so a site row shows its own figure for it
       // instead of saying the period is unavailable for sites. The other layout's copy of the same
       // text is in the document but hidden, so only a visible one counts.
-      await expect(page.getByText('$318.40').filter({ visible: true }).first()).toBeVisible();
+      await expect(page.getByText('$1,042.70').filter({ visible: true }).first()).toBeVisible();
+      // The comparison the period names, and the baseline amount it was worked out from (#1178).
+      await expect(page.getByText('vs same time last month').filter({ visible: true }).first()).toBeVisible();
+      await expect(page.getByText('Last month to this time').filter({ visible: true }).first()).toBeVisible();
       await expect(page.getByText('Not published for sites')).toHaveCount(0);
+      await expect(page.getByText('No comparison for this period')).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
 
       const height = await page.evaluate(() => document.documentElement.scrollHeight);
       await page.setViewportSize({ width, height });
-      await page.screenshot({ path: join(screenshotDirectory, `performance-period-last-week-${width}px.png`) });
+      await page.screenshot({ path: join(screenshotDirectory, `performance-period-this-month-${width}px.png`) });
     });
   }
 

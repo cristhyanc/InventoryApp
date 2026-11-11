@@ -24,8 +24,8 @@ namespace InventoryApi.Adapters.Mapping;
 /// </summary>
 public static class ReceiptScanResponseMapper
 {
-    /// <summary>The draft as the endpoint publishes it.</summary>
-    public static PurchaseScanResponseDto ToResponse(ReceiptScanDraft draft)
+    /// <summary>The draft as the endpoint publishes it, with the month's allowance beside it.</summary>
+    public static PurchaseScanResponseDto ToResponse(ReceiptScanDraft draft, ReceiptScanUsageView usage)
     {
         ArgumentNullException.ThrowIfNull(draft);
 
@@ -38,7 +38,20 @@ public static class ReceiptScanResponseMapper
             Value(draft.GstTotal),
             Value(draft.DeliveryCost),
             Value(draft.PackageCost),
-            draft.Lines.Select(ToLine).ToList());
+            draft.Lines.Select(ToLine).ToList(),
+            ToUsage(usage));
+    }
+
+    /// <summary>
+    /// The monthly allowance as the scan response and the usage endpoint both publish it (issue
+    /// #1164). The month is published as <c>yyyy-MM</c> and the remaining count is the Domain's, not
+    /// a subtraction done here.
+    /// </summary>
+    public static PurchaseScanUsageDto ToUsage(ReceiptScanUsageView usage)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+
+        return new PurchaseScanUsageDto(usage.Month, usage.Used, usage.Remaining, usage.Limit);
     }
 
     private static PurchaseScanLineDto ToLine(ReceiptScanLine line) =>

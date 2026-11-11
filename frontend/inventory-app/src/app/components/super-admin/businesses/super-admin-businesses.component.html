@@ -103,6 +103,14 @@
                       >
                         Nayax SQS sender
                       </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        data-testid="receipt-scan-usage"
+                        (click)="openReceiptScanUsage(business)"
+                      >
+                        Receipt scans
+                      </button>
                       <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
                         Deactivate
                       </button>
@@ -171,6 +179,14 @@
     (saved)="onNayaxSqsSenderSaved()"
     (closed)="closeNayaxSqsSender()"
   ></app-business-nayax-sqs-sender-card>
+}
+
+@if (receiptScanUsageTarget) {
+  <app-business-receipt-scan-usage-card
+    [businessId]="receiptScanUsageTarget.businessId"
+    [businessName]="receiptScanUsageTarget.name"
+    (closed)="closeReceiptScanUsage()"
+  ></app-business-receipt-scan-usage-card>
 }
 
 @if (viewAsTarget) {

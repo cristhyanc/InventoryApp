@@ -31,6 +31,13 @@ namespace Inventory.Application.Machines;
 /// deliberately no matching direct profit, so the period resolves no commission and looks up no
 /// processing fee - and it is appended last so every figure that came before it keeps its name,
 /// order and value.</para>
+///
+/// <para><paramref name="PreviousComparableMonthGrossRevenue"/> is Month to date's own baseline
+/// (issue #1180), built the same way one month back: the completed-sale revenue of
+/// <see cref="MachineDashboardWindow.PreviousComparableMonth"/>, counted exactly as
+/// <paramref name="MonthToDateGrossRevenue"/> is counted. It is revenue only for the same reason,
+/// and is appended after the day baseline so every figure before it keeps its name, order and
+/// value.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,
@@ -52,4 +59,5 @@ public sealed record MachineSummary(
     decimal? TwoWeeksAgoDirectProfit,
     string? ProfitabilityStatus,
     long? SiteId,
-    decimal PreviousComparableDayGrossRevenue);
+    decimal PreviousComparableDayGrossRevenue,
+    decimal PreviousComparableMonthGrossRevenue);

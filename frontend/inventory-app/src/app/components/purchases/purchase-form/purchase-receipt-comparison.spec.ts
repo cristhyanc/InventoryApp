@@ -59,6 +59,31 @@ describe('compareReceiptTotal (issue #1029)', () => {
     expect(compareReceiptTotal(250, [line(0, 1)], null, null)).toEqual({ kind: 'incomplete' });
   });
 
+  /**
+   * Issue #1166: a scanned receipt whose total includes an office item the purchase skips, or a
+   * levy no product carries, reconciles - and what the purchase costs is unchanged.
+   */
+  describe('amounts the scanned receipt printed and this purchase does not record (issue #1166)', () => {
+    it('counts them in the comparison, so the receipt matches instead of showing a difference', () => {
+      expect(compareReceiptTotal(259.6, items, null, null, 9.6)).toEqual({ kind: 'match' });
+      expect(compareReceiptTotal(250, items, null, null, 9.6)).toEqual({
+        kind: 'difference',
+        difference: 9.6,
+        beyondTolerance: true
+      });
+    });
+
+    it('counts nothing for a form that scanned nothing, which is every form before this change', () => {
+      expect(compareReceiptTotal(250, items, null, null)).toEqual({ kind: 'match' });
+      expect(compareReceiptTotal(250, items, null, null, 0)).toEqual({ kind: 'match' });
+      expect(compareReceiptTotal(250, items, null, null, null)).toEqual({ kind: 'match' });
+    });
+
+    it('never changes what the purchase itself costs', () => {
+      expect(purchaseTotal(items, null, null)).toBe(250);
+    });
+  });
+
   it('changes nothing it is given', () => {
     const lines = [line(3, 2)];
     const before = JSON.stringify(lines);

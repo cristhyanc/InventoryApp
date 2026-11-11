@@ -902,6 +902,15 @@ public class AppDbContext : DbContext
         Set<AttachmentStorageReservation>();
 
     /// <summary>
+    /// Each business's receipt-scan count per calendar month of its own time zone (issue #1164):
+    /// ordinary tenant-owned data, so the business key, the index, the query filter and the ownership
+    /// stamp are the central mechanism's with nothing added. One row per business per month, holding
+    /// a number and two instants and nothing about any receipt. See <see cref="ReceiptScanUsage"/>
+    /// and <see cref="ConfigureReceiptScanUsages"/>.
+    /// </summary>
+    public DbSet<ReceiptScanUsage> ReceiptScanUsages => Set<ReceiptScanUsage>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -968,6 +977,7 @@ public class AppDbContext : DbContext
         ConfigurePlatformMenuVisibility(modelBuilder);
         ConfigureSubscriptions(modelBuilder);
         ConfigureAttachmentStorageReservations(modelBuilder);
+        ConfigureReceiptScanUsages(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -2392,6 +2402,39 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
         reservation.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the monthly receipt-scan counter of issue #1164: one row per business per calendar month
+    /// of that business's own time zone.
+    ///
+    /// <para><strong>The unique index is the cap's backstop.</strong> <c>(BusinessId, MonthKey)</c>
+    /// is unique, so a month cannot come to hold two counters that each think they are the whole
+    /// count - which is the one way a cap over a counter could be exceeded without any single
+    /// comparison being wrong. It is <em>per business</em>, as every uniqueness rule over
+    /// tenant-owned data in this application is (AGENTS.md § Tenant ownership and data isolation):
+    /// two businesses are each counting their own month, and a global index over a month key would
+    /// let whichever scanned first deny the month to everybody else. It is also the index every
+    /// statement over this table uses, because every one of them asks the same question - what has
+    /// this business counted in this month.</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// reservations above are: the SQLite provider returns an unspecified kind otherwise.</para>
+    ///
+    /// <para>There is deliberately no foreign key to a product, a purchase or anything else: the row
+    /// is about a month, not about a receipt, and it holds nothing that could name one.</para>
+    /// </summary>
+    private static void ConfigureReceiptScanUsages(ModelBuilder modelBuilder)
+    {
+        var usage = modelBuilder.Entity<ReceiptScanUsage>();
+
+        usage.HasIndex(x => new { x.BusinessId, x.MonthKey }).IsUnique();
+        usage.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        usage.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
