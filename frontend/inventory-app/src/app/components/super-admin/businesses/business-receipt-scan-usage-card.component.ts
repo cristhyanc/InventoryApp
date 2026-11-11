@@ -150,9 +150,7 @@ export class BusinessReceiptScanUsageCardComponent implements OnInit {
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
-  const body = (err instanceof HttpErrorResponse ? err.error : (err as { error?: unknown })?.error) as
-    | unknown
-    | undefined;
+  const body = (err instanceof HttpErrorResponse ? err.error : (err as { error?: unknown })?.error) as unknown;
   if (typeof body === 'string') {
     return body;
   }

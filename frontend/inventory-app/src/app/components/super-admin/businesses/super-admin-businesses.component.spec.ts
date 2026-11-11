@@ -480,14 +480,6 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).not.toContain('Plan for Snack Co');
   });
 
-  /** A pending application has no plan to grant yet, so the action is not offered on its row. */
-  it('offers no plan action for a business that is not trading (issue #982)', async () => {
-    const list = jest.fn(() => of([business({ status: 'Pending' })]));
-    const { host } = await render({ list });
-
-    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="plan-grant"]')).toBeNull();
-  });
-
   /**
    * Issue #1101: the Nayax SQS sender action is offered for a trading business, opens the dedicated
    * card, and the card reads that business's own sender - this table carries none of its own.
@@ -525,14 +517,6 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).not.toContain('Nayax SQS sender for Snack Co');
   });
 
-  /** A business that is not trading has no sales to attribute, so the action is not offered. */
-  it('offers no Nayax SQS sender action for a business that is not trading (issue #1101)', async () => {
-    const list = jest.fn(() => of([business({ status: 'Pending' })]));
-    const { host } = await render({ list });
-
-    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="nayax-sqs-sender"]')).toBeNull();
-  });
-
   /**
    * Issue #1164's last acceptance criterion through the page: the Receipt scans action is offered for
    * a trading business, opens the dedicated card, and the card reads that business's own count -
@@ -558,11 +542,18 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).not.toContain('Receipt scans for Snack Co');
   });
 
-  /** A business that is not trading cannot scan, so the action is not offered on its row. */
-  it('offers no receipt-scan usage action for a business that is not trading (issue #1164)', async () => {
+  /**
+   * Issues #982, #1101 and #1164: a business that is not trading has no plan to grant, no sales to
+   * attribute and nothing to scan, so none of these per-business actions is offered on its row.
+   */
+  it.each([
+    ['plan', 'plan-grant', '#982'],
+    ['Nayax SQS sender', 'nayax-sqs-sender', '#1101'],
+    ['receipt-scan usage', 'receipt-scan-usage', '#1164']
+  ])('offers no %s action for a business that is not trading (issue %s)', async (_label, testId) => {
     const list = jest.fn(() => of([business({ status: 'Pending' })]));
     const { host } = await render({ list });
 
-    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="receipt-scan-usage"]')).toBeNull();
+    expect(rowFor(host, 'Snack Co').querySelector(`[data-testid="${testId}"]`)).toBeNull();
   });
 });
