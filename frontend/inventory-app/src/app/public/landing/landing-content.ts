@@ -234,10 +234,14 @@ export function landingSupplierOfferBadges(offer: LandingSupplierOffer, offers: 
   return badges;
 }
 
+/** The lowest unit price (inc GST) among the offers shown. */
+export function landingLowestUnitPriceIncGst(offers: readonly LandingSupplierOffer[]): number {
+  return Math.min(...offers.map((candidate) => candidate.unitPriceIncGst));
+}
+
 /** Whether an offer ties for the lowest unit price (inc GST) among the offers shown. */
 export function isLandingLowestUnitPrice(offer: LandingSupplierOffer, offers: readonly LandingSupplierOffer[]): boolean {
-  const lowest = Math.min(...offers.map((candidate) => candidate.unitPriceIncGst));
-  return offer.unitPriceIncGst === lowest;
+  return offer.unitPriceIncGst === landingLowestUnitPriceIncGst(offers);
 }
 
 /** `$1.07`, the one money format this example uses. */

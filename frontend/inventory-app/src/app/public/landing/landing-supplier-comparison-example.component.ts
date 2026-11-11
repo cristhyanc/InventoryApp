@@ -11,6 +11,7 @@ import {
   LANDING_SUPPLIER_OFFERS,
   LandingSupplierOffer,
   isLandingLowestUnitPrice,
+  landingLowestUnitPriceIncGst,
   landingMoney,
   landingSupplierOfferBadges
 } from './landing-content';
@@ -53,7 +54,7 @@ export class LandingSupplierComparisonExampleComponent {
   private trigger?: HTMLElement;
 
   get lowestUnitPriceIncGst(): number {
-    return Math.min(...this.offers.map((offer) => offer.unitPriceIncGst));
+    return landingLowestUnitPriceIncGst(this.offers);
   }
 
   get lowestOfferCount(): number {
