@@ -24,6 +24,7 @@ import {
   PACK_SIZE_FROM_LAST_PURCHASE_LABEL,
   PurchaseScannedLevy,
   PurchaseScannedLine,
+  isScannedLineSkipped,
   scannedAmountOutsideLines
 } from './purchase-scan-draft';
 
@@ -263,7 +264,7 @@ export class PurchaseFormLayoutComponent implements OnChanges {
    * scanned line the receipt said is not stock for resale ever starts that way.
    */
   isSkippedLine(item: PurchaseFormLine): boolean {
-    return item.scan?.skipped === true;
+    return isScannedLineSkipped(item);
   }
 
   /** The lines the purchase will actually save: everything except a skipped one. */

@@ -18,6 +18,7 @@ import {
 } from '../../models/models';
 import { PurchaseScanDraft, PurchaseScanLine, PurchaseScanValue } from '../../models/purchase-scan';
 import { UNRESOLVED_LEVY_MESSAGE } from './purchase-form/purchase-scan-draft';
+import { savedLineAmount } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
 import { PurchaseScanService } from '../../services/purchase-scan.service';
@@ -278,7 +279,7 @@ describe('PurchaseUploadComponent per-line price entry (issues #707, #878)', () 
     component.onLineTotalChange(item, 32.5);
 
     expect(item.unitCost).toBe(1.625);
-    expect(component.savedLineAmount(item)).toBe(32.5);
+    expect(savedLineAmount(item)).toBe(32.5);
 
     component.upload();
 
@@ -565,7 +566,7 @@ describe('PurchaseUploadComponent price entry controls (issue #878)', () => {
     // The displayed 0.3333 must not become the submitted value: 300 x 0.3333 is $99.99, not $100.
     expect(component.items[0].priceEntryMode).toBe('total');
     expect(component.items[0].unitCost).toBe(100 / 300);
-    expect(component.savedLineAmount(component.items[0])).toBe(100);
+    expect(savedLineAmount(component.items[0])).toBe(100);
   });
 });
 
@@ -1110,7 +1111,6 @@ describe('PurchaseUploadComponent scanned receipt (issue #1166)', () => {
     component.upload();
 
     expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 48, unitCost: 1.25 }]);
-    expect(component.itemsSubtotal).toBe(60);
   });
 
   it('saves a line that is not stock once a product is chosen for it', () => {

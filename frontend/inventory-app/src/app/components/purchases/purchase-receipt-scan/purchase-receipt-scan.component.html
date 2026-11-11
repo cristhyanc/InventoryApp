@@ -25,10 +25,10 @@
       that is refused while plan enforcement is switched off too. There is no Retry, because a plan
       refusal is not a transient failure.
     -->
-    <div class="mt-2 flex flex-wrap items-center gap-3" role="status" data-testid="purchase-receipt-scan-plan-lock">
-      <p class="m-0 text-sm text-rr-muted">{{ planLockMessage }}</p>
+    <output class="mt-2 flex flex-wrap items-center gap-3" data-testid="purchase-receipt-scan-plan-lock">
+      <span class="m-0 text-sm text-rr-muted">{{ planLockMessage }}</span>
       <a routerLink="/plan" class="btn-link">View the Plan page</a>
-    </div>
+    </output>
   } @else {
     <p class="m-0 mt-1 text-sm text-rr-muted">
       Pick a photo or PDF of the receipt and the items, supplier, date and totals are filled in for you to check.

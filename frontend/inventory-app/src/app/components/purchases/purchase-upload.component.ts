@@ -26,7 +26,6 @@ import {
   lineTotalFromUnitCost,
   purchaseLinePriceErrorMessage,
   purchaseLinePriceProblem,
-  savedLineAmount,
   syncPurchaseLinePrice,
   totalPriceFieldValue,
   unitPriceFieldValue
@@ -691,16 +690,6 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     return classification === GstClassification.Unknown ? undefined : classification;
   }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
-
-  /** The amount this line will save: the server's own round(quantity * unitCost, 2). */
-  savedLineAmount(item: DraftPurchaseItem): number { return savedLineAmount(item); }
-
-  /** The subtotal of the lines the purchase will save, which a skipped scanned line is not one of. */
-  get itemsSubtotal(): number {
-    return this.items
-      .filter(item => !isScannedLineSkipped(item))
-      .reduce((sum, item) => sum + this.savedLineAmount(item), 0);
-  }
 
   private purchaseTimestamp(): string | null {
     if (!this.form.purchaseDate) return null;
