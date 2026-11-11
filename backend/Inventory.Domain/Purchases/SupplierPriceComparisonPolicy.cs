@@ -37,11 +37,12 @@ public static class SupplierPriceComparisonPolicy
 {
     public static SupplierPriceComparison Evaluate(IReadOnlyList<SupplierPriceHistoryEntry> entries)
     {
-        // Newest first; a same-day tie is broken by the higher (most recently recorded) purchase
-        // item id, so the choice is deterministic rather than arbitrary insertion order.
-        var historyNewestFirst = entries
-            .OrderByDescending(entry => entry.PurchaseDate)
-            .ThenByDescending(entry => entry.PurchaseItemId)
+        // Newest first through the one shared ordering rule (SupplierPurchaseRecency): the purchase
+        // date descending, then the higher (most recently recorded) purchase item id, so the choice
+        // is deterministic rather than arbitrary insertion order. Issue #1165's receipt-scan pack-size
+        // lookup consumes that same rule instead of restating this ordering.
+        var historyNewestFirst = SupplierPurchaseRecency
+            .NewestFirst(entries, entry => entry.PurchaseDate, entry => entry.PurchaseItemId)
             .ToList();
 
         if (historyNewestFirst.Count == 0)

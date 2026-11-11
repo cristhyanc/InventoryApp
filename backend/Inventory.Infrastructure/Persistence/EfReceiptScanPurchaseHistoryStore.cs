@@ -1,4 +1,5 @@
 using Inventory.Application.ReceiptScanning;
+using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,12 +16,16 @@ namespace Inventory.Infrastructure.Persistence;
 /// be asked for (AGENTS.md § Tenant ownership and data isolation). It is <c>AsNoTracking</c> and
 /// read-only: no <c>SaveChanges</c>, no transaction, no lease.</para>
 ///
-/// <para><strong>"Latest" is one row per product, decided in the database.</strong> The predicate
-/// keeps the line no later line of the same product and supplier supersedes - a later purchase date,
-/// or the same date with a higher purchase-item id - which is <c>SupplierPriceComparisonPolicy</c>'s
-/// own newest-first tie-break (issue #63) and is strict, so exactly one line per product survives it
-/// however many lines share a date. Four columns leave the database: the product, the unit cost, the
-/// purchase date and nothing else.</para>
+/// <para><strong>"Latest" is not decided here.</strong> One bounded query reads the matched history -
+/// the requested products, and only the purchases that recorded this supplier - and
+/// <see cref="SupplierPurchaseRecency"/>, the one ordering rule
+/// <c>SupplierPriceComparisonPolicy</c> (issue #63) orders its own history with, then names each
+/// product's latest line: the purchase date descending, then the purchase-item id descending, so a
+/// same-day tie goes to the same line both paths would choose. The ordering is not restated here, so
+/// revising that tie-break on its own issue cannot leave this adapter behind (AGENTS.md
+/// § Architecture rules). Four columns leave the database - the product, the purchase-item id, the
+/// unit cost and the purchase date - in one statement for the whole receipt, never one query per
+/// product.</para>
 /// </summary>
 public sealed class EfReceiptScanPurchaseHistoryStore : IReceiptScanPurchaseHistoryStore
 {
@@ -46,31 +51,33 @@ public sealed class EfReceiptScanPurchaseHistoryStore : IReceiptScanPurchaseHist
 
         var ids = productIds.ToList();
 
+        // One statement for the whole receipt: the requested products' lines from this supplier's
+        // purchases, which is bounded by the receipt's own lines and makes no per-product query.
         var rows = await _db.ReceiptItems
             .AsNoTracking()
             .Where(item =>
                 ids.Contains(item.ProductId)
-                && item.Purchase!.SupplierId == supplierId
-                && !_db.ReceiptItems.Any(later =>
-                    later.ProductId == item.ProductId
-                    && later.Purchase!.SupplierId == supplierId
-                    && (later.Purchase.PurchaseDate > item.Purchase.PurchaseDate
-                        || (later.Purchase.PurchaseDate == item.Purchase.PurchaseDate
-                            && later.Id > item.Id))))
+                && item.Purchase!.SupplierId == supplierId)
             .Select(item => new
             {
                 item.ProductId,
+                item.Id,
                 item.UnitCost,
                 item.Purchase!.PurchaseDate,
             })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        // The purchase date is stored as an instant and is published as the calendar date it records;
-        // the conversion is here rather than in the query because it is not something to translate.
+        // Which line is the latest is SupplierPurchaseRecency's answer, not this adapter's. The
+        // purchase date is stored as an instant and is published as the calendar date it records; the
+        // conversion is here rather than in the query because it is not something to translate.
         return rows
-            .Select(row => new ReceiptScanLastPurchase(
-                row.ProductId, row.UnitCost, DateOnly.FromDateTime(row.PurchaseDate)))
+            .GroupBy(row => row.ProductId)
+            .Select(perProduct => SupplierPurchaseRecency
+                .NewestFirst(perProduct, row => row.PurchaseDate, row => row.Id)
+                .First())
+            .Select(latest => new ReceiptScanLastPurchase(
+                latest.ProductId, latest.UnitCost, DateOnly.FromDateTime(latest.PurchaseDate)))
             .ToList();
     }
 }

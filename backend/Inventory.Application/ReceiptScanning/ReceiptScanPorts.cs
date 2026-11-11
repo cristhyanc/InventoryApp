@@ -61,6 +61,13 @@ public interface IReceiptScanPurchaseHistoryStore
     /// The latest purchase line for each of <paramref name="productIds"/> whose purchase recorded
     /// <paramref name="supplierId"/> as its supplier - at most one entry per product, and no entry
     /// at all for a product this business has never bought from that supplier.
+    ///
+    /// <para>"Latest" is <c>Inventory.Domain.Purchases.SupplierPurchaseRecency</c>'s one ordering
+    /// rule - the purchase date, then the purchase-item id - which is the same rule
+    /// <c>SupplierPriceComparisonPolicy</c> (issue #63) orders its own history with, so two purchases
+    /// on one day name the same line here as they do there. An implementation must consume that rule
+    /// rather than restate the ordering, and must answer every product in one bounded read rather
+    /// than one read per product.</para>
     /// </summary>
     /// <param name="supplierId">The supplier the scan suggested, as this business's own supplier id.</param>
     /// <param name="productIds">The products a pack size might be suggested for.</param>
