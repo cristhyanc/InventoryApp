@@ -11,6 +11,10 @@ import {
   SuperAdminNayaxSqsSender,
   SuperAdminNayaxSqsSenderService
 } from '../../../services/super-admin-nayax-sqs-sender.service';
+import {
+  SuperAdminReceiptScanUsage,
+  SuperAdminReceiptScanUsageService
+} from '../../../services/super-admin-receipt-scan-usage.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -49,6 +53,18 @@ const recordedSender: SuperAdminNayaxSqsSender = {
   updatedAtUtc: '2026-11-06T03:45:00Z'
 };
 
+/**
+ * What the receipt-scan usage card loads unless a test says otherwise (issue #1164). The month is
+ * the business's own, as the server reports it.
+ */
+const scanUsage: SuperAdminReceiptScanUsage = {
+  businessId: 9,
+  month: '2026-11',
+  used: 37,
+  remaining: 63,
+  limit: 100
+};
+
 function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusiness {
   return {
     businessId: 9,
@@ -72,7 +88,8 @@ async function render(
   toast?: Partial<ToastService>,
   supportSession?: Partial<SupportSessionService>,
   planGrants?: Partial<SuperAdminPlanGrantsService>,
-  nayaxSqsSenders?: Partial<SuperAdminNayaxSqsSenderService>
+  nayaxSqsSenders?: Partial<SuperAdminNayaxSqsSenderService>,
+  receiptScanUsages?: Partial<SuperAdminReceiptScanUsageService>
 ) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminBusinessesComponent],
@@ -90,6 +107,10 @@ async function render(
       {
         provide: SuperAdminNayaxSqsSenderService,
         useValue: { get: jest.fn(() => of(recordedSender)), set: jest.fn(), ...nayaxSqsSenders }
+      },
+      {
+        provide: SuperAdminReceiptScanUsageService,
+        useValue: { get: jest.fn(() => of(scanUsage)), ...receiptScanUsages }
       }
     ]
   }).compileComponents();
@@ -219,7 +240,8 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
   it.each<[SuperAdminBusiness['status'], string[]]>([
     ['Pending', ['Approve', 'Reject']],
-    ['Active', ['View as this business', 'Plan', 'Nayax SQS sender', 'Deactivate']],
+    // "Receipt scans" is issue #1164's read-only usage card.
+    ['Active', ['View as this business', 'Plan', 'Nayax SQS sender', 'Receipt scans', 'Deactivate']],
     ['Deactivated', ['Reactivate', 'Members']]
   ])('for a %s business, offers %s', async (status, expectedButtons) => {
     const list = jest.fn(() => of([business({ status })]));
@@ -458,14 +480,6 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).not.toContain('Plan for Snack Co');
   });
 
-  /** A pending application has no plan to grant yet, so the action is not offered on its row. */
-  it('offers no plan action for a business that is not trading (issue #982)', async () => {
-    const list = jest.fn(() => of([business({ status: 'Pending' })]));
-    const { host } = await render({ list });
-
-    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="plan-grant"]')).toBeNull();
-  });
-
   /**
    * Issue #1101: the Nayax SQS sender action is offered for a trading business, opens the dedicated
    * card, and the card reads that business's own sender - this table carries none of its own.
@@ -503,11 +517,43 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).not.toContain('Nayax SQS sender for Snack Co');
   });
 
-  /** A business that is not trading has no sales to attribute, so the action is not offered. */
-  it('offers no Nayax SQS sender action for a business that is not trading (issue #1101)', async () => {
+  /**
+   * Issue #1164's last acceptance criterion through the page: the Receipt scans action is offered for
+   * a trading business, opens the dedicated card, and the card reads that business's own count -
+   * this table carries none of its own, for the reason it carries no plan and no sender.
+   */
+  it('opens the receipt-scan usage card for an active business (issue #1164)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const get = jest.fn(() => of(scanUsage));
+    const { fixture, host } = await render({ list }, undefined, undefined, undefined, undefined, {
+      get
+    });
+
+    buttonWithText(host, 'Receipt scans').click();
+    fixture.detectChanges();
+
+    expect(get).toHaveBeenCalledWith(9);
+    expect(host.textContent).toContain('Receipt scans for Snack Co');
+    expect(host.textContent).toContain('37 of 100');
+
+    buttonWithText(host, 'Close').click();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Receipt scans for Snack Co');
+  });
+
+  /**
+   * Issues #982, #1101 and #1164: a business that is not trading has no plan to grant, no sales to
+   * attribute and nothing to scan, so none of these per-business actions is offered on its row.
+   */
+  it.each([
+    ['plan', 'plan-grant', '#982'],
+    ['Nayax SQS sender', 'nayax-sqs-sender', '#1101'],
+    ['receipt-scan usage', 'receipt-scan-usage', '#1164']
+  ])('offers no %s action for a business that is not trading (issue %s)', async (_label, testId) => {
     const list = jest.fn(() => of([business({ status: 'Pending' })]));
     const { host } = await render({ list });
 
-    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="nayax-sqs-sender"]')).toBeNull();
+    expect(rowFor(host, 'Snack Co').querySelector(`[data-testid="${testId}"]`)).toBeNull();
   });
 });

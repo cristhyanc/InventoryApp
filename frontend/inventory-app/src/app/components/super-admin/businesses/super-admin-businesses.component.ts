@@ -8,6 +8,7 @@ import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../servic
 import type { NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
 import { BusinessNayaxSqsSenderCardComponent } from './business-nayax-sqs-sender-card.component';
+import { BusinessReceiptScanUsageCardComponent } from './business-receipt-scan-usage-card.component';
 import { BusinessPlanGrantDialogComponent } from './business-plan-grant-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
 import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
@@ -90,6 +91,7 @@ type PendingBusinessAction =
     BusinessRejectDialogComponent,
     BusinessMembersDialogComponent,
     BusinessNayaxSqsSenderCardComponent,
+    BusinessReceiptScanUsageCardComponent,
     BusinessPlanGrantDialogComponent,
     ViewAsBusinessDialogComponent
   ],
@@ -109,6 +111,7 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
   viewAsTarget: SuperAdminBusiness | null = null;
   planGrantTarget: SuperAdminBusiness | null = null;
   nayaxSqsSenderTarget: SuperAdminBusiness | null = null;
+  receiptScanUsageTarget: SuperAdminBusiness | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -220,6 +223,19 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
    */
   onNayaxSqsSenderSaved(): void {
     this.toast.success('The Nayax SQS sender was saved.');
+  }
+
+  /**
+   * Opens the receipt-scan usage card (issue #1164). There is no "saved" counterpart, because the
+   * card is read-only: it shows what the business has spent at the reader this month and offers no
+   * action at all.
+   */
+  openReceiptScanUsage(business: SuperAdminBusiness): void {
+    this.receiptScanUsageTarget = business;
+  }
+
+  closeReceiptScanUsage(): void {
+    this.receiptScanUsageTarget = null;
   }
 
   onViewAsStarted(): void {

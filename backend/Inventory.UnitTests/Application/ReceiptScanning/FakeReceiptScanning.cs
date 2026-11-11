@@ -1,4 +1,5 @@
 using Inventory.Application.ReceiptScanning;
+using Inventory.Domain.ReceiptScanning;
 
 namespace InventoryApi.Tests.Application.ReceiptScanning;
 
@@ -97,6 +98,56 @@ public sealed class FakePdfPageCounter : IPdfPageCounter
 
     /// <inheritdoc />
     public int? Count(ReadOnlySpan<byte> content) => _pages;
+}
+
+/// <summary>
+/// The monthly scan counter, in memory (issue #1164): one count per month key, incremented only
+/// while the month's allowance is not gone.
+///
+/// <para>It records <em>every</em> attempt to count, including the ones it refuses, so a test can
+/// assert both "the scan was counted" and "nothing was counted" as a list rather than as an
+/// inference. The serialisation the real store provides is not modelled here - that is the relational
+/// store's own concurrency test - but the comparison and the increment are the same rule.</para>
+/// </summary>
+public sealed class FakeReceiptScanUsageStore : IReceiptScanUsageStore
+{
+    private readonly Dictionary<int, int> _used = [];
+
+    public FakeReceiptScanUsageStore(int monthKey = 0, int alreadyUsed = 0)
+    {
+        if (alreadyUsed > 0)
+        {
+            _used[monthKey] = alreadyUsed;
+        }
+    }
+
+    /// <summary>Every month key this store was asked to count a scan against, in order.</summary>
+    public List<int> CountAttempts { get; } = [];
+
+    /// <summary>Every month key a scan was actually counted against, in order.</summary>
+    public List<int> Counted { get; } = [];
+
+    /// <inheritdoc />
+    public Task<int> ReadUsedAsync(int monthKey, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_used.GetValueOrDefault(monthKey));
+
+    /// <inheritdoc />
+    public Task<int?> TryCountScanAsync(
+        int monthKey, int limit, CancellationToken cancellationToken = default)
+    {
+        CountAttempts.Add(monthKey);
+
+        var used = _used.GetValueOrDefault(monthKey);
+        if (!ReceiptScanQuotaPolicy.Fits(used, limit))
+        {
+            return Task.FromResult<int?>(null);
+        }
+
+        _used[monthKey] = used + 1;
+        Counted.Add(monthKey);
+
+        return Task.FromResult<int?>(used + 1);
+    }
 }
 
 /// <summary>

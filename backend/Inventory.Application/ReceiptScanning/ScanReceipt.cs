@@ -1,18 +1,33 @@
 using System.Diagnostics;
 using Inventory.Application.Purchases;
 using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
 using Inventory.Domain.ReceiptScanning;
+using Inventory.Domain.Subscriptions;
 
 namespace Inventory.Application.ReceiptScanning;
 
 /// <summary>
-/// Reads one receipt into a suggested purchase draft (issue #1163, sub-issue B of #975).
+/// Reads one receipt into a suggested purchase draft (issue #1163, sub-issue B of #975), inside the
+/// business's monthly scan allowance (issue #1164, sub-issue C).
 ///
-/// <para><strong>It stores nothing.</strong> No file, no draft, no purchase: this use case takes no
-/// persistence port that can write, opens no transaction, calls no <c>SaveChanges</c> and never
-/// reaches document storage. The receipt's bytes are read into memory, sent to the reader once, and
-/// dropped. That is the whole of the no-writes criterion, and it is structural rather than a matter
-/// of care - there is nothing here to write with.</para>
+/// <para><strong>It stores no receipt, no draft and no purchase.</strong> No file is written, no
+/// draft is persisted, no purchase is created and document storage is never reached: the receipt's
+/// bytes are read into memory, sent to the reader once, and dropped. The <em>one</em> thing issue
+/// #1164 writes is a counter - how many scans this business has made in its own calendar month -
+/// which holds no receipt, no file name, no product and no part of a draft. That is the whole of the
+/// no-writes criterion as it now stands, and it is still structural: the only writing port here is
+/// <see cref="IReceiptScanUsageStore"/>, whose single write increments one integer.</para>
+///
+/// <para><strong>The month's cap is the last thing checked and the first thing written.</strong> A
+/// scan is counted when the reader is about to be called - after everything free has been refused,
+/// and before the money is spent - so a request refused for its plan, its file, its page count or a
+/// switched-off deployment is not counted, and a failure <em>after</em> the call stays counted
+/// because the money went. The counter's read, its comparison with the cap and its increment are one
+/// serialised operation in the store, so two simultaneous scans cannot both take the last one. The
+/// month is the business's own calendar month through <see cref="IBusinessCalendar"/> - never the
+/// host's and never UTC's - and the cap itself is
+/// <c>Inventory.Domain.Subscriptions.PlanCatalogue.MonthlyReceiptScanLimit</c>.</para>
 ///
 /// <para><strong>The plan is not checked here.</strong> It is the endpoint's own
 /// <c>[RequirePlan(PlanFeature.ReceiptScanning)]</c>, which runs before model binding, so a business
@@ -37,6 +52,8 @@ public sealed class ScanReceipt
     private readonly IReceiptReader _reader;
     private readonly IReceiptScanLog _log;
     private readonly ICurrentBusinessProvider _business;
+    private readonly IReceiptScanUsageStore _usage;
+    private readonly IBusinessCalendar _calendar;
 
     public ScanReceipt(
         IReceiptScanSettings settings,
@@ -44,7 +61,9 @@ public sealed class ScanReceipt
         IPdfPageCounter pages,
         IReceiptReader reader,
         IReceiptScanLog log,
-        ICurrentBusinessProvider business)
+        ICurrentBusinessProvider business,
+        IReceiptScanUsageStore usage,
+        IBusinessCalendar calendar)
     {
         _settings = settings;
         _catalogue = catalogue;
@@ -52,6 +71,8 @@ public sealed class ScanReceipt
         _reader = reader;
         _log = log;
         _business = business;
+        _usage = usage;
+        _calendar = calendar;
     }
 
     /// <summary>
@@ -111,6 +132,21 @@ public sealed class ScanReceipt
             var products = await _catalogue.ListProductsAsync(cancellationToken).ConfigureAwait(false);
             var suppliers = await _catalogue.ListSuppliersAsync(cancellationToken).ConfigureAwait(false);
 
+            // The last thing before the reader, and the first thing that writes anything: the
+            // month's counter is read, compared with the cap and incremented inside the store's own
+            // write-locked transaction, so of two concurrent scans with one left exactly one gets
+            // it. A refusal here has called nothing and counted nothing.
+            var monthKey = ReceiptScanQuotaPolicy.MonthKeyFor(_calendar.Today);
+            if (await _usage
+                    .TryCountScanAsync(monthKey, PlanCatalogue.MonthlyReceiptScanLimit, cancellationToken)
+                    .ConfigureAwait(false)
+                is not { } counted)
+            {
+                return result = ScanReceiptResult.Refused(
+                    ScanReceiptOutcome.LimitReached,
+                    ReceiptScanQuotaPolicy.LimitReachedMessage(PlanCatalogue.MonthlyReceiptScanLimit));
+            }
+
             read = await _reader.ReadAsync(
                     new ReceiptReadRequest(
                         new ReceiptScanFile(mediaType, kind, content, pageCount),
@@ -129,7 +165,9 @@ public sealed class ScanReceipt
 
             return result = draft is null
                 ? ScanReceiptResult.Refused(ScanReceiptOutcome.Unreadable)
-                : ScanReceiptResult.Scanned(draft);
+                : ScanReceiptResult.Scanned(
+                    draft,
+                    new ReceiptScanUsageView(monthKey, counted, PlanCatalogue.MonthlyReceiptScanLimit));
         }
         catch (ReceiptReaderTimeoutException)
         {

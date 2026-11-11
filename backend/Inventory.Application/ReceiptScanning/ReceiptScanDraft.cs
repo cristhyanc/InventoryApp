@@ -122,16 +122,30 @@ public enum ScanReceiptOutcome
 
     /// <summary>The reader could not be used.</summary>
     Unavailable = 60,
+
+    /// <summary>
+    /// The business has used its whole month's allowance of scans (issue #1164), so the reader was
+    /// not called. It is a refusal about the month rather than about the receipt: next month's
+    /// allowance starts at zero on its own, in the business's own calendar.
+    /// </summary>
+    LimitReached = 70,
 }
 
 /// <summary>
 /// A scan attempt's answer (issue #1163): one outcome, a draft only for
 /// <see cref="ScanReceiptOutcome.Draft"/>, and a caller-safe message for everything else.
+///
+/// <para><see cref="Usage"/> is issue #1164's addition: how much of the month's allowance a
+/// successful scan has now used, so the operator sees the count move on the answer rather than
+/// having to ask for it separately. It is present on a draft and absent on every refusal, including
+/// the one the cap itself produces - a refused scan is not counted, so there is no new count to
+/// report, and the refusal names the cap in its own sentence.</para>
 /// </summary>
 public sealed record ScanReceiptResult(
     ScanReceiptOutcome Outcome,
     ReceiptScanDraft? Draft,
-    string? Message)
+    string? Message,
+    ReceiptScanUsageView? Usage = null)
 {
     /// <summary>What a caller is told when scanning is not configured in this deployment.</summary>
     public const string SwitchedOffMessage = "Receipt scanning is not available.";
@@ -147,9 +161,9 @@ public sealed record ScanReceiptResult(
     public const string UnavailableMessage =
         "Receipt scanning is temporarily unavailable. Try again later, or enter the purchase manually.";
 
-    /// <summary>The successful answer.</summary>
-    public static ScanReceiptResult Scanned(ReceiptScanDraft draft) =>
-        new(ScanReceiptOutcome.Draft, draft, null);
+    /// <summary>The successful answer, with the month's allowance as it now stands (issue #1164).</summary>
+    public static ScanReceiptResult Scanned(ReceiptScanDraft draft, ReceiptScanUsageView usage) =>
+        new(ScanReceiptOutcome.Draft, draft, null, usage);
 
     /// <summary>A refusal, with the message for that outcome.</summary>
     /// <exception cref="ArgumentOutOfRangeException">
@@ -167,6 +181,13 @@ public sealed record ScanReceiptResult(
             ScanReceiptOutcome.Unreadable => new(outcome, null, UnreadableMessage),
             ScanReceiptOutcome.TimedOut => new(outcome, null, TimedOutMessage),
             ScanReceiptOutcome.Unavailable => new(outcome, null, UnavailableMessage),
+            // Issue #1164. The sentence names the cap it was refused by, from the one place the cap
+            // is written, so the message cannot say one number while another is enforced.
+            ScanReceiptOutcome.LimitReached => new(
+                outcome,
+                null,
+                message ?? throw new ArgumentNullException(
+                    nameof(message), "A monthly-cap refusal states the cap it was refused by.")),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome), outcome, "A draft is not a refusal."),
         };

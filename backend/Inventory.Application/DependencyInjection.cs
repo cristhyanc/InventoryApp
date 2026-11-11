@@ -29,6 +29,7 @@ using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
+using Inventory.Application.PlatformReceiptScans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -211,6 +212,12 @@ public static class ApplicationServiceCollectionExtensions
         // one BEGIN IMMEDIATE transaction on that same context, and the business it records is named
         // by the route - the subject of the decision rather than a tenancy scope.
         services.AddScoped<ManageBusinessNayaxSqsSender>();
+
+        // And the Super Admin's view of one business's monthly receipt-scan usage (issue #1164).
+        // Scoped like the surfaces above, and the narrowest of them: it reads one counter of the
+        // business the route names and writes nothing at all, so it takes no transaction and no
+        // lease. Looking at what a business has used cannot change it.
+        services.AddScoped<GetBusinessReceiptScanUsage>();
 
         // The attachment storage quota of issue #968, which reads the entitlement above for its
         // allowance. Scoped for the same reason: both the guard every upload path reserves through
@@ -450,9 +457,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();
         // Reading a receipt into a suggested purchase draft (issue #1163). Scoped like every other
-        // use case, and it writes nothing: it holds no store that can write, opens no transaction and
-        // never reaches document storage.
+        // use case. It stores no receipt, no draft and no purchase and never reaches document
+        // storage; the one thing it writes is issue #1164's monthly scan counter, which holds a
+        // number and nothing about what was scanned.
         services.AddScoped<ScanReceipt>();
+        // And how much of the month's allowance is left (issue #1164). Asking is not scanning: it
+        // reads one counter of the caller's own business and makes no outbound call.
+        services.AddScoped<GetReceiptScanUsage>();
         services.AddScoped<ListActiveSupplierOrders>();
         services.AddScoped<GetSupplierOrder>();
         services.AddScoped<CreateSupplierOrder>();

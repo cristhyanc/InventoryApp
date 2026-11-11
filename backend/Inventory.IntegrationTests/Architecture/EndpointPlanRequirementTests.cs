@@ -312,6 +312,12 @@ public class EndpointPlanRequirementTests
         // one feature that fails closed while plan enforcement is off. Recording the purchase the
         // draft becomes, and attaching the same receipt to it, stay on every plan above.
         new("PurchasesController.Scan", PlanRequirementKind.Declared, PlanFeature.ReceiptScanning), // POST api/purchases/scan
+        // And how many of the month's scans are left (issue #1164). Deliberately on **no** plan:
+        // asking is not scanning - it reads one counter of the caller's own business, makes no
+        // outbound call and spends nothing - and declaring the fail-closed feature here would make
+        // this the second endpoint in the API that is unavailable in the shipped state, which the
+        // test below keeps as a commercial decision rather than an implementation detail.
+        new("PurchasesController.ScanUsage", PlanRequirementKind.None), // GET api/purchases/scan/usage
 
         // The reports. The two that need no provider are Starter; the other six are Pro; the export
         // takes the feature of whichever report it was asked for.
@@ -388,6 +394,11 @@ public class EndpointPlanRequirementTests
         new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
         new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant
+        // Issue #1164's monthly receipt-scan count. No plan requirement, for the reason no
+        // platform-admin endpoint has one: what a business has spent at the reader is the platform's
+        // own question about its own costs, and the plan that business holds cannot decide whether
+        // the Super Admin may look.
+        new("SuperAdminPurchaseScanUsageController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/purchase-scan-usage
         new("SuperAdminSupplierPresetsController.Create", PlanRequirementKind.None), // POST api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.List", PlanRequirementKind.None), // GET api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.Update", PlanRequirementKind.None), // PUT api/super-admin/supplier-presets/{id:int}

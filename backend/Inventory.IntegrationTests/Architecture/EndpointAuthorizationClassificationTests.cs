@@ -762,6 +762,11 @@ public class EndpointAuthorizationClassificationTests
     // routes, because removing a sender is the PUT's own audited update rather than a DELETE.
     [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "GET")]
     [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "PUT")]
+    // Issue #1164's monthly receipt-scan count on one business. Class 2 again - the same marker and
+    // the same policy - and deliberately one route and one method, because looking at what a
+    // business has spent cannot change it. The route is named purchase-scan, never receipt-scan, by
+    // issue #127's published-vocabulary rule.
+    [InlineData("api/super-admin/businesses/{businessId:int}/purchase-scan-usage", "GET")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);
