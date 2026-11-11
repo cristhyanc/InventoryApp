@@ -55,10 +55,12 @@ internal static class TestPurchaseUseCases
         IPdfPageCounter? pages = null,
         IReceiptReader? reader = null,
         IReceiptScanLog? log = null,
-        ICurrentBusinessProvider? business = null) =>
+        ICurrentBusinessProvider? business = null,
+        IReceiptScanPurchaseHistoryStore? purchases = null) =>
         new(
             settings ?? FakeReceiptScanSettings.SwitchedOff(),
             catalogue ?? new FakeReceiptScanCatalogueStore(),
+            purchases ?? new FakeReceiptScanPurchaseHistoryStore(),
             pages ?? new FakePdfPageCounter(),
             reader ?? FakeReceiptReader.Unavailable(),
             log ?? new RecordingReceiptScanLog(),

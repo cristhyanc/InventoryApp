@@ -36,6 +36,26 @@ public class ScanReceiptTests
         """;
 
     /// <summary>
+    /// One carton whose pack size the receipt did not print, matched to this business's product and
+    /// supplier - the receipt issue #1165 is about.
+    /// </summary>
+    private static readonly string NoPackSize =
+        """
+        {
+          "supplierName": "Metro Beverages",
+          "supplierId": 7,
+          "deliveryDate": "2026-10-27",
+          "receiptTotal": 28.96,
+          "receiptTotalIncludesGst": "yes",
+          "lines": [
+            { "text": "45G CC'S TASTY CHEESE", "kind": "stock", "deliveredPacks": 1,
+              "packSize": "notPrinted", "lineTotal": 28.96, "priceIncludesGst": "yes",
+              "taxable": "yes", "productId": 91 }
+          ]
+        }
+        """;
+
+    /// <summary>
     /// The issue's first criterion through the use case: a valid photo becomes a draft whose line has
     /// 48 units at $0.625, and the suggested product is this business's own.
     /// </summary>
@@ -214,6 +234,58 @@ public class ScanReceiptTests
     }
 
     /// <summary>
+    /// Issue #1165 through the use case: a line with no printed pack size is suggested the one the
+    /// business last paid this supplier for, and the history that is read is that supplier's and that
+    /// product's - the supplier being the one the draft itself suggests.
+    /// </summary>
+    [Fact]
+    public async Task A_missing_pack_size_is_suggested_from_the_last_purchase()
+    {
+        var purchases = new FakeReceiptScanPurchaseHistoryStore(
+            new ReceiptScanLastPurchase(91, 1.2067m, new DateOnly(2026, 9, 14)));
+
+        var result = await Scan(new FakeReceiptReader(NoPackSize), purchases: purchases)
+            .Handle(Image(), CancellationToken.None);
+
+        var line = Assert.Single(result.Draft!.Lines);
+        Assert.Equal(24, line.UnitsPerPack!.Value);
+        Assert.Equal(ReceiptValueProvenance.Suggested, line.UnitsPerPack.Provenance);
+        Assert.Equal(24, line.Units!.Value);
+        Assert.Equal(
+            new ReceiptPackSizeSuggestion(24, ReceiptPackSizeSource.LastPurchase, new DateOnly(2026, 9, 14)),
+            line.UnitsPerPackSuggestion);
+
+        Assert.Equal(1, purchases.Calls);
+        Assert.Equal(7, purchases.LastSupplierId);
+        Assert.Equal([91L], purchases.LastProductIds);
+    }
+
+    /// <summary>
+    /// And the history a scan cannot use is never read at all: a receipt whose pack sizes were all
+    /// printed, a receipt with no supplier of this business to read a history of, and an answer
+    /// nothing could be parsed out of each read no purchase history.
+    /// </summary>
+    [Theory]
+    [InlineData("printed")]
+    [InlineData("no supplier")]
+    [InlineData("unreadable")]
+    public async Task No_purchase_history_is_read_when_nothing_could_be_suggested_from_it(string receipt)
+    {
+        var purchases = new FakeReceiptScanPurchaseHistoryStore(
+            new ReceiptScanLastPurchase(91, 1.2067m, new DateOnly(2026, 9, 14)));
+        var json = receipt switch
+        {
+            "printed" => OneLine,
+            "no supplier" => NoPackSize.Replace("\"supplierId\": 7", "\"supplierId\": 4242", StringComparison.Ordinal),
+            _ => "I'm sorry, I can't read that.",
+        };
+
+        await Scan(new FakeReceiptReader(json), purchases: purchases).Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(0, purchases.Calls);
+    }
+
+    /// <summary>
     /// The issue's criterion about what is sent: only this business's products and suppliers, as ids
     /// and names, and the media type the server derived rather than anything the client claimed.
     /// </summary>
@@ -275,12 +347,14 @@ public class ScanReceiptTests
         IReceiptReader reader,
         IReceiptScanSettings? settings = null,
         IPdfPageCounter? pages = null,
-        IReceiptScanLog? log = null) =>
+        IReceiptScanLog? log = null,
+        IReceiptScanPurchaseHistoryStore? purchases = null) =>
         new(
             settings ?? new FakeReceiptScanSettings(),
             new FakeReceiptScanCatalogueStore(
                 [new ReceiptScanProduct(91, "Cola 375mL")],
                 [new ReceiptScanSupplier(7, "Metro Beverages")]),
+            purchases ?? new FakeReceiptScanPurchaseHistoryStore(),
             pages ?? new FakePdfPageCounter(),
             reader,
             log ?? new RecordingReceiptScanLog(),

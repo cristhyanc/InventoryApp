@@ -249,6 +249,192 @@ public class ReceiptScanDraftBuilderTests
         Assert.Null(Build(Payload(Line(packs: 0, unitsPerPack: 1, lineTotal: 0m))));
     }
 
+    #region A pack size suggested from the last purchase (issue #1165)
+
+    /// <summary>
+    /// Issue #1165's first criterion: a carton the receipt did not print a pack size for takes the
+    /// pack size the business last paid for, marked as this application's suggestion and carrying the
+    /// purchase it came from - and the units and unit cost are filled in from it.
+    /// </summary>
+    [Fact]
+    public void A_line_with_no_printed_pack_size_takes_the_last_purchases_pack_size()
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(
+                text: "45G CC'S TASTY CHEESE",
+                packs: 1,
+                unitsPerPack: null,
+                lineTotal: 28.96m,
+                productId: 91))
+                with
+            { SupplierId = 7, ReceiptTotal = 28.96m },
+            LastPurchase(91, 1.2067m))!.Lines);
+
+        Assert.Equal(24, line.UnitsPerPack!.Value);
+        Assert.Equal(ReceiptValueProvenance.Suggested, line.UnitsPerPack.Provenance);
+        Assert.Equal(24, line.Units!.Value);
+        Assert.Equal(28.96m / 24, line.UnitCost!.Value);
+        Assert.Empty(line.Missing);
+
+        var suggestion = line.UnitsPerPackSuggestion!;
+        Assert.Equal(24, suggestion.UnitsPerPack);
+        Assert.Equal(ReceiptPackSizeSource.LastPurchase, suggestion.SuggestedFrom);
+        Assert.Equal(PurchaseDate, suggestion.PurchaseDate);
+    }
+
+    /// <summary>
+    /// Issue #1165's second criterion: two cartons for $57.92 are a pack size of 24 and 48 units -
+    /// never 96. The packs delivered are divided out of the ratio and multiplied back into the units
+    /// exactly once.
+    /// </summary>
+    [Fact]
+    public void Two_cartons_on_one_line_are_forty_eight_units_and_never_ninety_six()
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(packs: 2, unitsPerPack: null, lineTotal: 57.92m, productId: 91))
+                with
+            { SupplierId = 7, ReceiptTotal = 57.92m },
+            LastPurchase(91, 1.2067m))!.Lines);
+
+        Assert.Equal(24, line.UnitsPerPack!.Value);
+        Assert.Equal(48, line.Units!.Value);
+        Assert.Equal(57.92m / 48, line.UnitCost!.Value);
+    }
+
+    /// <summary>
+    /// Issue #1165's unknown-packs criterion: with no readable pack count nothing is suggested, and
+    /// the line stays missing its pack size - rather than being given the units of the whole line as
+    /// if they were the units of one pack.
+    /// </summary>
+    [Fact]
+    public void A_line_whose_pack_count_is_unknown_gets_no_suggestion()
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(packs: null, unitsPerPack: null, lineTotal: 28.96m, productId: 91))
+                with
+            { SupplierId = 7 },
+            LastPurchase(91, 1.2067m))!.Lines);
+
+        Assert.Null(line.UnitsPerPack);
+        Assert.Null(line.UnitsPerPackSuggestion);
+        Assert.Null(line.Units);
+        Assert.Contains(ReceiptLineMissingValue.Packs, line.Missing);
+        Assert.Contains(ReceiptLineMissingValue.UnitsPerPack, line.Missing);
+    }
+
+    /// <summary>
+    /// Issue #1165's tolerance criterion through the draft: a carton whose price has moved produces a
+    /// ratio of 24.7 and is left missing, while the same carton at essentially the same price
+    /// produces 23.9 and is 24.
+    /// </summary>
+    [Theory]
+    [InlineData(29.81, null)]
+    [InlineData(28.84, 24)]
+    public void A_ratio_outside_the_tolerance_leaves_the_line_missing(double lineTotal, int? expected)
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(packs: 1, unitsPerPack: null, lineTotal: (decimal)lineTotal, productId: 91))
+                with
+            { SupplierId = 7, ReceiptTotal = (decimal)lineTotal },
+            LastPurchase(91, 1.2067m))!.Lines);
+
+        Assert.Equal(expected, line.UnitsPerPack?.Value);
+        Assert.Equal(expected is null, line.UnitsPerPackSuggestion is null);
+        Assert.Equal(expected is null, line.Units is null);
+    }
+
+    /// <summary>
+    /// Issue #1165's "never overwrite" criterion: a pack size the receipt printed is used and no
+    /// lookup changes it, even when the history would have said something else. The value stays a
+    /// quotation and carries no suggestion marker.
+    /// </summary>
+    [Fact]
+    public void A_pack_size_printed_on_the_receipt_is_never_replaced()
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(packs: 1, unitsPerPack: 24, lineTotal: 28.96m, productId: 91))
+                with
+            { SupplierId = 7, ReceiptTotal = 28.96m },
+            // Would have suggested 12 had it been asked.
+            LastPurchase(91, 2.4133m))!.Lines);
+
+        Assert.Equal(24, line.UnitsPerPack!.Value);
+        Assert.Equal(ReceiptValueProvenance.Read, line.UnitsPerPack.Provenance);
+        Assert.Null(line.UnitsPerPackSuggestion);
+        Assert.Equal(24, line.Units!.Value);
+    }
+
+    /// <summary>
+    /// Issue #1165's no-history criterion: a product this business has never bought from this
+    /// supplier gets no suggestion, and neither does a line whose suggested product is not this
+    /// business's own - the history is keyed by product, and a foreign id names none of it.
+    /// </summary>
+    [Theory]
+    [InlineData(91, 92)]
+    [InlineData(4242, 4242)]
+    public void A_product_with_no_history_of_its_own_gets_no_suggestion(long lineProduct, long withHistory)
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(packs: 1, unitsPerPack: null, lineTotal: 28.96m, productId: lineProduct))
+                with
+            { SupplierId = 7 },
+            LastPurchase(withHistory, 1.2067m))!.Lines);
+
+        Assert.Null(line.UnitsPerPack);
+        Assert.Null(line.UnitsPerPackSuggestion);
+    }
+
+    /// <summary>
+    /// Only a stock line is ever given one. An <c>other</c> line is not stock for resale, carries no
+    /// product suggestion at all, and is not quietly given a pack size either.
+    /// </summary>
+    [Fact]
+    public void A_non_stock_line_is_never_given_a_pack_size()
+    {
+        var line = Assert.Single(Build(
+            Payload(Line(
+                text: "A4 PAPER",
+                kind: ReceiptLineKind.Other,
+                packs: 1,
+                unitsPerPack: null,
+                lineTotal: 28.96m,
+                productId: 91))
+                with
+            { SupplierId = 7 },
+            LastPurchase(91, 1.2067m))!.Lines);
+
+        Assert.Null(line.UnitsPerPack);
+        Assert.Null(line.UnitsPerPackSuggestion);
+        Assert.Null(line.ProductId);
+    }
+
+    /// <summary>
+    /// The ratio is judged against the amount the receipt printed, never the amount after a levy
+    /// share - the levy is shared by units, so judging it against a levied amount would make the
+    /// suggestion depend on the pack size being suggested. This receipt's $2.40 levy would turn
+    /// 28.96 into 31.36 and a ratio of 24 into 26, which is itself inside the tolerance: the pack
+    /// size is 24, and the levy then has a unit count to be shared by.
+    /// </summary>
+    [Fact]
+    public void The_ratio_is_judged_before_a_levy_share_is_added()
+    {
+        var draft = Build(
+            Payload(
+                Line(packs: 1, unitsPerPack: null, lineTotal: 28.96m, productId: 91, isDrinkContainer: true),
+                Line(text: "CONTAINER DEPOSIT", kind: ReceiptLineKind.Levy, lineTotal: 2.40m, packs: 1, unitsPerPack: 1))
+                with
+            { SupplierId = 7, ReceiptTotal = 31.36m },
+            LastPurchase(91, 1.2067m))!;
+
+        var line = Assert.Single(draft.Lines);
+        Assert.Equal(24, line.UnitsPerPack!.Value);
+        Assert.Equal(24, line.Units!.Value);
+        Assert.Equal(31.36m, line.LineTotal!.Value);
+        Assert.Equal(31.36m / 24, line.UnitCost!.Value);
+    }
+
+    #endregion
+
     #region The levy
 
     /// <summary>
@@ -424,8 +610,21 @@ public class ReceiptScanDraftBuilderTests
 
     #endregion
 
-    private static ReceiptScanDraft? Build(ReceiptScanPayload payload) =>
-        ReceiptScanDraftBuilder.Build(payload, OwnProducts, OwnSuppliers);
+    /// <summary>The date of the purchase every suggestion in this file is read from.</summary>
+    private static readonly DateOnly PurchaseDate = new(2026, 9, 14);
+
+    /// <summary>
+    /// A history holding one product's last purchase from the suggested supplier, at
+    /// <paramref name="unitCost"/> a unit.
+    /// </summary>
+    private static ReceiptPackSizeHistory LastPurchase(long productId, decimal unitCost) =>
+        ReceiptPackSizeHistory.Of([new ReceiptScanLastPurchase(productId, unitCost, PurchaseDate)]);
+
+    private static ReceiptScanDraft? Build(
+        ReceiptScanPayload payload,
+        ReceiptPackSizeHistory? history = null) =>
+        ReceiptScanDraftBuilder.Build(
+            payload, OwnProducts, OwnSuppliers, history ?? ReceiptPackSizeHistory.None);
 
     private static ReceiptScanPayload Payload(params ReceiptScanPayloadLine[] lines) =>
         new(
