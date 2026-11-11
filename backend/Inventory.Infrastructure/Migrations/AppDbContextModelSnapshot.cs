@@ -2783,6 +2783,37 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("ReceiptItems", (string)null);
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ReceiptScanUsage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MonthKey")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ScanCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "MonthKey")
+                        .IsUnique();
+
+                    b.ToTable("ReceiptScanUsages");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.ReimbursementImportJob", b =>
                 {
                     b.Property<int>("Id")

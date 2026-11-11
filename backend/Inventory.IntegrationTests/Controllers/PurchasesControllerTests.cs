@@ -45,6 +45,8 @@ public class PurchasesControllerTests
             // about the purchase endpoints; the scan's own tests are ReceiptScanApiTests (issue
             // #1163).
             TestPurchaseUseCases.Scan(),
+            // And its monthly usage read (issue #1164), which this file does not exercise either.
+            TestPurchaseUseCases.ScanUsage(),
             // An Owner, so a line's nested product carries its inventory value; the role-dependent
             // shape itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
             TestCurrentCapabilities.Owner);

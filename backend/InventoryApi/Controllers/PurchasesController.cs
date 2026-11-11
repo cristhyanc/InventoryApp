@@ -75,6 +75,7 @@ public class PurchasesController : ControllerBase
     private readonly ComputePurchaseTotalValidation _computeValidation;
     private readonly ComputePurchaseGstSummary _computeGstSummary;
     private readonly ScanReceipt _scanReceipt;
+    private readonly GetReceiptScanUsage _getReceiptScanUsage;
     private readonly CurrentCapabilities _capabilities;
 
     public PurchasesController(
@@ -88,10 +89,12 @@ public class PurchasesController : ControllerBase
         ComputePurchaseTotalValidation computeValidation,
         ComputePurchaseGstSummary computeGstSummary,
         ScanReceipt scanReceipt,
+        GetReceiptScanUsage getReceiptScanUsage,
         CurrentCapabilities capabilities)
     {
         _capabilities = capabilities;
         _scanReceipt = scanReceipt;
+        _getReceiptScanUsage = getReceiptScanUsage;
         _listPurchases = listPurchases;
         _getPurchase = getPurchase;
         _getPurchaseFile = getPurchaseFile;
@@ -247,7 +250,8 @@ public class PurchasesController : ControllerBase
 
         return result.Outcome switch
         {
-            ScanReceiptOutcome.Draft => Ok(ReceiptScanResponseMapper.ToResponse(result.Draft!)),
+            ScanReceiptOutcome.Draft => Ok(
+                ReceiptScanResponseMapper.ToResponse(result.Draft!, result.Usage!)),
             ScanReceiptOutcome.InvalidFile => BadRequest(result.Message),
             // No reader is configured in this deployment: the feature is off rather than broken, and
             // nothing was sent anywhere.
@@ -259,8 +263,41 @@ public class PurchasesController : ControllerBase
                 StatusCodes.Status422UnprocessableEntity, result.Message),
             ScanReceiptOutcome.TimedOut => StatusCode(
                 StatusCodes.Status504GatewayTimeout, result.Message),
+            // The business has used its whole month's allowance (issue #1164). Too Many Requests
+            // rather than a plan refusal: the plan does include scanning, and the same request will
+            // succeed next month without anything being bought - which is exactly what 429 means and
+            // what 402 or 403 would not. No scan was counted and the reader was not called.
+            ScanReceiptOutcome.LimitReached => StatusCode(
+                StatusCodes.Status429TooManyRequests, result.Message),
             _ => StatusCode(StatusCodes.Status502BadGateway, result.Message),
         };
+    }
+
+    /// <summary>
+    /// How many receipt scans this business has used this month, and how many are left (issue #1164,
+    /// child of #975).
+    ///
+    /// <para><strong>Asking is not scanning.</strong> It reads one counter of the caller's own
+    /// business, makes no outbound call, spends nothing and counts nothing - so it carries this
+    /// controller's existing <c>Purchasing.Operate</c> capability and deliberately <strong>no</strong>
+    /// <c>[RequirePlan]</c>. A business whose plan does not include scanning reads a count of zero,
+    /// which is true and tells it nothing it could not already infer; making this the second endpoint
+    /// in the API that is unavailable while plan enforcement is off would be a commercial decision,
+    /// and the scan itself is the only endpoint that may be one
+    /// (<c>EndpointPlanRequirementTests.Exactly_the_receipt_scan_declares_the_fail_closed_feature</c>).</para>
+    ///
+    /// <para>The month is the business's own calendar month, from the zone configured on it - the
+    /// same boundary the scan counts against, through one policy, so a page and a refusal cannot
+    /// disagree about which month it is.</para>
+    /// </summary>
+    /// <response code="200">The month, the count, what is left and the cap.</response>
+    [HttpGet("scan/usage")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<PurchaseScanUsageDto>> ScanUsage(CancellationToken cancellationToken)
+    {
+        return Ok(
+            ReceiptScanResponseMapper.ToUsage(
+                await _getReceiptScanUsage.Handle(cancellationToken)));
     }
 
     [HttpPut("{id:int}")]

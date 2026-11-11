@@ -392,6 +392,190 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         return problem;
     }
 
+    #region Issue #1164 - the monthly cap
+
+    /// <summary>
+    /// Issue #1164's first criterion over HTTP: with 99 scans counted this month the hundredth runs,
+    /// and the scan's own answer reports 100 used with 0 remaining - as does the usage endpoint
+    /// beside it, because both read the same counter through the same month.
+    /// </summary>
+    [Fact]
+    public async Task The_hundredth_scan_runs_and_both_answers_report_none_left()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedScanUsageAsync(_factory.TradingBusinessId, PlanCatalogue.MonthlyReceiptScanLimit - 1);
+
+        var response = await _factory.AsOwner().PostAsync("/api/purchases/scan", Jpeg());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var usage = (await Draft(response)).GetProperty("usage");
+        Assert.Equal(PlanCatalogue.MonthlyReceiptScanLimit, usage.GetProperty("used").GetInt32());
+        Assert.Equal(0, usage.GetProperty("remaining").GetInt32());
+        Assert.Equal(PlanCatalogue.MonthlyReceiptScanLimit, usage.GetProperty("limit").GetInt32());
+        Assert.Equal(_factory.CurrentMonthLabel(), usage.GetProperty("month").GetString());
+        Assert.Equal(1, _factory.Reader.Calls);
+
+        var reported = await ReadUsageAsync(_factory.AsOwner());
+        Assert.Equal(PlanCatalogue.MonthlyReceiptScanLimit, reported.GetProperty("used").GetInt32());
+        Assert.Equal(0, reported.GetProperty("remaining").GetInt32());
+    }
+
+    /// <summary>
+    /// Its second criterion over HTTP: with the month's allowance gone the answer is <c>429</c> with
+    /// the issue's own sentence, and <strong>the reader is not called</strong> - the cap refuses
+    /// before the money is spent. 429 rather than a plan refusal, because the plan does include
+    /// scanning and the same request succeeds next month without anything being bought.
+    /// </summary>
+    [Fact]
+    public async Task With_the_months_allowance_gone_the_answer_is_429_and_the_reader_is_not_called()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedScanUsageAsync(_factory.TradingBusinessId, PlanCatalogue.MonthlyReceiptScanLimit);
+
+        var response = await _factory.AsOwner().PostAsync("/api/purchases/scan", Jpeg());
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal(
+            ReceiptScanQuotaPolicy.LimitReachedMessage(PlanCatalogue.MonthlyReceiptScanLimit),
+            await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, _factory.Reader.Calls);
+
+        // And the refusal counted nothing: the stored count is still exactly the cap.
+        Assert.Equal(
+            PlanCatalogue.MonthlyReceiptScanLimit,
+            await _factory.StoredScanUsageAsync(_factory.TradingBusinessId));
+    }
+
+    /// <summary>
+    /// A scan is counted <strong>once</strong>, and the business starts from nothing: an empty month
+    /// reads zero used, one scan takes it to one, and the counter the database holds agrees.
+    /// </summary>
+    [Fact]
+    public async Task A_business_starts_the_month_at_zero_and_one_scan_counts_one()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+
+        var before = await ReadUsageAsync(_factory.AsOwner());
+        Assert.Equal(0, before.GetProperty("used").GetInt32());
+        Assert.Equal(PlanCatalogue.MonthlyReceiptScanLimit, before.GetProperty("remaining").GetInt32());
+
+        var response = await _factory.AsOwner().PostAsync("/api/purchases/scan", Jpeg());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, (await Draft(response)).GetProperty("usage").GetProperty("used").GetInt32());
+        Assert.Equal(1, await _factory.StoredScanUsageAsync(_factory.TradingBusinessId));
+    }
+
+    /// <summary>
+    /// Issue #1164's not-counted criterion over HTTP: each thing refused before the reader is reached
+    /// leaves the month's counter exactly as it was, and the counter table still holds no row at all -
+    /// so nothing was charged for a call nobody made.
+    /// </summary>
+    [Theory]
+    [InlineData(SubscriptionPlan.Free, "receipt.jpg", "image/jpeg")]
+    [InlineData(SubscriptionPlan.Pro, "receipt.heic", "image/heic")]
+    [InlineData(SubscriptionPlan.Pro, "receipt.xlsx", "image/jpeg")]
+    public async Task A_request_refused_before_the_reader_is_not_counted(
+        SubscriptionPlan plan, string fileName, string contentType)
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, plan);
+
+        var response = await _factory.AsOwner().PostAsync(
+            "/api/purchases/scan", File(fileName, contentType));
+
+        Assert.NotEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, _factory.Reader.Calls);
+        Assert.Equal(0, await _factory.StoredScanUsageAsync(_factory.TradingBusinessId));
+        Assert.Equal(0, await _factory.StoredScanUsageRowsAsync());
+    }
+
+    /// <summary>
+    /// And its other half over HTTP: a failure <em>after</em> the call stays counted, because the
+    /// money went. A timeout leaves the month one scan down and there is no release path.
+    /// </summary>
+    [Fact]
+    public async Task A_timeout_after_the_call_stays_counted()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        _factory.Reader.Fail = () => throw new ReceiptReaderTimeoutException();
+
+        var response = await _factory.AsOwner().PostAsync("/api/purchases/scan", Jpeg());
+
+        Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
+        Assert.Equal(1, _factory.Reader.Calls);
+        Assert.Equal(1, await _factory.StoredScanUsageAsync(_factory.TradingBusinessId));
+    }
+
+    /// <summary>
+    /// Issue #1164's tenant criterion over HTTP: usage is per business, and another business's scans
+    /// never count. The other business is at its cap, and this one still scans - and each sees only
+    /// its own count, because no request carries a business id anywhere.
+    /// </summary>
+    [Fact]
+    public async Task Another_businesss_scans_never_count_against_this_one()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        await _factory.GrantAsync(_factory.OtherBusinessId, SubscriptionPlan.Pro);
+        await _factory.SeedScanUsageAsync(_factory.OtherBusinessId, PlanCatalogue.MonthlyReceiptScanLimit);
+
+        var response = await _factory.AsOwner().PostAsync("/api/purchases/scan", Jpeg());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, (await Draft(response)).GetProperty("usage").GetProperty("used").GetInt32());
+
+        Assert.Equal(1, (await ReadUsageAsync(_factory.AsOwner())).GetProperty("used").GetInt32());
+        Assert.Equal(
+            PlanCatalogue.MonthlyReceiptScanLimit,
+            (await ReadUsageAsync(_factory.AsOtherBusinessOwner())).GetProperty("used").GetInt32());
+
+        // And the other business is still at its cap: this scan was not counted against it.
+        Assert.Equal(
+            PlanCatalogue.MonthlyReceiptScanLimit,
+            await _factory.StoredScanUsageAsync(_factory.OtherBusinessId));
+    }
+
+    /// <summary>
+    /// The usage endpoint keeps this controller's existing capability and carries <strong>no plan
+    /// requirement</strong>: a Free business reads its own count of zero rather than a plan refusal,
+    /// because asking how many scans are left is not scanning and spends nothing.
+    /// </summary>
+    [Fact]
+    public async Task The_usage_endpoint_is_open_on_every_plan_and_counts_nothing()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Free);
+
+        var usage = await ReadUsageAsync(_factory.AsOwner());
+
+        Assert.Equal(0, usage.GetProperty("used").GetInt32());
+        Assert.Equal(PlanCatalogue.MonthlyReceiptScanLimit, usage.GetProperty("limit").GetInt32());
+        Assert.Equal(0, _factory.Reader.Calls);
+        Assert.Equal(0, await _factory.StoredScanUsageRowsAsync());
+    }
+
+    /// <summary>
+    /// And it is still the controller's <c>Purchasing.Operate</c> capability: somebody with no
+    /// membership in the business cannot read its count.
+    /// </summary>
+    [Fact]
+    public async Task A_stranger_cannot_read_a_businesss_usage()
+    {
+        var response = await _factory
+            .Authenticated(SuperAdminBusinessesApiFactory.StrangerObjectId)
+            .GetAsync("/api/purchases/scan/usage");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    private static async Task<JsonElement> ReadUsageAsync(HttpClient client)
+    {
+        var response = await client.GetAsync("/api/purchases/scan/usage");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+    }
+
+    #endregion
+
     private static MultipartFormDataContent Jpeg() => File("receipt.jpg", "image/jpeg");
 
     private static MultipartFormDataContent File(string fileName, string contentType) =>
@@ -558,10 +742,92 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
         public async Task ResetScanAsync()
         {
             await ResetAsync();
+            await ClearScanUsageAsync();
             await SeedCatalogueAsync();
 
             _reader.Reset(OneLine());
         }
+
+        /// <summary>
+        /// The business month this host is in right now, as the responses publish it. It is read
+        /// through the same policy the server uses rather than being written out, so a run on the
+        /// first or last day of a month cannot make these tests disagree with the API about which
+        /// month it is.
+        /// </summary>
+        public string CurrentMonthLabel() =>
+            ReceiptScanQuotaPolicy.MonthLabel(ReceiptScanQuotaPolicy.MonthKeyFor(SydneyToday()));
+
+        /// <summary>
+        /// Puts one business's count for the current month at <paramref name="scanCount"/> (issue
+        /// #1164), so the cap can be reached without making a hundred requests.
+        /// </summary>
+        public async Task SeedScanUsageAsync(int businessId, int scanCount)
+        {
+            await using var db = Database();
+            var monthKey = ReceiptScanQuotaPolicy.MonthKeyFor(SydneyToday());
+            var existing = await db.ReceiptScanUsages
+                .SingleOrDefaultAsync(row => row.BusinessId == businessId && row.MonthKey == monthKey);
+
+            if (existing is null)
+            {
+                db.ReceiptScanUsages.Add(new Inventory.Infrastructure.Models.ReceiptScanUsage
+                {
+                    BusinessId = businessId,
+                    MonthKey = monthKey,
+                    ScanCount = scanCount,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.ScanCount = scanCount;
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// What the database says one business has counted this month, so "counted" and "not counted"
+        /// are read off the stored row rather than off a response.
+        /// </summary>
+        public async Task<int> StoredScanUsageAsync(int businessId)
+        {
+            await using var db = Database();
+            var monthKey = ReceiptScanQuotaPolicy.MonthKeyFor(SydneyToday());
+
+            return await db.ReceiptScanUsages
+                .AsNoTracking()
+                .Where(row => row.BusinessId == businessId && row.MonthKey == monthKey)
+                .Select(row => (int?)row.ScanCount)
+                .SingleOrDefaultAsync() ?? 0;
+        }
+
+        /// <summary>
+        /// How many counter rows exist at all, so "nothing was counted" is the absence of a row
+        /// rather than a row that happens to say zero.
+        /// </summary>
+        public async Task<int> StoredScanUsageRowsAsync()
+        {
+            await using var db = Database();
+            return await db.ReceiptScanUsages.CountAsync();
+        }
+
+        private async Task ClearScanUsageAsync()
+        {
+            await using var db = Database();
+            db.ReceiptScanUsages.RemoveRange(await db.ReceiptScanUsages.ToListAsync());
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Today in the zone every business this fixture seeds is configured in. The host answers
+        /// against the real clock, so the month under test is whichever month that really is.
+        /// </summary>
+        private static DateTime SydneyToday() =>
+            TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.UtcNow,
+                TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney")).Date;
 
         /// <summary>
         /// How many rows exist in everything a scan could conceivably have written, as text, so

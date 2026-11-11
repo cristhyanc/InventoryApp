@@ -55,14 +55,31 @@ internal static class TestPurchaseUseCases
         IPdfPageCounter? pages = null,
         IReceiptReader? reader = null,
         IReceiptScanLog? log = null,
-        ICurrentBusinessProvider? business = null) =>
+        ICurrentBusinessProvider? business = null,
+        IReceiptScanUsageStore? usage = null,
+        IBusinessCalendar? calendar = null) =>
         new(
             settings ?? FakeReceiptScanSettings.SwitchedOff(),
             catalogue ?? new FakeReceiptScanCatalogueStore(),
             pages ?? new FakePdfPageCounter(),
             reader ?? FakeReceiptReader.Unavailable(),
             log ?? new RecordingReceiptScanLog(),
-            business ?? new FakeCurrentBusinessProvider(1));
+            business ?? new FakeCurrentBusinessProvider(1),
+            // Issue #1164's monthly counter, in memory and starting at zero: a test about something
+            // else neither counts a scan nor is refused by a cap it never set.
+            usage ?? new FakeReceiptScanUsageStore(),
+            calendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 1)));
+
+    /// <summary>
+    /// Issue #1164's "how many scans are left" read, for the controller tests that construct the
+    /// controller directly. It counts nothing and makes no outbound call.
+    /// </summary>
+    public static GetReceiptScanUsage ScanUsage(
+        IReceiptScanUsageStore? usage = null,
+        IBusinessCalendar? calendar = null) =>
+        new(
+            usage ?? new FakeReceiptScanUsageStore(),
+            calendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 1)));
 
     private static ActorIdentity Actor(string objectId)
     {

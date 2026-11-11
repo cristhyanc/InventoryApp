@@ -4,6 +4,7 @@ using Inventory.Application.ReceiptScanning;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.ReceiptScanning;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.ReceiptScanning;
@@ -19,6 +20,12 @@ namespace InventoryApi.Tests.Application.ReceiptScanning;
 public class ScanReceiptTests
 {
     private const int BusinessId = 42;
+
+    /// <summary>
+    /// The business month every test here is in unless it says otherwise (issue #1164): November
+    /// 2026, as <c>ReceiptScanQuotaPolicy</c> keys a month.
+    /// </summary>
+    private const int November = 202611;
 
     private static readonly string OneLine =
         """
@@ -271,11 +278,151 @@ public class ScanReceiptTests
         Assert.Equal(switchedOff ? null : 1200, entry.InputTokens);
     }
 
+    /// <summary>
+    /// Issue #1164's first criterion through the use case: with 99 scans counted this month the
+    /// hundredth runs, and the answer reports 100 used with 0 remaining.
+    /// </summary>
+    [Fact]
+    public async Task The_hundredth_scan_of_a_month_runs_and_reports_none_left()
+    {
+        var usage = new FakeReceiptScanUsageStore(November, alreadyUsed: 99);
+        var reader = new FakeReceiptReader(OneLine);
+
+        var result = await Scan(reader, usage: usage).Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.Draft, result.Outcome);
+        Assert.Equal(1, reader.Calls);
+        Assert.Equal(100, result.Usage!.Used);
+        Assert.Equal(0, result.Usage.Remaining);
+        Assert.Equal("2026-11", result.Usage.Month);
+    }
+
+    /// <summary>
+    /// Its second criterion: with the month's allowance gone the scan is refused and
+    /// <strong>the reader is not called</strong>, so the cap is a refusal before the money is spent
+    /// rather than an accounting entry after it.
+    /// </summary>
+    [Fact]
+    public async Task With_the_months_allowance_gone_the_reader_is_not_called()
+    {
+        var usage = new FakeReceiptScanUsageStore(November, alreadyUsed: 100);
+        var reader = new FakeReceiptReader(OneLine);
+
+        var result = await Scan(reader, usage: usage).Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.LimitReached, result.Outcome);
+        Assert.Equal(
+            "You have used all 100 receipt scans for this month.",
+            result.Message);
+        Assert.Equal(0, reader.Calls);
+        Assert.Null(result.Usage);
+    }
+
+    /// <summary>
+    /// A scan is counted <strong>once</strong>, against the business's current month, immediately
+    /// before the reader is called - so the count and the spend cannot disagree by a retry or a
+    /// second pass.
+    /// </summary>
+    [Fact]
+    public async Task A_scan_is_counted_once_against_the_current_month()
+    {
+        var usage = new FakeReceiptScanUsageStore();
+
+        await Scan(new FakeReceiptReader(OneLine), usage: usage).Handle(Image(), CancellationToken.None);
+
+        Assert.Equal([November], usage.Counted);
+    }
+
+    /// <summary>
+    /// Issue #1164's month-boundary criterion through the use case: the month the scan is counted
+    /// against is the business's own calendar month, so a scan on 1 December is counted against
+    /// December with November's count untouched. Which date an instant falls on is
+    /// <c>IBusinessCalendar</c>'s answer in the business's own zone - <c>Australia/Sydney</c> for
+    /// this application's business - and never the host's or UTC's.
+    /// </summary>
+    [Fact]
+    public async Task A_scan_in_the_next_month_is_counted_against_the_next_month()
+    {
+        var usage = new FakeReceiptScanUsageStore(November, alreadyUsed: 100);
+        var reader = new FakeReceiptReader(OneLine);
+
+        var result = await Scan(reader, usage: usage, today: new DateTime(2026, 12, 1))
+            .Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.Draft, result.Outcome);
+        Assert.Equal(1, result.Usage!.Used);
+        Assert.Equal(99, result.Usage.Remaining);
+        Assert.Equal("2026-12", result.Usage.Month);
+        Assert.Equal(100, await usage.ReadUsedAsync(November, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Issue #1164's not-counted criterion: everything refused <em>before</em> the reader is reached
+    /// is not counted, and the counter is not even consulted. Each of these is a request that cost
+    /// nothing, so charging a scan to the month would be charging for a call nobody made.
+    /// </summary>
+    [Theory]
+    [InlineData("receipt.heic")]
+    [InlineData("receipt.xlsx")]
+    public async Task A_file_refused_before_the_reader_is_not_counted(string fileName)
+    {
+        var usage = new FakeReceiptScanUsageStore();
+        var reader = new FakeReceiptReader(OneLine);
+
+        var result = await Scan(reader, usage: usage).Handle(Image(fileName), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.InvalidFile, result.Outcome);
+        Assert.Equal(0, reader.Calls);
+        Assert.Empty(usage.CountAttempts);
+    }
+
+    /// <summary>And the switched-off deployment, which makes no call and reads nothing at all.</summary>
+    [Fact]
+    public async Task A_switched_off_deployment_counts_nothing()
+    {
+        var usage = new FakeReceiptScanUsageStore();
+
+        await Scan(
+                new FakeReceiptReader(OneLine),
+                settings: FakeReceiptScanSettings.SwitchedOff(),
+                usage: usage)
+            .Handle(Image(), CancellationToken.None);
+
+        Assert.Empty(usage.CountAttempts);
+    }
+
+    /// <summary>
+    /// And its other half: a failure <em>after</em> the call stays counted, because the money was
+    /// spent. A timeout, an unusable reader and an answer with nothing readable in it each leave the
+    /// month one scan down - there is no release path, deliberately.
+    /// </summary>
+    [Theory]
+    [InlineData("timeout")]
+    [InlineData("unavailable")]
+    [InlineData("unreadable")]
+    public async Task A_failure_after_the_call_stays_counted(string failure)
+    {
+        var usage = new FakeReceiptScanUsageStore();
+        var reader = failure switch
+        {
+            "timeout" => FakeReceiptReader.TimingOut(),
+            "unavailable" => FakeReceiptReader.Unavailable(),
+            _ => new FakeReceiptReader("I'm sorry, I can't read that."),
+        };
+
+        var result = await Scan(reader, usage: usage).Handle(Image(), CancellationToken.None);
+
+        Assert.NotEqual(ScanReceiptOutcome.Draft, result.Outcome);
+        Assert.Equal([November], usage.Counted);
+    }
+
     private static ScanReceipt Scan(
         IReceiptReader reader,
         IReceiptScanSettings? settings = null,
         IPdfPageCounter? pages = null,
-        IReceiptScanLog? log = null) =>
+        IReceiptScanLog? log = null,
+        IReceiptScanUsageStore? usage = null,
+        DateTime? today = null) =>
         new(
             settings ?? new FakeReceiptScanSettings(),
             new FakeReceiptScanCatalogueStore(
@@ -284,7 +431,9 @@ public class ScanReceiptTests
             pages ?? new FakePdfPageCounter(),
             reader,
             log ?? new RecordingReceiptScanLog(),
-            new FakeCurrentBusinessProvider(BusinessId));
+            new FakeCurrentBusinessProvider(BusinessId),
+            usage ?? new FakeReceiptScanUsageStore(),
+            new FakeBusinessCalendar(today ?? new DateTime(2026, 11, 12)));
 
     /// <summary>
     /// A submitted file, as the controller adapts one. The bytes are a placeholder: nothing in this
