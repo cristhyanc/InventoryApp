@@ -25,15 +25,21 @@ public readonly record struct MachineDashboardPeriodUtc(
 
 /// <summary>
 /// The machine and site dashboards' reference window (issue #310): the current instant, the
-/// business date it falls on, and the seven rolling comparison periods
+/// business date it falls on, and the eight rolling comparison periods
 /// (today, the previous comparable day, week-to-date, the previous comparable week, last full week,
-/// month-to-date, two weeks ago) expressed as UTC instants.
+/// month-to-date, the previous comparable month, two weeks ago) expressed as UTC instants.
 ///
 /// <para><see cref="PreviousComparableDay"/> is Today's own baseline (issue #1177): yesterday's
 /// business day up to the same elapsed time since business-local midnight as now is into today's,
 /// which is the comparison <see cref="PreviousComparableWeek"/> already makes for the week. It is
 /// derived here from <see cref="IBusinessCalendar.StartOfBusinessDayUtc"/> and the business date,
 /// with no new calendar member and no period arithmetic of its own.</para>
+///
+/// <para><see cref="PreviousComparableMonth"/> is Month to date's own baseline (issue #1180), built
+/// by the same rule one month back: the previous calendar month from its own first business day's
+/// midnight to the same point into that month's comparable day - today's day of the month, or that
+/// month's last day when it has fewer days - as now is into today. It too adds no
+/// <see cref="IBusinessCalendar"/> member.</para>
 ///
 /// The day boundaries come from the business day through <see cref="IBusinessCalendar"/>,
 /// never from the host's local timezone - an App Service host runs in UTC, where a server-local
@@ -56,7 +62,8 @@ public sealed record MachineDashboardWindow(
     MachineDashboardPeriodUtc PreviousComparableWeek,
     MachineDashboardPeriodUtc LastWeek,
     MachineDashboardPeriodUtc MonthToDate,
-    MachineDashboardPeriodUtc TwoWeeksAgo)
+    MachineDashboardPeriodUtc TwoWeeksAgo,
+    MachineDashboardPeriodUtc PreviousComparableMonth)
 {
     /// <summary>
     /// Resolves the window from one current instant. The business date is derived from that same
@@ -78,8 +85,21 @@ public sealed record MachineDashboardWindow(
         var previousComparableWeekStartUtc = businessCalendar.StartOfBusinessDayUtc(previousComparableWeek.Start);
 
         var todayStartUtc = businessCalendar.StartOfBusinessDayUtc(businessToday);
+        var monthToDateStartUtc = businessCalendar.StartOfBusinessDayUtc(monthToDate.Start);
         var previousBusinessDate = businessToday.AddDays(-1);
         var previousComparableDayStartUtc = businessCalendar.StartOfBusinessDayUtc(previousBusinessDate);
+
+        // Month to date's own baseline (issue #1180). The previous calendar month is derived from the
+        // business date rather than from the current instant, so a request taken in the hours where
+        // the business date and the UTC date differ - and a January read, whose previous month is in
+        // the previous year - names the same month the published month-to-date figure does.
+        var previousMonthStart = monthToDate.Start.AddMonths(-1);
+        var previousMonthLength = DateTime.DaysInMonth(previousMonthStart.Year, previousMonthStart.Month);
+
+        // "The same point last month" is today's day of the month, held at the previous month's last
+        // day when that month is shorter: there is no 31 February to compare a 31 March with.
+        var comparableDate = previousMonthStart.AddDays(Math.Min(businessToday.Day, previousMonthLength) - 1);
+        var previousComparableMonthStartUtc = businessCalendar.StartOfBusinessDayUtc(previousMonthStart);
 
         return new MachineDashboardWindow(
             nowUtc,
@@ -101,13 +121,26 @@ public sealed record MachineDashboardWindow(
                 EndOfBusinessDayUtc(businessCalendar, lastWeek.End),
                 lastWeek.Start,
                 lastWeek.End.Date),
-            MonthToDate: new(
-                businessCalendar.StartOfBusinessDayUtc(monthToDate.Start), nowUtc, monthToDate.Start, businessToday),
+            MonthToDate: new(monthToDateStartUtc, nowUtc, monthToDate.Start, businessToday),
             TwoWeeksAgo: new(
                 businessCalendar.StartOfBusinessDayUtc(twoWeeksAgo.Start),
                 EndOfBusinessDayUtc(businessCalendar, twoWeeksAgo.End),
                 twoWeeksAgo.Start,
-                twoWeeksAgo.End.Date));
+                twoWeeksAgo.End.Date),
+            PreviousComparableMonth: new(
+                previousComparableMonthStartUtc,
+                businessToday.Day > previousMonthLength
+                    // The comparable day is the shorter month's last day and today is past it, so the
+                    // baseline is that month in full: its own last instant, which is one millisecond
+                    // before this month began.
+                    ? monthToDateStartUtc.AddMilliseconds(-1)
+                    : ComparableEndUtc(
+                        businessCalendar.StartOfBusinessDayUtc(comparableDate),
+                        todayStartUtc,
+                        nowUtc,
+                        EndOfBusinessDayUtc(businessCalendar, comparableDate)),
+                previousMonthStart,
+                comparableDate));
     }
 
     /// <summary>
@@ -128,13 +161,23 @@ public sealed record MachineDashboardWindow(
     /// Held at the previous period's own end when the current one is the longer of the two - the week
     /// daylight saving ends is 169 hours and the day it ends is 25 - so the baseline can never reach
     /// into the current period and count the same sale in both.
+    ///
+    /// <para><paramref name="previousPeriodEndUtc"/> is that holding point. For the day and the week
+    /// it is the instant before the current period begins, which is also the previous period's own
+    /// last instant, so it is left unstated. The previous comparable month states it (issue #1180):
+    /// the elapsed time is measured into one <em>day</em> of that month - the comparable day - so the
+    /// baseline is held at the end of that day rather than at the end of the month, which may be
+    /// weeks later.</para>
     /// </summary>
     private static DateTime ComparableEndUtc(
-        DateTime previousPeriodStartUtc, DateTime currentPeriodStartUtc, DateTime nowUtc)
+        DateTime previousPeriodStartUtc,
+        DateTime currentPeriodStartUtc,
+        DateTime nowUtc,
+        DateTime? previousPeriodEndUtc = null)
     {
         var endUtc = previousPeriodStartUtc + (nowUtc - currentPeriodStartUtc);
-        var previousPeriodEndUtc = currentPeriodStartUtc.AddMilliseconds(-1);
-        return endUtc <= previousPeriodEndUtc ? endUtc : previousPeriodEndUtc;
+        var heldAtUtc = previousPeriodEndUtc ?? currentPeriodStartUtc.AddMilliseconds(-1);
+        return endUtc <= heldAtUtc ? endUtc : heldAtUtc;
     }
 
     /// <summary>

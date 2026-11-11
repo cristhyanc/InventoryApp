@@ -64,7 +64,9 @@ internal static class MachineDashboardAssembler
             // Revenue only (issue #1177): the baseline carries no direct profit, so no policy is
             // applied to it here and it is not one of the profits the missing-fee-rate status above
             // is decided from.
-            facts.PreviousComparableDayGrossRevenue);
+            facts.PreviousComparableDayGrossRevenue,
+            // Month to date's baseline, on the same terms (issue #1180).
+            facts.PreviousComparableMonthGrossRevenue);
     }
 
     private static (decimal GrossRevenue, decimal? DirectProfit) Resolve(MachineDashboardPeriodFacts period) =>

@@ -75,8 +75,9 @@ public sealed class MachineAndProductFinancialRedactionApiTests
     /// <summary>
     /// Every <c>MachineResponse</c> field <c>Dashboard.ViewFinancials</c> governs: the six periods'
     /// gross revenue, the six matching direct-profit figures, the profitability status and - since
-    /// issue #1177 - the previous comparable day's gross revenue, which is governed by the same rule
-    /// because it is one more sum over the same completed sales.
+    /// issues #1177 and #1180 - the previous comparable day's and the previous comparable month's
+    /// gross revenue, both governed by the same rule because each is one more sum over the same
+    /// completed sales.
     /// </summary>
     private static readonly string[] RestrictedMachineFields =
     [
@@ -85,6 +86,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         "todayDirectProfit", "currentWeekDirectProfit", "lastWeekDirectProfit",
         "twoWeeksAgoDirectProfit", "previousComparableWeekDirectProfit", "monthToDateDirectProfit",
         "profitabilityStatus", "previousComparableDayGrossRevenue",
+        "previousComparableMonthGrossRevenue",
     ];
 
     /// <summary>
@@ -159,8 +161,22 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         // machine made no sale at the same point yesterday, so the honest answer is 0 - which is
         // what makes the Operator's null above a withheld figure rather than an empty period.
         Assert.Equal(0m, costed.GetProperty("previousComparableDayGrossRevenue").GetDecimal());
+
+        // Issue #1180's baseline, on the same terms: the machine did sell at the same point last
+        // month, and that sale is more than a month old, so the figure is also the proof the sales
+        // read reaches the previous month over the real pipeline.
+        Assert.Equal(
+            ApiFactory.PreviousComparableMonthSaleValue,
+            costed.GetProperty("previousComparableMonthGrossRevenue").GetDecimal());
+        Assert.Equal(0m, uncosted.GetProperty("previousComparableMonthGrossRevenue").GetDecimal());
+
         Assert.NotEqual(JsonValueKind.Null, costed.GetProperty("todayDirectProfit").ValueKind);
         Assert.True(costed.GetProperty("todayDirectProfit").GetDecimal() > 0m);
+
+        // And reading it changes nothing else: that sale has no persisted COGS and is outside the
+        // last month the profitability facts are built from, so this machine still has no status.
+        Assert.Equal(JsonValueKind.Null, costed.GetProperty("profitabilityStatus").ValueKind);
+        Assert.Equal(ApiFactory.CostedSaleValue, costed.GetProperty("monthToDateGrossRevenue").GetDecimal());
 
         Assert.Equal(ApiFactory.UncostedSaleValue, uncosted.GetProperty("todayGrossRevenue").GetDecimal());
         Assert.Equal(
@@ -169,7 +185,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
     }
 
     /// <summary>
-    /// Redaction withholds the thirteen figures and changes nothing else: every other key of every
+    /// Redaction withholds the fifteen figures and changes nothing else: every other key of every
     /// machine in the list is byte-identical to the one a Manager is given over the same fleet.
     /// </summary>
     [Fact]
@@ -206,6 +222,8 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         {
             Assert.DoesNotContain(Literal(ApiFactory.CostedSaleValue), body, StringComparison.Ordinal);
             Assert.DoesNotContain(Literal(ApiFactory.UncostedSaleValue), body, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                Literal(ApiFactory.PreviousComparableMonthSaleValue), body, StringComparison.Ordinal);
             Assert.DoesNotContain(Literal(ApiFactory.CostOfGoodsSold), body, StringComparison.Ordinal);
             Assert.DoesNotContain("COGS", body, StringComparison.OrdinalIgnoreCase);
         }
@@ -398,6 +416,16 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         public const decimal UncostedSaleValue = 67.89m;
         public const decimal CostOfGoodsSold = 40.08m;
 
+        /// <summary>
+        /// The costed machine's sale inside the previous comparable month (issue #1180): 12:00 on
+        /// 15 September 2026 in Sydney, before the 15:00 that period runs to. It is deliberately
+        /// seeded <b>without</b> a persisted COGS, because it is outside the last month the
+        /// profitability facts are built from: if the wider read ever fed those facts, this machine's
+        /// <c>profitabilityStatus</c> and direct profits would change, which the figures test below
+        /// would fail on.
+        /// </summary>
+        public const decimal PreviousComparableMonthSaleValue = 234.56m;
+
         private const int BusinessId = 1;
         private const long SiteId = 9;
 
@@ -409,6 +437,10 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         private static readonly DateTime NowUtc = new(2026, 10, 15, 4, 0, 0, DateTimeKind.Utc);
 
         private static readonly DateTime SaleUtc = new(2026, 10, 15, 1, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>12:00 on 15 September 2026 in Sydney: inside the previous comparable month.</summary>
+        private static readonly DateTime PreviousComparableMonthSaleUtc =
+            new(2026, 9, 15, 2, 0, 0, DateTimeKind.Utc);
 
         private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
 
@@ -509,14 +541,24 @@ public sealed class MachineAndProductFinancialRedactionApiTests
 
             db.NayaxSales.AddRange(
                 CompletedCardSale(1, CostedMachineId, CostedSaleValue, CostOfGoodsSold),
-                CompletedCardSale(2, UncostedMachineId, UncostedSaleValue, null));
+                CompletedCardSale(2, UncostedMachineId, UncostedSaleValue, null),
+                CompletedCardSale(
+                    3,
+                    CostedMachineId,
+                    PreviousComparableMonthSaleValue,
+                    null,
+                    PreviousComparableMonthSaleUtc));
 
             await db.SaveChangesAsync();
             _seeded = true;
         }
 
         private static NayaxSales CompletedCardSale(
-            long transactionId, long machineId, decimal settlementValue, decimal? costOfGoodsSold) =>
+            long transactionId,
+            long machineId,
+            decimal settlementValue,
+            decimal? costOfGoodsSold,
+            DateTime? authorizedAtUtc = null) =>
             new()
             {
                 BusinessId = BusinessId,
@@ -525,7 +567,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 NayaxProductId = ProductId,
                 SettlementValue = settlementValue,
                 PaymentMethod = "Credit",
-                MachineAuthorizationTime = SaleUtc,
+                MachineAuthorizationTime = authorizedAtUtc ?? SaleUtc,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 CostOfGoodsSold = costOfGoodsSold,
                 UnitCostAtSale = costOfGoodsSold,

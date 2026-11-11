@@ -11,7 +11,9 @@ namespace InventoryApi.Tests.Application.Sites;
 /// <summary>
 /// The four sales periods a site row publishes (issue #1012): Today, This week, Last week and Month
 /// to date, every one of them resolved from the same <c>MachineDashboardWindow</c> the machine rows
-/// already use, so no period arithmetic of its own exists here to disagree with theirs.
+/// already use, so no period arithmetic of its own exists here to disagree with theirs - together
+/// with their comparison baselines, the previous comparable week, the previous comparable day
+/// (issue #1177) and the previous comparable month (issue #1180).
 ///
 /// <para>Each case runs on a fixed instant paired with the production
 /// <c>Australia/Sydney</c> calendar, because every boundary these figures are selected between is a
@@ -96,6 +98,7 @@ public class SiteSalesPeriodTests
         Assert.Equal(0m, site.MonthToDateRevenue);
         Assert.Equal(0m, site.PreviousComparableWeekRevenue);
         Assert.Equal(0m, site.PreviousComparableDayRevenue);
+        Assert.Equal(0m, site.PreviousComparableMonthRevenue);
     }
 
     /// <summary>
@@ -181,9 +184,11 @@ public class SiteSalesPeriodTests
 
     /// <summary>
     /// The read has to cover every period the row publishes from that period's own first instant,
-    /// and in the first half of a month that instant is last week's rather than the month's. A
-    /// lookback derived from a day count - sixteen days, or any other - happens to cover this one
-    /// and not the month-to-date case above, which is why it is derived from the window instead.
+    /// and since issue #1180 the earliest of them is always the previous comparable month's: the
+    /// previous calendar month begins before this month, before this week and before last week on
+    /// every date. A lookback derived from a day count could not cover it at all - the distance back
+    /// to the first of the previous month is between 28 and 62 days depending on the date - which is
+    /// why it is derived from the window.
     /// </summary>
     [Fact]
     public async Task The_completed_sales_read_starts_at_the_earliest_published_period()
@@ -191,15 +196,69 @@ public class SiteSalesPeriodTests
         var facts = Facts(
             // Monday 23 February 2026, 00:00 in Sydney: last week's first instant, which is before
             // the first instant of March.
-            Sale(LeftMachineId, 31m, Utc(2026, 2, 22, 13, 0)));
+            Sale(LeftMachineId, 31m, Utc(2026, 2, 22, 13, 0)),
+            // Sunday 1 February 2026, 00:00 in Sydney: the previous comparable month's own first
+            // instant, and the earliest instant the read now has to reach.
+            Sale(LeftMachineId, 13m, Utc(2026, 1, 31, 13, 0)));
 
         var site = Assert.Single(await Summaries(EarlyInMarch2026, facts));
 
         Assert.Equal(31m, site.LastWeekRevenue);
         Assert.Equal(0m, site.MonthToDateRevenue);
+        // The baseline runs to 21:00 on Wednesday 4 February, so it holds the sale on the first of
+        // the month and not the one on the twenty-third - which is itself proof the sale was read.
+        Assert.Equal(13m, site.PreviousComparableMonthRevenue);
 
         var request = Assert.Single(facts.CompletedSalesRequests);
-        Assert.Equal(EarlyInMarch2026.Window.LastWeek.StartUtc, request.FromUtc);
+        Assert.Equal(EarlyInMarch2026.Window.PreviousComparableMonth.StartUtc, request.FromUtc);
+        Assert.True(request.FromUtc < EarlyInMarch2026.Window.LastWeek.StartUtc);
+    }
+
+    /// <summary>
+    /// Last month's baseline (issue #1180): the previous calendar month up to the same point of the
+    /// month, by the comparable day's own business-local clock. Read at 21:00 on Wednesday 4 March
+    /// 2026 in Sydney, it is February from 1 February's own midnight (31 January 13:00 UTC) to 21:00
+    /// on Wednesday 4 February (4 February 10:00 UTC). Both bounds are inclusive, exactly as every
+    /// other site figure's are.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_comparable_month_counts_last_month_up_to_the_same_point_only()
+    {
+        var facts = Facts(
+            // Sunday 1 February 2026, 00:00 in Sydney: the baseline's first instant, on UTC
+            // 31 January.
+            Sale(LeftMachineId, 7m, Utc(2026, 1, 31, 13, 0)),
+            // Wednesday 4 February 2026, 21:00 in Sydney: exactly the cutoff, which is inclusive.
+            Sale(LeftMachineId, 11m, Utc(2026, 2, 4, 10, 0)),
+            // One millisecond later: last month, but past the point this month has reached.
+            Sale(LeftMachineId, 1000m, Utc(2026, 2, 4, 10, 0, 0, 1)),
+            // Saturday 31 January 2026, 23:59:59.999 in Sydney: one millisecond before February.
+            Sale(LeftMachineId, 2000m, Utc(2026, 1, 31, 12, 59, 59, 999)),
+            // This month, which the baseline it is compared with must never reach into.
+            Sale(LeftMachineId, 5m, Utc(2026, 3, 3, 10, 0)));
+
+        var site = Assert.Single(await Summaries(EarlyInMarch2026, facts));
+
+        Assert.Equal(18m, site.PreviousComparableMonthRevenue);
+        Assert.Equal(5m, site.MonthToDateRevenue);
+    }
+
+    /// <summary>
+    /// Membership is the machine's current site for the month baseline too: each site's figure is the
+    /// sum of its own machines' sales in that period and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_comparable_month_is_the_sum_of_the_machines_standing_at_the_site()
+    {
+        var facts = Facts(
+            Sale(LeftMachineId, 4m, Utc(2026, 2, 2, 10, 0)),
+            Sale(RightMachineId, 6m, Utc(2026, 2, 3, 10, 0)),
+            Sale(OtherSiteMachineId, 500m, Utc(2026, 2, 2, 10, 0)));
+
+        var summaries = await Summaries(EarlyInMarch2026, facts, TwoSiteFleet());
+
+        Assert.Equal(10m, summaries.Single(summary => summary.SiteId == SiteId).PreviousComparableMonthRevenue);
+        Assert.Equal(500m, summaries.Single(summary => summary.SiteId == OtherSiteId).PreviousComparableMonthRevenue);
     }
 
     /// <summary>

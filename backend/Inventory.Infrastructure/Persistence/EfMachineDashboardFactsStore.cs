@@ -35,9 +35,27 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         // day by the use case (issue #310), and MachineAuthorizationTime is a persisted true
         // UTC instant, so the comparisons below stay in one time base. This adapter no longer decides
         // which day "today" is.
-        var lastSales = await _db.NayaxSales.AsNoTracking()
-            .Where(sale => sale.MachineID == machineId && sale.MachineAuthorizationTime > window.NowUtc.AddMonths(-1))
+        //
+        // One query, reaching back as far as the earliest published period begins (issue #1180): the
+        // one-month lower bound below did not reach the start of the previous calendar month, which
+        // the previous comparable month's revenue is summed from. The bound is exclusive, so it is
+        // taken one millisecond before that first instant - a sale at exactly a period's StartUtc is
+        // inside that period, and must therefore be read.
+        var lastMonthFromUtc = window.NowUtc.AddMonths(-1);
+        var previousComparableMonthFromUtc = window.PreviousComparableMonth.StartUtc.AddMilliseconds(-1);
+        var salesFromUtc = previousComparableMonthFromUtc < lastMonthFromUtc
+            ? previousComparableMonthFromUtc
+            : lastMonthFromUtc;
+        var sales = await _db.NayaxSales.AsNoTracking()
+            .Where(sale => sale.MachineID == machineId && sale.MachineAuthorizationTime > salesFromUtc)
             .ToListAsync(cancellationToken);
+
+        // Exactly the sales the commission agreements below and the profitability status at the end
+        // were resolved from before the read widened - the last month - so no existing figure, period
+        // or status changes (issue #1180). Every period's own figures are selected from the full read
+        // by that period's instants, which is what they always were: each published period except the
+        // new one lies inside this last month.
+        var lastSales = sales.Where(sale => sale.MachineAuthorizationTime > lastMonthFromUtc).ToList();
 
         var agreementFrom = lastSales.Count == 0
             ? window.BusinessToday
@@ -62,18 +80,24 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             agreement.CreatedAt,
             agreement.UpdatedAt)).ToList();
 
-        var today0 = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.Today, machineId, cancellationToken);
-        var currentWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.CurrentWeek, machineId, cancellationToken);
-        var previousComparableWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.PreviousComparableWeek, machineId, cancellationToken);
-        var lastWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.LastWeek, machineId, cancellationToken);
-        var monthToDateFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.MonthToDate, machineId, cancellationToken);
-        var twoWeeksAgoFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.TwoWeeksAgo, machineId, cancellationToken);
+        var today0 = await BuildPeriodFactsAsync(sales, agreements, siteId, window.Today, machineId, cancellationToken);
+        var currentWeekFacts = await BuildPeriodFactsAsync(sales, agreements, siteId, window.CurrentWeek, machineId, cancellationToken);
+        var previousComparableWeekFacts = await BuildPeriodFactsAsync(sales, agreements, siteId, window.PreviousComparableWeek, machineId, cancellationToken);
+        var lastWeekFacts = await BuildPeriodFactsAsync(sales, agreements, siteId, window.LastWeek, machineId, cancellationToken);
+        var monthToDateFacts = await BuildPeriodFactsAsync(sales, agreements, siteId, window.MonthToDate, machineId, cancellationToken);
+        var twoWeeksAgoFacts = await BuildPeriodFactsAsync(sales, agreements, siteId, window.TwoWeeksAgo, machineId, cancellationToken);
 
         // Today's baseline is revenue only (issue #1177), so it is summed here from the same
         // completed sales the period figures above are built from and asks the fee engine for
         // nothing: no profit is published for it, so no commission is resolved and no processing fee
         // is looked up for its business dates.
-        var previousComparableDayGrossRevenue = CompletedSales(lastSales, window.PreviousComparableDay)
+        var previousComparableDayGrossRevenue = CompletedSales(sales, window.PreviousComparableDay)
+            .Sum(sale => sale.SettlementValue);
+
+        // Month to date's baseline, on exactly those terms (issue #1180): the same completed-sale
+        // policy over the same read, summed between the period's own instants, with no profit, no
+        // commission and no fee lookup.
+        var previousComparableMonthGrossRevenue = CompletedSales(sales, window.PreviousComparableMonth)
             .Sum(sale => sale.SettlementValue);
 
         var completedSales = lastSales.Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)).ToList();
@@ -88,7 +112,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
 
         return new MachineDashboardFacts(
             today0, currentWeekFacts, previousComparableWeekFacts, lastWeekFacts, monthToDateFacts, twoWeeksAgoFacts,
-            previousComparableDayGrossRevenue, statusInputs);
+            previousComparableDayGrossRevenue, previousComparableMonthGrossRevenue, statusInputs);
     }
 
     private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, MachineDashboardPeriodUtc period) =>
