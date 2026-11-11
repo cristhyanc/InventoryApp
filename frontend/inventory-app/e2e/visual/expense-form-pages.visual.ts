@@ -164,12 +164,35 @@ async function expectAmountsLayout(page: Page, width: number): Promise<void> {
 }
 
 /**
+ * Issue #1187: at desktop width every section fills the content area beside the sidebar, the same
+ * width the page header uses, instead of sitting in an 840px-capped column.
+ */
+async function expectFullWidthLayout(page: Page, width: number): Promise<void> {
+  const header = (await page.locator('[data-testid="expense-form-header"]').boundingBox())!;
+
+  for (const section of ['details', 'amounts', 'supporting']) {
+    const box = (await page.locator(`[data-testid="expense-section-${section}"]`).boundingBox())!;
+    expect(box.width, `${section} section is wider than 840px at ${width}px`).toBeGreaterThan(840);
+    expect(Math.abs(box.x - header.x), `${section} section left edge lines up with the header at ${width}px`).toBeLessThanOrEqual(
+      2
+    );
+    expect(
+      Math.abs(box.x + box.width - (header.x + header.width)),
+      `${section} section right edge lines up with the header at ${width}px`
+    ).toBeLessThanOrEqual(2);
+  }
+}
+
+/**
  * One whole-page capture. The viewport is grown to the page rather than passing `fullPage`, which is
  * the idiom the other visual runs use.
  */
 async function capture(page: Page, width: number, name: string): Promise<void> {
   await expectNoHorizontalOverflow(page, width);
   await expectAmountsLayout(page, width);
+  if (width === 1440) {
+    await expectFullWidthLayout(page, width);
+  }
   const height = await page.evaluate(() => document.documentElement.scrollHeight);
   await page.setViewportSize({ width, height });
   await page.screenshot({ path: join(screenshotDirectory, `${name}-${width}px.png`) });
