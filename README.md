@@ -2941,7 +2941,11 @@ same column, cell and popup — everything below applies to all three.
   supplier's website before purchasing." The badge itself is explained once, beside the table's
   existing observed-prices note, rather than repeated on every row that carries it: "Lowest recorded
   unit price among the eligible offers shown, excluding delivery and additional fees. Check the
-  supplier's final price before buying."
+  supplier's final price before buying." The wording changes nothing about which supplier wins: the
+  same offers are ranked in the same order, a tie still badges every tied offer, and an offer the
+  comparison ruled out is still shown with its reason and still takes no badge — even when its unit
+  price is lower. Desktop and mobile evidence:
+  [`docs/screenshots/issue-1183/`](docs/screenshots/issue-1183/).
 - **The price you are compared on follows your GST registration.** A GST-registered business is
   shown and compared on **ex-GST** prices, because that is what it really pays for a can; a business
   that is not registered is shown the price it hands over, **inc-GST**. Both figures are in the

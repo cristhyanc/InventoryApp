@@ -8472,6 +8472,46 @@ page still authors no dialog markup itself (`page-composition.guard.ts`). Render
 `frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
 `docs/screenshots/issue-1093/`.
 
+#### The comparison's scope notice and the Lowest unit price badge (issue #1183)
+
+`SupplierComparisonDialogComponent` states the comparison's own scope and limits before it shows a
+result. The owner-approved notice (`SUPPLIER_COMPARISON_NOTICE` in `cheapest-supplier-format.ts`) is
+the **first element inside the dialog's scrollable content**, above the table, so it is read without
+hovering and without scrolling past any supplier row. The row badge is
+`LOWEST_UNIT_PRICE_LABEL` - **"Lowest unit price"**, which replaced "Cheapest", because the old word
+could be read as a guarantee across the whole market rather than a statement about the offers this
+business has recorded. `LOWEST_UNIT_PRICE_EXPLAINER` says once, in visible text beside the table's
+existing observed-prices note rather than on hover or on every badged row, what the badge means; it
+renders only while `hasLowestUnitPriceOffer` is true, so the explainer never explains a badge that
+is not on screen.
+
+**This is wording only.** No eligibility, ranking, tie, freshness or GST rule moved, and no internal
+contract was renamed: `isCheapest`, `CheapestUnitOfferPolicy`, `SupplierPriceFreshnessPolicy`,
+`CheapestSupplierOffer` and the "Cheapest supplier" column name are all unchanged. The dialog still
+renders the server's offers in the server's own order and still badges exactly the offers whose
+`isCheapest` the server set - so an offer with a *lower* unit price that the server ruled ineligible
+is still listed with its reason and still takes no badge, and every offer in a tie still carries one.
+
+The exact wording and the badge's presence or absence are pinned by Jest in
+`supplier-comparison-dialog.component.spec.ts`. What Jest cannot see - that the notice is actually
+*visible* above the results, that it wraps, and that nothing is clipped or scrolls sideways - is
+measured in a browser by `frontend/inventory-app/e2e/visual/supplier-comparison-notice.visual.ts`,
+written to `docs/screenshots/issue-1183/`. At 1440px and 390px that run asserts the dialog's
+scroller is still at `scrollTop === 0` when the comparison opens, the whole notice is inside that
+scroller's visible box with the first supplier row below it, the notice and the explainer each
+occupy more than one line box and are not clipped by their own box
+(`scrollHeight <= clientHeight`), do not scroll sideways (`scrollWidth <= clientWidth`) and stay
+inside the viewport while the page itself never scrolls horizontally; it also re-asserts the ranking
+and eligibility rules above and that the related **Cheapest supplier** help opens and closes from
+the keyboard, returning focus to its trigger.
+
+It is a spec of its own rather than another block in `products-redesign.visual.ts` for a mechanical
+reason worth recording: the `e2e:visual` script chain (`npm run e2e:visual -- <path>`) forwards a
+**positional path** but npm swallows Playwright's own flags, so `--grep` cannot narrow a shared
+file. Running one issue's cases inside a shared spec therefore re-renders every other issue's
+committed captures and leaves them modified in the working tree, which the repair workflow's
+`git diff --quiet` check refuses to publish. A file is the unit the script can actually select.
+
 ### The Sites overview layout (issue #1128)
 
 **Sites** (`SiteListComponent`, route `/sites`) was redesigned on the Products page's `rr` scale. It
