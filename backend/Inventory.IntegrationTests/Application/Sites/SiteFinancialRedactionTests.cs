@@ -67,6 +67,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(site.LastWeekRevenue);
         Assert.Null(site.MonthToDateRevenue);
         Assert.Null(site.PreviousComparableDayRevenue);
+        Assert.Null(site.PreviousComparableMonthRevenue);
     }
 
     /// <summary>
@@ -104,6 +105,9 @@ public class SiteFinancialRedactionTests
         // The 5.00 sale is inside yesterday's elapsed time (issue #1177) and inside this week, so a
         // caller who holds the capability is given a real baseline rather than an empty one.
         Assert.Equal(5m, site.PreviousComparableDayRevenue);
+        // The 7.00 sale is at the previous comparable month's own first instant (issue #1180), which
+        // is in no other published period, so the month baseline is that sale and nothing else moved.
+        Assert.Equal(7m, site.PreviousComparableMonthRevenue);
         Assert.Single(facts.CompletedSalesRequests);
     }
 
@@ -128,6 +132,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(asOperator.LastWeekRevenue);
         Assert.Null(asOperator.MonthToDateRevenue);
         Assert.Null(asOperator.PreviousComparableDayRevenue);
+        Assert.Null(asOperator.PreviousComparableMonthRevenue);
         Assert.Equal(asOwner.SiteId, asOperator.SiteId);
         Assert.Equal(asOwner.SiteName, asOperator.SiteName);
         Assert.Equal(asOwner.MachineCount, asOperator.MachineCount);
@@ -159,6 +164,7 @@ public class SiteFinancialRedactionTests
         Assert.Equal(9m, site.TodayRevenue);
         Assert.Equal(17m, site.MonthToDateRevenue);
         Assert.Equal(5m, site.PreviousComparableDayRevenue);
+        Assert.Equal(7m, site.PreviousComparableMonthRevenue);
     }
 
     /// <summary>
@@ -326,6 +332,8 @@ public class SiteFinancialRedactionTests
                     MachineAuthorizationTime: Time.Window.PreviousComparableWeek.StartUtc),
                 new(MachineId, SettlementValue: 5m,
                     MachineAuthorizationTime: Time.Window.PreviousComparableDay.StartUtc),
+                new(MachineId, SettlementValue: 7m,
+                    MachineAuthorizationTime: Time.Window.PreviousComparableMonth.StartUtc),
             ],
             costBasis: CostBasis,
             commissionByPrice: CommissionByPrice,

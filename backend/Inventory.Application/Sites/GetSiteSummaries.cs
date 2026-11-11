@@ -23,8 +23,9 @@ namespace Inventory.Application.Sites;
 ///
 /// <para><b>Four published sales periods, and no period arithmetic of its own</b> (issue #1012). A
 /// summary publishes today, week-to-date, last week and month-to-date revenue, plus the
-/// previous-comparable-week baseline of the week's comparison and - since issue #1177 - the
-/// previous-comparable-day baseline of Today's. Each is
+/// previous-comparable-week baseline of the week's comparison, the previous-comparable-day baseline
+/// of Today's (issue #1177) and the previous-comparable-month baseline of Month to date's (issue
+/// #1180). Each is
 /// <see cref="MachineDashboardWindow"/>'s own period of that name, compared against the same
 /// persisted instants with the same inclusive bounds the machine rows use, which is what makes a
 /// site's figure the sum of the gross revenue of the machine rows grouped under it for every one of
@@ -243,6 +244,12 @@ public sealed class GetSiteSummaries
     /// not because it widens the bound. It never can: yesterday's start is inside the current
     /// business week except on a Monday, when it is inside last week, both of which are already
     /// here, so this bound and every figure that depends on it are unchanged (issue #1177).
+    ///
+    /// <see cref="MachineDashboardWindow.PreviousComparableMonth"/> is in it by the same rule and
+    /// <b>does</b> move the bound (issue #1180): the previous calendar month's own first instant is
+    /// earlier than every other published period's, so it is the minimum on every date. The figures
+    /// are unchanged - each is still selected between its own period's instants - and only the
+    /// read reaches further back.
     /// </summary>
     private static DateTime EarliestPublishedPeriodStartUtc(MachineDashboardWindow window) =>
         new[]
@@ -253,6 +260,7 @@ public sealed class GetSiteSummaries
             window.PreviousComparableWeek.StartUtc,
             window.LastWeek.StartUtc,
             window.MonthToDate.StartUtc,
+            window.PreviousComparableMonth.StartUtc,
         }.Min();
 
     /// <summary>
@@ -344,7 +352,9 @@ public sealed class GetSiteSummaries
             machineStocks,
             // Today's own baseline (issue #1177), summed by the same RevenueIn over the same read:
             // one more of the window's periods, with no arithmetic of its own here either.
-            RevenueIn(sales, window.PreviousComparableDay));
+            RevenueIn(sales, window.PreviousComparableDay),
+            // And Month to date's own baseline (issue #1180), on exactly those terms.
+            RevenueIn(sales, window.PreviousComparableMonth));
     }
 
     /// <summary>

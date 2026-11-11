@@ -95,6 +95,7 @@ public class MachineDashboardWindowResolutionTests
             return Task.FromResult(new MachineDashboardFacts(
                 period, period, period, period, period, period,
                 PreviousComparableDayGrossRevenue: 0m,
+                PreviousComparableMonthGrossRevenue: 0m,
                 new MachineProfitabilityStatusInputs(false, false, true, false)));
         }
     }

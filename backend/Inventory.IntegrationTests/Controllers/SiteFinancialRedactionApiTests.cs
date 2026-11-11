@@ -43,7 +43,8 @@ namespace InventoryApi.Tests.Controllers;
 ///
 /// <para>The host runs on a fixed clock, so every period the revenue figures are summed over - the
 /// business day, the week to date, the previous comparable week, since issue #1012 last week and
-/// month to date, and since issue #1177 the previous comparable day - is the same every run, and
+/// month to date, since issue #1177 the previous comparable day and since issue #1180 the previous
+/// comparable month - is the same every run, and
 /// each figure is a non-zero amount for a caller who may
 /// see them. A redacted <c>previousComparableWeekRevenue</c> is therefore distinguishable from the
 /// honest <c>0</c> an empty period would report.</para>
@@ -55,14 +56,14 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
     /// <summary>
     /// The revenue figures <c>Dashboard.ViewFinancials</c> governs on a site row. Issue #1012's two
-    /// additive periods and issue #1177's previous comparable day are here for the same reason the
-    /// first three are: they are sums over the one completed-sales read the capability decides
-    /// whether to make at all.
+    /// additive periods, issue #1177's previous comparable day and issue #1180's previous comparable
+    /// month are here for the same reason the first three are: they are sums over the one
+    /// completed-sales read the capability decides whether to make at all.
     /// </summary>
     private static readonly string[] SiteRevenueProperties =
     [
         "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
-        "monthToDateRevenue", "previousComparableDayRevenue",
+        "monthToDateRevenue", "previousComparableDayRevenue", "previousComparableMonthRevenue",
     ];
 
     private readonly ApiFactory _factory;
@@ -126,6 +127,7 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
                  {
                      ApiFactory.TodaysSaleValue, ApiFactory.PreviousComparableWeekSaleValue,
                      ApiFactory.PreviousComparableDaySaleValue, ApiFactory.YesterdayAfterTheCutoffSaleValue,
+                     ApiFactory.PreviousComparableMonthSaleValue, ApiFactory.LastMonthAfterTheCutoffSaleValue,
                      ApiFactory.EstimatedCardProfit,
                  })
         {
@@ -184,6 +186,39 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         Assert.Equal(
             ApiFactory.PreviousComparableDaySaleValue,
             site.GetProperty("previousComparableDayRevenue").GetDecimal());
+    }
+
+    /// <summary>
+    /// The contract for issue #1180's additive field, over the real pipeline: a site row publishes
+    /// <c>previousComparableMonthRevenue</c>, and it is last month's sales up to the same point of
+    /// the month and no further. The host's clock is 15:00 on Thursday 12 March in Sydney, so the
+    /// baseline is February up to 15:00 on 12 February: the seeded 13:00 sale on that day is in it
+    /// and the 17:00 sale on the same day is not. Neither is in any other published period, so the
+    /// figure also proves the completed-sales read now reaches back into the previous month.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.ManagerObjectId)]
+    [InlineData(ApiFactory.OwnerObjectId)]
+    public async Task A_site_row_publishes_last_months_sales_up_to_the_same_point(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync(SitesUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
+        Assert.Equal(
+            ApiFactory.PreviousComparableMonthSaleValue,
+            site.GetProperty("previousComparableMonthRevenue").GetDecimal());
+
+        // The month before is outside every other published period, so none of them moved.
+        Assert.Equal(ApiFactory.TodaysSaleValue, site.GetProperty("todayRevenue").GetDecimal());
+        Assert.Equal(
+            ApiFactory.TodaysSaleValue
+                + ApiFactory.PreviousComparableWeekSaleValue
+                + ApiFactory.PreviousComparableDaySaleValue
+                + ApiFactory.YesterdayAfterTheCutoffSaleValue,
+            site.GetProperty("monthToDateRevenue").GetDecimal());
     }
 
     /// <summary>
@@ -322,6 +357,19 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         /// </summary>
         public const decimal YesterdayAfterTheCutoffSaleValue = 88.23m;
 
+        /// <summary>
+        /// The seeded completed sale inside the previous comparable month (issue #1180): 13:00 on
+        /// Thursday 12 February in Sydney, which is before the 15:00 that month's baseline runs to -
+        /// and more than a month before the read, which only the widened lookback reaches.
+        /// </summary>
+        public const decimal PreviousComparableMonthSaleValue = 505.19m;
+
+        /// <summary>
+        /// The seeded completed sale on that same comparable day but past the cutoff: 17:00 on
+        /// Thursday 12 February. It belongs to no period this response publishes.
+        /// </summary>
+        public const decimal LastMonthAfterTheCutoffSaleValue = 606.27m;
+
         /// <summary>The seeded product's AVCO unit cost, which every role may see.</summary>
         public const decimal AverageUnitCost = 2m;
 
@@ -441,7 +489,11 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
                 CompletedSale(transactionId: 1, TodaysSaleValue, NowUtc.AddHours(-2)),
                 CompletedSale(transactionId: 2, PreviousComparableWeekSaleValue, NowUtc.AddDays(-7).AddHours(-2)),
                 CompletedSale(transactionId: 3, PreviousComparableDaySaleValue, NowUtc.AddDays(-1).AddHours(-2)),
-                CompletedSale(transactionId: 4, YesterdayAfterTheCutoffSaleValue, NowUtc.AddDays(-1).AddHours(1)));
+                CompletedSale(transactionId: 4, YesterdayAfterTheCutoffSaleValue, NowUtc.AddDays(-1).AddHours(1)),
+                // 13:00 and 17:00 on Thursday 12 February in Sydney (issue #1180): the first is
+                // inside the previous comparable month, the second is past its cutoff.
+                CompletedSale(transactionId: 5, PreviousComparableMonthSaleValue, new DateTime(2026, 2, 12, 2, 0, 0, DateTimeKind.Utc)),
+                CompletedSale(transactionId: 6, LastMonthAfterTheCutoffSaleValue, new DateTime(2026, 2, 12, 6, 0, 0, DateTimeKind.Utc)));
 
             await db.SaveChangesAsync();
             _seeded = true;

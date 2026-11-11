@@ -174,9 +174,10 @@ public class GetSiteSummariesTests
     /// <summary>
     /// The completed-sales lookback is a UTC instant, the time base
     /// <c>MachineAuthorizationTime</c> is stored in, and since issue #1012 it is the first instant of
-    /// the earliest period a summary publishes rather than a fixed day count back from now. On this
-    /// business day - Thursday 12 March 2026 - that is the start of March, and the bound is the
-    /// business-day boundary of the first, not midnight UTC.
+    /// the earliest period a summary publishes rather than a fixed day count back from now. Since
+    /// issue #1180 added the previous comparable month that period is always the earliest, so on this
+    /// business day - Thursday 12 March 2026 - the bound is the business-day boundary of 1 February
+    /// rather than of 1 March, and never midnight UTC.
     /// </summary>
     [Fact]
     public async Task Handle_RequestsTheCompletedSalesLookbackInUtc()
@@ -186,8 +187,9 @@ public class GetSiteSummariesTests
         await UseCase(Fleet(), facts).Handle(CancellationToken.None);
 
         var request = Assert.Single(facts.CompletedSalesRequests);
-        Assert.Equal(Time.Window.MonthToDate.StartUtc, request.FromUtc);
+        Assert.Equal(Time.Window.PreviousComparableMonth.StartUtc, request.FromUtc);
         Assert.Equal(DateTimeKind.Utc, request.FromUtc.Kind);
+        Assert.True(request.FromUtc < Time.Window.MonthToDate.StartUtc);
     }
 
     private static GetSiteSummaries UseCase(

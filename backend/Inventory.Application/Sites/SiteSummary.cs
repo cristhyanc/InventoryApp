@@ -53,6 +53,15 @@ public sealed record SiteMachineStock(
 /// <see cref="MachineStocks"/> so every field before it keeps its name, order and value, and
 /// membership is the machine's current <c>CustomerID</c> in that period too.</para>
 ///
+/// <para><b>And Month to date's</b> (issue #1180). <see cref="PreviousComparableMonthRevenue"/> is
+/// <see cref="Inventory.Application.Machines.MachineDashboardWindow.PreviousComparableMonth"/>
+/// summed by that same rule: the previous calendar month up to the same point of the month - today's
+/// day of it, or its last day when it is shorter - as now is into this one. It is appended after the
+/// day baseline, is counted with the same policy and the same site membership as every figure above,
+/// and like them it is withheld from a caller without <c>Dashboard.ViewFinancials</c>. The
+/// completed-sales read reaches back to this period's own first instant, which is what makes the
+/// figure complete rather than short.</para>
+///
 /// <para><b>Every revenue figure is withheld from a request without
 /// <c>Dashboard.ViewFinancials</c></b> (issue #697). They are <see langword="null"/> for such a
 /// request and <see cref="GetSiteSummaries"/> does not read the site's completed sales at all, so
@@ -83,4 +92,5 @@ public sealed record SiteSummary(
     decimal? LastWeekRevenue,
     decimal? MonthToDateRevenue,
     IReadOnlyList<SiteMachineStock> MachineStocks,
-    decimal? PreviousComparableDayRevenue);
+    decimal? PreviousComparableDayRevenue,
+    decimal? PreviousComparableMonthRevenue);
