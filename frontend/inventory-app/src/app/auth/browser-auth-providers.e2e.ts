@@ -49,6 +49,31 @@ export const e2eTestAccount = {
 } as unknown as AccountInfo;
 
 /**
+ * The one way a browser run can ask this stub for the *signed-out* application: a `sessionStorage`
+ * flag the test sets before the bundle loads (issue #1191).
+ *
+ * The public landing page only exists for a visitor nobody has signed in as - `signedOutVisitorGuard`
+ * matches it at `/` on exactly that condition, and the page chooses Sign in/Start free over Open app
+ * the same way - so a browser check of that page needs this stub to report no account. It is a flag
+ * rather than a second build configuration because the signed-in default has to stay the default for
+ * the whole workflow suite.
+ *
+ * It grants nothing: this file is compiled into the `e2e` build alone, and reporting no account is
+ * strictly *less* than reporting one. The E2E host still decides every request for itself from the
+ * synthetic actor header, so nothing here can make an unauthenticated request succeed.
+ */
+export const E2E_SIGNED_OUT_KEY = 'e2e-signed-out';
+
+/**
+ * Read per call rather than once at module load: a test sets the flag with an init script before
+ * bootstrap, and the guard and the landing page both ask afterwards.
+ */
+function e2eTestAccounts(): AccountInfo[] {
+  const signedOut = globalThis.sessionStorage?.getItem(E2E_SIGNED_OUT_KEY) === 'true';
+  return signedOut ? [] : [e2eTestAccount];
+}
+
+/**
  * Only the members the composition actually calls: `initialize`, which `app.config.ts` runs as an
  * APP_INITIALIZER on every build, and the ones the application shell uses (`app.component.ts`) -
  * redirect handling, the active account, and the login/logout commands, which an E2E run never
@@ -59,8 +84,8 @@ export const e2eTestAccount = {
 export function createE2ETestMsalService(): MsalService {
   return {
     instance: {
-      getActiveAccount: () => e2eTestAccount,
-      getAllAccounts: () => [e2eTestAccount],
+      getActiveAccount: () => e2eTestAccounts()[0] ?? null,
+      getAllAccounts: () => e2eTestAccounts(),
       setActiveAccount: () => undefined
     },
     initialize: () => of(undefined),

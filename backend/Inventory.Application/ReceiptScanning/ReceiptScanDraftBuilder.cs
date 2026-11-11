@@ -7,11 +7,20 @@ namespace Inventory.Application.ReceiptScanning;
 ///
 /// <para><strong>Every money decision is the Domain's.</strong> The line arithmetic is
 /// <see cref="ReceiptLineArithmeticPolicy"/>, the levy is <see cref="ReceiptLevyPolicy"/>, the date is
-/// <see cref="ReceiptPurchaseDatePolicy"/>, and the pack size is <see cref="ReceiptPackSizes"/>. What
-/// this builder does is the orchestration those pure rules cannot do for themselves: group the lines
-/// by kind, put every amount on the printed total's GST basis for the levy comparison, apply whatever
+/// <see cref="ReceiptPurchaseDatePolicy"/>, the pack size is <see cref="ReceiptPackSizes"/>, and a
+/// pack size the receipt did not print is <see cref="ReceiptPackSizeSuggestionPolicy"/>. What this
+/// builder does is the orchestration those pure rules cannot do for themselves: group the lines by
+/// kind, put every amount on the printed total's GST basis for the levy comparison, apply whatever
 /// the levy policy decided, and drop every suggestion that does not name something this business
 /// owns.</para>
+///
+/// <para><strong>A suggested pack size is applied before the levy is reconciled, and from the amount
+/// the receipt printed</strong> (issue #1165). The ratio is judged against the line's own discounted,
+/// GST-inclusive amount - never one carrying a levy share, which this application allocates per unit
+/// and which would therefore depend on the very pack size being suggested - and the line is then
+/// evaluated again with that pack size, so its units, its unit cost and its own list of what is still
+/// missing all come from the one arithmetic policy rather than being patched afterwards. A drink line
+/// whose pack size was suggested consequently has a unit count the levy can be shared by.</para>
 ///
 /// <para><strong>A suggestion that is not this business's own is not a suggestion.</strong> The ids
 /// come from a language model, so a product or supplier id that is not in the lists this business was
@@ -28,14 +37,21 @@ public static class ReceiptScanDraftBuilder
     /// <param name="payload">The reader's validated answer.</param>
     /// <param name="productIds">Every product id this business owns, as the scan was read against.</param>
     /// <param name="supplierIds">Every supplier id this business owns.</param>
+    /// <param name="history">
+    /// The last purchase of each candidate product from the suggested supplier (issue #1165).
+    /// <see cref="ReceiptPackSizeHistory.None"/> suggests nothing, which leaves every pack size
+    /// exactly as the receipt printed it.
+    /// </param>
     public static ReceiptScanDraft? Build(
         ReceiptScanPayload payload,
         IReadOnlySet<long> productIds,
-        IReadOnlySet<int> supplierIds)
+        IReadOnlySet<int> supplierIds,
+        ReceiptPackSizeHistory history)
     {
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(productIds);
         ArgumentNullException.ThrowIfNull(supplierIds);
+        ArgumentNullException.ThrowIfNull(history);
 
         // A line with nothing delivered is not a line of this purchase (issue #1163): the reader is
         // told to leave it out, and one that arrives anyway is left out here, which makes the rule
@@ -46,7 +62,9 @@ public static class ReceiptScanDraftBuilder
             return null;
         }
 
-        var evaluated = lines.Select((line, index) => new EvaluatedLine(index, line, Evaluate(line))).ToList();
+        var evaluated = lines
+            .Select((line, index) => Evaluate(index, line, productIds, history))
+            .ToList();
 
         var charges = evaluated.Where(line => line.Line.Kind is ReceiptLineKind.Delivery).ToList();
         var packaging = evaluated.Where(line => line.Line.Kind is ReceiptLineKind.Package).ToList();
@@ -64,10 +82,11 @@ public static class ReceiptScanDraftBuilder
 
         return new ReceiptScanDraft(
             Read(payload.SupplierName),
-            payload.SupplierId is { } supplierId
-                && supplierId <= int.MaxValue
-                && supplierIds.Contains((int)supplierId)
-                ? ReceiptScanValue<int>.Suggested((int)supplierId)
+            // Resolved in the one place that answer is resolved, which is also where the pack-size
+            // lookup reads it from: the supplier a pack size came from and the supplier the draft
+            // shows cannot disagree (issue #1165).
+            ReceiptPackSizeLookup.SuggestedSupplierId(payload, supplierIds) is { } supplierId
+                ? ReceiptScanValue<int>.Suggested(supplierId)
                 : null,
             ReceiptPurchaseDatePolicy.Choose(payload.DeliveryDate, payload.ReceiptDate, payload.OrderDate)
                 is { } purchaseDate
@@ -84,7 +103,62 @@ public static class ReceiptScanDraftBuilder
             draftLines);
     }
 
-    private static ReceiptLineArithmetic Evaluate(ReceiptScanPayloadLine line) =>
+    /// <summary>
+    /// One line's arithmetic, and the pack size this application suggested for it when the receipt
+    /// printed none (issue #1165). A suggested pack size makes the line worth evaluating twice: once
+    /// as printed, to get the amount the ratio is judged against, and once with the pack size, so
+    /// every figure the draft publishes - the units, the unit cost and what is still missing - comes
+    /// from the one arithmetic policy.
+    /// </summary>
+    private static EvaluatedLine Evaluate(
+        int index,
+        ReceiptScanPayloadLine line,
+        IReadOnlySet<long> productIds,
+        ReceiptPackSizeHistory history)
+    {
+        var printed = EvaluateArithmetic(line);
+        var suggestion = SuggestPackSize(line, printed.Amount, productIds, history);
+
+        return suggestion is null
+            ? new EvaluatedLine(index, line, printed, null)
+            : new EvaluatedLine(
+                index,
+                line,
+                EvaluateArithmetic(line with { UnitsPerPack = suggestion.UnitsPerPack }),
+                suggestion);
+    }
+
+    /// <summary>
+    /// The pack size the business's own purchase history suggests for this line, or
+    /// <see langword="null"/> when nothing is suggested.
+    ///
+    /// <para>Every condition is a refusal the issue names: only a stock line, only one that printed
+    /// no pack size, only one whose delivered pack count was read, only a product this business owns
+    /// and was read against, only a product it has bought from this supplier before, and only then
+    /// what <see cref="ReceiptPackSizeSuggestionPolicy"/> says about the ratio.</para>
+    /// </summary>
+    private static ReceiptPackSizeSuggestion? SuggestPackSize(
+        ReceiptScanPayloadLine line,
+        decimal? amount,
+        IReadOnlySet<long> productIds,
+        ReceiptPackSizeHistory history)
+    {
+        if (!ReceiptPackSizeLookup.NeedsAPackSize(line)
+            || line.ProductId is not { } productId
+            || !productIds.Contains(productId)
+            || history.For(productId) is not { } lastPurchase)
+        {
+            return null;
+        }
+
+        return ReceiptPackSizeSuggestionPolicy.Suggest(amount, line.DeliveredPacks, lastPurchase.UnitCost)
+            is { } unitsPerPack
+            ? new ReceiptPackSizeSuggestion(
+                unitsPerPack, ReceiptPackSizeSource.LastPurchase, lastPurchase.PurchaseDate)
+            : null;
+    }
+
+    private static ReceiptLineArithmetic EvaluateArithmetic(ReceiptScanPayloadLine line) =>
         ReceiptLineArithmeticPolicy.Evaluate(
             line.LineTotal,
             line.DiscountTotal,
@@ -216,7 +290,12 @@ public static class ReceiptScanDraftBuilder
             line.Line.Kind,
             ReceiptScanValue<string>.Read(line.Line.Text),
             Read(line.Line.DeliveredPacks),
-            Read(line.Line.UnitsPerPack),
+            // Read when the receipt printed it; suggested, with the purchase it came from, when
+            // issue #1165's rule supplied one. A printed pack size is never replaced, which is
+            // structural here: a line that printed one is never given a suggestion at all.
+            line.Suggestion is { } suggestion
+                ? ReceiptScanValue<int>.Suggested(suggestion.UnitsPerPack)
+                : Read(line.Line.UnitsPerPack),
             // Suggested: the units are this application's product of two values it read, not a
             // figure the receipt printed.
             Suggested(line.Arithmetic.Units),
@@ -233,7 +312,8 @@ public static class ReceiptScanDraftBuilder
             // A levy share changes what the line costs, never whether it has a cost at all - it is
             // only ever allocated to a line that already had an amount and a unit count - so the
             // arithmetic's own list of what is still missing stands unchanged.
-            line.Arithmetic.Missing);
+            line.Arithmetic.Missing,
+            line.Suggestion);
     }
 
     /// <summary>
@@ -269,8 +349,15 @@ public static class ReceiptScanDraftBuilder
     private static ReceiptScanValue<decimal>? Suggested(decimal? value) =>
         value is { } amount ? ReceiptScanValue<decimal>.Suggested(amount) : null;
 
-    /// <summary>One payload line and the arithmetic of it, kept together with its position.</summary>
-    private sealed record EvaluatedLine(int Index, ReceiptScanPayloadLine Line, ReceiptLineArithmetic Arithmetic);
+    /// <summary>
+    /// One payload line and the arithmetic of it, kept together with its position and with the pack
+    /// size this application suggested for it, when it suggested one.
+    /// </summary>
+    private sealed record EvaluatedLine(
+        int Index,
+        ReceiptScanPayloadLine Line,
+        ReceiptLineArithmetic Arithmetic,
+        ReceiptPackSizeSuggestion? Suggestion);
 
     /// <summary>
     /// What the levy reconciliation decided: what each line carries, and which levy lines are

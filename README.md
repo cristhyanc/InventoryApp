@@ -491,77 +491,59 @@ The journey a second live business needs is now complete end to end. The applica
 
 ## The public landing page
 
-A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
-application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
-integration, a three-step workflow, pricing and FAQs. It makes no request to the API at all, so
-opening or refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954, refreshed for
+the public beta by issue #1191): what the application does, an example dashboard drawn from clearly
+labelled sample data, the optional Nayax integration, a three-step workflow and FAQs. It makes no
+request to the API at all, so opening or refreshing it never asks for a sign-in or reads any business,
+account or Nayax data.
 
+- The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
+  compare supplier prices and plan your next refill in one place." Directly under it sits the public
+  beta notice - "Pro access is free during our public beta. No credit card required." - and, directly
+  under that, the export notice: "Data exports are not part of the free beta. Downloading your data
+  as CSV or Excel will need a paid plan once paid plans launch." No price, plan card or beta end date
+  appears anywhere on the page (see [Pricing on the landing page](#pricing-on-the-landing-page-issue-971)
+  below).
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
   is configured, otherwise a redirect straight to Microsoft that returns to `/`.
-- **Get started** opens the business application at `/apply` (see
+- **Start free** opens the business application at `/apply` (see
   [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
-  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
-  page instead, exactly as before.
+  sign-in first - the same `/apply` journey the button used under its earlier "Get started" label.
+  While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome page instead,
+  exactly as before.
 - **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
   **Open app** button returns to `/`.
 
-Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
-the page presents Nayax only as an optional connection for supported sales data and the reports
-built on it. The page's footer has **no Privacy Policy, Terms of Service or Contact link**: the
-Privacy Policy and Terms of Use page layouts exist (issue #1190, `frontend/inventory-app/src/app/public/legal/`),
-but the legal copy on them is not approved yet, so both pages are reachable only in a development
-build and nothing links to either one; add the footer link once the copy is approved and the pages
-are published. The approved designs and every wording change are recorded in
-[docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md) and
-[docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax; the
+Nayax section states "Use core inventory on its own. Connect Nayax for sales integration.", with no
+reference to a paid plan. The three workflow steps are "Set up your business", "Add products and
+machines" and "Plan and record refills". The footer carries a contact line - the
+`admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" - and **no Privacy
+Policy or Terms of Service link**: the Privacy Policy and Terms of Use page layouts exist (issue #1190,
+`frontend/inventory-app/src/app/public/legal/`), but the legal copy on them is not approved yet, so
+both pages are reachable only in a development build and nothing links to either one; add the footer
+link once the copy is approved and the pages are published. The approved designs and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md)
+and [docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
+
+The page never scrolls sideways on a phone: it was measured in Chromium at every width from 320px to
+390px, and the viewport meta tag still allows pinch zoom. Signed-out screenshots:
+[1440px](docs/screenshots/issue-1191/homepage-signed-out-1440px.png) and
+[390px](docs/screenshots/issue-1191/homepage-signed-out-390px.png), captured by
+`frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
+[docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
+them).
 
 ### Pricing on the landing page (issue #971)
 
-A **Pricing** link in the header, mobile menu and footer navigation scrolls to a section before the
-FAQs with three static plan cards - `landing-content.ts`'s `LANDING_PLANS`, read only by the page,
-never fetched - matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed: **Free** (A$0, 1 GB of purchase/expense attachments, every manual feature - Dashboard,
-Machines, Inventory, Purchases, Supplier orders, Suppliers, Expenses and manual Pick List entry -
-with no supplier comparisons and no reports), **Starter** (A$7 per business per month; Free plus
-20 GB of attachments, daily cheapest-supplier comparisons, and the Bookkeeping and GST reports with
-their CSV/XLSX export) and **Pro** (A$15 per business per month; Starter plus the Nayax connection
-and everything that needs it today - Sites, Site Commissions, the Daily, Transactions,
-Reconciliation, Machines and Products reports, machine latest sales, Sync Restock, dashboard sales
-refresh, the Nayax sales file import and the calculated Pick List matrix - with 5 connected
-machines included and A$2/month per additional connected machine).
-
-**Coming soon, not purchasable.** Paid enforcement, billing and the plan catalogue API (issue #965's
-other child tasks) are not live. Free carries an "Available now" badge; Starter and Pro carry a
-"Coming soon" badge. Every plan card's action is the same **Get started**/**Open app** as the rest
-of the page - the existing business application journey - so there is no checkout, trial promise or
-waitlist, nothing a visitor could mistake for a live purchase. The Pro card also states explicitly
-that plan entitlement and a *usable* Nayax connection are separate: Pro will include the Nayax
-connection, but connected features still need the business's own working Nayax credentials, exactly
-as today.
-
-**Existing copy reconciled with the plan catalogue.** The "Optional sales connection" and "Optional
-integration" facts in the Nayax section now say Nayax will be a Pro plan feature once paid plans go
-live (it stays open to every business today, and connecting it stays optional even on Pro), and the
-former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
-figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
-is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
-purchasable, what the storage allowances will do once the paid plans launch, and that the extra
-connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
-treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
-asserted here until it is decided.
-
-**Plan limits are still described as future behaviour, because none of them applies to a visitor
-today.** The attachment quota is implemented (issue #968) but applies only once a deployment
-switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
-needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
-allowances and the connected-machine charge start when the paid plans launch and that nothing is
-limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
-80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
-[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
-limit, a paused upload or a per-machine charge as today's behaviour;
-`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
-attaching a document has since shipped, issue #976, and the page claims nothing about it either
-way.)
+Issue #971 gave the landing page a **Pricing** section with Free/Starter/Pro plan cards, matching the
+catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965) agreed. Issue #1191
+removed it for the public beta: the page shows no Pricing section, no plan card and no price, because
+every business gets full access at no cost while the beta runs (see [The public landing
+page](#the-public-landing-page) above for the beta and export notices that replace it). The plan
+catalogue itself, `Business plans (Free, Starter and Pro)` below, is unaffected - only its landing-page
+presentation is off while plan enforcement and billing stay off. Reintroducing pricing on the page is
+tracked separately, for whenever paid plans actually launch.
 
 ## The dashboard and the menu
 
@@ -2376,9 +2358,14 @@ and record it through Add Purchase as usual, which is still where a purchase is 
   stream), which this application deliberately does not read — is refused with "This PDF could not be read.
   Try a photo of the receipt instead." rather than being sent off anyway.
 - **Quantities are what was delivered, not what was ordered**, and a line delivered as nothing is left out.
-- **A pack size that is not printed on the receipt stays unknown** — never 1. A carton whose size the receipt
-  does not state comes back with no units and asks you for the pack size, rather than quietly recording a
-  carton's price as the price of one bottle.
+- **A pack size that is not printed on the receipt is suggested from your last purchase** — and never
+  guessed. Some suppliers never print how many units are in a carton. When one does not, the scan looks up
+  what you last paid that same supplier for that product: if the line works out to a whole number of units a
+  pack at essentially that price, it offers that pack size, marks it as coming from that purchase and shows
+  the purchase's date, and fills in the units and unit cost. If the price has moved, the packs delivered are
+  unclear, or you have never bought it from that supplier, the pack size stays unknown — never 1 — and the
+  line asks you for it, rather than quietly recording a carton's price as the price of one bottle. A pack
+  size the receipt *does* print is always used as printed.
 - **A container deposit levy goes to the drinks it was charged for**, when the receipt's own totals say it is
   not already inside the drink prices. When they say it is — the usual case for an online order that prints it
   twice — nothing is added. When the totals say neither, no line's cost is changed and the levy comes back as
@@ -3025,6 +3012,52 @@ Every menu and dialog starts closed, opens one at a time, works from the keyboar
 Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
 `docs/screenshots/issue-1093/`.
 
+## Adding and editing a supplier
+
+The Suppliers page is a list, and everything you do to one supplier happens in a dialog over it, so
+you never lose your place in the list (issue #1174). There is no New/Edit form above the table any
+more.
+
+- **Add supplier** is in the page header and opens the dialog empty; each row's **Edit** opens the
+  same dialog filled in with that supplier. One form serves both: Name, Contact name, Phone, Email,
+  Website and Address, with **Create supplier** or **Save changes** as the primary action beside
+  **Cancel**.
+- **On a desktop** it is a centred panel about 600px wide that never grows past the window — the
+  fields scroll inside it and the action row stays visible. **On a phone** it is a full-screen form
+  with the fields stacked, clear of the notch and the home indicator, and you can still pinch to
+  zoom.
+- **Saving says so.** The primary action shows its progress and cannot be pressed twice. A refused
+  save keeps every value you typed and shows the server's own sentence above the fields — including
+  the refusals a supplier from the platform's list produces. The list is re-read and a success
+  message appears only after the save has actually gone through.
+- **Closing an unchanged form just closes it.** Cancel, the ✕, Escape and a click outside a form you
+  *have* changed ask first: **Discard changes** or **Keep editing**, and keeping takes you back to
+  the form exactly as you left it.
+- **GST defaults** is a button on each supplier's row and opens that supplier's
+  [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the same three
+  settings, with the same permission: a role that may read but not change them sees the choices
+  without a Save.
+- **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
+  A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
+  the list exactly as it was and shows the server's reason.
+- **In a read-only support session** neither **Add supplier** nor **Delete** is offered, for the
+  same reason the **Not used** switch is not: a Super Admin looking at your business can read it,
+  never write. Each row's **Edit** still opens the dialog, so a supplier's stored details can be
+  read there, with **Save changes** disabled.
+- **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
+  inside itself, closes on Escape and returns focus to the control that opened it; the page behind
+  it cannot be clicked or tabbed into while it is open.
+
+The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
+add** section are unchanged, and no API, model or stored field changed with this.
+
+Screenshots of the reviewed states, with sample suppliers, are in `docs/screenshots/issue-1174/`:
+[Add, 1440px](docs/screenshots/issue-1174/add-supplier-dialog-1440px.png),
+[Edit a supplier from the platform list, 1440px](docs/screenshots/issue-1174/edit-linked-supplier-dialog-1440px.png),
+[Add, 390px](docs/screenshots/issue-1174/add-supplier-dialog-390px.png),
+[Add, 360px](docs/screenshots/issue-1174/add-supplier-dialog-360px.png) and
+[Discard changes, 1440px](docs/screenshots/issue-1174/discard-changes-dialog-1440px.png).
+
 ## A supplier's website
 
 A supplier can record an optional **Website** beside its name, contact and address, so you can open
@@ -3074,9 +3107,10 @@ supplier with a **Platform list** label.
   has already been added and leaves one supplier; a supplier that serves another state is not offered
   and cannot be added.
 
-- **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
-  Website fields are read-only, with a note saying why. The API refuses a change to either with
-  `400` and a message you can read, whatever a client sends.
+- **Its name and website are the platform's.** Open a linked supplier in the Edit dialog (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)) and the Name and Website fields
+  are read-only, with a note saying why. The API refuses a change to either with `400` and a message
+  you can read, whatever a client sends.
 - **It cannot be deleted.** There is no Delete button on a linked row, and the endpoint refuses the
   delete.
 - **Its contact details and GST defaults are yours.** Contact name, phone, email and address save
@@ -3312,9 +3346,12 @@ classified:
   else changes, adds or removes a product while you are confirming, the change is refused rather
   than applied to a different set of products — the dialog says so, shows the new number and asks
   you to confirm again.
-- **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
+- **Suppliers → the supplier's row → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
-  defaults**. The three are independent: a charge never inherits the product-line default.
+  defaults**. The three are independent: a charge never inherits the product-line default. Since
+  issue #1174 this opens in its own dialog from the row, rather than appearing under the page while
+  a supplier is being edited (see
+  [Adding and editing a supplier](#adding-and-editing-a-supplier)).
 
 The two single-record panels — a product's own GST rule and a supplier's GST defaults — read the
 stored setting first, and the save button stays disabled until it is on screen,
