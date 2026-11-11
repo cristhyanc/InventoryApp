@@ -7900,11 +7900,11 @@ request to an account, business, access or Nayax endpoint. `public/public-routin
 
 **Its actions reuse the existing journeys.** **Sign in** follows the header's own decision - the
 `/sign-in` chooser when a customer identity authority is configured, otherwise a workforce redirect
-whose start page is `/`. **Get started** navigates to `/apply`, the business application route:
-being guarded, it takes a signed-out visitor through sign-in first (with the `/apply` destination
-held), and the application form sends anyone it is not for - a member, or anyone while
-`SelfServiceOnboarding:Enabled` is off - to the page their account state calls for. No new account
-flow exists.
+whose start page is `/`. **Start free** (labelled **Get started** before issue #1191's public-beta
+copy refresh) navigates to `/apply`, the business application route: being guarded, it takes a
+signed-out visitor through sign-in first (with the `/apply` destination held), and the application
+form sends anyone it is not for - a member, or anyone while `SelfServiceOnboarding:Enabled` is off -
+to the page their account state calls for. No new account flow exists.
 
 **Page composition.** The routed page lays out the sections and owns the in-page navigation (scroll
 to a section and move focus to it, instant under `prefers-reduced-motion`), the skip link, the
@@ -7921,34 +7921,22 @@ intentional copy change are recorded in [docs/design/restockroo-landing-page.md]
 The application is client-rendered, so the title and description are set in the browser; nothing
 here adds server rendering or promises search-engine indexing.
 
-**Pricing section (issue #971).** A fifth entry, `{ id: 'pricing', label: 'Pricing' }`, was added to
-`LANDING_SECTIONS` before `'faqs'`, so the header, its mobile menu and the footer navigation pick it
-up with no component change; the routed page places the `#pricing` section itself between
-`#how-it-works` and `#faqs`, as the issue required. The section renders `LANDING_PLANS` — Free,
-Starter and Pro, each a plain object (name, price, billing note, description, feature strings, an
-optional badge and an optional note) — with no new injected service and no request, preserving the
-page's "makes no request" guarantee; the catalogue is the plan proposal [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
-agreed (1 GB/20 GB/20 GB attachment allowances, Starter's supplier comparisons and Bookkeeping/GST
-reports, Pro's Nayax connection and connected reports, 5 included connected machines and A$2/month
-per extra one), reproduced here only as static marketing copy — it is not read from, and does not
-have to stay byte-for-byte in step with, a backend plan catalogue, because issue #965's catalogue
-endpoint does not exist yet. Free carries an "Available now" badge; Starter and Pro carry "Coming
-soon" and every plan's action is the same `getStarted()`/**Open app** the rest of the page uses, so
-there is no second, parallel purchase flow and nothing to keep anonymous. Pro's card carries its own
-`note` making the plan-entitlement/usable-connection distinction explicit, matching issue #965's
-rule that the two are never promised together. **A plan limit is copy about the future, never a
-described current behaviour**: attachment quota enforcement (issue #968) and document-optional
-purchases (issue #976) have not shipped, so the section's lead paragraph, Free's own `note` and the
-storage FAQ all say the allowances — and the 80% warning and 100% upload pause — start when the paid
-plans launch, and that storage is unlimited today; nothing on the page claims a cap, a blocked
-upload or a purchase recorded without its document now. That is the same rule as the rest of the
-page's copy, and it is guarded as a copy regression in `landing-page.component.spec.ts`. The GST tax treatment of the advertised prices is
-one of #965's open launch decisions and is deliberately not stated here until it is decided — see
-[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for how the rest of the
-page's copy is kept inside what the application actually does, which is the same rule applied to the
-"Optional sales connection", "Optional integration" and the renamed "Inventory value at cost" facts
-this issue reconciled with the plan catalogue (each now says what is free today versus what Pro will
-gate once paid plans are live, instead of implying Nayax or reporting are unconditionally free).
+**Pricing section (issue #971, removed by issue #1191).** Issue #971 added a fifth `LANDING_SECTIONS`
+entry, `{ id: 'pricing', label: 'Pricing' }`, and a `#pricing` section rendering `LANDING_PLANS` -
+Free, Starter and Pro plan cards matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed. Issue #1191 removed the section, `LANDING_SECTIONS`' `'pricing'` entry, `LANDING_PLANS` and
+its `LandingPlan` type entirely for the public beta: every business gets full access at no cost while
+the beta runs, so the page shows no price, plan card or "Coming soon" badge, and the three FAQs that
+only made sense next to pricing ("When can I subscribe…", "What happens if I reach my storage
+limit?", "Will connecting Nayax cost extra?") were dropped with it. The beta and export notices under
+the hero (`landing-beta-notice`, `landing-export-notice`) are what the page says about cost and
+exports instead. The "Optional sales connection" and "Optional integration" Nayax facts, which issue
+#971 had tied to Pro, were reworded again to drop every paid-plan reference, and the Nayax heading is
+now "Use core inventory on its own. Connect Nayax for sales integration." The backend plan catalogue issue #965
+agreed (see [README § Business plans](../README.md#business-plans-free-starter-and-pro)) is
+unaffected; only its landing-page presentation is off. See
+[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for the full before/after
+copy table.
 
 ### Runtime configuration and API contracts
 

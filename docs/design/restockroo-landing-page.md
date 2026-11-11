@@ -59,14 +59,49 @@ wording rather than adding features. These are the changes, each checked against
 | Dashboard machines table: a per-machine "Stock level" percentage and an "Operational"/"Review" status | A "Products" count per machine | A fill percentage implies live machine telemetry, which the issue rules out. |
 | Dashboard stock table: "Supplier benchmark" with "Primary:" prices | "Supplier · last unit cost" | A purchase records a unit cost per product; there is no benchmark. |
 
-The required copy is unchanged: the headline "Know your stock. Understand your costs.", the
-integration heading "Core inventory works on its own. Connect Nayax when you need it.", the three
-step titles, the four FAQ questions, the "Example dashboard · Sample data" label and every sample
-figure the issue lists.
+The required copy was unchanged by issue #954/#971: the headline, the integration heading, the three
+step titles, the four core FAQ questions, the "Example dashboard · Sample data" label and every sample
+figure the issue lists. The headline, integration heading and step titles were later replaced for the
+public beta - see [Public beta refresh](#public-beta-refresh-issue-1191) below; the four core FAQs,
+the dashboard label and the sample figures are still exactly as this issue approved them.
 
-## Pricing copy (issue #971)
+## Public beta refresh (issue #1191)
 
-The pricing section the homepage gained in issue #971 follows the same rule, with one addition that
+**A second Stitch export exists, for visual direction only.** The owner attached a new homepage
+desktop and mobile export to issue #1191. The issue states its own copy is complete without it, and
+that where the export's wording and the issue's wording differ, the issue wins - so, unlike the
+original export above, this one was not read line by line for implementation copy, only for layout
+direction. Its receipt-upload, planogram, route, vehicle and fleet content, "Banksia Hotel",
+"Brisbane" and "© 2025" are from its own placeholder business and are not implemented: none of them
+is a Restockroo capability, the example dashboard and the refill/supplier-comparison examples it
+shows are issue #1192's work (after this issue merges), and the copyright year stays the real current
+year.
+
+**What changed from the original approved copy.** Issue #1191 moved the page from its original
+subscription-first copy to public-beta copy, while every capability-accuracy rule above still holds:
+
+| Original (issue #954/#971) | Public beta (issue #1191) | Why |
+| --- | --- | --- |
+| Headline "Know your stock. Understand your costs." | "Know what to buy. Pack what you need." | The issue's approved public beta headline. |
+| Lead "Purpose-built inventory management for products, purchases and vending machines. Track stock movements, organise suppliers and review costs without messy spreadsheets." | "Manage vending stock, compare supplier prices and plan your next refill in one place." | The issue's approved public beta lead. |
+| Micro-line "Standalone inventory management · Optional Nayax sales sync" | Public beta notice "Pro access is free during our public beta. No credit card required." directly followed by the export notice "Data exports are not part of the free beta. Downloading your data as CSV or Excel will need a paid plan once paid plans launch." | The issue requires both notices near the hero, with no price, plan card or beta end date anywhere on the page. |
+| Primary action "Get started" | "Start free" | Copy only; the action is still the unchanged `/apply` business-application journey. |
+| Nayax heading "Core inventory works on its own. Connect Nayax when you need it." | "Use core inventory on its own. Connect Nayax for sales integration." | The issue's required exact sentence. |
+| Nayax facts: "Nayax will be a Pro plan feature once paid plans are live…" / "Nayax will be a Pro feature once paid plans launch…" | "Nayax is open to every business today. Connect it for sales integration whenever you are ready." / "Connecting Nayax stays optional: core inventory keeps working without it." | The issue requires every remaining Nayax reference to drop the paid-plan framing. |
+| Steps "Create your business" / "Add your products and opening stock" / "Record purchases and stock movements" | "Set up your business" / "Add products and machines" / "Plan and record refills" | The issue's required step titles; the second and third steps' descriptions were widened to mention machines and the Pick List refill plan they now name. |
+| Pricing section, its nav/footer links, and the "When can I subscribe…", "What happens if I reach my storage limit?" and "Will connecting Nayax cost extra?" FAQs | Removed entirely | The issue removes pricing from the page for the public beta; see [Pricing on the landing page](../../README.md#pricing-on-the-landing-page-issue-971) in the README. |
+| Footer "© {year} Restockroo. All rights reserved." with no contact details | "© {year} Restockroo" plus an `admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" | The issue's required footer contact details. Still no Privacy Policy or Terms of Service link - see Follow-up below. |
+
+No claim of receipt scanning or automatic reading of a purchase document was added: the "Purchases and
+receipts" feature card and FAQ answer already only describe recording a purchase and attaching its
+receipt, which issue #1166's manual-assisted scan is consistent with, and that wording is unchanged.
+
+## Pricing copy (issue #971, removed from the page by issue #1191)
+
+**This section is history, not current behaviour.** The pricing section it describes was removed from
+the page by issue #1191 for the public beta (see the table above); it is kept here only so the
+reasoning behind the original copy - and the exact wording a future pricing return should or should
+not restore - is not lost. The rest of this section follows the same rule, with one addition that
 matters more than a narrowed phrase: **a plan limit nothing enforces yet is written as what happens
 once the paid plans launch, never as today's behaviour.** Attachment quota enforcement (issue #968)
 and recording a purchase without attaching a document (issue #976) have not shipped - attachment
@@ -80,6 +115,7 @@ regression in `landing-page.component.spec.ts` fails if it does not.
 
 ## Follow-up
 
-- **Privacy, terms and contact.** The footer has no Privacy Policy, Terms of Service or Contact link
-  because none of those destinations exists. Authoring them is legal and business work outside
-  issue #954; once a real page or address exists, add the link to the footer.
+- **Privacy and terms.** The footer has no Privacy Policy or Terms of Service link because neither
+  page exists yet; issue #1190 publishes them, and the link is added once it ships. Issue #1191 added
+  a real contact point in the meantime - the `admin@restockroo.com.au` mailto link and "Eunhye Chung
+  · ABN 69 235 469 430" - so the footer is no longer contact-free.

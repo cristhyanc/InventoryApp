@@ -14,7 +14,6 @@ import {
   LANDING_DESCRIPTION,
   LANDING_FAQS,
   LANDING_FEATURES,
-  LANDING_PLANS,
   LANDING_SECTIONS,
   LANDING_STEPS,
   LANDING_TITLE,
@@ -29,17 +28,16 @@ import { APP_ENTRY_URL } from './landing-routes';
  * `/home` to everyone. It is rendered in the public layout (`PUBLIC_LAYOUT_DATA`), so the
  * authenticated shell is not on the page.
  *
- * **It makes no request.** The copy, the example dashboard and the Free/Starter/Pro pricing cards
- * (issue #971) are static (`landing-content.ts`), and the page injects no API service: a visitor
- * can read it, refresh it and leave without the application asking any business, account or Nayax
- * endpoint anything.
+ * **It makes no request.** The copy and the example dashboard are static (`landing-content.ts`),
+ * and the page injects no API service: a visitor can read it, refresh it and leave without the
+ * application asking any business, account or Nayax endpoint anything.
  *
  * **Its actions reuse the existing journeys, unchanged:**
  *
  * - **Sign in** is the header's own sign-in decision: with a customer identity authority configured
  *   it opens the `/sign-in` chooser, and otherwise it redirects straight to the workforce authority,
  *   asking to return to `/` - the application's entry route - rather than to the landing page.
- * - **Get started** opens the business application route (`/apply`). That route is guarded, so a
+ * - **Start free** opens the business application route (`/apply`). That route is guarded, so a
  *   signed-out visitor is taken through sign-in first (and the chooser offers creating an account
  *   where a customer identity authority is configured), and the application form sends anyone it
  *   is not for - a member, or anyone while self-service onboarding is switched off - on to the page
@@ -62,7 +60,6 @@ export class LandingPageComponent implements OnInit, OnDestroy {
   readonly nayaxPoints = NAYAX_POINTS;
   readonly integrationFacts = INTEGRATION_FACTS;
   readonly steps = LANDING_STEPS;
-  readonly plans = LANDING_PLANS;
   readonly faqs = LANDING_FAQS;
   readonly appEntry = APP_ENTRY_URL;
   readonly year = new Date().getFullYear();
