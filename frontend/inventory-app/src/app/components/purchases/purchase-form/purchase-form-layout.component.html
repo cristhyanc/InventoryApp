@@ -10,6 +10,24 @@
   @if (error) {
     <div class="alert alert-danger" role="alert" [attr.data-testid]="testId('purchase-error')">
       <p class="alert-title">{{ error }}</p>
+      @if (offerSaveWithoutReceipt) {
+        <!--
+          The one way forward when the attachment storage allowance refused the receipt (issue
+          #968): the purchase is always recordable without a document (issue #976), and nothing is
+          saved until this is chosen. Everything entered stays on screen either way.
+        -->
+        <p class="m-0">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            [attr.data-testid]="testId('purchase-save-without-receipt')"
+            [disabled]="saving || sessionActive"
+            (click)="saveWithoutReceipt.emit()"
+          >
+            Save the purchase without the receipt
+          </button>
+        </p>
+      }
     </div>
   }
 
@@ -92,7 +110,7 @@
         Purchased items
       </h2>
       <span class="rounded-full border border-rr-teal-border bg-rr-teal-tint px-2 py-0.5 text-xs font-semibold text-rr-teal" [attr.data-testid]="testId('purchase-item-count')">
-        {{ items.length }} {{ items.length === 1 ? 'item' : 'items' }}
+        {{ savedItems.length }} {{ savedItems.length === 1 ? 'item' : 'items' }}
       </span>
     </div>
 
@@ -102,6 +120,20 @@
       </div>
     }
 
+  <!--
+    The scanned receipt sits beside the lines it produced on a wide screen and above them below it
+    (issue #1166), so the pack maths and the prices can be checked against the paper without leaving
+    the form. It is first in the document, which is what puts it above the lines on a phone; the grid
+    places it in the second column from `xl` up. A form that has scanned nothing renders none of it.
+  -->
+  <div [class]="scannedReceipt ? 'xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,15rem)] xl:items-start' : ''">
+    @if (scannedReceipt) {
+      <div class="border-b border-rr-line p-4 xl:col-start-2 xl:row-start-1 xl:border-b-0 xl:border-l">
+        <app-purchase-receipt-preview [file]="scannedReceipt" />
+      </div>
+    }
+
+    <div class="min-w-0 xl:col-start-1 xl:row-start-1">
     <!-- Column headings for the wide table layout; each line labels its own fields below that. -->
     <div class="hidden border-b border-rr-line bg-rr-canvas px-4 py-2 text-xs font-semibold uppercase tracking-wide text-rr-muted xl:grid xl:grid-cols-[minmax(0,1fr)_5.5rem_8rem_8rem_9.5rem_2.75rem] xl:items-center xl:gap-3">
       <span class="flex items-center gap-1">
@@ -134,6 +166,8 @@
       <div
         [attr.data-testid]="testId('purchase-item')"
         class="grid grid-cols-6 items-start gap-x-2 gap-y-2 border-b border-rr-line px-4 py-3 xl:grid-cols-[minmax(0,1fr)_5.5rem_8rem_8rem_9.5rem_2.75rem] xl:items-center xl:gap-3"
+        [class.bg-rr-canvas]="isSkippedLine(item)"
+        [attr.data-skipped]="isSkippedLine(item) ? 'true' : null"
       >
         <div class="col-span-5 row-start-1 min-w-0 xl:col-span-1">
           @if (isFixedProductLine(item)) {
@@ -246,6 +280,72 @@
         @if (priceProblem(item)) {
           <p class="field-error col-span-6 m-0">{{ priceProblem(item) }}</p>
         }
+
+        @if (item.scan) {
+          <!--
+            What the scan said about this line (issue #1166): the receipt's own text, the pack maths
+            to check it against, which values are this application's suggestion rather than
+            quotations, and the choice that keeps a line that is not stock out of the purchase.
+          -->
+          <div
+            class="col-span-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-rr-muted"
+            [attr.data-testid]="testId('purchase-item-scan')"
+          >
+            <span class="min-w-0 break-words font-medium text-rr-navy" [attr.data-testid]="testId('purchase-item-scan-text')">
+              {{ item.scan.text }}
+            </span>
+            @if (item.scan.packMaths) {
+              <span class="tabular-nums" [attr.data-testid]="testId('purchase-item-scan-pack-maths')">{{ item.scan.packMaths }}</span>
+            }
+            @if (item.scan.packSizeSuggested) {
+              <span class="rounded-full border border-rr-line px-2 py-0.5" [attr.data-testid]="testId('purchase-item-scan-pack-source')">
+                Pack size {{ packSizeFromLastPurchaseLabel }}
+              </span>
+            }
+            @if (item.scan.productSuggested) {
+              <span class="rounded-full border border-rr-line px-2 py-0.5" [attr.data-testid]="testId('purchase-item-scan-product-source')">
+                Suggested product
+              </span>
+            }
+            @if (item.scan.kind === 'other') {
+              <label class="inline-flex min-h-11 items-center gap-2 font-semibold text-rr-navy" [for]="lineFieldId(index, 'skip')">
+                <input
+                  type="checkbox"
+                  class="h-4 w-4"
+                  [id]="lineFieldId(index, 'skip')"
+                  [attr.data-testid]="testId('purchase-item-skip')"
+                  [checked]="isSkippedLine(item)"
+                  (change)="onSkipChange(item, $any($event.target).checked)"
+                />
+                {{ notStockSkipLabel }}
+              </label>
+            }
+          </div>
+
+          @for (sentence of scanMissing(item); track sentence) {
+            <p class="field-error col-span-6 m-0" [attr.data-testid]="testId('purchase-item-scan-missing')">{{ sentence }}</p>
+          }
+        }
+      </div>
+    }
+
+    @for (levy of scannedLevies; track $index) {
+      <!--
+        A levy the receipt's own totals could not place on any product (issue #1163's unresolved
+        outcome). It has no product picker and is never saved as a purchase line - the receipt-total
+        check counts it instead, so the difference is explained rather than left to be chased.
+      -->
+      <div
+        class="flex flex-wrap items-start justify-between gap-2 border-b border-rr-line bg-rr-warn-bg px-4 py-3"
+        [attr.data-testid]="testId('purchase-scan-levy')"
+      >
+        <div class="min-w-0">
+          <p class="m-0 text-sm font-medium text-rr-navy">{{ levy.text }}</p>
+          <p class="m-0 text-xs text-rr-warn-text">{{ levy.message }}</p>
+        </div>
+        <p class="m-0 text-sm font-semibold tabular-nums text-rr-navy" [attr.data-testid]="testId('purchase-scan-levy-amount')">
+          {{ levy.amount !== null ? (levy.amount | currency) : '—' }}
+        </p>
       </div>
     }
 
@@ -256,6 +356,8 @@
       </button>
       <span class="text-sm text-rr-muted">Items subtotal: <strong class="text-rr-navy">{{ itemsSubtotal | currency }}</strong></span>
     </div>
+    </div>
+  </div>
   </section>
 
   <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
@@ -424,6 +526,17 @@
             }
           }
         </output>
+        @if (amountOutsideLines) {
+          <!--
+            Why the comparison reconciles: the scanned receipt printed amounts this purchase does
+            not record. They are counted against the receipt total and are never part of what the
+            purchase costs.
+          -->
+          <p class="m-0 text-xs text-rr-muted" [attr.data-testid]="testId('purchase-receipt-outside-lines')">
+            Counts {{ amountOutsideLines | currency }} the receipt printed that this purchase does not record
+            (skipped items and unresolved levies). It is not part of the purchase total.
+          </p>
+        }
       </div>
     </section>
   </div>
