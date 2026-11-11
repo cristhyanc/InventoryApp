@@ -32,6 +32,28 @@ export function offerOnlinePriceNote(offer: CheapestSupplierOffer): string | nul
 /** What the popup says about a match the collector made that nobody has checked yet (#941). */
 export const AUTOMATIC_MATCH_NOTE = 'Matched automatically';
 
+/**
+ * The notice above the comparison table (issue #1183's owner-approved wording), visible without
+ * hovering or scrolling through the results: the comparison's scope and its limits, so the badge
+ * below is never read as a guarantee across the whole market.
+ */
+export const SUPPLIER_COMPARISON_NOTICE =
+  'Check before buying: Prices and availability may change and can vary by location, membership or '
+  + 'promotion. Comparisons use recorded unit prices from supported suppliers and exclude delivery '
+  + 'and additional fees. Confirm the product, pack size and final total on the supplier’s '
+  + 'website before purchasing.';
+
+/** The badge on the comparison's lowest-priced row or rows (issue #1183, replacing "Cheapest"). */
+export const LOWEST_UNIT_PRICE_LABEL = 'Lowest unit price';
+
+/**
+ * What the {@link LOWEST_UNIT_PRICE_LABEL} badge means (issue #1183), said once beside the table
+ * rather than repeated on every row that carries it.
+ */
+export const LOWEST_UNIT_PRICE_EXPLAINER =
+  'Lowest recorded unit price among the eligible offers shown, excluding delivery and additional '
+  + 'fees. Check the supplier’s final price before buying.';
+
 /** `$0.95`, the one money format in this column. Rounding happens here, where it is displayed. */
 export function money(value: number): string {
   return `$${value.toFixed(2)}`;
