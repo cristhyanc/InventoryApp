@@ -9903,17 +9903,45 @@ the same treatment under its own heading, and the one unheaded fallback group - 
 at all - is not `isCollapsible`, so it keeps neither indent nor rule.
 
 **One set of columns, one period.** Site and machine rows share Site / machine, Stock, Low / empty,
-the selected period's sales, the applicable comparison and Actions. One `<fieldset>` of Today / This
-week / Last week / Month to date buttons - shared by both layouts, defaulting to This week - chooses
-the period, and the sales heading names it (`Sales · This week`), so no figure is shown under a
-heading that does not say which period it is. The comparison column is "vs same time last week" only
-while This week is selected, because that published part-week comparison is the only one either
-response carries; the other periods get a neutral heading and say there is no comparison for them
-rather than borrowing one. Both responses publish all four periods since issue #1012, so a site row
-shows its own figure for whichever one is selected — `$0.00` for a period with no completed sale,
-`Unavailable` for one the response withheld — and the card no longer carries a note about periods a
-site is silent for. `siteSales` returns a figure or `null`, with no third "not published" answer, and
-nothing in the component sums or derives a site figure.
+the selected period's sales, that period's comparison and Actions. One `<fieldset>` of Today / This
+week / This month buttons - shared by both layouts, defaulting to This week - chooses the period
+(issue #1178 narrowed the four of issue #972 to these three; see **Three comparison modes** below),
+and the sales heading names it (`Sales · This week`), so no figure is shown under a heading that does
+not say which period it is. Both responses publish every period the card offers since issue #1012,
+so a site row shows its own figure for whichever one is selected — `$0.00` for a period with no
+completed sale, `Unavailable` for one the response withheld — and the card no longer carries a note
+about periods a site is silent for. `siteSales` returns a figure or `null`, with no third "not
+published" answer, and nothing in the component sums or derives a site figure.
+
+**Three comparison modes (issue #1178).** The owner reviewed the card on 11 November 2026 and asked
+for a comparison in every mode, each with the baseline amount on screen beside the percentage. The
+card therefore offers exactly the three periods both responses publish a comparable baseline for:
+Today against the previous business date to this time of day
+([issue #1177](#yesterdays-same-time-sales-as-todays-baseline-issue-1177)), This week against the
+existing previous comparable week, and This month - the existing `monthToDateRevenue` /
+`monthToDateGrossRevenue` figures - against the previous calendar month to the same point
+([issue #1180](#last-months-same-point-sales-as-this-months-baseline-issue-1180)). The headings are
+"vs same time yesterday", "vs same time last week" and "vs same time last month", and each
+percentage carries the amount it was worked out from, labelled "Yesterday to this time", "Last week
+to this time" or "Last month to this time", on the site rows, the expanded machine rows, the fleet
+total and both layouts. `COMPARISON_HEADINGS` and `BASELINE_LABELS` hold that wording once per
+period, and `siteComparison`/`machineComparison` answer one period's own current-and-baseline pair,
+so a figure is never compared against a window it is not about. The period id stays `monthToDate`
+because it still names the figure it shows. **Last week is gone from this card only**: it is a whole
+previous week, which no same-elapsed-time baseline exists for, and a whole period is never a
+baseline. Every API field, `lastWeek*` included, is untouched and is still read elsewhere, and
+nothing published, redacted or calculated on the server changed - this is a frontend, read-only
+change over the two existing responses.
+
+The three answers a comparison can give are the shared `trendLabel`/`trendClass` ones, unchanged: the
+arrow and percentage, **No prior sales** for a baseline that is a known `0` - shown with the `$0.00`
+it is, because a window with no sale is a fact - and **Unavailable** when either figure was withheld,
+which is never rendered as `$0.00`. A row whose current figure is `null` while its baseline is
+published says Unavailable for the percentage and still states the published baseline amount, because
+that amount is a figure the response carries. A member without `Dashboard.ViewFinancials` sees no
+period control, no sales, no percentage and no baseline amount, exactly as before: all of it is
+inside the card's existing capability condition. The former `NO_PERIOD_COMPARISON` state
+("No comparison for this period") no longer exists, because no period is without one.
 
 **Stock comes from the sites read, and since issue #1013 each machine row carries its own.** The
 sites read is still the only authoritative source for a stock figure, and nothing derives one in
@@ -9950,10 +9978,14 @@ and the machine name keeps being the row's real anchor with issue #494's row-lin
 totals row covers the machine fleet, summed over `machines` rather than over the groups, so
 collapsing a group cannot change it and a site figure is never added into a machine total; a period
 total appears only when every machine's figure for that period is known, and is "Unavailable"
-otherwise. The pre-existing inconsistency #972 reported is carried across unchanged and is still not
-fixed here (a comparison change is out of scope): the fleet total's week comparison falls back to a
-machine's full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`,
-mixing a full week into a part-week comparison.
+otherwise. **The fleet comparison follows the same rule since issue #1178**: `comparisonTotals()`
+sums every machine's current figure and every machine's baseline for the selected period and
+compares the two sums, and one `null` - either figure, any machine - makes both sums unknown, so the
+percentage *and* the baseline amount report Unavailable. That replaces the inconsistency issue #972
+introduced and issue #987 carried across: the week comparison used to substitute a machine's full
+`lastWeekGrossRevenue` for a missing `previousComparableWeekGrossRevenue`, mixing a whole week into a
+part-week comparison, and to count a missing current figure as `0`, which understated the fleet and
+made the change look worse than it was. Neither substitution exists now, in any of the three modes.
 
 **The title help button (issue #1015).** The owner reviewed the card on 31 October 2026 and asked
 for the explanations beside the title rather than as full-width rows between the header and the
@@ -10055,7 +10087,8 @@ migration and no new Nayax call: the data was already persisted and already read
 
 Both dashboard reads published a baseline for This week and none for Today, so the combined card
 showed "No comparison for this period" whenever Today was selected. Issue #1177 publishes that
-baseline on the server; the card change is issue #1178.
+baseline on the server; the card reads it as Today's comparison since issue #1178 (see
+[Site and machine performance](#site-and-machine-performance-issue-987), **Three comparison modes**).
 
 **One new period on the shared window, and no new calendar member.**
 `MachineDashboardWindow.PreviousComparableDay` is described in full under [Time](#time) above: the
@@ -10101,7 +10134,8 @@ and no new query: the sales were already read.
 
 Issue #1177 gave Today a baseline and This week already had one, so Month to date was the remaining
 period the combined card had nothing to compare against. Issue #1180 publishes that baseline on the
-server; the card change is issue #1178.
+server; the card reads it as This month's comparison since issue #1178 (see
+[Site and machine performance](#site-and-machine-performance-issue-987), **Three comparison modes**).
 
 **One new period on the shared window, and no new calendar member.**
 `MachineDashboardWindow.PreviousComparableMonth` is described in full under [Time](#time) above: the

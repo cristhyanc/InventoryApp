@@ -596,15 +596,31 @@ changed, and every "Unavailable" still means unavailable, never zero.
     closes it, and Escape hands focus back to the button. It appears only when the card has rows:
     while it is loading, after a failed read with nothing to show, or when the business has no
     sites or machines, there is no help button, exactly as there was no explanation row before.
-  - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
-    date buttons above the table choose the period for every row, and the sales column names it. The
-    comparison column shows the published "vs same time last week" figure while This week is
-    selected and says there is no comparison for the other periods, because that is the only
-    comparison these reads publish. Sites and machines both publish all four periods, so a site row
-    shows its own sales figure for whichever one you choose, on a wide screen and on a phone; a
-    period with no completed sale shows `$0.00`, and a figure your role may not see shows as
-    Unavailable. A site's figure is the sum of the machines standing at it, worked out on the server
-    for exactly the period and business days the column names.
+  - **One period at a time, shared by both layouts, and each one is a comparison** (issue #1178).
+    The Today / This week / This month buttons above the table choose the period for every row, and
+    the sales column names it; This week is what the card opens on. Each period is compared against
+    **the same elapsed window in the previous period**, not a whole previous day, week or month:
+    Today against "vs same time yesterday", This week against "vs same time last week", This month
+    against "vs same time last month". Every site row, every expanded machine row and the fleet
+    total show the percentage change *and*, beneath it, the amount it was worked out from -
+    "Yesterday to this time", "Last week to this time" or "Last month to this time" - so a
+    comparison is never a percentage with nothing behind it. For example, $150 this week against
+    $100 last week to this time reads `↑ 50.0%` with `$100.00` under it. Sites and machines publish
+    every one of the three periods, so a site row shows its own sales figure for whichever one you
+    choose, on a wide screen and on a phone; a period with no completed sale shows `$0.00`, and a
+    figure your role may not see shows as Unavailable. A site's figure is the sum of the machines
+    standing at it, worked out on the server for exactly the period and business days the column
+    names. Last week is not one of this card's periods any more: it is a whole week, which no
+    same-elapsed-time baseline exists for. Other screens still show it.
+  - **A baseline of nothing and a baseline nobody published are different answers.** A known zero
+    baseline shows `$0.00` with **No prior sales** instead of a percentage - there were no sales in
+    that window to compare against - while a figure the response withheld or did not know shows as
+    **Unavailable**, never as `$0.00`. The fleet total sums every machine's current figure and every
+    machine's baseline and compares the two sums; if any machine is missing either figure, the
+    fleet's percentage and its baseline amount both show Unavailable rather than a total that quietly
+    counts a missing machine as zero or falls back to a whole previous week. A role without
+    permission to see financial figures is shown no period buttons, no sales, no comparison and no
+    baseline amounts, exactly as before.
   - **Every machine row shows its own stock level** (issue #1013). `GET api/sites` already fetched
     every site machine's selections to work out the site percentage; it now publishes that split as
     well, so a machine row carries its own percentage, bar and status in words - worked out on the
