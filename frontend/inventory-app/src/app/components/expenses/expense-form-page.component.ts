@@ -12,6 +12,7 @@ import { SupplierService } from '../../services/supplier.service';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { PendingWorkGuarded } from '../pick-list/pick-list-leave.guard';
@@ -149,6 +150,7 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
     private readonly provider: ProviderAvailabilityService,
     private readonly router: Router,
     private readonly route: ActivatedRoute,
+    private readonly businessTimeZone: BusinessTimeZoneService,
     supportSession: SupportSessionService
   ) {
     this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
@@ -308,7 +310,7 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
       // Add expense: there is nothing to read, so the form opens on a brand-new expense.
       this.expenseId = null;
       this.loading = false;
-      this.value = newExpenseFormValue();
+      this.value = newExpenseFormValue(this.businessTimeZone.timeZoneId);
       return;
     }
 
