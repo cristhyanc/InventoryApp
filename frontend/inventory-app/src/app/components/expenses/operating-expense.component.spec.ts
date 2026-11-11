@@ -78,40 +78,59 @@ afterEach(() => TestBed.resetTestingModule());
  * extending #554). A session grants `ExpensesManage`, so this page's controls would otherwise
  * still render and its handlers would otherwise still call the API.
  *
- * Since issue #1167 Add Expense and Edit are links to the dedicated pages rather than buttons that
+ * Since issue #1167 Add expense and Edit are links to the dedicated pages rather than buttons that
  * open a card here, so what the register must withhold is those links; the pages refuse the write
- * themselves as well (see `expense-form-page.component.spec.ts`).
+ * themselves as well (see `expense-form-page.component.spec.ts`). Since issue #1170 Delete is a
+ * menu item in each row's overflow menu, behind a confirmation, so what the register withholds is
+ * that whole menu - and both halves of the delete, the ask and the write, are guarded.
  */
 describe('OperatingExpenseComponent write controls during a support session (issue #659)', () => {
-  it('hides Add Expense, Edit and Delete while a session is active', async () => {
+  it('hides Add expense, Edit and the delete menu while a session is active', async () => {
     const { host } = await render({ sessionActive: of(true) });
 
     expect(linkHrefs(host, 'expenses-add')).toEqual([]);
     expect(linkHrefs(host, 'expenses-edit')).toEqual([]);
-    expect(Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim())).not.toContain('Delete');
+    expect(host.querySelector('[data-testid="expense-row-menu"]')).toBeNull();
+    expect(host.querySelector('[data-testid="expense-card-menu"]')).toBeNull();
   });
 
-  it('shows Add Expense, Edit and Delete while no session is active', async () => {
-    const { host } = await render({ sessionActive: of(false) });
+  it('shows Add expense, Edit and the delete menu while no session is active', async () => {
+    const { fixture, host } = await render({ sessionActive: of(false) });
 
     expect(linkHrefs(host, 'expenses-add')).toEqual(['/expenses/new']);
     expect(linkHrefs(host, 'expenses-edit')).toEqual(['/expenses/1/edit']);
-    expect(Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim())).toContain('Delete');
+
+    (host.querySelector('[data-testid="expense-row-menu"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(host.querySelector('[data-testid="expense-delete"]')?.textContent?.trim()).toBe('Delete');
   });
 
-  it('does not delete while a session is active, even if the handler is invoked directly', async () => {
+  it('does not even ask while a session is active, if the handler is invoked directly', async () => {
+    const { component, fixture, host, remove } = await render({ sessionActive: of(true) });
+
+    component.confirmDelete(expense());
+    fixture.detectChanges();
+
+    expect(component.confirmingExpense).toBeNull();
+    expect(host.querySelector('.confirm-modal')).toBeNull();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('does not delete while a session is active, even if the confirmation is invoked directly', async () => {
     const { component, remove } = await render({ sessionActive: of(true) });
 
-    component.remove(expense());
+    component.deleteConfirmed(expense());
 
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it('deletes normally while no session is active', async () => {
+  it('deletes normally, once confirmed, while no session is active', async () => {
     const { component, remove } = await render({ sessionActive: of(false) });
-    jest.spyOn(window, 'confirm').mockReturnValue(true);
 
-    component.remove(expense());
+    component.confirmDelete(expense());
+    expect(remove).not.toHaveBeenCalled();
+
+    component.deleteConfirmed(expense());
 
     expect(remove).toHaveBeenCalledWith(1);
   });

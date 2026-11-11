@@ -1,0 +1,381 @@
+<!--
+  Operating expenses (issue #1170's approved design, on the Products list's `rr` scale): the heading
+  and Add expense, then one card holding the toolbar, the register (the table above `md`, the cards
+  below it) and the pager. The table and the cards render the same `pagedExpenses`, from the same
+  filters and the same page, so the two layouts can never show different expenses or different
+  values. The Totals footer deliberately sums the whole filtered list rather than the page.
+-->
+<div class="page font-rr text-rr-navy">
+  <header class="flex flex-wrap items-start justify-between gap-3">
+    <div class="flex flex-col gap-1">
+      <h1 class="page-title m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Operating expenses</h1>
+      <p class="m-0 max-w-prose text-sm text-rr-muted" data-testid="expenses-subtitle">{{ subtitle }}</p>
+    </div>
+    @if (!sessionActive) {
+      <!-- The register's filters and page travel with the link, so Save, Cancel and Back come back here. -->
+      <a
+        routerLink="/expenses/new"
+        [queryParams]="returnQueryParams"
+        class="rr-button-primary min-h-11 md:min-h-10"
+        data-testid="expenses-add"
+      >
+        <app-icon name="add" [size]="18" />
+        Add expense
+      </a>
+    }
+  </header>
+
+  <section class="card overflow-hidden rounded-xl border-rr-line" aria-label="Operating expenses register">
+    <!--
+      The compact toolbar: the date range and Category, with Supplier and Machine behind More
+      filters. Everything wraps, so there is no sideways-scrolling filter strip at any width.
+    -->
+    <div class="flex flex-wrap items-end gap-2 border-b border-rr-line p-3 sm:gap-3 sm:p-4" data-testid="expenses-toolbar">
+      <label class="flex min-w-0 flex-col gap-1 text-sm">
+        <span class="text-rr-caption">From</span>
+        <input
+          type="date"
+          id="expense-from-filter"
+          name="expenseFrom"
+          class="min-h-11 rounded-lg border border-rr-line bg-white px-2 text-sm text-rr-navy md:min-h-10"
+          [(ngModel)]="filters.from" />
+      </label>
+      <label class="flex min-w-0 flex-col gap-1 text-sm">
+        <span class="text-rr-caption">To</span>
+        <input
+          type="date"
+          id="expense-to-filter"
+          name="expenseTo"
+          class="min-h-11 rounded-lg border border-rr-line bg-white px-2 text-sm text-rr-navy md:min-h-10"
+          [(ngModel)]="filters.to" />
+      </label>
+      <label class="flex min-w-0 flex-col gap-1 text-sm">
+        <span class="text-rr-caption">Category</span>
+        <select
+          id="expense-category-filter"
+          name="expenseCategory"
+          class="min-h-11 max-w-[14rem] rounded-lg border border-rr-line bg-white px-2 text-sm font-semibold text-rr-navy md:min-h-10"
+          [(ngModel)]="filters.category">
+          <option [ngValue]="undefined">All categories</option>
+          @for (category of categories; track category) {
+            <option [ngValue]="category">{{ categoryLabel(category) }}</option>
+          }
+        </select>
+      </label>
+
+      <!--
+        An accessible disclosure rather than an overlay: a native select inside a popover closes it
+        in some browsers, and the panel has to stay open while Supplier and Machine are chosen. It
+        stays in the DOM so the machine read's own error and loading states are never lost, and
+        opens by itself when the address already applies one of the filters it holds.
+      -->
+      <button
+        type="button"
+        class="rr-button-secondary min-h-11 px-3 md:min-h-10"
+        data-testid="expenses-more-filters"
+        aria-controls="expenses-more-filters-panel"
+        [attr.aria-expanded]="moreFiltersOpen"
+        (click)="toggleMoreFilters()"
+      >More filters</button>
+
+      <button
+        type="button"
+        class="rr-button-secondary min-h-11 px-3 md:min-h-10"
+        data-testid="expenses-apply-filters"
+        (click)="applyFilters()"
+      >Apply filters</button>
+
+      @if (clearFiltersOffered) {
+        <button
+          type="button"
+          class="rr-button-ghost min-h-11 px-3 md:min-h-10"
+          data-testid="expenses-clear-filters"
+          (click)="clearFilters()"
+        >Clear filters</button>
+      }
+
+      @if (appliedFilterCount > 0) {
+        <p class="m-0 text-sm text-rr-muted" data-testid="expenses-filter-count" aria-live="polite">
+          {{ appliedFilterCount }} {{ appliedFilterCount === 1 ? 'filter' : 'filters' }} applied
+        </p>
+      }
+    </div>
+
+    <div id="expenses-more-filters-panel" [hidden]="!moreFiltersOpen" data-testid="expenses-more-filters-panel">
+      <div class="grid gap-3 border-b border-rr-line p-3 sm:grid-cols-2 sm:p-4">
+        <label class="flex min-w-0 flex-col gap-1 text-sm">
+          <span class="text-rr-caption">Supplier</span>
+          <select
+            id="expense-supplier-filter"
+            name="expenseSupplier"
+            class="min-h-11 rounded-lg border border-rr-line bg-white px-2 text-sm font-semibold text-rr-navy md:min-h-10"
+            [(ngModel)]="filters.supplierId">
+            <option [ngValue]="undefined">All suppliers</option>
+            @for (supplier of suppliers; track supplier.id) {
+              <option [ngValue]="supplier.id">{{ supplier.name }}</option>
+            }
+          </select>
+        </label>
+
+        @if (machinesError) {
+          <div class="flex min-w-0 flex-col gap-1 text-sm">
+            <span class="text-rr-caption">Machine</span>
+            <p data-testid="machine-filter-error" class="m-0 text-md-body text-md-danger-text" role="alert">{{ machinesError }}</p>
+          </div>
+        } @else if (machinesLoading) {
+          <div class="flex min-w-0 flex-col gap-1 text-sm">
+            <span class="text-rr-caption">Machine</span>
+            <output data-testid="machine-filter-loading" class="field-hint">Loading machines…</output>
+          </div>
+        } @else if (machineFilterShown) {
+          <label class="flex min-w-0 flex-col gap-1 text-sm">
+            <span class="text-rr-caption">Machine</span>
+            <select
+              id="expense-machine-filter"
+              name="expenseMachine"
+              class="min-h-11 rounded-lg border border-rr-line bg-white px-2 text-sm font-semibold text-rr-navy md:min-h-10"
+              [(ngModel)]="filters.machineId">
+              <option [ngValue]="undefined">All machines</option>
+              <!-- Every recorded machine, deactivated ones included, so a retired machine's expenses stay findable. -->
+              @for (machine of machines; track machine.id) {
+                <option [ngValue]="machine.id">{{ machine.name }}</option>
+              }
+            </select>
+          </label>
+        }
+      </div>
+    </div>
+
+    <!--
+      A failed delete or a failed document read is said here, in text, and stays until it is
+      dismissed or superseded - never only in the console, and never by colour alone.
+    -->
+    @if (actionError) {
+      <div class="flex items-start justify-between gap-3 border-b border-rr-line bg-rr-danger-bg p-3 sm:p-4" role="alert" data-testid="expenses-action-error">
+        <p class="m-0 flex items-start gap-2 text-sm font-semibold text-rr-danger-text">
+          <app-icon name="error" [size]="18" />
+          {{ actionError }}
+        </p>
+        <button
+          type="button"
+          class="rr-button-ghost min-h-11 px-3 text-rr-danger-text md:min-h-10"
+          data-testid="expenses-action-error-dismiss"
+          (click)="dismissActionError()"
+        >Dismiss</button>
+      </div>
+    }
+
+    @if (loadState.loadFailed) {
+      <div class="flex flex-col items-start gap-2 p-4" data-testid="expenses-load-error">
+        <p class="m-0 text-md-body value-negative">The expenses could not be loaded, so none are shown.</p>
+        <button type="button" class="rr-button-secondary min-h-11 px-4 md:min-h-10" data-testid="expenses-retry" (click)="load()">Retry</button>
+      </div>
+    } @else if (!loadState.loaded) {
+      <div class="space-y-3 p-4" data-testid="expenses-loading">
+        <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+      </div>
+    } @else if (expenses.length === 0 && appliedFilterCount === 0) {
+      <div class="flex flex-col items-center gap-2 p-8 text-center" data-testid="expenses-empty">
+        <p class="m-0 font-semibold text-rr-navy">No operating expenses recorded yet.</p>
+        <p class="m-0 text-sm text-rr-muted">Record the expenses this business pays itself; separately sourced charges arrive on their own.</p>
+        @if (!sessionActive) {
+          <a routerLink="/expenses/new" [queryParams]="returnQueryParams" class="rr-button-primary min-h-11 md:min-h-10" data-testid="expenses-empty-add">
+            <app-icon name="add" [size]="18" />
+            Add expense
+          </a>
+        }
+      </div>
+    } @else if (expenses.length === 0) {
+      <div class="flex flex-col items-center gap-2 p-8 text-center" data-testid="expenses-no-match">
+        <p class="m-0 font-semibold text-rr-navy">No expenses match these filters.</p>
+        <button type="button" class="rr-button-secondary min-h-11 px-4 md:min-h-10" data-testid="expenses-no-match-clear" (click)="clearFilters()">Clear filters</button>
+      </div>
+    } @else {
+      <div class="hidden overflow-x-auto md:block" data-testid="expenses-table">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell whitespace-nowrap">Date</th>
+              <th scope="col" class="table-cell">Description</th>
+              <th scope="col" class="table-cell">Category</th>
+              <th scope="col" class="table-cell">Supplier</th>
+              <th scope="col" class="table-cell">Document</th>
+              <th scope="col" class="table-cell table-num">Ex GST</th>
+              <th scope="col" class="table-cell table-num">GST</th>
+              <th scope="col" class="table-cell table-num">Total</th>
+              <th scope="col" class="table-cell text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (expense of pagedExpenses; track expense.id) {
+              <tr class="table-row" data-testid="expense-row">
+                <td class="table-cell whitespace-nowrap">{{ expense.expenseDate | date:'yyyy-MM-dd' }}</td>
+                <td class="table-cell font-semibold text-rr-navy [overflow-wrap:anywhere]">{{ expense.description }}</td>
+                <td class="table-cell">
+                  <span class="inline-flex rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted">{{ categoryLabel(expense.category) }}</span>
+                </td>
+                <td class="table-cell">{{ expense.supplierName || '—' }}</td>
+                <td class="table-cell">
+                  @if (expense.attachmentFileName) {
+                    <button
+                      type="button"
+                      class="rr-button-secondary min-h-9 px-3 text-xs text-rr-teal"
+                      data-testid="expense-view-document"
+                      [attr.aria-label]="'View the document for ' + expense.description"
+                      (click)="viewAttachment(expense)"
+                    >
+                      <app-icon name="receipt" [size]="16" />
+                      View
+                    </button>
+                  } @else {
+                    —
+                  }
+                </td>
+                <td class="table-cell table-num tabular-nums">{{ expense.amountExGst | currency }}</td>
+                <td class="table-cell table-num tabular-nums">{{ expense.gstAmount | currency }}</td>
+                <td class="table-cell table-num font-semibold tabular-nums">{{ expense.totalAmount | currency }}</td>
+                <td class="table-cell">
+                  <!--
+                    Edit stays on the row; Delete is in the overflow menu, where opening the menu
+                    changes nothing and only choosing Delete opens the confirmation. Neither is
+                    rendered during a support session (issue #659): a session grants ExpensesManage,
+                    so these writes would otherwise still render.
+                  -->
+                  @if (!sessionActive) {
+                    <div class="flex flex-nowrap items-center justify-end gap-1">
+                      <a
+                        [routerLink]="['/expenses', expense.id, 'edit']"
+                        [queryParams]="returnQueryParams"
+                        class="rr-button-secondary min-h-9 px-3 text-xs text-rr-teal"
+                        data-testid="expenses-edit"
+                        [attr.aria-label]="'Edit ' + expense.description"
+                      >
+                        <app-icon name="edit" [size]="16" />
+                        Edit
+                      </a>
+                      <app-action-menu
+                        icon="more_vert"
+                        [label]="'More actions for ' + expense.description"
+                        triggerClass="inline-flex h-9 w-9 items-center justify-center rounded-lg text-rr-muted hover:bg-rr-canvas hover:text-rr-navy"
+                        testId="expense-row-menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg"
+                          data-testid="expense-delete"
+                          (click)="confirmDelete(expense)"
+                        >Delete</button>
+                      </app-action-menu>
+                    </div>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+          <tfoot class="bg-md-gray-100 font-semibold">
+            <tr data-testid="expenses-totals">
+              <td colspan="5" class="table-cell">{{ totalsLabel }}</td>
+              <td class="table-cell table-num tabular-nums">{{ total('amountExGst') | currency }}</td>
+              <td class="table-cell table-num tabular-nums">{{ total('gstAmount') | currency }}</td>
+              <td class="table-cell table-num tabular-nums">{{ total('totalAmount') | currency }}</td>
+              <td class="table-cell"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <!--
+        Below `md` the same page of expenses as compact cards: the description wraps in full so a
+        record is always identifiable, with its date and category, the supplier, the prominent total
+        above the Ex GST/GST line, the document where there is one, and the same two actions.
+      -->
+      <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="expense-cards">
+        @for (expense of pagedExpenses; track expense.id) {
+          <li class="flex flex-col gap-3 rounded-xl border border-rr-line bg-white p-3" data-testid="expense-card">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="m-0 font-bold text-rr-navy [overflow-wrap:anywhere]" data-testid="expense-card-description">{{ expense.description }}</p>
+                <p class="m-0 mt-0.5 text-xs text-rr-muted">
+                  {{ expense.expenseDate | date:'yyyy-MM-dd' }} · {{ categoryLabel(expense.category) }}
+                </p>
+                <p class="m-0 mt-0.5 text-xs text-rr-muted [overflow-wrap:anywhere]">{{ expense.supplierName || '—' }}</p>
+              </div>
+              <p class="m-0 shrink-0 text-right text-lg font-bold tabular-nums text-rr-navy">{{ expense.totalAmount | currency }}</p>
+            </div>
+            <p class="m-0 rounded-lg bg-rr-surface p-2.5 text-xs tabular-nums text-rr-muted">
+              Ex GST {{ expense.amountExGst | currency }} · GST {{ expense.gstAmount | currency }}
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+              @if (expense.attachmentFileName) {
+                <button
+                  type="button"
+                  class="rr-button-secondary min-h-11 px-3 text-rr-teal"
+                  data-testid="expense-card-view-document"
+                  [attr.aria-label]="'View the document for ' + expense.description"
+                  (click)="viewAttachment(expense)"
+                >
+                  <app-icon name="receipt" [size]="18" />
+                  View document
+                </button>
+              }
+              @if (!sessionActive) {
+                <a
+                  [routerLink]="['/expenses', expense.id, 'edit']"
+                  [queryParams]="returnQueryParams"
+                  class="rr-button-secondary min-h-11 flex-1 text-rr-teal"
+                  data-testid="expenses-card-edit"
+                  [attr.aria-label]="'Edit ' + expense.description"
+                >
+                  <app-icon name="edit" [size]="18" />
+                  Edit
+                </a>
+                <app-action-menu
+                  icon="more_vert"
+                  [label]="'More actions for ' + expense.description"
+                  triggerClass="rr-button-secondary min-h-11 w-11 px-0"
+                  testId="expense-card-menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg"
+                    data-testid="expense-card-delete"
+                    (click)="confirmDelete(expense)"
+                  >Delete</button>
+                </app-action-menu>
+              }
+            </div>
+          </li>
+        }
+      </ul>
+
+      <!-- The same totals as the table's footer, as one line, with the same all-filtered-rows rule. -->
+      <p class="m-0 border-t border-rr-line bg-rr-surface p-3 text-sm font-semibold tabular-nums text-rr-navy md:hidden" data-testid="expenses-totals-summary">
+        {{ totalsLabel }}: Ex GST {{ total('amountExGst') | currency }} · GST {{ total('gstAmount') | currency }} ·
+        Total {{ total('totalAmount') | currency }}
+      </p>
+
+      <div class="border-t border-rr-line p-3 sm:p-4">
+        <app-list-pagination
+          itemLabel="expenses"
+          [totalItems]="expenses.length"
+          [pageIndex]="pageIndex"
+          [pageSize]="pageSize"
+          [pageSizeOptions]="pageSizeOptions"
+          (pageIndexChange)="onPageIndexChange($event)"
+          (pageSizeChange)="onPageSizeChange($event)"></app-list-pagination>
+      </div>
+    }
+  </section>
+</div>
+
+<!--
+  The delete confirmation, with its own focus containment and restoration (issue #1170). The dialog
+  markup is the child component's, not this page's (issue #191's page composition boundary).
+-->
+<app-expense-delete-confirmation
+  [expense]="confirmingExpense"
+  (confirmed)="deleteConfirmed($event)"
+  (canceled)="cancelDelete()"></app-expense-delete-confirmation>

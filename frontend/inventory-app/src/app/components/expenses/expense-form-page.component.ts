@@ -12,6 +12,7 @@ import { SupplierService } from '../../services/supplier.service';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { PendingWorkGuarded } from '../pick-list/pick-list-leave.guard';
@@ -21,7 +22,7 @@ import {
   ExpenseSaveRequest,
   newExpenseFormValue
 } from './expense-form.component';
-import { expenseFilterQueryParams, readExpenseFilters } from './expense-register-filters';
+import { expenseRegisterQueryParams, readExpenseRegisterView } from './expense-register-filters';
 
 /** The one sentence a departure asks while there is unsaved work (issue #1167). */
 export const EXPENSE_UNSAVED_LEAVE_WARNING =
@@ -116,7 +117,10 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
    */
   sessionActive = false;
 
-  /** The register's applied filters, carried back on a save, a Cancel and Back to expenses. */
+  /**
+   * The register's applied filters and its page (issue #1170), carried back on a save, a Cancel and
+   * Back to expenses, so the operator returns to the register they left rather than to page 1.
+   */
   returnQueryParams: Params = {};
 
   @ViewChild(ExpenseFormComponent) private readonly form?: ExpenseFormComponent;
@@ -146,6 +150,7 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
     private readonly provider: ProviderAvailabilityService,
     private readonly router: Router,
     private readonly route: ActivatedRoute,
+    private readonly businessTimeZone: BusinessTimeZoneService,
     supportSession: SupportSessionService
   ) {
     this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
@@ -158,9 +163,11 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
     );
     this.loadMachines();
 
-    // The applied filters travel in the address, so a reload of this page keeps the return context.
+    // The register's filters and page travel in the address, so a reload keeps the return context.
     this.subscriptions.add(
-      this.route.queryParamMap.subscribe((params) => (this.returnQueryParams = expenseFilterQueryParams(readExpenseFilters(params))))
+      this.route.queryParamMap.subscribe(
+        (params) => (this.returnQueryParams = expenseRegisterQueryParams(readExpenseRegisterView(params)))
+      )
     );
     // paramMap rather than a snapshot: the router reuses this component between two edit URLs, so
     // browser Back and Forward must load the expense the current address names.
@@ -303,7 +310,7 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
       // Add expense: there is nothing to read, so the form opens on a brand-new expense.
       this.expenseId = null;
       this.loading = false;
-      this.value = newExpenseFormValue();
+      this.value = newExpenseFormValue(this.businessTimeZone.timeZoneId);
       return;
     }
 

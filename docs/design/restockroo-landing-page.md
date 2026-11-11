@@ -123,7 +123,8 @@ regression in `landing-page.component.spec.ts` fails if it does not.
 
 ## Follow-up
 
-- **Privacy and terms.** The footer has no Privacy Policy or Terms of Service link because neither
-  page exists yet; issue #1190 publishes them, and the link is added once it ships. Issue #1191 added
+- **Privacy and terms.** The footer has no Privacy Policy or Terms of Service link: issue #1190 added
+  the page layouts, but they stay development-only until the legal copy is approved and the pages are
+  published, and the link is added then. Issue #1191 added
   a real contact point in the meantime - the `admin@restockroo.com.au` mailto link and "Eunhye Chung
   · ABN 69 235 469 430" - so the footer is no longer contact-free.
