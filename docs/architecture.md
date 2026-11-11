@@ -5215,9 +5215,12 @@ flag these pages now read instead, for the same reason: it is presentation only,
 read-only method rule is still what would refuse the write if a page failed to hide or disable it.
 
 **What each page hides or disables, and why hidden rather than disabled differs by control.**
-`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
+`OperatingExpenseComponent` hides Add expense (a page action, like the rest of this build's create
 entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete). Since issue
-#1167 Add Expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
+#1170 Delete is a menu item in each row's (and each card's) overflow menu, so what the register
+withholds there is the whole menu - exactly as `ProductListComponent` withholds its row menu - and
+nothing else in it is lost, because Delete is all it holds. Since issue
+#1167 Add expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
 that open a card on the register, so `ExpenseFormPageComponent` refuses the write on its own account
 as well - and must, because those addresses can be reached directly: `/expenses/new` shows no form at
 all during a session, `/expenses/:id/edit` shows the expense read-only with no primary action, and
@@ -5229,7 +5232,8 @@ expense from outside the business - and one sentence is what issue #1167 asks bo
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
 Payment control - the input group and the button together - hides rather than disables, since (like
 Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
-guarded handler (`remove` on the expense register and `onSave` on the expense form page;
+guarded handler (`confirmDelete` and `deleteConfirmed` on the expense register - since issue #1170
+both halves of a delete, the ask and the write, check the flag - and `onSave` on the expense form page;
 `saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
@@ -7681,14 +7685,24 @@ checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked A
 touch-target heights); like every visual run it is human-invoked and runs in neither
 `scripts/validate.sh` nor CI.
 
-**The register's filters are the return context.** `/expenses` reads and writes its applied filters
-as the query parameters `from`, `to`, `category`, `supplierId` and `machineId` (parsed in one place,
-`components/expenses/expense-register-filters.ts`): Apply filters writes them to the address, opening
-`/expenses` with them applies them, and a parameter carrying a value the application cannot use is
-ignored rather than refused, so a stale bookmark opens the register instead of an error. Add expense
-and Edit expense receive those same parameters and return to `/expenses` carrying them on a
-successful save, on Cancel and on Back to expenses; without them they return to the plain `/expenses`.
-The sidebar link stays `/expenses` and is unaffected.
+**The register's filters and its page are the return context.** `/expenses` reads and writes its
+applied filters as the query parameters `from`, `to`, `category`, `supplierId` and `machineId`, and
+since issue #1170 the page of that filtered list as `page` (1-based, as a reader counts it) and
+`pageSize` — all seven parsed in one place, `components/expenses/expense-register-filters.ts`: Apply
+filters writes the filters, turning a page or changing the size writes the page, opening `/expenses`
+with them opens exactly that register, and a parameter carrying a value the application cannot use is
+ignored rather than refused, so a stale bookmark opens the register instead of an error. The first
+page at the default size (10, from the Products options 5, 10, 20, 50 and 100) is the plain
+`/expenses` address, so only a page or size that differs from the default appears. **Paging is
+client-side over the one list `GET /api/operating-expenses` already answered in full**, the same
+strategy `ProductListComponent` uses: turning a page requests nothing, the Totals footer sums every
+filtered row rather than the page on screen, and the pager's counts are the real filtered counts.
+Applying or clearing filters returns to page 1; a `page` the filtered list does not have — a stale
+bookmark, or the page a deleted last row leaves behind — settles onto the last page that exists and
+is rewritten into the address in place. Add expense and Edit expense receive those same parameters
+and return to `/expenses` carrying them on a successful save, on Cancel and on Back to expenses;
+without them they return to the plain `/expenses`. The sidebar link stays `/expenses` and is
+unaffected.
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
@@ -8486,6 +8500,51 @@ has no copy of `MachineDashboardWindow`, so the page states the rule - this week
 now in the business's time zone, compared with the same point last week - rather than computing
 dates of its own. Showing the actual dates would need the site read (or another existing read) to
 publish the window's business dates; that is a backend change outside issue #1128.
+
+### The Operating Expenses register layout (issue #1170)
+
+**Operating expenses** (`OperatingExpenseComponent`, route `/expenses`) was redesigned on the
+Products page's `rr` scale, after issue #1167 moved Add and Edit onto their own pages. It is a
+presentation change: the page still makes exactly one `GET api/operating-expenses` per applied
+filter set, with the same five filter parameters, keeps its route guards, its `Expenses.Manage`
+capability, the machine-filter visibility rules of issue #746, the Nayax wording rule of issue #728
+and the support-session rules of issue #659, and no expense-inclusion, GST or currency rule moved or
+changed.
+
+**Layout.** The heading and the primary **Add expense** sit above one card holding the toolbar, the
+register and the pager. The toolbar is compact — From, To and Category directly on it, with
+**Supplier** and **Machine** behind a **More filters** disclosure (`aria-expanded`/`aria-controls`
+over a region that stays in the DOM, so the machine read's own loading and failure states are never
+lost, and that opens by itself when the address already applies one of the two). Filters still apply
+only on **Apply filters**; **Clear filters** appears as soon as there is something to clear, resets
+to no filters at all and returns to page 1, and the toolbar reports how many filters are applied.
+At `md` and wider the register is a table with the columns Date, Description, Category, Supplier,
+Document, Ex GST, GST, Total and Actions, the amounts right-aligned and Description and Total
+emphasised, a missing supplier or document shown as `—` and a recorded zero as `$0.00`. Below `md`
+the same page of expenses is compact cards: the description wrapping in full (`overflow-wrap:
+anywhere`, so a record is always identifiable), its date and category, the supplier, the prominent
+total above an Ex GST/GST line, View document where there is one, and the same Edit and overflow
+actions, each at least 44px tall. The **Totals** row is kept in both layouts and says what it
+covers ("Totals (all 23 filtered expenses)"), because it sums the whole filtered list rather than
+the page on screen. Loading, empty (with Add expense), no-match (with Clear filters) and
+load-error (with Retry) are distinct states — `ListLoadState` is what tells an outstanding or failed
+read from a confirmed empty register, which the page previously could not do at all.
+
+**Row actions and the delete flow.** Each row and card keeps **Edit** (the existing
+`/expenses/:id/edit` link, carrying the return context) and holds **Delete** in the shared
+`action-menu` (`kind="menu"`). Opening the menu writes nothing; choosing Delete opens
+`ExpenseDeleteConfirmationComponent`, which composes the shared `confirmation-dialog`, names the
+expense by description, date and total, and adds the keyboard behaviour that dialog does not own —
+initial focus on **Cancel**, Tab contained, Escape to cancel, and focus returned to the menu that
+opened it. The shared dialog itself is unchanged (out of scope for issue #1170), and the page
+authors no dialog markup of its own (`page-composition.guard.ts`). A confirmed delete re-reads the
+register with the same filters and stays on the same page, stepping back one when the page it was on
+no longer exists; a refusal keeps the row exactly as it was fetched and states the server's own
+message in a page-level `role="alert"`, never a success. A failed **View document** read is stated
+the same way rather than only logged. Rendered evidence:
+`frontend/inventory-app/e2e/visual/expenses-register-redesign.visual.ts`, written to
+`docs/screenshots/issue-1170/`; like every visual run it is human-invoked and runs in neither
+`scripts/validate.sh` nor CI.
 
 ### A product carries no selling price (issue #792)
 
