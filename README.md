@@ -3036,6 +3036,10 @@ more.
 - **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
   A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
   the list exactly as it was and shows the server's reason.
+- **In a read-only support session** neither **Add supplier** nor **Delete** is offered, for the
+  same reason the **Not used** switch is not: a Super Admin looking at your business can read it,
+  never write. Each row's **Edit** still opens the dialog, so a supplier's stored details can be
+  read there, with **Save changes** disabled.
 - **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
   inside itself, closes on Escape and returns focus to the control that opened it; the page behind
   it cannot be clicked or tabbed into while it is open.

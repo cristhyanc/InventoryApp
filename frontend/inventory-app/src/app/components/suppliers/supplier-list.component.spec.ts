@@ -150,26 +150,64 @@ async function render(sessionActive: Observable<boolean> = of(false), listed: Su
 afterEach(() => TestBed.resetTestingModule());
 
 /**
- * Create/Update and Delete while a support session is active (issue #657, extending #554). A
- * session grants `PurchasingOperate`, so these would otherwise still render - disabling and hiding
- * them is this page's own job, not the capability check's.
+ * Add supplier, Create/Update and Delete while a support session is active (issue #657, extending
+ * #554). A session grants `PurchasingOperate`, so these would otherwise still render - disabling
+ * and hiding them is this page's own job, not the capability check's. Edit is the exception the
+ * page keeps on purpose: it opens a stored supplier's details and issues no request.
  */
 describe('SupplierListComponent write controls during a support session (issue #657)', () => {
-  it('disables the dialog save and hides Delete while a session is active', async () => {
+  /**
+   * The header's **Add supplier** action is hidden, not merely led to a dialog whose Save is
+   * disabled: a create is a write on the capability a session grants, so the server refuses it
+   * either way and offering the form could only end in a refusal.
+   */
+  it('renders no header Add supplier action while a session is active and opens nothing if invoked', async () => {
     const { fixture, host } = await render(of(true));
+
+    expect(host.querySelector('[data-testid="add-supplier"]')).toBeNull();
+    expect(buttonNamed(host, 'Add supplier')).toBeUndefined();
 
     fixture.componentInstance.addSupplier();
     fixture.detectChanges();
 
-    const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
+    expect(fixture.componentInstance.formOpen).toBe(false);
+    expect(host.querySelector('app-supplier-form-dialog')).toBeNull();
+  });
+
+  /**
+   * Edit is the one control a session keeps, because opening a stored supplier's details issues no
+   * request: the row's own button opens the dialog filled in, and the dialog's Save is what the
+   * session disables.
+   */
+  it('still offers the row Edit action while a session is active, filled in and with its save disabled', async () => {
+    const { fixture, host, update } = await render(of(true), [supplier({ id: 4, name: 'Acme Supplies' })]);
+
+    const edit = host.querySelector('[data-testid="supplier-edit-4"]') as HTMLButtonElement;
+    expect(edit).not.toBeNull();
+
+    edit.click();
+    fixture.detectChanges();
+    // ngModel writes the stored values into the inputs on the round after the dialog renders.
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="supplier-form-title"]')?.textContent?.trim()).toBe('Edit supplier');
+    expect((host.querySelector('#supplierName') as HTMLInputElement).value).toBe('Acme Supplies');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('hides Delete while a session is active', async () => {
+    const { host } = await render(of(true));
 
     const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim().includes('Delete'));
     expect(deleteButton).toBeUndefined();
   });
 
-  it('leaves the dialog save enabled and Delete shown while no session is active', async () => {
+  it('offers Add supplier, an enabled dialog save and Delete while no session is active', async () => {
     const { fixture, host } = await render(of(false));
+
+    expect(host.querySelector('[data-testid="add-supplier"]')).not.toBeNull();
 
     fixture.componentInstance.addSupplier();
     fixture.detectChanges();
@@ -184,10 +222,10 @@ describe('SupplierListComponent write controls during a support session (issue #
   it('writes nothing on save while a session is active, even if the write method is invoked directly', async () => {
     const { fixture, create, update } = await render(of(true));
 
-    fixture.componentInstance.addSupplier();
+    fixture.componentInstance.editSupplier(supplier());
     fixture.detectChanges();
     const dialog = formDialogOf(fixture);
-    dialog.form.name = 'New Supplier';
+    dialog.form.name = 'Renamed Supplier';
     dialog.save();
 
     expect(create).not.toHaveBeenCalled();
@@ -205,12 +243,17 @@ describe('SupplierListComponent write controls during a support session (issue #
     expect(deleteFn).not.toHaveBeenCalled();
   });
 
-  it('still saves and deletes once a session ends', async () => {
+  it('offers Add supplier again and still saves and deletes once a session ends', async () => {
     const sessionActive = new BehaviorSubject(true);
     const { fixture, host, create } = await render(sessionActive);
 
     sessionActive.next(false);
-    fixture.componentInstance.addSupplier();
+    fixture.detectChanges();
+
+    const add = host.querySelector('[data-testid="add-supplier"]') as HTMLButtonElement;
+    expect(add).not.toBeNull();
+
+    add.click();
     fixture.detectChanges();
 
     const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement;

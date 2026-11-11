@@ -60,10 +60,11 @@ export class SupplierListComponent implements OnInit, OnDestroy {
   error: string | null = null;
 
   /**
-   * Whether a support session is active (issue #657, extending #554): the dialog's Save and the
-   * row's Delete are blocked while it is, because a session grants `PurchasingOperate` - the
-   * capability this page would otherwise gate those on - and the backend refuses the write itself
-   * only by its read-only method rule, never by withholding the capability. The "Not used" switch
+   * Whether a support session is active (issue #657, extending #554): the header's **Add
+   * supplier** action, the dialog's Save and the row's Delete are blocked while it is, because a
+   * session grants `PurchasingOperate` - the capability this page would otherwise gate those on -
+   * and the backend refuses the write itself only by its read-only method rule, never by
+   * withholding the capability. The "Not used" switch
    * of issue #934 is on the same capability and is hidden for exactly the same reason. See
    * `SupportSessionService.active$`.
    */
@@ -140,8 +141,26 @@ export class SupplierListComponent implements OnInit, OnDestroy {
     return supplier.isLinked === true;
   }
 
-  /** Opens the dialog on an empty form. */
+  /**
+   * Whether the header's **Add supplier** action is offered (issues #657 and #1174). It is hidden
+   * in a read-only support session, like every other write this page offers: a session grants
+   * `PurchasingOperate` - the capability a create is gated on - and then refuses the write by its
+   * own method rule, so an Add dialog opened in a session could only ever end in a refusal. Edit
+   * is a different matter and stays available; see `editSupplier`. A role preview is deliberately
+   * not read here: it leaves this form exactly as the inline one had it (issue #721 unchanged),
+   * unlike the **Add** of issue #935 below, which that preview already hid before this issue.
+   */
+  get canAddSupplier(): boolean {
+    return !this.sessionActive;
+  }
+
+  /**
+   * Opens the dialog on an empty form. Guarded here as well as hidden in the template, so the
+   * create is actually unavailable rather than merely invisible.
+   */
   addSupplier(): void {
+    if (!this.canAddSupplier) return;
+
     this.editing = null;
     this.formOpen = true;
     this.error = null;
@@ -149,8 +168,8 @@ export class SupplierListComponent implements OnInit, OnDestroy {
 
   /**
    * Opens the dialog on this supplier's stored values. It is offered during a support session, as
-   * it was before issue #1174: opening the form issues no request, and the dialog's own Save is
-   * what the session disables.
+   * it was before issue #1174: opening the form issues no request, so a session may still read a
+   * supplier's stored details here, and the dialog's own Save is what the session disables.
    */
   editSupplier(supplier: Supplier): void {
     this.editing = supplier;

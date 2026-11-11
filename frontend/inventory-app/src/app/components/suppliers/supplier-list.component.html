@@ -3,14 +3,17 @@
     <div>
       <h1 class="page-title">Suppliers</h1>
     </div>
-    <!-- Offered during a support session and a role preview, as the New Supplier form was before
-         issue #1174: opening the dialog issues no request, and its own Save is what both of those
-         states disable. -->
+    <!-- Hidden rather than disabled while a support session is active (issue #657): a session
+         grants PurchasingOperate, so this create would otherwise still render, and the server
+         refuses it by its read-only method rule whatever this page shows. The row's Edit stays,
+         because opening a stored supplier's details issues no request. -->
     <div class="page-actions">
-      <button type="button" class="btn btn-primary min-h-11" data-testid="add-supplier" (click)="addSupplier()">
-        <app-icon name="add" [size]="16" />
-        Add supplier
-      </button>
+      @if (canAddSupplier) {
+        <button type="button" class="btn btn-primary min-h-11" data-testid="add-supplier" (click)="addSupplier()">
+          <app-icon name="add" [size]="16" />
+          Add supplier
+        </button>
+      }
     </div>
   </header>
 

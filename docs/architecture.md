@@ -5386,7 +5386,11 @@ leads to. Since issue #1174 moved that form into a dialog the rule is unchanged 
 same two places: the page passes `[sessionActive]` to `SupplierFormDialogComponent`, which disables
 its own primary action and returns from `save()` before calling the API, the page still hides Delete
 and guards `askDelete()`/`remove()`, and Edit still opens the dialog for the same reason it was left
-alone here (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
+alone here (see [The Suppliers page's dialogs](#the-suppliers-pages-dialogs-issue-1174)). The one
+thing that issue did add is a control of its own: the page header's **Add supplier** button, which
+the inline form never had, so it is *hidden* in a session on the same terms as Add Purchase on the
+purchase list and `addSupplier()` is guarded beneath it - a create is a write on the capability a
+session grants, so a form the server could only refuse is not offered at all. Issue #934's "Not used" switch joined that list on the same terms, for the same reason:
 it is on `Purchasing.Operate`, which a session grants, so the page hides the control and
 `setNotUsed()` returns before calling the API
 ([The link, the lock and the "Not used" switch](#the-link-the-lock-and-the-not-used-switch-issue-934)).
@@ -5410,8 +5414,10 @@ Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
 `supplier-list.component.spec.ts` (new) covers Delete being hidden, `remove()` refusing to call the
 API while a session is active, and normal behaviour resuming once a session ends; since issue #1174
 the save half of that is `supplier-form-dialog.component.spec.ts` (the primary action disabled and
-`save()` refusing to call the API) plus the page spec opening the dialog to assert the disabled
-submit it composes.
+`save()` refusing to call the API) plus the page spec asserting, on the rendered page, that the
+header **Add supplier** button is absent in a session and `addSupplier()` opens nothing when
+invoked anyway, that the row's Edit button is still there and opens the dialog filled in with its
+submit disabled, and that the header button returns once the session ends.
 
 ### Auditing the remaining write actions across the support view UI (issue #661)
 
@@ -15651,7 +15657,10 @@ re-read the list and show its toast **after** the write rather than beside it. A
 entered value and shows the server's own sentence (`supplier-refusal.ts`, the shared reader of the
 two shapes the API uses, which the list uses for its own refusals) above the fields. A support
 session disables the save and `save()` returns before calling the API, exactly as the inline form's
-submit did; Edit still **opens**, because opening a form issues no request (see
+submit did, and the header's **Add supplier** trigger is hidden outright with `addSupplier()`
+guarded beneath it, because a create in a session could only end in the server's refusal; Edit
+still **opens**, because opening a stored supplier's details issues no request, which is what lets
+a session read them (see
 [Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
 
 **What proves it.** `supplier-list.component.spec.ts` covers the page half — no inline form or GST
