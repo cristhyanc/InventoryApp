@@ -9,6 +9,14 @@ import { IconComponent } from '../shared/icon.component';
 import { gstClassificationLabel, isChargePresent } from './gst-classification-options';
 import { PurchaseDocumentAttachComponent } from './purchase-document-attach/purchase-document-attach.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { ListPaginationComponent } from '../shared/list-pagination/list-pagination.component';
+import { clampPageIndex, pageSlice } from '../shared/list-pagination/paging';
+
+/** The per-page sizes the Purchases list offers (issue #1209), the same as All Products and Expenses. */
+export const PURCHASE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100] as const;
+
+/** Ten purchases per page until the operator chooses otherwise; every visit starts here. */
+export const PURCHASE_DEFAULT_PAGE_SIZE = 10;
 
 /**
  * The purchases list (issue #475: display only). Editing a purchase is the dedicated
@@ -20,15 +28,25 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * "No document" - a real state, never a blank cell - and composes in
  * `PurchaseDocumentAttachComponent` to offer one, which keeps that workflow's own file, saving and
  * error state out of the page.</p>
+ *
+ * <p>The list is paged in the browser (issue #1209): it is still read once per load, and a page or
+ * size change only moves the window through `pageSlice`, so it re-requests no purchase. Thumbnails
+ * are the one per-row download, so they are fetched only for the image documents on the page shown
+ * and released when that page is left.</p>
  */
 @Component({
   selector: 'app-purchase-list',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent, PurchaseDocumentAttachComponent],
+  imports: [CommonModule, RouterLink, IconComponent, PurchaseDocumentAttachComponent, ListPaginationComponent],
   templateUrl: './purchase-list.component.html'
 })
 export class PurchaseListComponent implements OnInit, OnDestroy {
   purchases: Purchase[] = [];
+
+  /** The page shown (0-based) and its size: local to this visit, never stored (issue #1209). */
+  pageIndex = 0;
+  pageSize: number = PURCHASE_DEFAULT_PAGE_SIZE;
+  readonly pageSizeOptions: readonly number[] = PURCHASE_PAGE_SIZE_OPTIONS;
 
   /**
    * Whether a support session is active (issue #657, extending #554): Add Purchase and Delete are
@@ -42,6 +60,9 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   // attaches the bearer token) and rendered from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
   private thumbnailUrls = new Map<number, string>();
+  // The thumbnail downloads for the page shown; cancelled when another page replaces it, so a late
+  // answer can never place a revoked or another page's image.
+  private thumbnailSubscription = new Subscription();
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
@@ -56,15 +77,45 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.thumbnailSubscription.unsubscribe();
     this.objectUrls.releaseAll();
     this.sessionActiveSubscription.unsubscribe();
   }
 
+  /**
+   * Reads the whole list. A re-read (after Delete or Add document) keeps the page shown while it
+   * still exists and otherwise moves to the new last page.
+   */
   load(): void {
     this.purchaseService.getAll().subscribe((r) => {
       this.purchases = r;
+      this.pageIndex = clampPageIndex(this.pageIndex, r.length, this.pageSize);
       this.loadThumbnails();
     });
+  }
+
+  /** The purchases on the page shown, in the order the API returned them. */
+  get pagedPurchases(): Purchase[] {
+    return pageSlice(this.purchases, this.pageIndex, this.pageSize);
+  }
+
+  onPageIndexChange(index: number): void {
+    const next = clampPageIndex(index, this.purchases.length, this.pageSize);
+    if (next === this.pageIndex) {
+      return;
+    }
+    this.pageIndex = next;
+    this.loadThumbnails();
+  }
+
+  /** A new page size is a fresh view of the same list, so it returns to page 1. */
+  onPageSizeChange(size: number): void {
+    if (!this.pageSizeOptions.includes(size) || size === this.pageSize) {
+      return;
+    }
+    this.pageSize = size;
+    this.pageIndex = 0;
+    this.loadThumbnails();
   }
 
   getValidation(purchase: Purchase): PurchaseValidation | null {
@@ -108,16 +159,21 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     return purchase.storedFileName !== null && purchase.storedFileName !== undefined;
   }
 
+  /** Downloads the thumbnails of the page shown only, releasing the previous page's object URLs. */
   private loadThumbnails(): void {
+    this.thumbnailSubscription.unsubscribe();
+    this.thumbnailSubscription = new Subscription();
     this.objectUrls.releaseAll();
     this.thumbnailUrls = new Map<number, string>();
-    this.purchases
+    this.pagedPurchases
       .filter((purchase) => this.isImage(purchase))
       .forEach((purchase) =>
-        this.purchaseService.getFile(purchase.id).subscribe({
-          next: (blob) => this.thumbnailUrls.set(purchase.id, this.objectUrls.create(blob)),
-          error: (err) => console.error('Failed to load purchase document', err)
-        })
+        this.thumbnailSubscription.add(
+          this.purchaseService.getFile(purchase.id).subscribe({
+            next: (blob) => this.thumbnailUrls.set(purchase.id, this.objectUrls.create(blob)),
+            error: (err) => console.error('Failed to load purchase document', err)
+          })
+        )
       );
   }
 
