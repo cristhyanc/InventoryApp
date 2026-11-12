@@ -1,14 +1,23 @@
-import { DOCUMENT } from '@angular/common';
+import { DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { Component, Inject, Input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { IconComponent } from '../../components/shared/icon.component';
-import { LEGAL_CONTACT, LegalPageContent } from './legal-page-content';
+import {
+  LEGAL_CONTACT,
+  LegalPageBlock,
+  LegalPageContent,
+  LegalPageList,
+  LegalTextSegment,
+  isLegalPageList,
+  legalTextSegments
+} from './legal-page-content';
 import { PUBLIC_HOME_ROUTE } from '../landing/landing-routes';
 
 /**
- * The shared layout both legal page layouts (issue #1190) render their own
+ * The shared layout both legal pages (issues #1190 and #1214) render their own
  * {@link LegalPageContent} through: a heading, an effective-date line, an optional introduction, a
- * table of contents linking to in-page section anchors, the numbered sections themselves, the
+ * table of contents linking to in-page section anchors, the numbered sections themselves (each a
+ * run of paragraphs and bulleted lists, with email and web addresses rendered as links), the
  * business display details and a link back to the homepage and to the other legal page.
  *
  * Reachability, the public layout and the "no API request" guarantee are the route's concern
@@ -18,7 +27,7 @@ import { PUBLIC_HOME_ROUTE } from '../landing/landing-routes';
 @Component({
   selector: 'app-legal-page',
   standalone: true,
-  imports: [IconComponent, RouterLink],
+  imports: [IconComponent, NgTemplateOutlet, RouterLink],
   templateUrl: './legal-page.component.html'
 })
 export class LegalPageComponent {
@@ -29,6 +38,16 @@ export class LegalPageComponent {
   readonly contact = LEGAL_CONTACT;
   readonly homeLink = `/${PUBLIC_HOME_ROUTE}`;
   readonly year = new Date().getFullYear();
+
+  /** Splits a paragraph or list item into plain text and links. */
+  segments(text: string): LegalTextSegment[] {
+    return legalTextSegments(text);
+  }
+
+  /** Narrows a body block to a bulleted list in the template. */
+  isList(block: LegalPageBlock): block is LegalPageList {
+    return isLegalPageList(block);
+  }
 
   constructor(@Inject(DOCUMENT) private readonly document: Document) {}
 

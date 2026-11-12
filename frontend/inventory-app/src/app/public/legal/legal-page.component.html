@@ -78,7 +78,19 @@
                 [attr.data-testid]="'legal-section-' + section.id"
               >
                 <h2 class="m-0 text-lg font-semibold text-rr-navy">{{ i + 1 }}. {{ section.heading }}</h2>
-                <p class="m-0 mt-3 text-sm leading-relaxed text-rr-muted">{{ section.body }}</p>
+                @for (block of section.body; track $index) {
+                  @if (isList(block)) {
+                    <ul class="m-0 mt-3 flex list-disc flex-col gap-1 pl-5 text-sm leading-relaxed text-rr-muted">
+                      @for (item of block.items; track $index) {
+                        <li><ng-container *ngTemplateOutlet="linkedText; context: { $implicit: item }" /></li>
+                      }
+                    </ul>
+                  } @else {
+                    <p class="m-0 mt-3 text-sm leading-relaxed text-rr-muted">
+                      <ng-container *ngTemplateOutlet="linkedText; context: { $implicit: block }" />
+                    </p>
+                  }
+                }
               </section>
             }
           </div>
@@ -101,3 +113,17 @@
     </div>
   </footer>
 </div>
+
+<!-- A paragraph or list item, with its email and web addresses as links. Whitespace-only text
+     between these nodes is dropped by the compiler, so no stray space appears around a link. -->
+<ng-template #linkedText let-value>
+  @for (segment of segments(value); track $index) {
+    @if (segment.href) {
+      <a [href]="segment.href" class="break-words font-semibold text-rr-teal no-underline hover:text-rr-teal-hover hover:underline">{{
+        segment.text
+      }}</a>
+    } @else {
+      <ng-container>{{ segment.text }}</ng-container>
+    }
+  }
+</ng-template>

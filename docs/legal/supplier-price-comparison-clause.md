@@ -1,5 +1,9 @@
 # DRAFT clause: supplier price comparisons (issue #1183)
 
+**Published (issue #1214):** this clause is now in section 7 of the public Terms of Use
+(`frontend/inventory-app/src/app/public/legal/terms-of-use-content.ts`); the page is the published
+text, and this file records the clause as #1183 approved it.
+
 **This is a draft, not published legal content.** It holds the exact owner-approved clause text for
 issue #1183, for the future legal-page task that authors and publishes the real Terms of Use. It is
 not legal advice, carries no effective date, and has not had legal review. It is not linked from any

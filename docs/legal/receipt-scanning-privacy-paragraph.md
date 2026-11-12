@@ -1,5 +1,9 @@
 # DRAFT paragraph: receipt scanning (issue #1202)
 
+**Published (issue #1214):** this paragraph now opens section 5 of the public Privacy Policy
+(`frontend/inventory-app/src/app/public/legal/privacy-policy-content.ts`); the page is the published
+text, and this file records how the wording was derived.
+
 **This is a draft, not published legal content.** It holds the proposed Privacy Policy paragraph
 for issue #1202, for the owner to review and place into the Privacy Policy under the legal-pages
 work of issue #1190. It is not legal advice, carries no effective date, and has not had legal

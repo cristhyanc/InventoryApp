@@ -66,7 +66,17 @@ issue #1183) in the Terms of Use.
 The homepage footer gained a **Legal** list linking to both pages. The legal pages' own header and
 footer stay the minimal chrome described above; nothing else about the layouts changed.
 
-PLACEHOLDER-COPY-NOTES
+What changed from the #1190 layout and from the owner's draft, deliberately:
+
+| Change | Why |
+| --- | --- |
+| The Stitch export's section headings ("Who We Are and What This Covers", "Data Sovereignty & Cloud Hosting" and so on) are replaced by the approved draft's own eleven headings on each page, and each section's anchor is now a slug of its heading (for example `#who-we-are`) instead of `#section-N`. | The headings are part of the approved copy; the export's were design placeholders. |
+| The draft's "Draft for review" banner, its opening **Review notes**, its **Implementation notes** and its **Evidence reviewed** list are not on either page. | The owner said to leave out the review notes; the other two are marked "not public policy text". |
+| Privacy Policy section 5 opens with the receipt-scanning paragraph from `docs/legal/receipt-scanning-privacy-paragraph.md`. | The owner asked for the latest receipt-scanning disclosure; the draft has no receipt-scanning wording of its own, and section 5 is its AI section. |
+| Privacy Policy section 6 publishes only its first paragraph. | The draft's second paragraph is a bracketed instruction to name verified overseas-processing countries that itself says "Do not publish this placeholder". |
+| Terms of Use section 7's second paragraph is the supplier price comparison clause from `docs/legal/supplier-price-comparison-clause.md`, followed by the draft's two remaining sentences ("Review any AI-assisted match before relying on it. Reports are operational aids and do not replace professional accounting or tax advice."). | The owner asked for the latest supplier-comparison clause; it replaces the draft's own two shorter sentences on the same point. |
+| Both pages share one effective date, `legal/legal-effective-date.ts`. | The draft calls for both pages to use their shared publication date when they go live together. |
+| A section body is now a list of blocks - paragraphs and bulleted lists - and an email address or `https` address in the text renders as a link (`legalTextSegments`), without binding HTML. | The approved copy has bulleted lists, the contact email and the OAIC web address. |
 
 ## Follow-up
 
