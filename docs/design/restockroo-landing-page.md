@@ -106,8 +106,8 @@ Chromium and captured at 1440px and 390px into
 every width from 320px to 390px and found no page-level horizontal scrolling at any of them, with the
 viewport meta tag still allowing pinch zoom. The run is
 `frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts`; regenerate both pictures in
-the same commit as any later change to this page. **That regeneration is open follow-up work after
-issue #1192** - see below.
+the same commit as any later change to this page. Issue #1192 did exactly that, so the pair shows
+the page with its refill and supplier comparison examples; the examples' own evidence is below.
 
 ## Refill and supplier comparison examples (issue #1192)
 
@@ -151,16 +151,30 @@ and this issue's own text and table are the complete copy source.
   (`setup-jest.ts` - jsdom 20 implements `<dialog>`'s open/close state but none of its focus trap),
   so `landing-supplier-comparison-example.component.spec.ts` can hold it to that cycle with real
   `keydown` events.
-- **Not yet done: browser evidence.** `landing-page.component.spec.ts` and
+- **Browser evidence.** `landing-page.component.spec.ts` and
   `landing-supplier-comparison-example.component.spec.ts` prove the rows, the notices and the
-  dialog's keyboard behaviour under Jest, which is everything jsdom can see. What jsdom cannot see -
-  that the page still never scrolls sideways at 390px with the dialog open, and a picture of that
-  open mobile dialog - needs a real browser; the existing
-  [docs/screenshots/issue-1191/](../screenshots/issue-1191/README.md) pair predates this issue and
-  still shows the removed example dashboard. Regenerating both and adding a mobile dialog capture is
-  open follow-up work, in the same style as
-  [the supplier comparison notice's own browser evidence](https://github.com/cristhyanc/InventoryApp/commit/5aabe828f4ab13f9cee17a78a8243efb728c8c49)
-  (issue #1183).
+  dialog's own Tab cycle under Jest, which is everything jsdom can see. What jsdom cannot see -
+  it applies no user-agent stylesheet and computes no layout - is measured in Chromium by
+  `frontend/inventory-app/e2e/visual/landing-refill-supplier-examples.visual.ts`, which captures the
+  page at 1440px and 390px and the open mobile dialog into
+  [docs/screenshots/issue-1192/](../screenshots/issue-1192/README.md) and asserts, in the same
+  browser: no page-level horizontal scrolling at either width with the dialog closed **and** at
+  390px with it open, with the dialog's own panel inside the viewport; the viewport meta tag still
+  allowing pinch zoom either way; and the dialog opening from the keyboard, closing on Escape and on
+  its Close button, and returning focus to **View full comparison** each time. It shares its
+  signed-out setup with issue #1191's run through `e2e/visual/support/landing-page.ts`, and
+  issue #1191's own two captures were regenerated with this change, as that directory's README
+  requires.
+- **What the browser caught that jsdom could not.** This dialog element is always in the DOM, and it
+  was first written with a bare Tailwind `flex` among its classes. That is an author declaration, so
+  it beats the user agent's own `dialog:not([open]) { display: none }`: the closed comparison was
+  painted over the page and its Close controls sat in the accessibility tree at every width, while
+  every Jest assertion still passed because jsdom applies no user-agent stylesheet. The class list
+  is now `hidden open:flex`, which is what `layout/sidebar-nav.component.html` - the application's
+  other always-present `<dialog>` - already does, and the browser run pins the closed state:
+  hidden, no `open` attribute, no dialog role and no Close control in the accessibility tree, so the
+  regression cannot come back unseen. A dialog that is created only when it is opened, as
+  `cheapest-supplier-cell.component.html` does, never meets this; one that is always present does.
 
 ## Pricing copy (issue #971, removed from the page by issue #1191)
 

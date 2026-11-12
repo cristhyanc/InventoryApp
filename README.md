@@ -546,9 +546,18 @@ The page never scrolls sideways on a phone: it was measured in Chromium at every
 [390px](docs/screenshots/issue-1191/homepage-signed-out-390px.png), captured by
 `frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
 [docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
-them). **Those two pictures predate issue #1192** and still show its removed example dashboard;
-regenerating them, and capturing the mobile supplier comparison dialog open, is open follow-up work
-(see [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md)).
+them).
+
+The two examples have their own browser evidence, captured by
+`frontend/inventory-app/e2e/visual/landing-refill-supplier-examples.visual.ts` into
+[docs/screenshots/issue-1192/](docs/screenshots/issue-1192/README.md):
+[the page at 1440px](docs/screenshots/issue-1192/homepage-examples-signed-out-1440px.png) with the
+comparison inline, [at 390px](docs/screenshots/issue-1192/homepage-examples-signed-out-390px.png)
+with its preview, and [the comparison dialog open at 390px](docs/screenshots/issue-1192/supplier-comparison-dialog-390px.png).
+That run also measures what a screenshot cannot: the page has no page-level horizontal scrolling at
+390px with the dialog **open** as well as closed, pinch zoom stays enabled either way, and the
+dialog opens from the keyboard and returns focus to **View full comparison** whether Escape or its
+Close button dismissed it.
 
 ### Pricing on the landing page (issue #971)
 

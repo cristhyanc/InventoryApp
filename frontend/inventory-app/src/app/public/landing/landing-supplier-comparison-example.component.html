@@ -46,12 +46,20 @@
   inert, so the browser maps it to the dialog role and aria-modal itself. Escape (the browser's
   `cancel` event), the backdrop and the Close controls all close it and return focus to the button
   that opened it.
+
+  `hidden open:flex` rather than a bare `flex`, because this element is always in the DOM: a plain
+  `flex` is an author declaration and therefore beats the user-agent's own
+  `dialog:not([open]) { display: none }`, which would leave the closed dialog painted over the page
+  and its Close controls in the accessibility tree at every width. It is what
+  `layout/sidebar-nav.component.html`, the other always-present dialog, already does. jsdom applies
+  no user-agent stylesheet and computes no layout, so only the browser run
+  (`e2e/visual/landing-refill-supplier-examples.visual.ts`) can hold this to it.
 -->
 <dialog
   #dialogPanel
   tabindex="-1"
   [attr.aria-labelledby]="dialogTitleId"
-  class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-1rem)] max-w-2xl flex-col overflow-hidden rounded-xl border border-rr-line-strong bg-white p-0 text-left font-rr text-rr-navy shadow-md-lg outline-none backdrop:bg-md-gray-800/50 sm:w-[calc(100%-2rem)]"
+  class="m-auto hidden max-h-[calc(100vh-2rem)] w-[calc(100%-1rem)] max-w-2xl flex-col overflow-hidden rounded-xl border border-rr-line-strong bg-white p-0 text-left font-rr text-rr-navy shadow-md-lg outline-none backdrop:bg-md-gray-800/50 open:flex sm:w-[calc(100%-2rem)]"
   data-testid="landing-supplier-comparison-dialog"
   (keydown)="onPanelKeydown($event)"
   (cancel)="onCancel($event)"

@@ -5,7 +5,7 @@ public Restockroo homepage after the public beta copy refresh, at both widths th
 
 | File | Shows |
 |---|---|
-| `homepage-signed-out-1440px.png` | the whole page at 1440px: the hero ("Know what to buy. Pack what you need."), the beta notice and the export notice directly under it, **Start free** and **Sign in** in the header, the example dashboard, the features, the reworded Nayax section, the three "How it works" steps, the FAQs without the three paid-plan ones, and the footer's contact line - with no Pricing section and no Pricing link in the header or the footer navigation |
+| `homepage-signed-out-1440px.png` | the whole page at 1440px: the hero ("Know what to buy. Pack what you need."), the beta notice and the export notice directly under it, **Start free** and **Sign in** in the header, the two examples, the features, the reworded Nayax section, the three "How it works" steps, the FAQs without the three paid-plan ones, and the footer's contact line - with no Pricing section and no Pricing link in the header or the footer navigation |
 | `homepage-signed-out-390px.png` | the same page at 390px, where the header collapses to the logo, **Start free** and the menu button, and nothing overflows the viewport |
 
 ## How they were produced
@@ -23,15 +23,23 @@ unscoped run also re-renders the other issues' evidence.
 
 The run starts the Angular dev server alone — no API process, no database, no Nayax call and no
 sign-in — which is enough because the landing page injects no API service and makes no request at
-all. Everything on these captures is static marketing copy and the clearly labelled "Example
-dashboard · Sample data" of invented figures; no business data, site, machine, account name,
-credential or imported document appears in them, and none can.
+all. Everything on these captures is static marketing copy and the clearly labelled examples of
+invented figures; no business data, site, machine, account name, credential or imported document
+appears in them, and none can.
 
 **Signed out** is the point of this evidence, and the run asks the `e2e` build's MSAL stub for it:
 that stub reports the synthetic signed-in account by default (what the workflow suite needs) and no
 account at all when `sessionStorage` holds `e2e-signed-out` before the bundle loads, which is the
-state `signedOutVisitorGuard` shows the page at `/` on. See
+state `signedOutVisitorGuard` shows the page at `/` on. That setup, the overflow measurement and the
+pinch-zoom check are shared with issue #1192's run through
+`frontend/inventory-app/e2e/visual/support/landing-page.ts`. See
 [docs/architecture.md § End-to-end testing authentication](../../architecture.md#end-to-end-testing-authentication-issue-46).
+
+The page these captures show is the page **after** issue #1192 replaced the public beta refresh's
+example dashboard with the refill and supplier comparison examples: they were regenerated with that
+change, as the last paragraph below requires. The examples themselves — including the open mobile
+comparison dialog, which this run never opens — are issue #1192's own evidence, in
+[docs/screenshots/issue-1192/](../issue-1192/README.md).
 
 The same run asserts, in the same browser, what jsdom cannot: that the page has no page-level
 horizontal scrolling at **every** width from 320px to 390px, and that the viewport meta tag still
