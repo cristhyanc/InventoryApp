@@ -136,8 +136,10 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
     /// <para>The observation is a correlated read of the listing's own <c>LatestObservationId</c>
     /// cursor rather than a scan of the append-only table: a listing points at the one observation
     /// that is current, and a failed or missing check never clears that pointer (issue #925). The
-    /// freshness limit comes from the supplier master record the listing belongs to, because the
-    /// limit is per supplier and is stored rather than decided by code that names a supplier.</para>
+    /// supplier master record's own search schedule and its <em>Search prices</em> switch are read
+    /// beside it, because since issue #1200 those two columns are what decide whether one of its
+    /// prices is still compared - stored facts about the supplier, never a limit decided by code that
+    /// names one.</para>
     /// </summary>
     private async Task<ILookup<long, ListingRow>> ListingsAsync(
         List<long> masterProductIds,
@@ -162,7 +164,10 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
                 listing.UnitsPerPack,
                 listing.Url,
                 listing.LastCheckedAtUtc,
-                listing.SupplierPreset!.PriceCheckFreshnessHours,
+                listing.SupplierPreset!.SearchFrequency,
+                listing.SupplierPreset.SearchDaysOfWeek,
+                listing.SupplierPreset.FortnightStartDate,
+                listing.SupplierPreset.SearchPrices,
                 _db.SupplierPriceObservations
                     .Where(observation => observation.Id == listing.LatestObservationId)
                     .Select(observation => new ObservationRow(
@@ -209,6 +214,13 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
             listing.UnitsPerPack,
             listing.Url,
             listing.LastCheckedAtUtc,
+            // The three stored columns read back as one schedule by the policy that owns them, so
+            // this adapter reassembles nothing of its own (issue #1108).
+            SupplierSearchSchedulePolicy.Read(
+                listing.SearchFrequency,
+                listing.SearchDaysOfWeek,
+                listing.FortnightStartDate),
+            listing.SearchPrices,
             listing.Observation is { } observation
                 ? new ObservedPackPrice(
                     observation.PackPrice,
@@ -217,8 +229,7 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
                     observation.IsPromotion,
                     observation.PromotionEndsAtUtc,
                     observation.StockStatus,
-                    observation.ObservedAtUtc,
-                    listing.PriceCheckFreshnessHours)
+                    observation.ObservedAtUtc)
                 : null);
 
     /// <summary>One of the caller's products, as a SQL projection can produce it.</summary>
@@ -230,7 +241,11 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
         ProductPriceTrackingStatus Status,
         long? MasterProductId);
 
-    /// <summary>One supplier listing with its supplier's freshness limit and its current price.</summary>
+    /// <summary>
+    /// One supplier listing with its supplier's stored search schedule, its <em>Search prices</em>
+    /// switch and its current price - the three columns as they are stored, because a schedule is
+    /// read back by the policy that owns it rather than by a SQL projection.
+    /// </summary>
     private sealed record ListingRow(
         long SupplierListingId,
         long MasterProductId,
@@ -239,7 +254,10 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
         int? UnitsPerPack,
         string? Url,
         DateTime? LastCheckedAtUtc,
-        int PriceCheckFreshnessHours,
+        SupplierSearchFrequency SearchFrequency,
+        string SearchDaysOfWeek,
+        DateOnly? FortnightStartDate,
+        bool SearchPrices,
         ObservationRow? Observation);
 
     /// <summary>The latest accepted observation of one listing's price, exactly as it is stored.</summary>

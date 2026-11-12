@@ -35,4 +35,8 @@ public sealed class FakeSupplierSearchScheduleCalendar : ISupplierSearchSchedule
         DateTime.SpecifyKind(
             scheduleDate.ToDateTime(TimeOnly.MinValue) - _offsetFromUtc,
             DateTimeKind.Utc);
+
+    /// <inheritdoc />
+    public DateOnly DateOf(DateTime instantUtc) =>
+        DateOnly.FromDateTime(instantUtc + _offsetFromUtc);
 }

@@ -192,6 +192,7 @@ public class CheapestSupplierSummaryTests
     [InlineData(SupplierOfferIneligibility.PackSizeUnknown)]
     [InlineData(SupplierOfferIneligibility.ListingNotConfirmed)]
     [InlineData(SupplierOfferIneligibility.PromotionEnded)]
+    [InlineData(SupplierOfferIneligibility.SearchStopped)]
     [InlineData(SupplierOfferIneligibility.Stale)]
     public async Task An_offer_that_cannot_be_compared_is_published_with_its_reason(
         SupplierOfferIneligibility reason)
@@ -213,6 +214,11 @@ public class CheapestSupplierSummaryTests
                         IsPromotion = true,
                         PromotionEndsAtUtc = Now.AddHours(-1),
                     }),
+            SupplierOfferIneligibility.SearchStopped =>
+                Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst) with
+                {
+                    SupplierSearchesPrices = false,
+                },
             _ => WithPrice(
                 Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
                 price => price with { ObservedAtUtc = Now.AddHours(-100) }),
@@ -308,6 +314,119 @@ public class CheapestSupplierSummaryTests
         Assert.Null(coles.Ineligibility);
         Assert.Equal(SupplierStockStatus.OutOfStock, coles.StockStatus);
         Assert.Equal(0.50m, product.CheapestUnitPrice);
+    }
+
+    /// <summary>
+    /// The criterion: a supplier whose <em>Search prices</em> switch is off is listed with its last
+    /// price, carries <c>SearchStopped</c>, and is never the cheapest - even with the lowest unit
+    /// price and an observation from two hours ago. It is published after the compared offer.
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_whose_price_search_is_stopped_is_listed_and_never_cheapest()
+    {
+        var store = Store(
+            gstRegistered: false,
+            [JbMetro, Coles],
+            Matched(7,
+            [
+                Listing(ColesPreset, 2, 1.00m, SupplierPriceBasis.InclusiveOfGst) with
+                {
+                    SupplierSearchesPrices = false,
+                },
+                Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
+            ]));
+
+        var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
+
+        Assert.Equal(["JB Metro", "Coles"], product.Suppliers.Select(offer => offer.SupplierName));
+
+        var coles = Assert.Single(product.Suppliers, offer => offer.SupplierName == "Coles");
+        Assert.Equal(SupplierOfferIneligibility.SearchStopped, coles.Ineligibility);
+        Assert.Equal(0.50m, coles.UnitPrice);
+        Assert.False(coles.IsCheapest);
+
+        Assert.True(product.Suppliers[0].IsCheapest);
+        Assert.Equal(22.80m / 24, product.CheapestUnitPrice);
+    }
+
+    /// <summary>
+    /// The criterion: switching it back on compares that supplier's offers again on the next read.
+    /// Nothing here remembers the pause - the switch is read from the supplier master record every
+    /// time the summary is built.
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_whose_price_search_is_switched_back_on_is_compared_again()
+    {
+        var store = Store(
+            gstRegistered: false,
+            [Coles],
+            Matched(7,
+            [
+                Listing(ColesPreset, 2, 1.00m, SupplierPriceBasis.InclusiveOfGst) with
+                {
+                    SupplierSearchesPrices = true,
+                },
+            ]));
+
+        var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
+
+        var coles = Assert.Single(product.Suppliers);
+        Assert.Null(coles.Ineligibility);
+        Assert.True(coles.IsCheapest);
+        Assert.Equal(0.50m, product.CheapestUnitPrice);
+    }
+
+    /// <summary>
+    /// The criterion: the schedule stored on the supplier master record <em>now</em> decides, and no
+    /// stored number of hours is consulted. The same observation - 16:00 Sydney on Sunday 25 October
+    /// 2026, 73 hours before <see cref="Now"/> - is stale for a daily supplier, whose Monday run
+    /// should have refreshed it, and still compared for one searched on Wednesday and Sunday, whose
+    /// next run is today's Wednesday.
+    /// </summary>
+    [Fact]
+    public async Task The_schedule_stored_on_the_supplier_decides_how_old_a_price_may_be()
+    {
+        var observedOnSunday = Now.AddHours(-73);
+
+        var daily = Store(
+            gstRegistered: false,
+            [Coles],
+            Matched(7,
+            [
+                WithPrice(
+                    Listing(ColesPreset, 2, 1.00m, SupplierPriceBasis.InclusiveOfGst),
+                    price => price with { ObservedAtUtc = observedOnSunday }),
+            ]));
+
+        var stale = Assert.Single(
+            (await Summary(daily).Handle([7], CancellationToken.None)).Products[0].Suppliers);
+
+        Assert.Equal(SupplierOfferIneligibility.Stale, stale.Ineligibility);
+
+        var wednesdayAndSunday = Store(
+            gstRegistered: false,
+            [Coles],
+            Matched(7,
+            [
+                WithPrice(
+                    Listing(ColesPreset, 2, 1.00m, SupplierPriceBasis.InclusiveOfGst) with
+                    {
+                        SupplierSchedule = SupplierSearchSchedulePolicy.Require(
+                            new SupplierSearchSchedule(
+                                SupplierSearchFrequency.Weekly,
+                                [DayOfWeek.Wednesday, DayOfWeek.Sunday],
+                                null)),
+                    },
+                    price => price with { ObservedAtUtc = observedOnSunday }),
+            ]));
+
+        var compared = Assert.Single(
+            (await Summary(wednesdayAndSunday).Handle([7], CancellationToken.None))
+                .Products[0]
+                .Suppliers);
+
+        Assert.Null(compared.Ineligibility);
+        Assert.True(compared.IsCheapest);
     }
 
     #endregion
@@ -440,8 +559,21 @@ public class CheapestSupplierSummaryTests
 
     #endregion
 
+    /// <summary>
+    /// The use case with the collection calendar of issue #1108 beside its clock, because since issue
+    /// #1200 how old a price may be is derived from the supplier's own schedule through that calendar.
+    /// The double is eleven hours ahead of UTC, which is what Australia/Sydney is on these dates; the
+    /// real zone conversion is <c>SupplierSearchScheduleCalendarTests</c>'.
+    /// </summary>
     private static GetCheapestSupplierSummary Summary(FakeStore store) =>
-        new(new FakeCurrentBusinessProvider(1), store, new FakeClock(Now));
+        new(
+            new FakeCurrentBusinessProvider(1),
+            store,
+            new FakeClock(Now),
+            new FakeSupplierSearchScheduleCalendar(SydneyToday));
+
+    /// <summary>The date <see cref="Now"/> falls on in the collection calendar: 17:00 on 28 October.</summary>
+    private static readonly DateOnly SydneyToday = new(2026, 10, 28);
 
     private static FakeStore Store(
         bool gstRegistered,
@@ -456,8 +588,9 @@ public class CheapestSupplierSummaryTests
         new(productId, status, listings);
 
     /// <summary>
-    /// One supplier's listing with a fresh, in-stock, confirmed observation of its pack price: the
-    /// ordinary case each test then changes one fact of.
+    /// One supplier's listing with a fresh, in-stock, confirmed observation of its pack price, from a
+    /// supplier searched daily whose searching is on: the ordinary case each test then changes one
+    /// fact of.
     /// </summary>
     private static TrackedListingPrice Listing(
         int supplierPresetId,
@@ -471,6 +604,8 @@ public class CheapestSupplierSummaryTests
             unitsPerPack,
             $"https://example.test/{supplierPresetId}",
             Observed,
+            SupplierSearchSchedulePolicy.Daily,
+            SupplierSearchesPrices: true,
             new ObservedPackPrice(
                 packPrice,
                 basis,
@@ -478,8 +613,7 @@ public class CheapestSupplierSummaryTests
                 IsPromotion: false,
                 PromotionEndsAtUtc: null,
                 SupplierStockStatus.InStock,
-                Observed,
-                SupplierPriceFreshnessPolicy.DailyCheckLimitHours));
+                Observed));
 
     private static TrackedListingPrice WithPrice(
         TrackedListingPrice listing,

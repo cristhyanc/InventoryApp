@@ -19,18 +19,19 @@ import {
   LANDING_TITLE,
   NAYAX_POINTS
 } from './landing-content';
-import { LandingDashboardPreviewComponent } from './landing-dashboard-preview.component';
 import { LandingHeaderComponent } from './landing-header.component';
+import { LandingRefillExampleComponent } from './landing-refill-example.component';
 import { APP_ENTRY_URL } from './landing-routes';
+import { LandingSupplierComparisonExampleComponent } from './landing-supplier-comparison-example.component';
 
 /**
  * The public Restockroo landing page (issue #954), shown at `/` to a signed-out visitor and at
  * `/home` to everyone. It is rendered in the public layout (`PUBLIC_LAYOUT_DATA`), so the
  * authenticated shell is not on the page.
  *
- * **It makes no request.** The copy and the example dashboard are static (`landing-content.ts`),
- * and the page injects no API service: a visitor can read it, refresh it and leave without the
- * application asking any business, account or Nayax endpoint anything.
+ * **It makes no request.** The copy and the refill and supplier comparison examples are static
+ * (`landing-content.ts`), and the page injects no API service: a visitor can read it, refresh it
+ * and leave without the application asking any business, account or Nayax endpoint anything.
  *
  * **Its actions reuse the existing journeys, unchanged:**
  *
@@ -50,7 +51,14 @@ import { APP_ENTRY_URL } from './landing-routes';
 @Component({
   selector: 'app-landing-page',
   standalone: true,
-  imports: [IconComponent, LandingDashboardPreviewComponent, LandingHeaderComponent, NgTemplateOutlet, RouterLink],
+  imports: [
+    IconComponent,
+    LandingHeaderComponent,
+    LandingRefillExampleComponent,
+    LandingSupplierComparisonExampleComponent,
+    NgTemplateOutlet,
+    RouterLink
+  ],
   templateUrl: './landing-page.component.html'
 })
 export class LandingPageComponent implements OnInit, OnDestroy {

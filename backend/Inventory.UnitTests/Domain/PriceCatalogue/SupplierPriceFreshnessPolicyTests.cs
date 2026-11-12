@@ -5,17 +5,78 @@ using Xunit;
 namespace Inventory.UnitTests.Domain.PriceCatalogue;
 
 /// <summary>
-/// How old an observed supplier price may be and still be compared (issue #925): the owner's two
-/// limits, the margin they are built from, and the boundary itself.
+/// How old an observed supplier price may be and still be compared: the schedule-based boundary of
+/// issue #1200, its margin, and the stored hours limit that now only describes a cadence (#925).
 /// </summary>
 public class SupplierPriceFreshnessPolicyTests
 {
-    private static readonly DateTime Now = new(2026, 10, 28, 6, 0, 0, DateTimeKind.Utc);
+    /// <summary>
+    /// The end of the next scheduled search day, as the collection calendar converts it: 00:00 Sydney
+    /// on Thursday 12 November 2026 is 13:00 UTC on the Wednesday.
+    /// </summary>
+    private static readonly DateTime NextSearchDayEnd =
+        new(2026, 11, 11, 13, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// The boundary is the end of the day the next search should have happened on, plus the margin:
+    /// 06:00 Sydney the morning after, which is what the owner asked for on 12 November 2026.
+    /// </summary>
+    [Fact]
+    public void A_price_is_comparable_until_the_next_search_day_ends_plus_the_margin()
+    {
+        Assert.Equal(6, SupplierPriceFreshnessPolicy.MarginHours);
+
+        Assert.Equal(
+            NextSearchDayEnd.AddHours(SupplierPriceFreshnessPolicy.MarginHours),
+            SupplierPriceFreshnessPolicy.ComparableUntilUtc(NextSearchDayEnd));
+    }
+
+    /// <summary>
+    /// Fresh one tick before the boundary and stale at it: the boundary belongs to the stale side
+    /// deliberately rather than by accident, which is the rule the hours limit it replaced had.
+    /// </summary>
+    [Fact]
+    public void The_boundary_itself_belongs_to_the_stale_side()
+    {
+        var boundary = SupplierPriceFreshnessPolicy.ComparableUntilUtc(NextSearchDayEnd);
+
+        Assert.True(SupplierPriceFreshnessPolicy.IsFreshUntil(
+            boundary.AddTicks(-1), NextSearchDayEnd));
+        Assert.False(SupplierPriceFreshnessPolicy.IsFreshUntil(boundary, NextSearchDayEnd));
+        Assert.False(SupplierPriceFreshnessPolicy.IsFreshUntil(
+            boundary.AddHours(1), NextSearchDayEnd));
+    }
+
+    /// <summary>
+    /// The whole of the next search day is inside the window, which is the case the margin exists
+    /// for: a run that starts in the evening instead of the morning has not made yesterday's price
+    /// wrong, and a page of uncomparable offers is worse guidance than a price that is a day old.
+    /// </summary>
+    [Fact]
+    public void The_whole_of_the_next_search_day_is_still_comparable()
+    {
+        Assert.True(SupplierPriceFreshnessPolicy.IsFreshUntil(
+            NextSearchDayEnd.AddHours(-24), NextSearchDayEnd));
+        Assert.True(SupplierPriceFreshnessPolicy.IsFreshUntil(
+            NextSearchDayEnd.AddTicks(-1), NextSearchDayEnd));
+        Assert.True(SupplierPriceFreshnessPolicy.IsFreshUntil(NextSearchDayEnd, NextSearchDayEnd));
+    }
+
+    /// <summary>
+    /// A price whose next search day is still ahead - including a reading from a clock that
+    /// disagrees with itself, whose own day is in the future - is fresh. Calling a price nobody has
+    /// had time to age "too old" would be the one answer that is certainly wrong.
+    /// </summary>
+    [Fact]
+    public void A_price_whose_next_search_day_is_still_ahead_is_fresh() =>
+        Assert.True(SupplierPriceFreshnessPolicy.IsFreshUntil(
+            NextSearchDayEnd.AddDays(-3), NextSearchDayEnd));
 
     /// <summary>
     /// The two decided limits are the check interval plus the margin, stated as that arithmetic
     /// rather than as two bare numbers - so a reader can see why 30 and 102 are the answers and a
-    /// third cadence is derived the same way.
+    /// third cadence is derived the same way. Since issue #1200 they describe a cadence and decide
+    /// nothing: what a supplier's stored <c>PriceCheckFreshnessHours</c> is derived from.
     /// </summary>
     [Fact]
     public void The_two_decided_limits_are_their_check_interval_plus_the_margin()
@@ -45,80 +106,7 @@ public class SupplierPriceFreshnessPolicyTests
             SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours,
             SupplierPriceFreshnessPolicy.LimitForCheckInterval(
                 SupplierPriceFreshnessPolicy.WeeklyCheckIntervalHours));
-
-        var observedAt = new DateTime(2026, 11, 5, 21, 0, 0, DateTimeKind.Utc);
-        Assert.True(SupplierPriceFreshnessPolicy.IsFresh(
-            observedAt, observedAt.AddHours(173), SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours));
-        Assert.False(SupplierPriceFreshnessPolicy.IsFresh(
-            observedAt, observedAt.AddHours(174), SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours));
     }
-
-    /// <summary>
-    /// The limit is the age at which a price stops being usable: fresh just under it, stale at it.
-    /// The boundary belongs to one side deliberately rather than by accident.
-    /// </summary>
-    [Theory]
-    [InlineData(29.99, true)]
-    [InlineData(30.0, false)]
-    [InlineData(30.01, false)]
-    public void A_price_is_fresh_up_to_its_limit_and_stale_at_it(double ageHours, bool fresh) =>
-        Assert.Equal(
-            fresh,
-            SupplierPriceFreshnessPolicy.IsFresh(
-                Now.AddHours(-ageHours),
-                Now,
-                SupplierPriceFreshnessPolicy.DailyCheckLimitHours));
-
-    /// <summary>
-    /// The margin is what the limits exist for: a run that starts six hours later than yesterday's
-    /// finds yesterday's daily prices still current, which is precisely the case that would otherwise
-    /// mark every price stale.
-    /// </summary>
-    [Fact]
-    public void A_run_that_starts_later_than_yesterdays_still_finds_yesterdays_prices_fresh()
-    {
-        var observedYesterday = Now.AddHours(-(SupplierPriceFreshnessPolicy.DailyCheckIntervalHours
-            + SupplierPriceFreshnessPolicy.MarginHours - 1));
-
-        Assert.True(
-            SupplierPriceFreshnessPolicy.IsFresh(
-                observedYesterday,
-                Now,
-                SupplierPriceFreshnessPolicy.DailyCheckLimitHours));
-    }
-
-    /// <summary>
-    /// A twice-weekly supplier's four-day gap is covered, and the same price is long stale for a
-    /// daily one - the whole reason the limit travels with the supplier rather than with this file.
-    /// </summary>
-    [Fact]
-    public void One_price_can_be_fresh_for_one_supplier_and_stale_for_another()
-    {
-        var observed = Now.AddHours(-90);
-
-        Assert.True(
-            SupplierPriceFreshnessPolicy.IsFresh(
-                observed,
-                Now,
-                SupplierPriceFreshnessPolicy.TwiceWeeklyCheckLimitHours));
-        Assert.False(
-            SupplierPriceFreshnessPolicy.IsFresh(
-                observed,
-                Now,
-                SupplierPriceFreshnessPolicy.DailyCheckLimitHours));
-    }
-
-    /// <summary>
-    /// An instant in the future - two clocks that disagree - is fresh. Calling a price nobody has had
-    /// time to age "too old" would be the one answer that is certainly wrong.
-    /// </summary>
-    [Fact]
-    public void A_price_observed_in_the_future_is_fresh() =>
-        Assert.True(
-            SupplierPriceFreshnessPolicy.IsFresh(
-                Now.AddHours(1),
-                Now,
-                SupplierPriceFreshnessPolicy.DailyCheckLimitHours));
 
     /// <summary>
     /// Zero is refused rather than read as "never stale" or "always stale": an absent limit would be
@@ -152,13 +140,4 @@ public class SupplierPriceFreshnessPolicyTests
     public void A_check_interval_that_is_not_positive_is_refused() =>
         Assert.Throws<DomainValidationException>(
             () => SupplierPriceFreshnessPolicy.LimitForCheckInterval(0));
-
-    /// <summary>
-    /// A staleness question asked with a limit nobody accepted is refused rather than answered: the
-    /// freshness rule has no behaviour at all for a limit that is not a limit.
-    /// </summary>
-    [Fact]
-    public void Freshness_cannot_be_decided_under_an_unaccepted_limit() =>
-        Assert.Throws<DomainValidationException>(
-            () => SupplierPriceFreshnessPolicy.IsFresh(Now.AddHours(-1), Now, 0));
 }

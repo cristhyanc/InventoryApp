@@ -40,7 +40,11 @@ public class ClaudeReceiptReaderTests
 
         var format = body.GetProperty("output_config").GetProperty("format");
         Assert.Equal("json_schema", format.GetProperty("type").GetString());
-        Assert.Equal("receipt_draft", format.GetProperty("name").GetString());
+        // Exactly `type` and `schema`: the Messages API rejects any other member of
+        // output_config.format (a `name` was answered 400 "Extra inputs are not permitted").
+        Assert.Equal(
+            new[] { "schema", "type" },
+            format.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal("object", format.GetProperty("schema").GetProperty("type").GetString());
 
         var file = body.GetProperty("messages")[0].GetProperty("content")[0];

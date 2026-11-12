@@ -492,10 +492,24 @@ The journey a second live business needs is now complete end to end. The applica
 ## The public landing page
 
 A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954, refreshed for
-the public beta by issue #1191): what the application does, an example dashboard drawn from clearly
-labelled sample data, the optional Nayax integration, a three-step workflow and FAQs. It makes no
-request to the API at all, so opening or refreshing it never asks for a sign-in or reads any business,
-account or Nayax data.
+the public beta by issue #1191, with its example dashboard replaced by issue #1192's refill and
+supplier comparison examples): what the application does, two static examples, the optional Nayax
+integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
+refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- The **refill example** shows a fictional site and machine - "Banksia House" and "Banksia House VM" -
+  with a short Pick List of products carrying a "To pack" and a "Loaded" quantity. "Loaded" is how
+  many of each "To pack" quantity have been packed so far in that one Pick List run; the application
+  does not record it as a second, separate quantity.
+- The **supplier comparison example**, headed "Compare prices across supported suppliers", shows one
+  fictional product's offers from the supported suppliers, with a "Lowest unit price" badge on every
+  row that ties for it. It carries "Example comparison — prices and availability change." and a
+  notice to confirm the product, pack size and final price with the supplier before buying. From the
+  `md` breakpoint up the full comparison is shown inline; below it, a short preview stands in for it
+  with a **View full comparison** button that opens the same comparison in a dialog - a native modal
+  `<dialog>`, closed by Escape, the backdrop or a Close button, which returns focus to the button
+  that opened it and causes no page-level horizontal scrolling. No supplier name in the example is a
+  link to a real site.
 
 - The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
   compare supplier prices and plan your next refill in one place." Directly under it sits the public
@@ -533,6 +547,17 @@ The page never scrolls sideways on a phone: it was measured in Chromium at every
 `frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
 [docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
 them).
+
+The two examples have their own browser evidence, captured by
+`frontend/inventory-app/e2e/visual/landing-refill-supplier-examples.visual.ts` into
+[docs/screenshots/issue-1192/](docs/screenshots/issue-1192/README.md):
+[the page at 1440px](docs/screenshots/issue-1192/homepage-examples-signed-out-1440px.png) with the
+comparison inline, [at 390px](docs/screenshots/issue-1192/homepage-examples-signed-out-390px.png)
+with its preview, and [the comparison dialog open at 390px](docs/screenshots/issue-1192/supplier-comparison-dialog-390px.png).
+That run also measures what a screenshot cannot: the page has no page-level horizontal scrolling at
+390px with the dialog **open** as well as closed, pinch zoom stays enabled either way, and the
+dialog opens from the keyboard and returns focus to **View full comparison** whether Escape or its
+Close button dismissed it.
 
 ### Pricing on the landing page (issue #971)
 
@@ -1470,9 +1495,9 @@ PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true
 - **It never writes to a business.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset is never a supplier in a business's own list, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today is **not pushed** into any existing business (issue #935): it is *offered* to the ones it serves, under **Available to add** on their own Suppliers page, and becomes a supplier only when somebody there adds it — see [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the three surfaces above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair unset — the shipped state — nobody can reach it at all.** A business Owner, Admin or member is refused with `403` like anybody else, and an anonymous request is `401`. A [role preview](#previewing-the-app-as-a-role-issues-720-and-721) is refused on both writes as read-only, exactly as on the Businesses surface, while a previewed **read** is unaffected: this controller declares no capability for a preview to narrow. The `X-Support-Session` header is **not acted on here at all** — as on every endpoint of this class — so an ordinary member who sets it is still an ordinary member refused `403`, and an administrator who happens to hold a live [support session](#super-admin-support-sessions) reaches this surface as themselves, writes included, exactly as they still reach the Businesses surface.
 - **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, whether its prices are searched for, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
-- **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know. Each record also carries **how old one of its prices may be and still be compared** (issue #925): 30 hours for a supplier checked daily, and 102 for Big W, which is checked on Thursday and Sunday — each one the longest expected gap between two checks plus a six-hour margin, so a collection run that starts a little later than yesterday's does not make every price look out of date. It is stored on the record rather than decided in code, so a supplier whose schedule changes is an edit to data; it is **not on this page or in this API yet**, and the shipped records were given their two values by the migration that added the column.
+- **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know. Each record also carries **a description of how often it is checked** (issue #925): 30 hours for a supplier checked daily, and 102 for Big W, which is checked on Thursday and Sunday — each one the longest expected gap between two checks plus a six-hour margin. Since issue #1108 that figure is derived from the record's own search schedule, and since issue #1200 it decides nothing: whether one of that supplier's prices is still compared follows the schedule directly — current until the next scheduled search has had its chance, which is the end of that search's own day plus six hours. Both are stored on the record rather than decided in code, so a supplier whose schedule changes is an edit to data; it is **not on this page or in this API yet**, and the shipped records were given their two values by the migration that added the column.
 - **Names are unique, ignoring case.** "Coles" and "COLES" are the same suggestion, so the second one is refused with `409` and "A supplier preset with this name already exists." The rule is a unique database index over a stored normalised name, not a check made before the insert, so two requests arriving at once leave one preset and one refusal — never two rows and never a server error.
-- **Suggesting a supplier and searching its prices are two switches (issue #1077, the owner's decision of 3 November 2026).** **Suggested** decides whether a record is copied into a newly approved business and offered under "Available to add". **Search prices** decides whether the scheduled price collector searches that supplier at all, and it is the only thing the collector reads: a supplier is searched when that switch is on **and** it has a collection route, so a record you have stopped suggesting is still priced while the switch is on, and pausing the paid Kmart and BIG W searches no longer hides either supplier from businesses. The page shows both as their own column with their own button, and a record nothing collects reads **No price route** rather than Off, because the switch would decide nothing for it. Switching searching off stops *new* readings only: that supplier's collected prices stay and age out by the ordinary freshness rule, work a run already holds can still be submitted, and nothing a business sees changes. Every existing record was given its enabled state as its searching state when the column was added, so the collector's behaviour did not change on deployment. See [Pausing one supplier's searches](docs/price-collector-testing.md#pausing-one-suppliers-searches).
+- **Suggesting a supplier and searching its prices are two switches (issue #1077, the owner's decision of 3 November 2026).** **Suggested** decides whether a record is copied into a newly approved business and offered under "Available to add". **Search prices** decides whether the scheduled price collector searches that supplier at all, and it is the only thing the collector reads: a supplier is searched when that switch is on **and** it has a collection route, so a record you have stopped suggesting is still priced while the switch is on, and pausing the paid Kmart and BIG W searches no longer hides either supplier from businesses. The page shows both as their own column with their own button, and a record nothing collects reads **No price route** rather than Off, because the switch would decide nothing for it. Switching searching off stops *new* readings and takes that supplier out of the price comparison: its collected prices stay and are still listed, and work a run already holds can still be submitted, but since issue #1200 each of its offers reads "Price search stopped for this supplier, so this price is not compared" and is never the cheapest — nothing will refresh a price nobody is searching for. Switching it back on compares that supplier again at once. Every existing record was given its enabled state as its searching state when the column was added, so the collector's behaviour did not change on deployment. See [Pausing one supplier's searches](docs/price-collector-testing.md#pausing-one-suppliers-searches).
 - **There is no delete.** A preset that should stop being suggested is **disabled**, which is reversible and leaves whatever a business already copied from it untouched. Disabled presets stay in the list, because one nobody can see is one nobody can re-enable.
 - **The shipped records are inserted once, by migrations.** The original four came with the migration that created the table; ALDI, Kmart and the three JB Metro records came with the one that added the supplier-master columns, which also set those columns on the four that already existed, matching them **by name**. Neither is seeded at startup and neither is declared as EF `HasData`, both of which re-apply themselves: production applies migrations on startup, so either would quietly undo an edit, or switch a deliberately disabled preset back on, at the next deployment. Rename one, give it a website, change what it serves, disable it or delete it directly in the database, and it stays that way — and a record that was **renamed before** the supplier-master migration ran is left entirely alone by it, which shows on the page as a market that is **not set** until somebody fills it in. A record you had **already created yourself** under one of those five names is left alone in the same way: the migration inserts a record only when that name is free, so your record keeps its name, website, enabled state and instants, its new fields start **not set**, and the upgrade cannot fail on the duplicate name. Reversing that migration removes only the records it created itself, never one that was already there.
 - **Audit.** Every committed create and edit emits one structured `ILogger` event with the actor `(tid, oid)`, the preset's key, which change it was, whether the preset is suggested afterwards, what it serves, whether its prices include GST, its connector and that connector's key, the instant and the correlation id. It deliberately carries **neither the name nor the website** — the same restraint the two audits above show about a business's name and contact address — and there is no audit table. A refused create or edit is audited as nothing. **The log destination and retention period are platform configuration, exactly as for the audit trails above, and a human must verify them before relying on this trail.**
@@ -1568,7 +1593,8 @@ POST /api/super-admin/price-catalogue-review/business-selections/undo
   them and confirming is one action, which is how a BIG W row whose pack count was read out of its
   name ("Coca Cola 375Ml Coke 36Pk 36 Pack") gets the count a comparison then divides by.
 - **Confirming also accepts the price the listing was holding, but only when it stands up.** The
-  reading must be inside that supplier's own freshness limit, must describe the pack that was
+  reading must still be current under that supplier's own search schedule — the same rule the
+  Cheapest supplier column uses, so the two agree — must describe the pack that was
   confirmed, and must be inside the band around the listing's last accepted price (no more than 50%
   below, no more than 100% above). Otherwise the listing is **confirmed with no current price** and is
   priced on the next run — the page says which of the two happened and why.
@@ -2944,8 +2970,14 @@ same column, cell and popup — everything below applies to all three.
 - **A supplier that is listed with no price is still listed, and says why.** "No match" is a
   supplier that does not list the product at all, "Not checked yet" is a listing nobody has read a
   price from, and an offer that cannot be compared says the one reason — out of stock, the special
-  has ended, the pack size is not published, the match is not confirmed, the GST rate is unknown, or
-  the last check is too old. A price that is not known is never shown as `$0.00`.
+  has ended, the pack size is not published, the match is not confirmed, the GST rate is unknown, the
+  price search has been stopped for that supplier, or the last check is too old. A price that is not
+  known is never shown as `$0.00`.
+- **How long a price counts as current is that supplier's own search schedule.** A price stays
+  comparable until the supplier's next scheduled search has had its chance, and reads as too old only
+  when that search did not refresh it: a supplier searched on Wednesdays and Sundays keeps a Wednesday
+  price until Monday morning, and one searched every second Saturday keeps its price for the
+  fortnight.
 - **The cell itself is an answer, not a blank.** It says **Not tracked** for a product you have not
   switched on, **Awaiting match** while nothing has matched it, **No match found** when it was
   looked for and nothing described it, **No eligible price** when no offer could be compared,
@@ -3012,6 +3044,39 @@ Every menu and dialog starts closed, opens one at a time, works from the keyboar
 Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
 `docs/screenshots/issue-1093/`.
 
+## The Suppliers list
+
+**Suppliers** (issue #1175) is redesigned to match **Products → All products** (issue #1093): one
+card holding a toolbar, the table (compact cards on a phone) and the suppliers it lists, with
+**Available to add** kept as its own section below, unchanged. The header names the page and shows
+how many suppliers are loaded, beside **Add supplier**.
+
+- **Toolbar**: search suppliers by name (case-insensitive, with a clear button) and an **All / In
+  use / Not used** filter, combined together and applied client-side over the one register already
+  loaded — there is no pagination to turn a page on. Usage is the existing "Not used" state (issue
+  #934), never purchase history, and a supplier you added yourself is always **In use**, because
+  that state is only ever offered to one from the platform's list. **Clear filters** is shown only
+  once a search or the filter differs from its default.
+- **States**: loading, a load failure (with guidance to reload), no suppliers at all yet, and **"No
+  suppliers match your search or filter."** with a button that clears both.
+- **Table columns** are Supplier (name, with the **Platform list** badge where `isLinked`), Contact
+  (the available name, email as a `mailto:` link and phone as a `tel:` link — a detail you have not
+  recorded is simply left out), Website (the stored address's short domain, linking to it only where
+  [the website rule](#a-suppliers-website) allows — anything else, including a value that reached
+  the database without passing that rule, stays plain text), Usage (**In use**/**Not used**) and
+  Actions.
+- **Actions**: **Edit** is on every row; the row's ⋮ menu holds **GST defaults**, **Mark as not
+  used**/**Mark as in use** (linked suppliers only) and **Delete** (only where the server still
+  allows it) — the same controls, confirmations, refusal sentences and support-session/role-preview
+  rules as before issue #1175, just moved off the row and into the menu.
+- **On a phone** each supplier is a card with its name and badge, usage, the same available contact
+  and website details, Edit and the same ⋮ menu; the toolbar and Add supplier stay reachable with no
+  horizontal scrolling, every control is at least 44px tall, and pinching to zoom is never blocked.
+- **Opening and closing the Add/Edit dialog never resets the search, the filter or your scroll
+  position.** A save that succeeds while the current search or usage filter would hide the result
+  says so — *"Supplier created."*/*"Supplier saved."* followed by *"It is hidden by your current
+  search or usage filter."* — rather than the filter springing open to show it.
+
 ## Adding and editing a supplier
 
 The Suppliers page is a list, and everything you do to one supplier happens in a dialog over it, so
@@ -3033,23 +3098,24 @@ more.
 - **Closing an unchanged form just closes it.** Cancel, the ✕, Escape and a click outside a form you
   *have* changed ask first: **Discard changes** or **Keep editing**, and keeping takes you back to
   the form exactly as you left it.
-- **GST defaults** is a button on each supplier's row and opens that supplier's
-  [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the same three
-  settings, with the same permission: a role that may read but not change them sees the choices
-  without a Save.
+- **GST defaults** is in each row's ⋮ menu (issue #1175, off the row since that redesign) and opens
+  that supplier's [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the
+  same three settings, with the same permission: a role that may read but not change them sees the
+  choices without a Save.
 - **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
-  A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
-  the list exactly as it was and shows the server's reason.
+  A supplier the server refuses to delete has no Delete action in the menu at all, and a refused
+  delete leaves the list exactly as it was and shows the server's reason.
 - **In a read-only support session** neither **Add supplier** nor **Delete** is offered, for the
-  same reason the **Not used** switch is not: a Super Admin looking at your business can read it,
-  never write. Each row's **Edit** still opens the dialog, so a supplier's stored details can be
-  read there, with **Save changes** disabled.
+  same reason **Mark as not used**/**Mark as in use** is not: a Super Admin looking at your business
+  can read it, never write. Each row's **Edit** still opens the dialog, so a supplier's stored
+  details can be read there, with **Save changes** disabled.
 - **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
   inside itself, closes on Escape and returns focus to the control that opened it; the page behind
   it cannot be clicked or tabbed into while it is open.
 
-The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
-add** section are unchanged, and no API, model or stored field changed with this.
+The **Platform list** label, the website link rule and the **Available to add** section are
+unchanged, and no API, model or stored field changed with either this or
+[the Suppliers list redesign](#the-suppliers-list) above.
 
 Screenshots of the reviewed states, with sample suppliers, are in `docs/screenshots/issue-1174/`:
 [Add, 1440px](docs/screenshots/issue-1174/add-supplier-dialog-1440px.png),
@@ -3070,8 +3136,9 @@ no website is normal, and editing one you recorded earlier works without touchin
   path, and anything with another scheme — `javascript:`, `data:`, `file:`, `ftp:`, `mailto:` — are
   refused, with the message shown on the field. The form checks this before saving and the server
   checks it again on every create and update; a refused value changes nothing.
-- **It is a link, and only a link.** On the Suppliers list a recorded website opens in a new tab,
-  with `rel="noopener noreferrer"`. **The application never visits it.** Nothing fetches, follows,
+- **It is a link, and only a link.** On the Suppliers list a recorded website is shown as its short
+  domain (issue #1175) and opens the full stored address in a new tab, with
+  `rel="noopener noreferrer"`. **The application never visits it.** Nothing fetches, follows,
   previews, scrapes or checks that the address works, and nothing reads a GST status, an ABN or
   anything else out of it. A stored value that is not an `http(s)` address is shown as plain text
   and is never clickable.
@@ -3117,12 +3184,14 @@ supplier with a **Platform list** label.
   normally, and so do the supplier's three
   [GST defaults](#product-and-supplier-gst-rules) — those are your own accounting settings about a
   supplier you buy from, and the link only fixes who the supplier *is*.
-- **Mark one you do not use as "Not used".** The Suppliers page has a **Not used** switch on each
-  linked row. Switched on, the supplier stops being offered when you record a purchase, place a
-  supplier order or order from the Needs Ordering page. Nothing is removed: the row stays on the
-  Suppliers page so you can switch it back on, and every purchase, supplier order and expense that
-  already names it still shows it. The switch needs the same permission as the rest of the Suppliers
-  page, and it is hidden — and refused — in a read-only support session.
+- **Mark one you do not use as "Not used".** Each linked row's actions menu has a **Mark as not
+  used**/**Mark as in use** action (issue #1175 moved it off the row and into that menu; the Usage
+  column still shows **In use**/**Not used** at a glance). Chosen, the supplier stops being offered
+  when you record a purchase, place a supplier order or order from the Needs Ordering page. Nothing
+  is removed: the row stays on the Suppliers page so you can mark it in use again, and every
+  purchase, supplier order and expense that already names it still shows it. The action needs the
+  same permission as the rest of the Suppliers page, and it is hidden — and refused — in a
+  read-only support session.
 - **A supplier you added yourself is unchanged.** Rename it, re-point its website, delete it, exactly
   as before. "Not used" is deliberately not offered for one: you can simply delete it.
 - **For the API.** `GET /api/suppliers` and `GET /api/suppliers/{id}` publish `isLinked`, `isHidden`,

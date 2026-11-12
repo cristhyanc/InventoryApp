@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
-import { BehaviorSubject, Observable, of, throwError } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { SupplierListComponent } from './supplier-list.component';
 import { SupplierFormDialogComponent } from './supplier-form-dialog/supplier-form-dialog.component';
 import { SupplierService } from '../../services/supplier.service';
@@ -58,23 +58,28 @@ interface RenderOptions {
   /** Whether this tab is previewing another role (issue #721). */
   previewActive?: Observable<boolean>;
 
-  listed?: Supplier[];
+  listed?: Supplier[] | Observable<Supplier[]>;
 
   /** What `GET /api/suppliers/available-presets` answers (issue #935). */
   available?: AvailableSupplierPreset[];
 
   /** What the add answers; an error exercises the refusal path. */
   addFromPreset?: jest.Mock;
+
+  /** What a create answers; override to control the saved record's own fields (issue #1175). */
+  create?: jest.Mock;
 }
 
 async function renderWith(options: RenderOptions = {}) {
-  const listed = options.listed ?? [supplier()];
-  const create = jest.fn(() => of(supplier()));
-  const update = jest.fn(() => of(supplier()));
+  const listedSource = options.listed ?? [supplier()];
+  const create = options.create ?? jest.fn(() => of(supplier()));
+  const update = jest.fn(() => of(undefined));
   const deleteFn = jest.fn(() => of(undefined));
   const setNotUsed = jest.fn(() => of(undefined));
-  const getAllIncludingHidden = jest.fn(() => of(listed));
-  const getAll = jest.fn(() => of(listed));
+  const getAllIncludingHidden = jest.fn(() =>
+    Array.isArray(listedSource) ? of(listedSource) : listedSource
+  );
+  const getAll = jest.fn(() => of([] as Supplier[]));
   const getAvailablePresets = jest.fn(() => of(options.available ?? []));
   const addFromPreset = options.addFromPreset ?? jest.fn(() => of(supplier()));
   const getGstDefaults = jest.fn(() =>
@@ -143,6 +148,21 @@ function buttonNamed(host: ParentNode, label: string): HTMLButtonElement | undef
   return Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.trim() === label);
 }
 
+/**
+ * Opens one row's overflow menu (issue #1175): GST defaults, the usage toggle and Delete moved off
+ * the row into it, the way the Products redesign (#1093) already does. Returns the open panel, or
+ * `null` when the row offers no menu at all.
+ */
+function openSupplierMenu(fixture: ComponentFixture<SupplierListComponent>, host: HTMLElement, supplierId: number): HTMLElement | null {
+  const trigger = host.querySelector<HTMLButtonElement>(`[data-testid="supplier-actions-${supplierId}"]`);
+  if (!trigger) {
+    return null;
+  }
+  trigger.click();
+  fixture.detectChanges();
+  return host.querySelector(`[data-testid="supplier-actions-${supplierId}-panel"]`);
+}
+
 async function render(sessionActive: Observable<boolean> = of(false), listed: Supplier[] = [supplier()]) {
   return renderWith({ sessionActive, listed });
 }
@@ -150,22 +170,266 @@ async function render(sessionActive: Observable<boolean> = of(false), listed: Su
 afterEach(() => TestBed.resetTestingModule());
 
 /**
+ * The register's loading, error, empty and no-match states (issue #1175): a page with a search box
+ * and a usage filter has four distinct things it may be showing, not just "rows or nothing".
+ */
+describe('SupplierListComponent register states (issue #1175)', () => {
+  it('shows a loading state before the first read settles, and nothing of the table yet', async () => {
+    const pending = new Subject<Supplier[]>();
+    const { host } = await renderWith({ listed: pending.asObservable() });
+
+    expect(host.querySelector('[data-testid="suppliers-loading"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="suppliers-table"]')).toBeNull();
+    expect(host.querySelector('[data-testid="suppliers-count"]')).toBeNull();
+  });
+
+  it('shows a load failure and no table when the read errors', async () => {
+    const { fixture, host } = await renderWith({
+      listed: new Observable<Supplier[]>((subscriber) => subscriber.error(new HttpErrorResponse({ status: 500 })))
+    });
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="suppliers-error"]')?.textContent).toContain('Failed to load suppliers.');
+    expect(host.querySelector('[data-testid="suppliers-table"]')).toBeNull();
+  });
+
+  it('shows the empty-register message when there are no suppliers at all', async () => {
+    const { host } = await renderWith({ listed: [] });
+
+    expect(host.querySelector('[data-testid="suppliers-empty"]')?.textContent).toContain('No suppliers yet');
+    expect(host.querySelector('[data-testid="suppliers-table"]')).toBeNull();
+  });
+
+  it('shows the no-match message and a reset action once a search or filter leaves nothing', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ name: 'Acme Supplies' })]);
+
+    fixture.componentInstance.search = 'does not exist';
+    fixture.detectChanges();
+
+    const noMatch = host.querySelector('[data-testid="suppliers-no-match"]') as HTMLElement;
+    expect(noMatch.textContent).toContain('No suppliers match your search or filter.');
+
+    (noMatch.querySelector('[data-testid="suppliers-reset"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.search).toBe('');
+    expect(fixture.componentInstance.usageFilter).toBe('all');
+    expect(host.querySelector('[data-testid="suppliers-table"]')).not.toBeNull();
+  });
+
+  it('counts every loaded supplier in the header regardless of the search or filter', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ id: 1 }), linkedSupplier({ id: 2 })]);
+
+    expect(host.querySelector('[data-testid="suppliers-count"]')?.textContent?.trim()).toBe('2 suppliers');
+
+    fixture.componentInstance.search = 'nothing matches this';
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="suppliers-count"]')?.textContent?.trim()).toBe('2 suppliers');
+  });
+});
+
+/**
+ * The search and the All/In use/Not used usage filter (issue #1175), combined over the one
+ * register already loaded. Usage is the existing `isHidden` switch (issue #934), never purchase
+ * history, and a supplier the business created itself is always "In use" - the switch that would
+ * set it is never offered to one.
+ */
+describe('SupplierListComponent search and usage filter (issue #1175)', () => {
+  function rowNames(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('[data-testid="supplier-row"]')).map(
+      (row) => row.querySelector('.font-semibold')?.textContent?.trim() ?? ''
+    );
+  }
+
+  it('matches by name, case-insensitively, trimmed', async () => {
+    const { fixture, host } = await render(of(false), [
+      supplier({ id: 1, name: 'Acme Supplies' }),
+      supplier({ id: 2, name: 'Beta Traders' })
+    ]);
+
+    fixture.componentInstance.search = '  ACME  ';
+    fixture.detectChanges();
+
+    expect(rowNames(host)).toEqual(['Acme Supplies']);
+  });
+
+  it('combines the search with the usage filter', async () => {
+    const { fixture, host } = await render(of(false), [
+      linkedSupplier({ id: 2, name: 'Coles', isHidden: true }),
+      linkedSupplier({ id: 3, name: 'Costco', isHidden: false })
+    ]);
+
+    fixture.componentInstance.search = 'co';
+    fixture.componentInstance.usageFilter = 'notUsed';
+    fixture.detectChanges();
+
+    expect(rowNames(host)).toEqual(['Coles']);
+  });
+
+  it('treats a custom supplier as always "In use", even defensively against a stray isHidden', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ id: 1, name: 'Acme Supplies', isHidden: true })]);
+
+    expect(host.querySelector('[data-testid="supplier-usage-1"]')?.textContent?.trim()).toBe('In use');
+
+    fixture.componentInstance.usageFilter = 'notUsed';
+    fixture.detectChanges();
+    expect(rowNames(host)).toEqual([]);
+
+    fixture.componentInstance.usageFilter = 'inUse';
+    fixture.detectChanges();
+    expect(rowNames(host)).toEqual(['Acme Supplies']);
+  });
+
+  it('shows a linked supplier marked "Not used" as such, and lets "In use" filter it out', async () => {
+    const { fixture, host } = await render(of(false), [linkedSupplier({ isHidden: true })]);
+
+    expect(host.querySelector('[data-testid="supplier-usage-7"]')?.textContent?.trim()).toBe('Not used');
+
+    fixture.componentInstance.usageFilter = 'inUse';
+    fixture.detectChanges();
+    expect(rowNames(host)).toEqual([]);
+  });
+
+  it('offers Clear filters only once a search or filter differs from the default, and resets both', async () => {
+    const { fixture, host } = await render(of(false), [supplier()]);
+
+    expect(host.querySelector('[data-testid="suppliers-clear-filters"]')).toBeNull();
+
+    fixture.componentInstance.search = 'acme';
+    fixture.detectChanges();
+    expect(host.querySelector('[data-testid="suppliers-clear-filters"]')).not.toBeNull();
+
+    (host.querySelector('[data-testid="suppliers-clear-filters"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.search).toBe('');
+    expect(fixture.componentInstance.usageFilter).toBe('all');
+  });
+});
+
+/**
+ * The desktop Contact and Website columns (issue #1175): the available name, email and phone
+ * grouped together with missing details left out, and a safe website shown as its short domain.
+ */
+describe('SupplierListComponent contact and website columns (issue #1175)', () => {
+  it('groups the available contact name, a mailto email and a tel phone', async () => {
+    const { host } = await render(of(false), [
+      supplier({ contactName: 'Dana', email: 'dana@example.test', phone: '0400 000 000' })
+    ]);
+
+    const contact = host.querySelector('[data-testid="supplier-contact"]') as HTMLElement;
+    expect(contact.textContent).toContain('Dana');
+
+    const mailto = contact.querySelector('a[href="mailto:dana@example.test"]');
+    expect(mailto?.textContent?.trim()).toBe('dana@example.test');
+
+    const tel = contact.querySelector('a[href="tel:0400 000 000"]');
+    expect(tel?.textContent?.trim()).toBe('0400 000 000');
+  });
+
+  it('leaves a missing contact detail out rather than showing a placeholder for it', async () => {
+    const { host } = await render(of(false), [supplier({ contactName: 'Dana', email: null, phone: null })]);
+
+    const contact = host.querySelector('[data-testid="supplier-contact"]') as HTMLElement;
+    expect(contact.textContent?.trim()).toBe('Dana');
+    expect(contact.querySelector('a')).toBeNull();
+  });
+
+  it('shows nothing extra when a supplier has no contact details at all', async () => {
+    const { host } = await render(of(false), [supplier({ contactName: null, email: null, phone: null })]);
+
+    expect(host.querySelector('[data-testid="supplier-contact"]')).toBeNull();
+    const row = host.querySelector('[data-testid="supplier-row"]') as HTMLElement;
+    expect(row.textContent).toContain('—');
+  });
+
+  it('shows a safe website as its short domain, linking to the full stored address', async () => {
+    const { host } = await render(of(false), [supplier({ url: 'https://www.coles.com.au/trade?ref=1' })]);
+
+    const link = host.querySelector('tbody a[target="_blank"]') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('https://www.coles.com.au/trade?ref=1');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.textContent).toContain('coles.com.au');
+    expect(link.textContent).not.toContain('https://');
+  });
+
+  it.each(['javascript:alert(1)', 'data:text/html,x', 'coles.com.au', '/suppliers/1'])(
+    'renders a stored %p as plain text and never as a link',
+    async (stored) => {
+      const { host } = await render(of(false), [supplier({ url: stored })]);
+
+      expect(host.querySelector('tbody a[target="_blank"]')).toBeNull();
+      expect(host.querySelector('[data-testid="supplier-row"]')?.textContent).toContain(stored);
+    }
+  );
+
+  it('shows nothing in the website column for a supplier with no url', async () => {
+    const { host } = await render(of(false), [supplier({ url: null })]);
+
+    expect(host.querySelector('tbody a[target="_blank"]')).toBeNull();
+  });
+});
+
+/**
+ * The row's Edit action and overflow menu (issue #1175): Edit stays on the row, and GST defaults,
+ * the usage toggle (linked suppliers only) and Delete (only where the API allows it) move into one
+ * `app-action-menu`.
+ */
+describe('SupplierListComponent row actions (issue #1175)', () => {
+  it('always offers Edit and a menu holding at least GST defaults', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ id: 1 })]);
+
+    expect(host.querySelector('[data-testid="supplier-edit-1"]')).not.toBeNull();
+
+    const menu = openSupplierMenu(fixture, host, 1);
+    expect(menu?.querySelector('[data-testid="supplier-gst-defaults-1"]')).not.toBeNull();
+  });
+
+  it('offers the usage toggle only for a linked supplier, labelled by its current state', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ id: 1 }), linkedSupplier({ id: 7, isHidden: false })]);
+
+    expect(openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-usage-toggle-1"]')).toBeNull();
+
+    const linkedMenu = openSupplierMenu(fixture, host, 7);
+    const toggle = linkedMenu?.querySelector('[data-testid="supplier-usage-toggle-7"]');
+    expect(toggle?.textContent?.trim()).toBe('Mark as not used');
+  });
+
+  it('offers Delete only when the API still allows it', async () => {
+    const { fixture, host } = await render(of(false), [
+      supplier({ id: 1, canDelete: true }),
+      supplier({ id: 2, canDelete: false })
+    ]);
+
+    expect(openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-delete-1"]')).not.toBeNull();
+    expect(openSupplierMenu(fixture, host, 2)?.querySelector('[data-testid="supplier-delete-2"]')).toBeNull();
+  });
+
+  it('switches "Not used" on and off through the menu and reloads', async () => {
+    const stored = linkedSupplier({ isHidden: false });
+    const { fixture, host, setNotUsed, getAllIncludingHidden } = await render(of(false), [stored]);
+
+    (openSupplierMenu(fixture, host, 7)?.querySelector('[data-testid="supplier-usage-toggle-7"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(setNotUsed).toHaveBeenCalledWith(7, true);
+    expect(getAllIncludingHidden).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
  * Add supplier, Create/Update and Delete while a support session is active (issue #657, extending
  * #554). A session grants `PurchasingOperate`, so these would otherwise still render - disabling
  * and hiding them is this page's own job, not the capability check's. Edit is the exception the
- * page keeps on purpose: it opens a stored supplier's details and issues no request.
+ * page keeps on purpose: it opens a stored supplier's details and issues no request, and GST
+ * defaults is a read with no write of its own either.
  */
 describe('SupplierListComponent write controls during a support session (issue #657)', () => {
-  /**
-   * The header's **Add supplier** action is hidden, not merely led to a dialog whose Save is
-   * disabled: a create is a write on the capability a session grants, so the server refuses it
-   * either way and offering the form could only end in a refusal.
-   */
   it('renders no header Add supplier action while a session is active and opens nothing if invoked', async () => {
     const { fixture, host } = await render(of(true));
 
     expect(host.querySelector('[data-testid="add-supplier"]')).toBeNull();
-    expect(buttonNamed(host, 'Add supplier')).toBeUndefined();
 
     fixture.componentInstance.addSupplier();
     fixture.detectChanges();
@@ -174,11 +438,6 @@ describe('SupplierListComponent write controls during a support session (issue #
     expect(host.querySelector('app-supplier-form-dialog')).toBeNull();
   });
 
-  /**
-   * Edit is the one control a session keeps, because opening a stored supplier's details issues no
-   * request: the row's own button opens the dialog filled in, and the dialog's Save is what the
-   * session disables.
-   */
   it('still offers the row Edit action while a session is active, filled in and with its save disabled', async () => {
     const { fixture, host, update } = await render(of(true), [supplier({ id: 4, name: 'Acme Supplies' })]);
 
@@ -197,15 +456,17 @@ describe('SupplierListComponent write controls during a support session (issue #
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('hides Delete while a session is active', async () => {
-    const { host } = await render(of(true));
+  it('still offers GST defaults but hides the usage toggle and Delete in the row menu', async () => {
+    const { fixture, host } = await render(of(true), [linkedSupplier({ id: 7, canDelete: true })]);
 
-    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim().includes('Delete'));
-    expect(deleteButton).toBeUndefined();
+    const menu = openSupplierMenu(fixture, host, 7);
+    expect(menu?.querySelector('[data-testid="supplier-gst-defaults-7"]')).not.toBeNull();
+    expect(menu?.querySelector('[data-testid="supplier-usage-toggle-7"]')).toBeNull();
+    expect(menu?.querySelector('[data-testid="supplier-delete-7"]')).toBeNull();
   });
 
-  it('offers Add supplier, an enabled dialog save and Delete while no session is active', async () => {
-    const { fixture, host } = await render(of(false));
+  it('offers Add supplier, an enabled dialog save and a Delete menu item while no session is active', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ id: 1 })]);
 
     expect(host.querySelector('[data-testid="add-supplier"]')).not.toBeNull();
 
@@ -214,9 +475,10 @@ describe('SupplierListComponent write controls during a support session (issue #
 
     const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement;
     expect(submit.disabled).toBe(false);
+    fixture.componentInstance.closeForm();
+    fixture.detectChanges();
 
-    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim().includes('Delete'));
-    expect(deleteButton).toBeDefined();
+    expect(openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-delete-1"]')).not.toBeNull();
   });
 
   it('writes nothing on save while a session is active, even if the write method is invoked directly', async () => {
@@ -268,43 +530,6 @@ describe('SupplierListComponent write controls during a support session (issue #
 });
 
 /**
- * The optional website (issue #847) as this page shows it: the list links only to a value the
- * client rule still accepts. The form's own half of that rule is
- * `supplier-form-dialog.component.spec.ts` since issue #1174 moved the form into a dialog.
- */
-describe('SupplierListComponent website URL (issue #847)', () => {
-  it('renders a stored http(s) url as a link that opens safely', async () => {
-    const { host } = await render(of(false), [supplier({ url: 'https://coles.com.au/trade' })]);
-
-    const link = host.querySelector('tbody a') as HTMLAnchorElement;
-    expect(link).not.toBeNull();
-    expect(link.getAttribute('href')).toBe('https://coles.com.au/trade');
-    expect(link.getAttribute('target')).toBe('_blank');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(link.textContent?.trim()).toBe('https://coles.com.au/trade');
-  });
-
-  /**
-   * Defence in depth: a value the server rule would never have stored is still never clickable.
-   */
-  it.each(['javascript:alert(1)', 'data:text/html,x', 'coles.com.au', '/suppliers/1'])(
-    'renders a stored %p as plain text and never as a link',
-    async (stored) => {
-      const { host } = await render(of(false), [supplier({ url: stored })]);
-
-      expect(host.querySelector('tbody a')).toBeNull();
-      expect(host.querySelector('tbody tr')?.textContent).toContain(stored);
-    }
-  );
-
-  it('renders no link and no text for a supplier with no url', async () => {
-    const { host } = await render(of(false), [supplier({ url: null })]);
-
-    expect(host.querySelector('tbody a')).toBeNull();
-  });
-});
-
-/**
  * The link state and the "Not used" switch (issue #934). Everything here reads the four fields the
  * API publishes from its one policy: the page renders the server's answer and never a rule of its
  * own, and the API refuses the write whatever this page shows.
@@ -318,23 +543,17 @@ describe('SupplierListComponent linked suppliers and "Not used" (issue #934)', (
   });
 
   it('marks a linked row and offers no Delete for it', async () => {
-    const { host } = await render(of(false), [linkedSupplier()]);
+    const { fixture, host } = await render(of(false), [linkedSupplier()]);
 
     expect(host.querySelector('[data-testid="supplier-linked-7"]')).not.toBeNull();
-    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) =>
-      b.textContent?.trim().includes('Delete')
-    );
-    expect(deleteButton).toBeUndefined();
+    expect(openSupplierMenu(fixture, host, 7)?.querySelector('[data-testid="supplier-delete-7"]')).toBeNull();
   });
 
   it('leaves an unlinked row unmarked and still offers Delete', async () => {
-    const { host } = await render(of(false), [supplier()]);
+    const { fixture, host } = await render(of(false), [supplier()]);
 
     expect(host.querySelector('[data-testid="supplier-linked-1"]')).toBeNull();
-    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) =>
-      b.textContent?.trim().includes('Delete')
-    );
-    expect(deleteButton).toBeDefined();
+    expect(openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-delete-1"]')).not.toBeNull();
   });
 
   it('deletes nothing for a linked supplier even if the method is invoked directly', async () => {
@@ -372,43 +591,25 @@ describe('SupplierListComponent linked suppliers and "Not used" (issue #934)', (
     expect(host.querySelector('[data-testid="supplier-locked-note"]')).toBeNull();
   });
 
-  it('switches "Not used" on and off for a linked supplier and reloads', async () => {
-    const stored = linkedSupplier();
-    const { fixture, host, setNotUsed, getAllIncludingHidden } = await render(of(false), [stored]);
-
-    const toggle = host.querySelector('[data-testid="supplier-not-used-7"]') as HTMLInputElement;
-    expect(toggle).not.toBeNull();
-    expect(toggle.checked).toBe(false);
-
-    toggle.dispatchEvent(new Event('change'));
-
-    expect(setNotUsed).toHaveBeenCalledWith(7, true);
-    expect(getAllIncludingHidden).toHaveBeenCalledTimes(2);
-
-    fixture.componentInstance.setNotUsed(linkedSupplier({ isHidden: true }), false);
-    expect(setNotUsed).toHaveBeenLastCalledWith(7, false);
-  });
-
-  it('shows a hidden linked supplier with the switch on, so it can be switched back off', async () => {
+  it('shows a hidden linked supplier marked "Not used", so it can be switched back', async () => {
     const { host } = await render(of(false), [linkedSupplier({ isHidden: true })]);
 
-    const toggle = host.querySelector('[data-testid="supplier-not-used-7"]') as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
+    expect(host.querySelector('[data-testid="supplier-usage-7"]')?.textContent?.trim()).toBe('Not used');
   });
 
-  it('offers no switch for a supplier the business created itself', async () => {
+  it('offers no usage toggle for a supplier the business created itself', async () => {
     const { fixture, host, setNotUsed } = await render(of(false), [supplier()]);
 
-    expect(host.querySelector('[data-testid="supplier-not-used-1"]')).toBeNull();
+    expect(openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-usage-toggle-1"]')).toBeNull();
 
     fixture.componentInstance.setNotUsed(supplier(), true);
     expect(setNotUsed).not.toHaveBeenCalled();
   });
 
-  it('hides the switch while a support session is active and writes nothing if invoked', async () => {
+  it('hides the usage toggle while a support session is active and writes nothing if invoked', async () => {
     const { fixture, host, setNotUsed } = await render(of(true), [linkedSupplier()]);
 
-    expect(host.querySelector('[data-testid="supplier-not-used-7"]')).toBeNull();
+    expect(openSupplierMenu(fixture, host, 7)?.querySelector('[data-testid="supplier-usage-toggle-7"]')).toBeNull();
 
     fixture.componentInstance.setNotUsed(linkedSupplier(), true);
     expect(setNotUsed).not.toHaveBeenCalled();
@@ -440,10 +641,8 @@ describe('SupplierListComponent linked suppliers and "Not used" (issue #934)', (
 /**
  * The "Available to add" section (issue #935): the suppliers from the platform's list that serve
  * this business's state and that it has not added yet, and the one-click add beside each of them.
- *
- * The server decides what is on offer - this page renders that answer and holds no rule of its own
- * about states, enabled records or existing copies - and the server refuses the add in a support
- * session and in a role preview whatever this page shows.
+ * Restyled by issue #1175; its behaviour is unchanged, so the server still decides what is on
+ * offer and refuses the add in a support session and in a role preview whatever this page shows.
  */
 describe('SupplierListComponent "Available to add" (issue #935)', () => {
   it('asks the server what this business may add, and lists it with its website as a safe link', async () => {
@@ -596,13 +795,13 @@ describe('SupplierListComponent dialogs (issue #1174)', () => {
     fixture.componentInstance.addSupplier();
     fixture.detectChanges();
     const dialog = formDialogOf(fixture);
-    dialog.form.name = 'New Supplier';
+    dialog.form.name = 'Acme Supplies';
     dialog.save();
     fixture.detectChanges();
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(getAllIncludingHidden).toHaveBeenCalledTimes(2);
-    expect(toasts.success).toHaveBeenCalledTimes(1);
+    expect(toasts.success).toHaveBeenCalledWith('Supplier created.');
     expect(host.querySelector('app-supplier-form-dialog')).toBeNull();
   });
 
@@ -623,10 +822,10 @@ describe('SupplierListComponent dialogs (issue #1174)', () => {
     expect(toasts.success).not.toHaveBeenCalled();
   });
 
-  it('opens the GST defaults of the supplier whose row action was pressed, with its own permission', async () => {
+  it('opens the GST defaults of the supplier whose menu action was pressed, with its own permission', async () => {
     const { fixture, host, getGstDefaults } = await render(of(false), [linkedSupplier()]);
 
-    (host.querySelector('[data-testid="supplier-gst-defaults-7"]') as HTMLButtonElement).click();
+    (openSupplierMenu(fixture, host, 7)?.querySelector('[data-testid="supplier-gst-defaults-7"]') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     const dialog = host.querySelector('[data-testid="supplier-gst-defaults-dialog"]') as HTMLElement;
@@ -650,7 +849,7 @@ describe('SupplierListComponent dialogs (issue #1174)', () => {
   it('asks the shared confirmation dialog before deleting, naming the supplier', async () => {
     const { fixture, host, delete: deleteFn, getAllIncludingHidden } = await render(of(false), [supplier()]);
 
-    (host.querySelector('[data-testid="supplier-delete-1"]') as HTMLButtonElement).click();
+    (openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-delete-1"]') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     const confirmation = host.querySelector('app-confirmation-dialog') as HTMLElement;
@@ -669,7 +868,7 @@ describe('SupplierListComponent dialogs (issue #1174)', () => {
   it('deletes nothing when the confirmation is dismissed', async () => {
     const { fixture, host, delete: deleteFn } = await render(of(false), [supplier()]);
 
-    (host.querySelector('[data-testid="supplier-delete-1"]') as HTMLButtonElement).click();
+    (openSupplierMenu(fixture, host, 1)?.querySelector('[data-testid="supplier-delete-1"]') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     buttonNamed(host.querySelector('app-confirmation-dialog') as HTMLElement, 'Cancel')!.click();
@@ -695,5 +894,89 @@ describe('SupplierListComponent dialogs (issue #1174)', () => {
 
     expect(update).not.toHaveBeenCalled();
     expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * State kept across the Add/Edit dialog (issue #1175): opening and closing it, saved or not, never
+ * resets the search or the usage filter, and a save that the current filter now hides says so
+ * rather than silently vanishing from view.
+ */
+describe('SupplierListComponent state kept across the dialog, and the filtered-out save message (issue #1175)', () => {
+  it('keeps the search and usage filter after the dialog is dismissed unsaved', async () => {
+    const { fixture, host } = await render(of(false), [supplier({ name: 'Acme Supplies' })]);
+
+    fixture.componentInstance.search = 'acme';
+    fixture.componentInstance.usageFilter = 'inUse';
+    fixture.detectChanges();
+
+    fixture.componentInstance.addSupplier();
+    fixture.detectChanges();
+    fixture.componentInstance.closeForm();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.search).toBe('acme');
+    expect(fixture.componentInstance.usageFilter).toBe('inUse');
+    expect(host.querySelector('[data-testid="suppliers-search"]')).not.toBeNull();
+  });
+
+  it('shows the plain success toast when the newly created supplier still matches the filter', async () => {
+    const created = supplier({ id: 9, name: 'Acme Supplies' });
+    const { fixture, toasts } = await renderWith({
+      listed: [supplier({ id: 1, name: 'Acme Supplies' })],
+      create: jest.fn(() => of(created))
+    });
+
+    fixture.componentInstance.search = 'acme';
+    fixture.detectChanges();
+
+    fixture.componentInstance.addSupplier();
+    fixture.detectChanges();
+    const dialog = formDialogOf(fixture);
+    dialog.form.name = 'Acme Supplies';
+    dialog.save();
+    fixture.detectChanges();
+
+    expect(toasts.success).toHaveBeenCalledWith('Supplier created.');
+    expect(fixture.componentInstance.search).toBe('acme');
+  });
+
+  it('names the hiding filter when the newly created supplier does not match the current search', async () => {
+    const created = supplier({ id: 9, name: 'Zed Traders' });
+    const { fixture, toasts } = await renderWith({
+      listed: [supplier({ id: 1, name: 'Acme Supplies' })],
+      create: jest.fn(() => of(created))
+    });
+
+    fixture.componentInstance.search = 'acme';
+    fixture.detectChanges();
+
+    fixture.componentInstance.addSupplier();
+    fixture.detectChanges();
+    const dialog = formDialogOf(fixture);
+    dialog.form.name = 'Zed Traders';
+    dialog.save();
+    fixture.detectChanges();
+
+    expect(toasts.success).toHaveBeenCalledWith('Supplier created. It is hidden by your current search or usage filter.');
+    // The filter stays exactly as it was - the new row does not spring back into view.
+    expect(fixture.componentInstance.search).toBe('acme');
+  });
+
+  it('names the hiding filter when a rename takes an edited supplier out of the current search', async () => {
+    const stored = supplier({ id: 4, name: 'Acme Supplies' });
+    const { fixture, toasts } = await render(of(false), [stored]);
+
+    fixture.componentInstance.search = 'acme';
+    fixture.detectChanges();
+
+    fixture.componentInstance.editSupplier(stored);
+    fixture.detectChanges();
+    const dialog = formDialogOf(fixture);
+    dialog.form.name = 'Zed Traders';
+    dialog.save();
+    fixture.detectChanges();
+
+    expect(toasts.success).toHaveBeenCalledWith('Supplier saved. It is hidden by your current search or usage filter.');
   });
 });

@@ -189,6 +189,12 @@ public static class CheapestSupplierSummaryRequestPolicy
 /// (AGENTS.md § Observed supplier prices). <c>Inventory.Domain.Purchases.SupplierPriceComparisonPolicy</c>
 /// remains the separate, unchanged comparison over what the business actually paid.</para>
 ///
+/// <para><strong>How old a price may be is the supplier's own schedule's answer</strong> (issue
+/// #1200). Every read derives it from the schedule stored on the supplier master record now - a
+/// schedule somebody edited this morning decides this afternoon's summary - through the platform
+/// collection calendar, and no stored number of hours takes part. A supplier whose <em>Search
+/// prices</em> switch is off is listed with its last price and compared with nothing.</para>
+///
 /// <para><strong>Which business is never asked.</strong> It comes from the authenticated actor's
 /// membership through <see cref="ICurrentBusinessProvider"/>; the request carries product ids and
 /// nothing else, and an id of another business matches nothing and is absent from the answer rather
@@ -199,15 +205,18 @@ public sealed class GetCheapestSupplierSummary
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly ICheapestSupplierSummaryStore _store;
     private readonly IClock _clock;
+    private readonly ISupplierSearchScheduleCalendar _calendar;
 
     public GetCheapestSupplierSummary(
         ICurrentBusinessProvider currentBusiness,
         ICheapestSupplierSummaryStore store,
-        IClock clock)
+        IClock clock,
+        ISupplierSearchScheduleCalendar calendar)
     {
         _currentBusiness = currentBusiness;
         _store = store;
         _clock = clock;
+        _calendar = calendar;
     }
 
     /// <exception cref="DomainValidationException">
@@ -239,7 +248,7 @@ public sealed class GetCheapestSupplierSummary
             [.. facts.Products.Select(product => Summarise(product, facts.Suppliers, suppliersByPreset, basis, asOfUtc))]);
     }
 
-    private static CheapestSupplierProductSummary Summarise(
+    private CheapestSupplierProductSummary Summarise(
         TrackedProductListings product,
         IReadOnlyList<LinkedSupplier> suppliers,
         IReadOnlyDictionary<int, LinkedSupplier> suppliersByPreset,
@@ -313,7 +322,17 @@ public sealed class GetCheapestSupplierSummary
             rows);
     }
 
-    private static SupplierUnitOffer Candidate(TrackedListingPrice listing)
+    /// <summary>
+    /// One listing's stored facts as the comparison takes them, with the one derived instant it needs:
+    /// when the supplier's next scheduled search day after this reading ends (issue #1200).
+    ///
+    /// <para>The conversion between the schedule's dates and true instants is the collection
+    /// calendar's, here rather than in the Domain, because the zone and its daylight-saving rules are
+    /// a platform fact and the Domain holds no zone at all (AGENTS.md § Reporting dates). The
+    /// <em>rule</em> - until the end of that day, plus the margin - stays in
+    /// <c>SupplierPriceFreshnessPolicy</c>.</para>
+    /// </summary>
+    private SupplierUnitOffer Candidate(TrackedListingPrice listing)
     {
         var price = listing.Price!;
 
@@ -326,8 +345,11 @@ public sealed class GetCheapestSupplierSummary
             price.SupplierGstRate,
             price.StockStatus,
             price.PromotionEndsAtUtc,
-            price.ObservedAtUtc,
-            price.FreshnessLimitHours);
+            listing.SupplierSearchesPrices,
+            SupplierSearchScheduleWindow.NextSearchDayEndUtc(
+                _calendar,
+                listing.SupplierSchedule,
+                price.ObservedAtUtc));
     }
 
     private static SupplierUnitPriceOffer Offer(

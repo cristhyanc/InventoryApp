@@ -57,6 +57,17 @@ export function isSafeSupplierUrl(value: string | null | undefined): boolean {
 }
 
 /**
+ * The Suppliers register's own short form of a website (issue #1175): the bare host a safe URL
+ * points at, with a leading `www.` dropped, so a long address does not crowd the Website column.
+ * Call it only once {@link isSafeSupplierUrl} has allowed the value - the `URL` parse below is the
+ * same one that check already performed, so it cannot fail here.
+ */
+export function supplierUrlDomain(url: string): string {
+  const host = new URL(url.trim()).hostname;
+  return host.startsWith('www.') ? host.slice(4) : host;
+}
+
+/**
  * The authority pattern is checked alongside the parser because the WHATWG parser is forgiving
  * about repeated slashes for a special scheme - it reads `https:///x` as the host `x`, where the
  * server's `Uri` reads an empty host and refuses it. Requiring a host character straight after

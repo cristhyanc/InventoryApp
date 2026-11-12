@@ -3,24 +3,35 @@ using Inventory.Domain.Exceptions;
 namespace Inventory.Domain.PriceCatalogue;
 
 /// <summary>
-/// How old an observed supplier price may be and still be compared (issue #925, parent #817): one
-/// limit per supplier master record, measured from the instant the price was observed.
+/// How old an observed supplier price may be and still be compared (issue #925, parent #817): a price
+/// stays current <strong>until the supplier's next scheduled search has had its chance</strong>, and
+/// becomes too old only when that search did not refresh it.
 ///
-/// <para><strong>A limit is the longest expected gap between two checks, plus a margin.</strong> The
-/// owner's decision of 27 October 2026 is two numbers - 30 hours for a supplier checked daily, and
-/// 102 hours for one checked on Thursday and Sunday, whose longest gap (Sunday to Thursday) is 96 -
-/// and both are the gap plus <see cref="MarginHours"/>. The margin is the whole reason the limit is
-/// not the gap itself: a run that starts a little later than yesterday's would otherwise mark every
-/// price it has not re-read yet as stale, and a price nobody can compare is worse guidance than a
-/// price that is a few hours old.</para>
+/// <para><strong>The rule is the supplier's own schedule, not a number of hours</strong> (issue #1200,
+/// the owner's decision of 12 November 2026). A price read on a day is current until the end of the
+/// first day after it that the supplier is searched on (<see cref="SupplierSearchSchedulePolicy.NextOccurrenceAfter"/>),
+/// plus <see cref="MarginHours"/>: a supplier searched on Wednesday and Sunday keeps a Wednesday
+/// price until Monday 06:00, and a supplier searched every second Saturday keeps one for the
+/// fortnight. What was wrong with a fixed age is that it measured the wrong thing - the longest gap
+/// the schedule <em>could</em> have, from whenever the price happened to be read - so a Sunday price
+/// outlived a missed Wednesday run, and a price read on an off day got the same allowance wherever
+/// the next run fell.</para>
 ///
-/// <para><strong>The limit is stored per supplier master record, never decided from a supplier's
-/// name.</strong> <c>SupplierPreset.PriceCheckFreshnessHours</c> is where it lives, so a supplier
-/// whose collection schedule changes is an edit to a row rather than a change to this file, and a
-/// supplier added later needs no code at all. The two constants here are the declared cadences those
-/// stored values come from - a default for a daily supplier and the alternative for a twice-weekly
-/// one - and <see cref="LimitForCheckInterval"/> is how a third cadence would be derived from its own
-/// gap rather than invented.</para>
+/// <para><strong>The dates are the schedule's calendar's and this file resolves none of them.</strong>
+/// <see cref="IsFreshUntil"/> is given a true instant that
+/// <c>Inventory.Application.Time.ISupplierSearchScheduleCalendar</c> already converted - the start of
+/// the day after that next scheduled day - because the zone and its daylight-saving rules are a
+/// platform fact rather than a domain rule (AGENTS.md § Reporting dates).</para>
+///
+/// <para><strong>The margin is why the boundary is the end of the day and not the run's own
+/// hour.</strong> A run that starts a little later than yesterday's has not made yesterday's prices
+/// wrong, and a price nobody can compare is worse guidance than a price that is a few hours old.</para>
+///
+/// <para><strong>The hours limit remains a stored description of the cadence and decides
+/// nothing.</strong> <see cref="LimitForCheckInterval"/> and the constants below are what
+/// <see cref="SupplierSearchSchedulePolicy.FreshnessHoursFor"/> derives
+/// <c>SupplierPreset.PriceCheckFreshnessHours</c> from, and that column is still shown to a Super
+/// Admin; since issue #1200 no comparison and no review reads it.</para>
 ///
 /// <para><strong>Staleness is the only thing this policy decides, and it decides nothing about
 /// money.</strong> No price, GST rate or basis passes through it; <see cref="CheapestUnitOfferPolicy"/>
@@ -30,11 +41,12 @@ namespace Inventory.Domain.PriceCatalogue;
 public static class SupplierPriceFreshnessPolicy
 {
     /// <summary>
-    /// The allowance on top of a supplier's own check interval, in hours.
+    /// The allowance after the scheduled search that should have refreshed a price, in hours - and the
+    /// same allowance on top of a supplier's own check interval in the stored hours limit.
     ///
     /// <para>It exists because a collector run is not a clock: a run that starts six hours later than
-    /// yesterday's has not made yesterday's prices wrong, and a limit equal to the interval exactly
-    /// would turn every such run into a page of uncomparable offers.</para>
+    /// yesterday's has not made yesterday's prices wrong, and a boundary at the run's own hour would
+    /// turn every such run into a page of uncomparable offers.</para>
     /// </summary>
     public const int MarginHours = 6;
 
@@ -116,17 +128,30 @@ public static class SupplierPriceFreshnessPolicy
             : throw new DomainValidationException(LimitOutOfRangeMessage);
 
     /// <summary>
-    /// Whether a price observed at <paramref name="observedAtUtc"/> is still fresh at
-    /// <paramref name="asOfUtc"/> under a limit of <paramref name="limitHours"/> hours.
-    ///
-    /// <para><strong>The limit is the age at which a price stops being usable</strong>, so an
-    /// observation exactly <paramref name="limitHours"/> old is stale: "30 hours" is the owner's
-    /// answer to "how long is this price good for", and the boundary has to belong to one side
-    /// deliberately rather than by accident.</para>
-    ///
-    /// <para>An observation whose instant is in the future - a clock that disagrees with itself - is
-    /// fresh, because the alternative is to call a price nobody has had time to age "too old".</para>
+    /// The instant a price stops being compared: <paramref name="nextSearchDayEndUtc"/> plus
+    /// <see cref="MarginHours"/>.
     /// </summary>
-    public static bool IsFresh(DateTime observedAtUtc, DateTime asOfUtc, int limitHours) =>
-        asOfUtc - observedAtUtc < TimeSpan.FromHours(RequireLimit(limitHours));
+    /// <param name="nextSearchDayEndUtc">
+    /// When the first scheduled search day <em>after</em> the day the price was observed ends - 00:00
+    /// of the following date in the schedule's own calendar, as a true instant, which
+    /// <c>Inventory.Application.Time.ISupplierSearchScheduleCalendar</c> converts.
+    /// </param>
+    public static DateTime ComparableUntilUtc(DateTime nextSearchDayEndUtc) =>
+        nextSearchDayEndUtc.AddHours(MarginHours);
+
+    /// <summary>
+    /// Whether a price whose next scheduled search day ends at <paramref name="nextSearchDayEndUtc"/>
+    /// is still fresh at <paramref name="asOfUtc"/>.
+    ///
+    /// <para><strong>The boundary belongs to the stale side</strong>, exactly as the hours limit it
+    /// replaced did: at <see cref="ComparableUntilUtc"/> the search that should have refreshed this
+    /// price has had its whole day and six hours more, so the price is too old to compare and the
+    /// boundary belongs to one side deliberately rather than by accident.</para>
+    ///
+    /// <para>A price observed in the future - a clock that disagrees with itself - is fresh, because
+    /// its own next scheduled day is in the future too; calling a price nobody has had time to age
+    /// "too old" would be the one answer that is certainly wrong.</para>
+    /// </summary>
+    public static bool IsFreshUntil(DateTime asOfUtc, DateTime nextSearchDayEndUtc) =>
+        asOfUtc < ComparableUntilUtc(nextSearchDayEndUtc);
 }

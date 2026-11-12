@@ -27,6 +27,10 @@ export enum SupplierStockStatus {
  * Why one supplier's offer could not take part in the cheapest-per-unit comparison (backend
  * `SupplierOfferIneligibility`, issue #925). The offer is still shown with its reason, because an
  * owner who cannot see that a supplier is out of stock will wonder why it is not on the list.
+ *
+ * `Stale` is "the supplier's next scheduled price search did not refresh this price" and
+ * `SearchStopped` is "this supplier's price search has been switched off" (issue #1200): the first
+ * is a run that did not answer, the second is a run that is no longer made at all.
  */
 export enum SupplierOfferIneligibility {
   PackSizeUnknown = 1,
@@ -34,7 +38,8 @@ export enum SupplierOfferIneligibility {
   GstRateUnknown = 3,
   OutOfStock = 4,
   PromotionEnded = 5,
-  Stale = 6
+  Stale = 6,
+  SearchStopped = 7
 }
 
 /**
