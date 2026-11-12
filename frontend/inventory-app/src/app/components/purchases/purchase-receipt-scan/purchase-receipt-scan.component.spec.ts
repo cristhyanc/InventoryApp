@@ -116,7 +116,7 @@ describe('PurchaseReceiptScanComponent (issue #1166)', () => {
     afterEach(() => jest.useRealTimers());
 
     const bar = () => byTestId('purchase-receipt-scan-progress-bar');
-    const valueNow = () => Number(bar()?.getAttribute('aria-valuenow'));
+    const valueNow = () => (bar() as HTMLProgressElement | null)?.value ?? Number.NaN;
 
     it('rises while the receipt is read, never shows finished, and says when a read runs long', async () => {
       const pending = new Subject<PurchaseScanDraft>();

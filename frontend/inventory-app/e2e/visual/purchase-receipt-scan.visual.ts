@@ -339,7 +339,7 @@ test.describe('Scan receipt on Add Purchase (issue #1166)', () => {
       await expect(bar).toBeVisible();
       await expect(page.locator('[data-testid="purchase-receipt-scan-cancel"]')).toBeVisible();
       await expect
-        .poll(async () => Number(await bar.getAttribute('aria-valuenow')), { timeout: 15_000 })
+        .poll(() => bar.evaluate((element) => (element as HTMLProgressElement).value), { timeout: 15_000 })
         .toBeGreaterThan(30);
       await capture(page, width, 'add-purchase-scan-progress');
     });
