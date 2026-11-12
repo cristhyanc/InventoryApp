@@ -81,14 +81,31 @@ public class ClaudeReceiptReaderTests
             ReceiptGstAnswers.All,
             line.GetProperty("priceIncludesGst").GetProperty("enum").EnumerateArray().Select(token => token.GetString()!));
 
-        // The text, the kind, the pack-size answer and the GST basis are required on every line,
-        // which is what makes a line that omits one a dropped line rather than a defaulted one.
-        var required = lineSchema.GetProperty("required")
-            .EnumerateArray()
-            .Select(token => token.GetString())
-            .ToList();
+        // Values the receipt may not print are nullable, not optional: an optional property makes
+        // the structured-output grammar far larger, and this schema was refused as "Schema is too
+        // complex" while most of its properties were optional.
+        Assert.Equal("null", line.GetProperty("productId").GetProperty("type")[1].GetString());
+    }
 
-        Assert.Equal(["text", "kind", "packSize", "priceIncludesGst"], required);
+    /// <summary>
+    /// Every object in the schema requires every one of its properties. The Messages API answered
+    /// 400 "Schema is too complex" (after more than two minutes) while most were optional.
+    /// </summary>
+    [Fact]
+    public async Task Every_schema_object_requires_every_property()
+    {
+        var handler = new RecordingHandler(Completion("{}"));
+        await Reader(handler).ReadAsync(Request(), CancellationToken.None);
+
+        var schema = handler.Body.GetProperty("output_config").GetProperty("format").GetProperty("schema");
+        var line = schema.GetProperty("properties").GetProperty("lines").GetProperty("items");
+
+        foreach (var objectSchema in new[] { schema, line })
+        {
+            Assert.Equal(
+                objectSchema.GetProperty("properties").EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal),
+                objectSchema.GetProperty("required").EnumerateArray().Select(token => token.GetString()!).Order(StringComparer.Ordinal));
+        }
     }
 
     /// <summary>
