@@ -415,7 +415,7 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
 
     expect(seen).toEqual(purchases.map((p) => p.title));
     expect((host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(getAll.mock.calls.length).toBe(before);
+    expect(getAll.mock.calls).toHaveLength(before);
   });
 
   it('returns to page 1 when the page size changes, without requesting the list again', async () => {
@@ -432,7 +432,7 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
     expect(fixture.componentInstance.pageIndex).toBe(0);
     expect(titles(host)).toEqual(['Purchase 01', 'Purchase 02', 'Purchase 03', 'Purchase 04', 'Purchase 05']);
     expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent?.trim()).toBe('Page 1 of 5');
-    expect(getAll.mock.calls.length).toBe(before);
+    expect(getAll.mock.calls).toHaveLength(before);
   });
 
   it('shows the single page for exactly one purchase, with Previous and Next both disabled', async () => {
