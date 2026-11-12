@@ -164,7 +164,7 @@ public static class PriceCollectorRunPolicy
     /// <paramref name="asOfUtc"/>.
     ///
     /// <para>The expiry instant belongs to the expired side, the same way
-    /// <see cref="SupplierPriceFreshnessPolicy.IsFresh"/>'s limit belongs to the stale side: "six
+    /// <see cref="SupplierPriceFreshnessPolicy.IsFreshUntil"/>'s boundary belongs to the stale side: "six
     /// hours" is the answer to "how long may this run stay open", and the boundary has to belong to
     /// one side deliberately rather than by accident.</para>
     /// </summary>

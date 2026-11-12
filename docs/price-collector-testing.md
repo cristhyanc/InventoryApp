@@ -115,8 +115,9 @@ page per search and cost more.
 Varnmill cost about US$0.02 for 15 searches and keeps its 50-result pages.
 
 BIG W and Kmart are searched **once a week** (owner decision, 1 November 2026): BIG W on Thursdays,
-when its catalogues start, and Kmart on Mondays. Their supplier records' price freshness limit is
-174 hours (a week plus the six-hour margin), so a price stays comparable until the next week's run.
+when its catalogues start, and Kmart on Mondays. A price of theirs stays comparable until that
+supplier's next scheduled run has had its chance — the end of that run's own day plus a six-hour
+margin, so a Thursday price is compared until 06:00 on the Friday a week later (issue #1200).
 Which suppliers are searched on which day is each supplier's own search schedule since #1108, and
 only a `due` run follows it (see [Choosing `all` or `due`](#choosing-all-or-due)); a manual run with
 the default **schedule** `all` still searches every supplier it is given.
@@ -342,14 +343,18 @@ Supplier presets** has a **Search prices** column beside the existing **Suggeste
 
 What that switch does **not** do, which is the point of having two:
 
-- It does not change what businesses see. **Suggested** is still what decides whether the record is
-  copied into a newly approved business and offered under "Available to add", so pausing the paid
-  Kmart and BIG W searches leaves both suppliers on offer.
+- It does not take the supplier away from businesses. **Suggested** is still what decides whether the
+  record is copied into a newly approved business and offered under "Available to add", so pausing
+  the paid Kmart and BIG W searches leaves both suppliers on offer — they are still suppliers
+  businesses buy from. What a business does see, since #1200, is that the paused supplier's price is
+  no longer compared; see the next point.
 - It removes nothing already collected. That supplier's listings, observed prices and pending
-  readings stay exactly as they are, and the Cheapest supplier column keeps reading them until they
-  age out by the record's own freshness limit (since #1108 derived from that supplier's search
-  schedule — 174 hours for a once-a-week one) — after which the supplier simply has no comparable
-  price rather than a wrong one.
+  readings stay exactly as they are, and the Cheapest supplier column still shows its last price.
+  Since [#1200](https://github.com/cristhyanc/InventoryApp/issues/1200) that price is no longer
+  **compared**, though: every one of that supplier's offers reads *"Price search stopped for this
+  supplier, so this price is not compared"*, is listed after the compared offers, and is never the
+  cheapest — because nothing will refresh a price nobody is searching for. Switching searching back
+  on compares those offers again on the next read of the page.
 - It does not cancel work a run already holds. A run issued before the switch moved can still submit
   its results and complete, because a submitted row is resolved through the work item it names.
 
@@ -466,7 +471,10 @@ workflow file cannot quietly re-search the whole catalogue. A supplier's schedul
 **Super Admin → Supplier presets**, whose Search schedule column and dialog fields arrived with
 [#1109](https://github.com/cristhyanc/InventoryApp/issues/1109); the freshness limit beside it is
 derived from that schedule, shown read-only on both the list and the dialog, and is not something to
-set by hand.
+set by hand. Since [#1200](https://github.com/cristhyanc/InventoryApp/issues/1200) that figure is a
+description of the cadence only: whether one of the supplier's prices is still compared is decided by
+the schedule itself, from the day the price was read to the end of the next searched day plus six
+hours.
 
 ## Daily schedule
 

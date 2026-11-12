@@ -25,6 +25,16 @@ public interface ISupplierSearchScheduleCalendar
     DateOnly Today { get; }
 
     /// <summary>
+    /// The date <paramref name="instantUtc"/> falls on in the collection calendar - which day of the
+    /// schedule a price was observed on, or an answer was given on (issue #1200).
+    ///
+    /// <para>It is the same conversion <see cref="Today"/> makes of the current instant, over an
+    /// instant the caller already has: a price read at 20:00 UTC on a Wednesday was read on the
+    /// Thursday in Sydney, and deciding its freshness from the UTC date would move it a day.</para>
+    /// </summary>
+    DateOnly DateOf(DateTime instantUtc);
+
+    /// <summary>
     /// The UTC instant of midnight at the start of <paramref name="scheduleDate"/> in the collection
     /// calendar - the start of a scheduled occurrence, and therefore one half of a pair's coverage
     /// boundary (<c>SupplierSearchDuePolicy.CoverageBoundary</c>).
