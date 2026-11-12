@@ -84,10 +84,19 @@ const LONG_URL =
   'https://orders.sample-regional-wholesale-distributors-and-vending-consumables.invalid/customer/catalogue';
 
 /**
+ * The row that proves an unsafe stored website is never rendered as a link (issue #847). The value
+ * is deliberately inert: it carries no scheme at all, so it is not a web address the register could
+ * link to and not an address of any other kind either - there is nothing here for a browser, or for
+ * a reader of this file, to navigate to.
+ */
+const UNUSABLE_WEBSITE_SUPPLIER = 'Sample Depot (unusable website recorded)';
+const UNUSABLE_URL = 'sample-depot.invalid/catalogue';
+
+/**
  * Ten synthetic suppliers: the pair the dialog evidence uses, the long-name/long-website row, two
  * more marked "Not used", a row with no contact details and no website at all, a row whose stored
- * website is not an http(s) address (so it stays plain text, issue #847), and a custom row the API
- * refuses to delete. Together they put every state of the Supplier, Contact, Website, Usage and
+ * website is not a usable web address (so it stays plain text, issue #847), and a custom row the
+ * API refuses to delete. Together they put every state of the Supplier, Contact, Website, Usage and
  * Actions columns on screen in one capture.
  */
 const suppliers = [
@@ -98,7 +107,7 @@ const suppliers = [
     phone: '02 0000 0011'
   }),
   custom(12, 'Sample Depot (no details recorded)', null, true),
-  custom(13, 'Sample File Share Supplier', 'ftp://files.sample-depot.invalid/catalogue', true, {
+  custom(13, UNUSABLE_WEBSITE_SUPPLIER, UNUSABLE_URL, true, {
     contactName: 'Sample Depot Office'
   }),
   linked(14, 'Sample Beverage Distributors', 'https://sample-beverages.invalid', false, {
@@ -195,14 +204,18 @@ test.describe('The Suppliers register (issue #1175)', () => {
     await expect(page.locator('[data-testid="suppliers-table"] .badge', { hasText: 'Platform list' })).toHaveCount(4);
 
     // A safe website is its short domain behind a link to the full stored address; one that is not
-    // an http(s) address stays plain text (issue #847).
+    // a usable web address stays plain text, with nothing to navigate to (issue #847).
     const website = page.getByRole('link', { name: `Website for ${LONG_NAME}, opens in a new tab` });
     await expect(website).toHaveText(/orders\.sample-regional-wholesale-distributors-and-vending-consumables\.invalid/);
     await expect(website).toHaveAttribute('href', LONG_URL);
-    await expect(page.getByRole('link', { name: 'Website for Sample File Share Supplier, opens in a new tab' })).toHaveCount(0);
-    await expect(page.locator('[data-testid="supplier-row"]').filter({ hasText: 'Sample File Share Supplier' })).toContainText(
-      'ftp://files.sample-depot.invalid/catalogue'
-    );
+
+    const unusable = page.locator('[data-testid="supplier-row"]').filter({ hasText: UNUSABLE_WEBSITE_SUPPLIER });
+    await expect(unusable).toContainText(UNUSABLE_URL);
+    await expect(
+      page.getByRole('link', { name: `Website for ${UNUSABLE_WEBSITE_SUPPLIER}, opens in a new tab` })
+    ).toHaveCount(0);
+    // The whole row offers no link at all: the refused value is text, not something to follow.
+    await expect(unusable.getByRole('link')).toHaveCount(0);
 
     // The long name and the long domain wrap inside their own columns rather than widening the
     // table past the card that holds it: the issue's "long names and URLs stay usable" criterion.
