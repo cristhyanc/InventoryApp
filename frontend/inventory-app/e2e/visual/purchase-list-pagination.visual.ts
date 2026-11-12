@@ -44,6 +44,12 @@ const purchases = Array.from({ length: 25 }, (_, index) => {
   const day = String(28 - index).padStart(2, '0');
   const hasNone = id % 5 === 0;
   const isImage = id % 3 === 0;
+  let fileName: string | null = null;
+  let contentType: string | null = null;
+  if (!hasNone) {
+    fileName = isImage ? `receipt-${id}.jpg` : `invoice-${id}.pdf`;
+    contentType = isImage ? 'image/png' : 'application/pdf';
+  }
   return {
     purchase: {
       id,
@@ -58,9 +64,9 @@ const purchases = Array.from({ length: 25 }, (_, index) => {
       purchaseDate: `2026-10-${day}T00:00:00Z`,
       supplierId: 1,
       supplier: { id: 1, name: 'Sample Wholesale' },
-      fileName: hasNone ? null : isImage ? `receipt-${id}.jpg` : `invoice-${id}.pdf`,
+      fileName,
       storedFileName: hasNone ? null : `stored-${id}`,
-      contentType: hasNone ? null : isImage ? 'image/png' : 'application/pdf',
+      contentType,
       fileSizeBytes: hasNone ? null : 20480,
       createdAt: `2026-10-${day}T01:00:00Z`,
       items: [
@@ -100,7 +106,7 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 async function tabTo(page: Page, testId: string): Promise<void> {
   for (let press = 0; press < 200; press++) {
     await page.keyboard.press('Tab');
-    const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? null);
+    const focused = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset['testid'] ?? null);
     if (focused === testId) {
       const indicator = await page.evaluate(() => {
         const style = getComputedStyle(document.activeElement as Element);
@@ -150,7 +156,7 @@ test.describe('Purchases list pagination (issue #1209)', () => {
       await expect(page.getByTestId('list-pagination-range')).toHaveText(/Showing\s+11–20\s+of\s+25\s+purchases/);
 
       await page.keyboard.press('Shift+Tab');
-      const previousFocused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'));
+      const previousFocused = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset['testid']);
       expect(previousFocused).toBe('list-pagination-previous');
       await expectNoHorizontalOverflow(page);
     });
