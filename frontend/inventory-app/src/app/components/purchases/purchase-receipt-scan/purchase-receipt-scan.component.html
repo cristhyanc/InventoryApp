@@ -50,9 +50,6 @@
       @if (state === 'preparing') {
         <output class="text-sm text-rr-muted" data-testid="purchase-receipt-scan-preparing">Preparing photo…</output>
       } @else if (state === 'scanning') {
-        <output class="text-sm text-rr-muted" data-testid="purchase-receipt-scan-progress">
-          Reading the receipt…
-        </output>
         <button
           type="button"
           class="inline-flex min-h-11 items-center rounded-md px-2 font-semibold text-rr-teal hover:bg-rr-teal-tint"
@@ -63,6 +60,33 @@
         </button>
       }
     </div>
+
+    @if (state === 'scanning') {
+      <!--
+        An estimate, not a measurement: the reader answers once, at the end, so the bar rises quickly,
+        slows near the end and never shows finished before the draft arrives.
+      -->
+      <div class="mt-3" data-testid="purchase-receipt-scan-progress">
+        <p class="m-0 text-sm font-semibold text-rr-navy">Reading the receipt…</p>
+        <div
+          class="mt-2 h-2 overflow-hidden rounded-full bg-md-gray-200"
+          role="progressbar"
+          aria-label="Reading the receipt"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          [attr.aria-valuenow]="progressPercent"
+          data-testid="purchase-receipt-scan-progress-bar"
+        >
+          <div
+            class="h-full rounded-full bg-rr-teal transition-[width] duration-300 ease-out"
+            [style.width.%]="progressPercent"
+          ></div>
+        </div>
+        <p class="m-0 mt-1 text-xs text-rr-muted" aria-live="polite" data-testid="purchase-receipt-scan-progress-hint">
+          {{ progressHint }}
+        </p>
+      </div>
+    }
 
     @if (state === 'failed') {
       <!-- The form is exactly as it was: manual entry carries on from here. -->

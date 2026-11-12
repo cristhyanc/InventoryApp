@@ -1,7 +1,7 @@
 import { Component, ElementRef, EventEmitter, Input, OnDestroy, Output, Renderer2, ViewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
-import { Subject, Subscription } from 'rxjs';
+import { Subject, Subscription, interval } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 import { AccessService } from '../../../access/access.service';
 import { planRequiredOfError, requiredPlanOf } from '../../../access/plan-feature';
@@ -42,6 +42,19 @@ const FALLBACK_MESSAGES: Readonly<Record<number, string>> = {
   503: 'Receipt scanning is not available.',
   504: 'Reading the receipt took too long. Try again, or enter the purchase manually.'
 };
+
+/**
+ * How the estimated progress bar fills while a receipt is read. Nothing reports real progress -
+ * the reader answers once, at the end - so the bar is an honest estimate: it rises quickly at
+ * first, slows as it approaches {@link PROGRESS_CEILING} and never claims to be finished before the
+ * answer arrives. With a time constant of 15 s a typical 20-30 s read shows about 75-85 %.
+ */
+const PROGRESS_TIME_CONSTANT_MS = 15_000;
+const PROGRESS_CEILING = 95;
+const PROGRESS_TICK_MS = 250;
+
+/** After this long the hint says a long receipt can take up to a minute (the server's timeout). */
+const SLOW_READ_MS = 35_000;
 
 /** What anything else - a transport failure, an unexpected status, no body at all - is told as. */
 const FALLBACK_MESSAGE = 'Could not scan the receipt. Try again, or enter the purchase manually.';
@@ -94,6 +107,12 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   @Output() readonly scanned = new EventEmitter<PurchaseReceiptScanned>();
 
   state: PurchaseReceiptScanState = 'idle';
+
+  /** The estimated progress of the read in progress, 0-{@link PROGRESS_CEILING}, while `scanning`. */
+  progressPercent = 0;
+
+  /** The hint under the progress bar, which changes once the read is taking longer than usual. */
+  progressHint = '';
 
   /** Why the last attempt failed, shown while {@link state} is `failed`. */
   errorMessage = '';
@@ -232,6 +251,7 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   private startScan(file: File): void {
     this.state = 'scanning';
     this.errorMessage = '';
+    this.startProgress();
 
     this.purchaseScan
       .scan(file)
@@ -252,6 +272,31 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
 
           this.errorMessage = apiErrorMessage(error, fallbackFor(error));
           this.state = 'failed';
+        }
+      });
+  }
+
+  /**
+   * Starts the estimated progress bar. It stops by itself when the state leaves `scanning` - an
+   * answer, a failure, a plan lock or Cancel - and when the component is destroyed.
+   */
+  private startProgress(): void {
+    const started = Date.now();
+    this.progressPercent = 0;
+    this.progressHint = 'This usually takes 20 to 30 seconds.';
+
+    const ticks = interval(PROGRESS_TICK_MS)
+      .pipe(takeUntil(this.cancelled$), takeUntil(this.destroyed$))
+      .subscribe(() => {
+        if (this.state !== 'scanning') {
+          ticks.unsubscribe();
+          return;
+        }
+
+        const elapsed = Date.now() - started;
+        this.progressPercent = Math.round(PROGRESS_CEILING * (1 - Math.exp(-elapsed / PROGRESS_TIME_CONSTANT_MS)));
+        if (elapsed >= SLOW_READ_MS) {
+          this.progressHint = 'Still reading. A long receipt can take up to a minute.';
         }
       });
   }
