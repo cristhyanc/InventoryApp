@@ -45,7 +45,7 @@ describe('TermsOfUsePageComponent (issue #1214)', () => {
       '7. Integrations, prices and AI outputs',
       '8. Beta operation and changes',
       '9. Suspension and closure',
-      '10. Rights and responsibility',
+      '10. Rights and liability',
       '11. Disputes and applicable law'
     ]);
   });
@@ -63,6 +63,14 @@ describe('TermsOfUsePageComponent (issue #1214)', () => {
     expect(section).toContain(
       'Supplier comparisons are based on recorded offers from supported suppliers and do not cover every supplier or guarantee the lowest final purchase cost. Prices, availability and product matches may be incomplete, delayed or incorrect, including where automated collection or matching is used. Before purchasing, verify the exact product, pack size, GST treatment, location or membership conditions, availability, delivery charges and final total directly with the supplier. Nothing in these terms excludes, restricts or modifies rights or remedies that cannot lawfully be excluded.'
     );
+  });
+
+  it('uses the owner’s replacement Rights and liability section', () => {
+    const section = text(render().querySelector('#rights-and-liability'));
+
+    expect(section).toContain('limited to the subscription fees you paid Restockroo in the 12 months before the first event giving rise to the claim.');
+    expect(section).toContain('These limits do not apply to fraud, wilful misconduct, or any liability that cannot lawfully be limited.');
+    expect(section).not.toContain('draft terms');
   });
 
   it('links onward to the Privacy Policy page', () => {

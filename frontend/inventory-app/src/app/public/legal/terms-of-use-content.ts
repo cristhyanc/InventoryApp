@@ -8,7 +8,8 @@ import { LegalPageContent } from './legal-page-content';
  * `docs/design/restockroo-legal-pages.md`: section 7's supplier-price sentences are the latest
  * approved supplier price comparison clause from
  * `docs/legal/supplier-price-comparison-clause.md` (issue #1183), in place of the draft's own two
- * shorter sentences on the same point.
+ * shorter sentences on the same point. Section 10 is the owner's later replacement, "Rights and
+ * liability" (13 November 2026), in place of the draft's "Rights and responsibility".
  */
 export const TERMS_OF_USE_CONTENT: LegalPageContent = {
   title: 'Restockroo Terms of Use',
@@ -85,11 +86,13 @@ export const TERMS_OF_USE_CONTENT: LegalPageContent = {
       ]
     },
     {
-      id: 'rights-and-responsibility',
-      heading: 'Rights and responsibility',
+      id: 'rights-and-liability',
+      heading: 'Rights and liability',
       body: [
-        'Nothing in these terms excludes, restricts or modifies rights, guarantees or remedies that cannot lawfully be excluded, including under the Australian Consumer Law where applicable. The beta status or free price does not override those rights.',
-        'Each party remains responsible for its acts and omissions under applicable law. We do not give a blanket exclusion of liability for our own conduct, and these draft terms do not impose a zero-dollar liability cap merely because beta access is free.'
+        'Nothing in these Terms excludes, restricts or modifies any right, guarantee or remedy that cannot lawfully be excluded, including under the Australian Consumer Law. The limits below apply only to the extent permitted by law.',
+        'Restockroo provides inventory and purchasing tools to assist your business. You are responsible for checking supplier prices, pack sizes, availability and AI-assisted receipt matches before purchasing or saving records. Each party’s liability is reduced to the extent the other party’s acts or omissions caused or contributed to the loss.',
+        'To the extent permitted by law, neither party is liable to the other for indirect or consequential loss arising from use of the service. Restockroo’s total liability to you for claims arising out of or relating to the service or these Terms is limited to the subscription fees you paid Restockroo in the 12 months before the first event giving rise to the claim.',
+        'These limits do not apply to fraud, wilful misconduct, or any liability that cannot lawfully be limited.'
       ]
     },
     {
