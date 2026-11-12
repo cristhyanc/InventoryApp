@@ -1,6 +1,14 @@
-import { Page, Route, expect, test } from '@playwright/test';
+import { Page, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {
+  TOLERANCE as tolerance,
+  expectNoPageHorizontalOverflow,
+  expectPinchZoomAllowed,
+  expectSquareTouchTargets,
+  expectTouchTargets,
+  openSuppliersPage
+} from './support/suppliers-page';
 
 /**
  * The browser-level evidence for issue #1174: the Suppliers page's Add/Edit dialog at the widths the
@@ -15,108 +23,24 @@ import { join, resolve } from 'node:path';
  * Chromium, against the real component CSS.
  *
  * Like every other visual run it starts no API and no database: each `/api/` request is answered in
- * the browser with neutral synthetic suppliers, so no business name, contact, phone, email or address
- * can appear in a capture. **It writes nothing**: every non-`GET` is refused, so a run that ever
- * drifted into creating, updating or deleting a supplier would fail rather than quietly photograph a
- * save. It is human-invoked and is not part of `scripts/validate.sh`.
+ * the browser with the neutral synthetic suppliers of `support/suppliers-page.ts`, so no business
+ * name, contact, phone, email or address can appear in a capture. **It writes nothing**: every
+ * non-`GET` is refused, so a run that ever drifted into creating, updating or deleting a supplier
+ * would fail rather than quietly photograph a save. It is human-invoked and is not part of
+ * `scripts/validate.sh`.
  */
 const screenshotDirectory = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-1174');
 mkdirSync(screenshotDirectory, { recursive: true });
 
-const OWNER_CAPABILITIES = [
-  'Dashboard.View',
-  'Dashboard.ViewFinancials',
-  'PickList.View',
-  'Inventory.Operate',
-  'Purchasing.Operate',
-  'Suppliers.ManageGstDefaults',
-  'Expenses.Manage',
-  'Reports.View',
-  'Imports.Run',
-  'SiteCommissions.Manage',
-  'Integration.Manage',
-  'Data.Repair',
-  'Members.Manage',
-  'Roles.View',
-  'Business.Manage'
-];
-
 /**
- * Two synthetic suppliers: one the business added itself, and one that came from the platform's
- * supplier list, which is the row whose Edit the issue asks to see - its Name and Website are locked
- * with the explanatory note (issue #934), and it has no Delete.
+ * The register's two layouts give the same supplier's Edit the same test id in the table and in the
+ * phone card (issue #1175), so every row control here is addressed as the rendered one.
  */
-const suppliers = [
-  {
-    id: 4,
-    name: 'Sample Wholesale Distributors',
-    contactName: 'Sample Contact',
-    phone: '02 0000 0000',
-    email: 'orders@sample-wholesale.invalid',
-    address: '1 Sample Street\nSampleville NSW 2000',
-    url: 'https://sample-wholesale.invalid',
-    isLinked: false,
-    isHidden: false,
-    canRename: true,
-    canDelete: true
-  },
-  {
-    id: 7,
-    name: 'Sample Platform Supplier',
-    contactName: 'Sample Account Manager',
-    phone: '03 0000 0000',
-    email: 'accounts@sample-platform.invalid',
-    address: '2 Sample Parade\nSample Bay VIC 3000',
-    url: 'https://sample-platform.invalid',
-    isLinked: true,
-    isHidden: false,
-    canRename: false,
-    canDelete: false
-  }
-];
-
-function json(route: Route, body: unknown, status = 200): Promise<void> {
-  return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-}
-
-async function answerApi(page: Page): Promise<void> {
-  await page.route('**/api/**', (route: Route) => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-
-    // Nothing here writes. A create, an update, a delete or a "Not used" switch is refused rather
-    // than photographed, so this run cannot capture a save it also performed.
-    if (request.method() !== 'GET') {
-      return json(route, { title: 'This visual run makes no writes.' }, 500);
-    }
-
-    if (path.endsWith('/me/access')) {
-      return json(route, {
-        role: 'Owner',
-        capabilities: OWNER_CAPABILITIES,
-        businessName: 'Sample Vending',
-        timeZoneId: 'Australia/Sydney',
-        entitlement: { enforced: true, plan: 'Pro', source: 'BillingSubscription', endsAtUtc: null }
-      });
-    }
-    if (path.endsWith('/me/account-state')) return json(route, { state: 'Member', onboardingEnabled: false, rejectionReason: null });
-    if (path.endsWith('/business/current')) return json(route, { name: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
-    if (path.endsWith('/suppliers/available-presets')) return json(route, []);
-    if (path.endsWith('/suppliers')) return json(route, suppliers);
-    return json(route, []);
-  });
-}
+const linkedEdit = '[data-testid="supplier-edit-7"]:visible';
 
 async function openSuppliers(page: Page, width: number, height: number): Promise<void> {
-  await page.setViewportSize({ width, height });
-  await answerApi(page);
-  await page.goto('/suppliers');
-  await page.addStyleTag({
-    content: '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }'
-  });
-  await expect(page.getByRole('heading', { name: 'Suppliers', level: 1 })).toBeVisible();
-  await expect(page.locator('[data-testid="supplier-edit-7"]')).toBeVisible();
+  await openSuppliersPage(page, width, height);
+  await expect(page.locator(linkedEdit)).toBeVisible();
 }
 
 const dialog = '[data-testid="supplier-form-dialog"]';
@@ -130,30 +54,27 @@ async function openAdd(page: Page): Promise<void> {
 
 /** Opens the linked supplier's Edit dialog, whose Name and Website are locked (issue #934). */
 async function openLinkedEdit(page: Page): Promise<void> {
-  await page.locator('[data-testid="supplier-edit-7"]').click();
+  await page.locator(linkedEdit).click();
   await expect(page.locator('[data-testid="supplier-form-title"]')).toHaveText('Edit supplier');
   await expect(page.locator('#supplierName')).toHaveValue('Sample Platform Supplier');
 }
-
-/** One CSS pixel of slack: a laid-out box edge is fractional, a viewport bound is not. */
-const tolerance = 1;
 
 /**
  * Nothing scrolls sideways - neither the page behind the dialog, nor the panel, nor its scrollable
  * body - and the panel itself stays inside the viewport.
  */
 async function expectNoHorizontalOverflow(page: Page, width: number): Promise<void> {
+  await expectNoPageHorizontalOverflow(page, width);
+
   const overflow = await page.evaluate(() => {
     const panel = document.querySelector<HTMLElement>('[data-testid="supplier-form-dialog"]');
     const body = panel?.querySelector<HTMLElement>('.app-dialog-body');
     return {
-      page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       panel: panel === null || panel === undefined ? 0 : panel.scrollWidth - panel.clientWidth,
       body: body === null || body === undefined ? 0 : body.scrollWidth - body.clientWidth
     };
   });
 
-  expect(overflow.page, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(tolerance);
   expect(overflow.panel, `the dialog panel does not scroll sideways at ${width}px`).toBeLessThanOrEqual(tolerance);
   expect(overflow.body, `the dialog body does not scroll sideways at ${width}px`).toBeLessThanOrEqual(tolerance);
 
@@ -164,43 +85,17 @@ async function expectNoHorizontalOverflow(page: Page, width: number): Promise<vo
   );
 }
 
-/** Pinch zoom stays available: the shell's viewport meta locks neither the scale nor the user. */
-async function expectPinchZoomAllowed(page: Page): Promise<void> {
-  const viewport = await page.locator('meta[name="viewport"]').getAttribute('content');
-  expect(viewport, 'the shell declares a viewport').toBeTruthy();
-  expect(viewport ?? '').not.toMatch(/user-scalable\s*=\s*no|user-scalable\s*=\s*0|maximum-scale\s*=\s*1(\.0)?\b/);
-}
-
-/** The minimum rendered height of each visible element the selector matches. */
-function minHeight(page: Page, selector: string): Promise<number> {
-  return page
-    .locator(selector)
-    .evaluateAll((elements) =>
-      Math.min(
-        ...elements
-          .filter((element) => (element as HTMLElement).offsetParent !== null || element.closest('dialog') !== null)
-          .map((element) => element.getBoundingClientRect().height)
-      )
-    );
-}
-
 /** Every control the phone sheet offers is at least a 44px touch target. */
 async function expectMobileTouchTargets(page: Page, width: number): Promise<void> {
-  const selectors = [
-    `${dialog} .app-dialog-close`,
+  await expectTouchTargets(page, width, [
     `${dialog} [data-testid="supplier-form-submit"]`,
     `${dialog} .app-dialog-footer button`,
     `${dialog} input`,
     `${dialog} textarea`
-  ];
-
-  for (const selector of selectors) {
-    expect(await minHeight(page, selector), `${selector} is at least 44px tall at ${width}px`).toBeGreaterThanOrEqual(44);
-  }
+  ]);
 
   // The Close control is square, not just tall: a 44px-high sliver is not a 44px target.
-  const close = (await page.locator(`${dialog} .app-dialog-close`).boundingBox())!;
-  expect(close.width, `the Close control is at least 44px wide at ${width}px`).toBeGreaterThanOrEqual(44);
+  await expectSquareTouchTargets(page, width, [`${dialog} .app-dialog-close`]);
 }
 
 /** A capture of the viewport: a modal `<dialog>` lives in the top layer, which does not scroll. */
@@ -313,7 +208,7 @@ test.describe('The Suppliers page dialogs (issue #1174)', () => {
     await openLinkedEdit(page);
     await page.keyboard.press('Escape');
     await expect(page.locator(dialog)).toHaveCount(0);
-    await expect(page.locator('[data-testid="supplier-edit-7"]')).toBeFocused();
+    await expect(page.locator(linkedEdit)).toBeFocused();
   });
 
   test('Escape on a changed form asks before discarding, and keeps every value', async ({ page }) => {

@@ -42,7 +42,7 @@
         @if (search) {
           <button
             type="button"
-            class="absolute right-0.5 inline-flex h-10 w-10 items-center justify-center rounded-md text-rr-caption hover:bg-rr-canvas hover:text-rr-navy md:h-9 md:w-9"
+            class="absolute right-0.5 inline-flex h-11 w-11 items-center justify-center rounded-md text-rr-caption hover:bg-rr-canvas hover:text-rr-navy md:h-9 md:w-9"
             aria-label="Clear search"
             data-testid="suppliers-search-clear"
             (click)="clearSearch()"><app-icon name="close" [size]="16" /></button>
@@ -78,7 +78,7 @@
       </fieldset>
 
       @if (filtersDiffer) {
-        <button type="button" class="rr-button-ghost min-h-10 px-3" data-testid="suppliers-clear-filters" (click)="resetSearchAndFilter()">Clear filters</button>
+        <button type="button" class="rr-button-ghost min-h-11 px-3 md:min-h-10" data-testid="suppliers-clear-filters" (click)="resetSearchAndFilter()">Clear filters</button>
       }
     </div>
 
