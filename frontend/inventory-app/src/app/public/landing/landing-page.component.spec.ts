@@ -113,14 +113,24 @@ describe('LandingPageComponent (issue #954)', () => {
       expect(eyebrows).toEqual(['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Frequently asked questions']);
     });
 
-    it('uses "Stock levels" only as the example dashboard\'s stock list', async () => {
+    it('drops the fleet metrics, old sample sites and machines, and vehicle/route/tray/coil/slot language (issue #1192)', async () => {
       const { host } = await render();
+      const page = text(host).toLowerCase();
 
-      const mentions = Array.from(host.querySelectorAll('h1, h2, h3, p, span')).filter((element) =>
-        element.children.length === 0 && text(element) === 'Stock levels'
-      );
-      expect(mentions).toHaveLength(1);
-      expect(mentions[0].closest('[data-testid="landing-dashboard"]')).not.toBeNull();
+      for (const claim of [
+        'harbour point plaza',
+        'apex commercial',
+        'beverage combo',
+        '922 items',
+        'low-stock products',
+        'vehicle capacity',
+        'route frequency',
+        'tray',
+        'coil',
+        'slot'
+      ]) {
+        expect(page).not.toContain(claim);
+      }
     });
 
     it('offers the six feature cards', async () => {
@@ -242,45 +252,167 @@ describe('LandingPageComponent (issue #954)', () => {
     });
   });
 
-  describe('example dashboard', () => {
-    it('is labelled as sample data', async () => {
+  describe('refill example (issue #1192)', () => {
+    it('names the fictional site and machine, labelled as an example', async () => {
       const { host } = await render();
-      const dashboard = byTestId(host, 'landing-dashboard')!;
+      const refill = byTestId(host, 'landing-refill-example')!;
 
-      expect(dashboard.getAttribute('aria-labelledby')).toBe('landing-dashboard-label');
-      expect(text(host.querySelector('#landing-dashboard-label'))).toBe('Example dashboard · Sample data');
+      expect(text(refill)).toContain('Banksia House · Banksia House VM');
+      expect(text(host.querySelector('#landing-refill-label'))).toBe('Example refill · Fictional data');
     });
 
-    it('shows the approved sample figures', async () => {
-      const { host } = await render();
-      const dashboard = text(byTestId(host, 'landing-dashboard'));
-
-      expect(dashboard).toContain('922 items');
-      expect(dashboard).toContain('2 products');
-      expect(dashboard).toContain('11 dockets');
-      expect(dashboard).toContain('$1,840.50');
-      expect(dashboard).toContain('$2,482.83');
-    });
-
-    it('shows the three stock levels, with low-stock warnings on Red Bull and Kinder Bueno only', async () => {
+    it('shows a To pack and a Loaded quantity for each product, and a note that Loaded is not a separate record', async () => {
       const { host } = await render();
 
-      const rows = Array.from(host.querySelectorAll('[data-testid="landing-stock-table"] tbody tr')).map((row) => ({
-        product: text(row.querySelector('th')).replace(' Low stock', ''),
-        inStock: text(row.querySelectorAll('td')[0]),
-        minimum: text(row.querySelectorAll('td')[1]),
-        warned: row.querySelector('[data-testid="landing-low-stock"]') !== null
+      const rows = Array.from(host.querySelectorAll('[data-testid="landing-refill-row"]')).map((row) => ({
+        product: text(row.querySelector('th')),
+        toPack: text(row.querySelectorAll('td')[0]).replace('Packed', '').trim(),
+        loaded: text(row.querySelectorAll('td')[1]).replace('Packed', '').trim()
       }));
       expect(rows).toEqual([
-        { product: 'Red Bull 250mL', inStock: '0', minimum: '7', warned: true },
-        { product: 'Coke 375mL', inStock: '26', minimum: '17', warned: false },
-        { product: 'Kinder Bueno', inStock: '5', minimum: '7', warned: true }
+        { product: 'Coke - Original 375mL', toPack: '24', loaded: '24' },
+        { product: "Smith's Chips - Original 45g", toPack: '12', loaded: '8' },
+        { product: 'Red Bull - Original 250mL', toPack: '10', loaded: '0' },
+        { product: 'Kit Kat - 4 Finger 45g', toPack: '8', loaded: '8' }
       ]);
 
-      const listWarnings = Array.from(host.querySelectorAll('[data-testid="landing-stock-list"] li'))
-        .filter((item) => item.querySelector('[data-testid="landing-low-stock"]'))
-        .map((item) => text(item.querySelector('.font-semibold')));
-      expect(listWarnings).toEqual(['Red Bull 250mL', 'Kinder Bueno']);
+      const note = text(byTestId(host, 'landing-refill-loaded-note'));
+      expect(note.toLowerCase()).toContain('not a separate record');
+    });
+  });
+
+  describe('supplier comparison example (issue #1192)', () => {
+    it('is headed "Compare prices across supported suppliers", with the example and confirm notices', async () => {
+      const { host } = await render();
+      const comparison = byTestId(host, 'landing-supplier-comparison')!;
+
+      expect(text(comparison.querySelector('#landing-supplier-comparison-heading'))).toBe(
+        'Compare prices across supported suppliers'
+      );
+      expect(text(byTestId(host, 'landing-supplier-example-notice'))).toBe('Example comparison — prices and availability change.');
+      expect(text(byTestId(host, 'landing-supplier-confirm-notice'))).toContain(
+        'Confirm the product, pack size and final price with the supplier before buying.'
+      );
+    });
+
+    it('carries the rows the issue specifies, with Lowest unit price on every tied 30-pack row and nowhere else', async () => {
+      const { host } = await render();
+      // Scoped to the inline (desktop) comparison: the same rows are repeated inside the mobile dialog.
+      const inlineComparison = byTestId(host, 'landing-supplier-comparison-inline')!;
+
+      const rows = Array.from(inlineComparison.querySelectorAll('[data-testid="landing-supplier-row"]')).map(
+        (row) => {
+          const cells = row.querySelectorAll('td');
+          return {
+            supplier: text(cells[0]).replace('Lowest unit price', '').replace('Special', '').trim(),
+            badges: Array.from(row.querySelectorAll('[data-testid="landing-supplier-badge"]')).map(text),
+            packSize: text(cells[1]),
+            packPrice: text(cells[2]),
+            unitPrice: text(cells[3]),
+            gstBasis: text(cells[4]),
+            availability: text(cells[5]).replace('Online price, may differ in store', '').trim(),
+            lastChecked: text(cells[6])
+          };
+        }
+      );
+
+      expect(rows).toEqual([
+        {
+          supplier: 'Coles',
+          badges: ['Lowest unit price'],
+          packSize: '30 pack',
+          packPrice: '$32.00',
+          unitPrice: '$1.07 inc GST / $0.97 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '11/11/2026, 05:17 am'
+        },
+        {
+          supplier: 'Woolworths',
+          badges: ['Lowest unit price', 'Special'],
+          packSize: '30 pack',
+          packPrice: '$32.00',
+          unitPrice: '$1.07 inc GST / $0.97 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '11/11/2026, 05:17 am'
+        },
+        {
+          supplier: 'Big W',
+          badges: ['Lowest unit price'],
+          packSize: '30 pack',
+          packPrice: '$32.00',
+          unitPrice: '$1.07 inc GST / $0.97 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '08/11/2026, 09:10 am'
+        },
+        {
+          supplier: 'Coles',
+          badges: ['Special'],
+          packSize: '24 pack',
+          packPrice: '$27.00',
+          unitPrice: '$1.13 inc GST / $1.02 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '11/11/2026, 05:17 am'
+        },
+        {
+          supplier: 'Big W',
+          badges: [],
+          packSize: '24 pack',
+          packPrice: '$27.00',
+          unitPrice: '$1.13 inc GST / $1.02 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '08/11/2026, 09:10 am'
+        },
+        {
+          supplier: 'Woolworths',
+          badges: ['Special'],
+          packSize: '10 pack',
+          packPrice: '$11.50',
+          unitPrice: '$1.15 inc GST / $1.05 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'In stock',
+          lastChecked: '11/11/2026, 05:17 am'
+        },
+        {
+          supplier: 'ALDI',
+          badges: [],
+          packSize: '18 pack',
+          packPrice: '$20.99',
+          unitPrice: '$1.17 inc GST / $1.06 ex GST',
+          gstBasis: 'inc GST',
+          availability: 'Stock unknown',
+          lastChecked: '11/11/2026, 05:17 am'
+        }
+      ]);
+
+      const onlineNotes = Array.from(inlineComparison.querySelectorAll('[data-testid="landing-supplier-online-note"]')).map(text);
+      expect(onlineNotes).toEqual(Array(7).fill('Online price, may differ in store'));
+    });
+
+    it('wires the mobile preview button to open the full comparison in a dialog and returns focus on close', async () => {
+      // The dialog's own Tab cycle, Escape and backdrop dismissal are covered in
+      // landing-supplier-comparison-example.component.spec.ts; this is the page's wiring.
+      const { host } = await render();
+      document.body.appendChild(host);
+
+      const trigger = byTestId<HTMLButtonElement>(host, 'landing-supplier-view-full-comparison')!;
+      const dialog = byTestId<HTMLDialogElement>(host, 'landing-supplier-comparison-dialog')!;
+      trigger.click();
+
+      expect(dialog.open).toBe(true);
+      expect(text(dialog.querySelector('h2'))).toBe('Compare prices across supported suppliers');
+      expect(dialog.querySelectorAll('[data-testid="landing-supplier-row"]')).toHaveLength(7);
+
+      dialog.querySelector<HTMLButtonElement>('button[aria-label="Close supplier comparison"]')!.click();
+
+      expect(dialog.open).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+
+      host.remove();
     });
   });
 

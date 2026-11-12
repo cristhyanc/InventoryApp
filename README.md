@@ -492,10 +492,24 @@ The journey a second live business needs is now complete end to end. The applica
 ## The public landing page
 
 A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954, refreshed for
-the public beta by issue #1191): what the application does, an example dashboard drawn from clearly
-labelled sample data, the optional Nayax integration, a three-step workflow and FAQs. It makes no
-request to the API at all, so opening or refreshing it never asks for a sign-in or reads any business,
-account or Nayax data.
+the public beta by issue #1191, with its example dashboard replaced by issue #1192's refill and
+supplier comparison examples): what the application does, two static examples, the optional Nayax
+integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
+refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- The **refill example** shows a fictional site and machine - "Banksia House" and "Banksia House VM" -
+  with a short Pick List of products carrying a "To pack" and a "Loaded" quantity. "Loaded" is how
+  many of each "To pack" quantity have been packed so far in that one Pick List run; the application
+  does not record it as a second, separate quantity.
+- The **supplier comparison example**, headed "Compare prices across supported suppliers", shows one
+  fictional product's offers from the supported suppliers, with a "Lowest unit price" badge on every
+  row that ties for it. It carries "Example comparison — prices and availability change." and a
+  notice to confirm the product, pack size and final price with the supplier before buying. From the
+  `md` breakpoint up the full comparison is shown inline; below it, a short preview stands in for it
+  with a **View full comparison** button that opens the same comparison in a dialog - a native modal
+  `<dialog>`, closed by Escape, the backdrop or a Close button, which returns focus to the button
+  that opened it and causes no page-level horizontal scrolling. No supplier name in the example is a
+  link to a real site.
 
 - The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
   compare supplier prices and plan your next refill in one place." Directly under it sits the public
@@ -533,6 +547,17 @@ The page never scrolls sideways on a phone: it was measured in Chromium at every
 `frontend/inventory-app/e2e/visual/landing-page-public-beta.visual.ts` (see
 [docs/screenshots/issue-1191/README.md](docs/screenshots/issue-1191/README.md) for how to regenerate
 them).
+
+The two examples have their own browser evidence, captured by
+`frontend/inventory-app/e2e/visual/landing-refill-supplier-examples.visual.ts` into
+[docs/screenshots/issue-1192/](docs/screenshots/issue-1192/README.md):
+[the page at 1440px](docs/screenshots/issue-1192/homepage-examples-signed-out-1440px.png) with the
+comparison inline, [at 390px](docs/screenshots/issue-1192/homepage-examples-signed-out-390px.png)
+with its preview, and [the comparison dialog open at 390px](docs/screenshots/issue-1192/supplier-comparison-dialog-390px.png).
+That run also measures what a screenshot cannot: the page has no page-level horizontal scrolling at
+390px with the dialog **open** as well as closed, pinch zoom stays enabled either way, and the
+dialog opens from the keyboard and returns focus to **View full comparison** whether Escape or its
+Close button dismissed it.
 
 ### Pricing on the landing page (issue #971)
 
