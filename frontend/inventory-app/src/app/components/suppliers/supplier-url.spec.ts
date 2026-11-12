@@ -3,7 +3,8 @@ import {
   SUPPLIER_URL_MAX_LENGTH,
   SUPPLIER_URL_TOO_LONG_MESSAGE,
   isSafeSupplierUrl,
-  normalizeSupplierUrl
+  normalizeSupplierUrl,
+  supplierUrlDomain
 } from './supplier-url';
 
 /**
@@ -83,6 +84,17 @@ describe('supplier URL rule (issue #847)', () => {
         expect(isSafeSupplierUrl(value)).toBe(false);
       }
     );
+  });
+
+  describe('supplierUrlDomain (issue #1175)', () => {
+    it.each([
+      ['https://coles.com.au', 'coles.com.au'],
+      ['https://www.coles.com.au/trade?ref=1', 'coles.com.au'],
+      ['http://sub.domain.example.com:8443/path', 'sub.domain.example.com'],
+      ['  https://coles.com.au  ', 'coles.com.au']
+    ])('reads %p as the short domain %p', (value, expected) => {
+      expect(supplierUrlDomain(value)).toBe(expected);
+    });
   });
 });
 

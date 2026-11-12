@@ -3044,6 +3044,39 @@ Every menu and dialog starts closed, opens one at a time, works from the keyboar
 Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
 `docs/screenshots/issue-1093/`.
 
+## The Suppliers list
+
+**Suppliers** (issue #1175) is redesigned to match **Products → All products** (issue #1093): one
+card holding a toolbar, the table (compact cards on a phone) and the suppliers it lists, with
+**Available to add** kept as its own section below, unchanged. The header names the page and shows
+how many suppliers are loaded, beside **Add supplier**.
+
+- **Toolbar**: search suppliers by name (case-insensitive, with a clear button) and an **All / In
+  use / Not used** filter, combined together and applied client-side over the one register already
+  loaded — there is no pagination to turn a page on. Usage is the existing "Not used" state (issue
+  #934), never purchase history, and a supplier you added yourself is always **In use**, because
+  that state is only ever offered to one from the platform's list. **Clear filters** is shown only
+  once a search or the filter differs from its default.
+- **States**: loading, a load failure (with guidance to reload), no suppliers at all yet, and **"No
+  suppliers match your search or filter."** with a button that clears both.
+- **Table columns** are Supplier (name, with the **Platform list** badge where `isLinked`), Contact
+  (the available name, email as a `mailto:` link and phone as a `tel:` link — a detail you have not
+  recorded is simply left out), Website (the stored address's short domain, linking to it only where
+  [the website rule](#a-suppliers-website) allows — anything else, including a value that reached
+  the database without passing that rule, stays plain text), Usage (**In use**/**Not used**) and
+  Actions.
+- **Actions**: **Edit** is on every row; the row's ⋮ menu holds **GST defaults**, **Mark as not
+  used**/**Mark as in use** (linked suppliers only) and **Delete** (only where the server still
+  allows it) — the same controls, confirmations, refusal sentences and support-session/role-preview
+  rules as before issue #1175, just moved off the row and into the menu.
+- **On a phone** each supplier is a card with its name and badge, usage, the same available contact
+  and website details, Edit and the same ⋮ menu; the toolbar and Add supplier stay reachable with no
+  horizontal scrolling, every control is at least 44px tall, and pinching to zoom is never blocked.
+- **Opening and closing the Add/Edit dialog never resets the search, the filter or your scroll
+  position.** A save that succeeds while the current search or usage filter would hide the result
+  says so — *"Supplier created."*/*"Supplier saved."* followed by *"It is hidden by your current
+  search or usage filter."* — rather than the filter springing open to show it.
+
 ## Adding and editing a supplier
 
 The Suppliers page is a list, and everything you do to one supplier happens in a dialog over it, so
@@ -3065,23 +3098,24 @@ more.
 - **Closing an unchanged form just closes it.** Cancel, the ✕, Escape and a click outside a form you
   *have* changed ask first: **Discard changes** or **Keep editing**, and keeping takes you back to
   the form exactly as you left it.
-- **GST defaults** is a button on each supplier's row and opens that supplier's
-  [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the same three
-  settings, with the same permission: a role that may read but not change them sees the choices
-  without a Save.
+- **GST defaults** is in each row's ⋮ menu (issue #1175, off the row since that redesign) and opens
+  that supplier's [GST defaults](#product-and-supplier-gst-rules) in their own dialog. They are the
+  same three settings, with the same permission: a role that may read but not change them sees the
+  choices without a Save.
 - **Delete** asks in a dialog that names the supplier instead of the browser's own confirmation box.
-  A supplier the server refuses to delete has no Delete button at all, and a refused delete leaves
-  the list exactly as it was and shows the server's reason.
+  A supplier the server refuses to delete has no Delete action in the menu at all, and a refused
+  delete leaves the list exactly as it was and shows the server's reason.
 - **In a read-only support session** neither **Add supplier** nor **Delete** is offered, for the
-  same reason the **Not used** switch is not: a Super Admin looking at your business can read it,
-  never write. Each row's **Edit** still opens the dialog, so a supplier's stored details can be
-  read there, with **Save changes** disabled.
+  same reason **Mark as not used**/**Mark as in use** is not: a Super Admin looking at your business
+  can read it, never write. Each row's **Edit** still opens the dialog, so a supplier's stored
+  details can be read there, with **Save changes** disabled.
 - **Keyboard and screen readers.** Each dialog is labelled, takes focus when it opens, keeps Tab
   inside itself, closes on Escape and returns focus to the control that opened it; the page behind
   it cannot be clicked or tabbed into while it is open.
 
-The **Not used** switch, the **Platform list** label, the website link rule and the **Available to
-add** section are unchanged, and no API, model or stored field changed with this.
+The **Platform list** label, the website link rule and the **Available to add** section are
+unchanged, and no API, model or stored field changed with either this or
+[the Suppliers list redesign](#the-suppliers-list) above.
 
 Screenshots of the reviewed states, with sample suppliers, are in `docs/screenshots/issue-1174/`:
 [Add, 1440px](docs/screenshots/issue-1174/add-supplier-dialog-1440px.png),
@@ -3102,8 +3136,9 @@ no website is normal, and editing one you recorded earlier works without touchin
   path, and anything with another scheme — `javascript:`, `data:`, `file:`, `ftp:`, `mailto:` — are
   refused, with the message shown on the field. The form checks this before saving and the server
   checks it again on every create and update; a refused value changes nothing.
-- **It is a link, and only a link.** On the Suppliers list a recorded website opens in a new tab,
-  with `rel="noopener noreferrer"`. **The application never visits it.** Nothing fetches, follows,
+- **It is a link, and only a link.** On the Suppliers list a recorded website is shown as its short
+  domain (issue #1175) and opens the full stored address in a new tab, with
+  `rel="noopener noreferrer"`. **The application never visits it.** Nothing fetches, follows,
   previews, scrapes or checks that the address works, and nothing reads a GST status, an ABN or
   anything else out of it. A stored value that is not an `http(s)` address is shown as plain text
   and is never clickable.
@@ -3149,12 +3184,14 @@ supplier with a **Platform list** label.
   normally, and so do the supplier's three
   [GST defaults](#product-and-supplier-gst-rules) — those are your own accounting settings about a
   supplier you buy from, and the link only fixes who the supplier *is*.
-- **Mark one you do not use as "Not used".** The Suppliers page has a **Not used** switch on each
-  linked row. Switched on, the supplier stops being offered when you record a purchase, place a
-  supplier order or order from the Needs Ordering page. Nothing is removed: the row stays on the
-  Suppliers page so you can switch it back on, and every purchase, supplier order and expense that
-  already names it still shows it. The switch needs the same permission as the rest of the Suppliers
-  page, and it is hidden — and refused — in a read-only support session.
+- **Mark one you do not use as "Not used".** Each linked row's actions menu has a **Mark as not
+  used**/**Mark as in use** action (issue #1175 moved it off the row and into that menu; the Usage
+  column still shows **In use**/**Not used** at a glance). Chosen, the supplier stops being offered
+  when you record a purchase, place a supplier order or order from the Needs Ordering page. Nothing
+  is removed: the row stays on the Suppliers page so you can mark it in use again, and every
+  purchase, supplier order and expense that already names it still shows it. The action needs the
+  same permission as the rest of the Suppliers page, and it is hidden — and refused — in a
+  read-only support session.
 - **A supplier you added yourself is unchanged.** Rename it, re-point its website, delete it, exactly
   as before. "Not used" is deliberately not offered for one: you can simply delete it.
 - **For the API.** `GET /api/suppliers` and `GET /api/suppliers/{id}` publish `isLinked`, `isHidden`,
