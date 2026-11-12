@@ -532,11 +532,11 @@ Core inventory - products, stock, purchases, suppliers and machine records - wor
 Nayax section states "Use core inventory on its own. Connect Nayax for sales integration.", with no
 reference to a paid plan. The three workflow steps are "Set up your business", "Add products and
 machines" and "Plan and record refills". The footer carries a contact line - the
-`admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" - and **no Privacy
-Policy or Terms of Service link**: the Privacy Policy and Terms of Use page layouts exist (issue #1190,
-`frontend/inventory-app/src/app/public/legal/`), but the legal copy on them is not approved yet, so
-both pages are reachable only in a development build and nothing links to either one; add the footer
-link once the copy is approved and the pages are published. The approved designs and every wording
+`admin@restockroo.com.au` mailto link and "Eunhye Chung · ABN 69 235 469 430" - and a **Legal**
+list linking to the **Privacy Policy** (`/privacy-policy`) and the **Terms of Use** (`/terms-of-use`)
+(issue #1214). Both pages are public in every build,
+open to a signed-out visitor with no sign-in redirect, and carry the owner-approved copy
+(`frontend/inventory-app/src/app/public/legal/`). The approved designs and every wording
 change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md)
 and [docs/design/restockroo-legal-pages.md](docs/design/restockroo-legal-pages.md).
 
