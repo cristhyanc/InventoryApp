@@ -59,3 +59,6 @@ action or decoration rather than something this application has:
   headings and its two placeholders. Authoring the approved copy, deciding the effective date and
   making either page reachable in production or linked from anywhere are legal, business and product
   work outside issue #1190 (see issue #1191 for the homepage link).
+- **Draft wording held for the legal copy.** Clause text drafted for later placement lives in
+  [docs/legal/](../legal/): the supplier price comparison clause for the Terms of Use (issue #1183)
+  and the receipt-scanning paragraph for the Privacy Policy (issue #1202). Neither is on either page.
