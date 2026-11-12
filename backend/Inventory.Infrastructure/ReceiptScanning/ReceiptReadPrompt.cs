@@ -29,9 +29,6 @@ namespace Inventory.Infrastructure.ReceiptScanning;
 /// </summary>
 internal static class ReceiptReadPrompt
 {
-    /// <summary>The schema's published name, sent with it.</summary>
-    internal const string SchemaName = "receipt_draft";
-
     private const string JsonString = "string";
     private const string JsonInteger = "integer";
     private const string JsonNumber = "number";

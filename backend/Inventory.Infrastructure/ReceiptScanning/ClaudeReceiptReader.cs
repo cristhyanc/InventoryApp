@@ -154,7 +154,6 @@ public sealed class ClaudeReceiptReader : IReceiptReader
                 ["format"] = new JsonObject
                 {
                     ["type"] = "json_schema",
-                    ["name"] = ReceiptReadPrompt.SchemaName,
                     ["schema"] = ReceiptReadPrompt.Schema(),
                 },
             },
