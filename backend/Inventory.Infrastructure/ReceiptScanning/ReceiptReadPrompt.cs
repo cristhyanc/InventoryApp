@@ -133,74 +133,88 @@ internal static class ReceiptReadPrompt
         return text.ToString();
     }
 
-    /// <summary>The output schema: a fixed shape, with every token taken from a declared vocabulary.</summary>
-    internal static JsonObject Schema() => new()
+    /// <summary>
+    /// The output schema: a fixed shape, with every token taken from a declared vocabulary.
+    /// <para><strong>Every property is required; a value that may be missing is nullable
+    /// instead.</strong> Each optional property multiplies the grammar the Messages API compiles for
+    /// structured output, and with most properties optional this schema was refused as "Schema is too
+    /// complex" after more than two minutes. A required, nullable property lets the model say "not
+    /// printed" with <c>null</c>, which <c>ReceiptScanPayloadParser</c> reads exactly as it reads an
+    /// absent one.</para>
+    /// </summary>
+    internal static JsonObject Schema() => ObjectSchema(new JsonObject
     {
-        ["type"] = "object",
-        ["additionalProperties"] = false,
-        ["required"] = new JsonArray("lines"),
-        ["properties"] = new JsonObject
+        ["supplierName"] = Nullable(JsonString, "The supplier's name exactly as printed."),
+        ["supplierId"] = Nullable(JsonInteger, "One of the supplied supplier ids, or null."),
+        ["orderDate"] = Nullable(JsonString, "The date the order was placed, yyyy-MM-dd."),
+        ["receiptDate"] = Nullable(JsonString, "The receipt, transaction or invoice date, yyyy-MM-dd."),
+        ["deliveryDate"] = Nullable(JsonString, "The date the goods were delivered, yyyy-MM-dd."),
+        ["invoiceNumber"] = Nullable(JsonString, "The supplier's invoice or order number as printed."),
+        ["receiptTotal"] = Nullable(JsonNumber, "The total printed on the receipt, read once."),
+        ["receiptTotalIncludesGst"] = GstAnswer("Whether that printed total includes GST."),
+        ["gstTotal"] = Nullable(JsonNumber, "The GST total, only if one is printed."),
+        ["lines"] = new JsonObject
         {
-            ["supplierName"] = Nullable(JsonString, "The supplier's name exactly as printed."),
-            ["supplierId"] = Nullable(JsonInteger, "One of the supplied supplier ids, or null."),
-            ["orderDate"] = Nullable(JsonString, "The date the order was placed, yyyy-MM-dd."),
-            ["receiptDate"] = Nullable(JsonString, "The receipt, transaction or invoice date, yyyy-MM-dd."),
-            ["deliveryDate"] = Nullable(JsonString, "The date the goods were delivered, yyyy-MM-dd."),
-            ["invoiceNumber"] = Nullable(JsonString, "The supplier's invoice or order number as printed."),
-            ["receiptTotal"] = Nullable(JsonNumber, "The total printed on the receipt, read once."),
-            ["receiptTotalIncludesGst"] = GstAnswer("Whether that printed total includes GST."),
-            ["gstTotal"] = Nullable(JsonNumber, "The GST total, only if one is printed."),
-            ["lines"] = new JsonObject
-            {
-                ["type"] = "array",
-                [DescriptionKey] = "One entry per printed line that was delivered.",
-                ["items"] = LineSchema(),
-            },
+            ["type"] = "array",
+            [DescriptionKey] = "One entry per printed line that was delivered.",
+            ["items"] = LineSchema(),
         },
-    };
+    });
 
-    private static JsonObject LineSchema() => new()
+    private static JsonObject LineSchema() => ObjectSchema(new JsonObject
     {
-        ["type"] = "object",
-        ["additionalProperties"] = false,
-        ["required"] = new JsonArray("text", "kind", "packSize", "priceIncludesGst"),
-        ["properties"] = new JsonObject
+        ["text"] = new JsonObject
         {
-            ["text"] = new JsonObject
-            {
-                ["type"] = JsonString,
-                [DescriptionKey] = "The line exactly as printed.",
-            },
-            ["kind"] = new JsonObject
-            {
-                ["type"] = JsonString,
-                ["enum"] = Tokens(ReceiptLineKinds.All.Select(ReceiptLineKinds.Name)),
-                [DescriptionKey] = "What the line is.",
-            },
-            ["deliveredPacks"] = Nullable(JsonInteger, "Packs delivered, supplied, picked or shipped."),
-            ["orderedPacks"] = Nullable(JsonInteger, "Packs ordered, when printed. Never the quantity."),
-            ["packSize"] = new JsonObject
-            {
-                ["type"] = JsonString,
-                ["enum"] = Tokens(ReceiptPackSizes.All.Select(ReceiptPackSizes.Name)),
-                [DescriptionKey] =
-                    "\"printed\" when the document prints the pack size, \"single\" for a genuine "
-                    + "single item, \"notPrinted\" when it does not. Never guess a pack size.",
-            },
-            ["unitsPerPack"] = Nullable(JsonInteger, "The printed pack size, only when packSize is \"printed\"."),
-            ["lineTotal"] = Nullable(JsonNumber, "The line's printed total before discounts."),
-            ["discountTotal"] = Nullable(JsonNumber, "Discounts printed under this item, as a positive amount."),
-            ["priceIncludesGst"] = GstAnswer("Whether the printed price includes GST."),
-            ["taxable"] = GstAnswer("Whether the document marks this line as carrying GST."),
-            ["gstMarker"] = Nullable(JsonString, "The GST marker you saw, as printed."),
-            ["productId"] = Nullable(JsonInteger, "One of the supplied product ids, or null."),
-            ["isDrinkContainer"] = new JsonObject
-            {
-                ["type"] = "boolean",
-                [DescriptionKey] = "True for a drink in a deposit container.",
-            },
+            ["type"] = JsonString,
+            [DescriptionKey] = "The line exactly as printed.",
         },
-    };
+        ["kind"] = new JsonObject
+        {
+            ["type"] = JsonString,
+            ["enum"] = Tokens(ReceiptLineKinds.All.Select(ReceiptLineKinds.Name)),
+            [DescriptionKey] = "What the line is.",
+        },
+        ["deliveredPacks"] = Nullable(JsonInteger, "Packs delivered, supplied, picked or shipped."),
+        ["orderedPacks"] = Nullable(JsonInteger, "Packs ordered, when printed. Never the quantity."),
+        ["packSize"] = new JsonObject
+        {
+            ["type"] = JsonString,
+            ["enum"] = Tokens(ReceiptPackSizes.All.Select(ReceiptPackSizes.Name)),
+            [DescriptionKey] =
+                "\"printed\" when the document prints the pack size, \"single\" for a genuine "
+                + "single item, \"notPrinted\" when it does not. Never guess a pack size.",
+        },
+        ["unitsPerPack"] = Nullable(JsonInteger, "The printed pack size, only when packSize is \"printed\"."),
+        ["lineTotal"] = Nullable(JsonNumber, "The line's printed total before discounts."),
+        ["discountTotal"] = Nullable(JsonNumber, "Discounts printed under this item, as a positive amount."),
+        ["priceIncludesGst"] = GstAnswer("Whether the printed price includes GST."),
+        ["taxable"] = GstAnswer("Whether the document marks this line as carrying GST."),
+        ["gstMarker"] = Nullable(JsonString, "The GST marker you saw, as printed."),
+        ["productId"] = Nullable(JsonInteger, "One of the supplied product ids, or null."),
+        ["isDrinkContainer"] = new JsonObject
+        {
+            ["type"] = "boolean",
+            [DescriptionKey] = "True for a drink in a deposit container.",
+        },
+    });
+
+    /// <summary>A closed object whose every property is required (see <see cref="Schema"/>).</summary>
+    private static JsonObject ObjectSchema(JsonObject properties)
+    {
+        var required = new JsonArray();
+        foreach (var property in properties)
+        {
+            required.Add(property.Key);
+        }
+
+        return new JsonObject
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = false,
+            ["required"] = required,
+            ["properties"] = properties,
+        };
+    }
 
     private static JsonObject GstAnswer(string description) => new()
     {

@@ -223,6 +223,37 @@ public class ReceiptScanPayloadParserTests
         Assert.Equal(1.50m, line.DiscountTotal);
     }
 
+    /// <summary>
+    /// Every schema property is required, so a value the receipt does not print arrives as an
+    /// explicit <c>null</c> rather than an absent field. Both must read identically, field for field.
+    /// </summary>
+    [Fact]
+    public void An_explicit_null_reads_exactly_as_an_absent_field()
+    {
+        var absent = ReceiptScanPayloadParser.Parse(
+            """
+            { "lines": [{ "text": "COLA", "kind": "stock", "packSize": "notPrinted",
+                          "priceIncludesGst": "unknown" }] }
+            """);
+        var nulls = ReceiptScanPayloadParser.Parse(
+            """
+            {
+              "supplierName": null, "supplierId": null, "orderDate": null, "receiptDate": null,
+              "deliveryDate": null, "invoiceNumber": null, "receiptTotal": null,
+              "receiptTotalIncludesGst": "unknown", "gstTotal": null,
+              "lines": [{ "text": "COLA", "kind": "stock", "deliveredPacks": null, "orderedPacks": null,
+                          "packSize": "notPrinted", "unitsPerPack": null, "lineTotal": null,
+                          "discountTotal": null, "priceIncludesGst": "unknown", "taxable": "unknown",
+                          "gstMarker": null, "productId": null, "isDrinkContainer": false }]
+            }
+            """);
+
+        Assert.NotNull(absent);
+        Assert.NotNull(nulls);
+        Assert.Equal(absent with { Lines = [] }, nulls with { Lines = [] });
+        Assert.Equal(Assert.Single(absent.Lines), Assert.Single(nulls.Lines));
+    }
+
     /// <summary>A line with no discount field has no discount, not a null one.</summary>
     [Fact]
     public void A_line_with_no_discount_has_none() =>
