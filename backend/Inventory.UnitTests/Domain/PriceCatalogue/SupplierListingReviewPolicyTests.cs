@@ -16,6 +16,20 @@ public class SupplierListingReviewPolicyTests
 {
     private static readonly DateTime Observed = new(2026, 10, 27, 5, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// When the next scheduled search day after the reading's own day ends, for a supplier searched
+    /// daily: <see cref="Observed"/> is 16:00 Sydney on Tuesday 27 October 2026, so the next search
+    /// day is the Wednesday and it ends at 00:00 Sydney on the Thursday - 13:00 UTC on the Wednesday,
+    /// 32 hours after the reading. With <see cref="SupplierPriceFreshnessPolicy.MarginHours"/> on top,
+    /// the reading is guidance until 38 hours after it was read.
+    ///
+    /// <para>The conversion is the collection calendar's and is covered against the platform
+    /// time-zone database in <c>SupplierSearchScheduleCalendarTests</c>; what this suite is about is
+    /// the decision made with the instant it answers.</para>
+    /// </summary>
+    private static readonly DateTime NextSearchDayEnd =
+        new(2026, 10, 28, 13, 0, 0, DateTimeKind.Utc);
+
     /// <summary>The identity of the pack the reviewer is looking at, in every case below.</summary>
     private static SupplierListingIdentity Confirmed => new(
         "Classic",
@@ -78,7 +92,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(25),
             priceExceptionApproved: false);
 
@@ -94,7 +108,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             pending: null,
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed,
             priceExceptionApproved: false);
 
@@ -103,15 +117,17 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
-    /// The freshness limit is the supplier master record's own, and the boundary belongs to the stale
-    /// side deliberately - which is <see cref="SupplierPriceFreshnessPolicy"/>'s rule and not a second
+    /// The criterion: a held reading is refused as too old by the same schedule rule the cheapest
+    /// comparison uses (issue #1200), so the review page and Cheapest agree about one reading. The
+    /// boundary - the end of the supplier's next search day plus the margin - belongs to the stale
+    /// side deliberately, which is <see cref="SupplierPriceFreshnessPolicy"/>'s rule and not a second
     /// one stated here.
     /// </summary>
     [Theory]
-    [InlineData(29, true)]
-    [InlineData(30, false)]
+    [InlineData(37, true)]
+    [InlineData(38, false)]
     [InlineData(101, false)]
-    public void A_reading_is_accepted_only_while_it_is_inside_the_suppliers_own_limit(
+    public void A_reading_is_accepted_only_until_the_next_scheduled_search_has_passed(
         int ageHours,
         bool accepted)
     {
@@ -119,7 +135,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(ageHours),
             priceExceptionApproved: false);
 
@@ -132,21 +148,37 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
-    /// A supplier checked twice a week has a longer limit, and it is the <em>stored</em> one that
-    /// decides: the same reading is fresh for one supplier and stale for another.
+    /// A supplier searched twice a week waits longer for its next search, and it is the window
+    /// derived from that supplier's <em>own</em> schedule that decides: the same fifty-hour-old
+    /// reading is refused for a daily supplier and accepted for this one.
     /// </summary>
     [Fact]
-    public void The_limit_that_decides_is_the_one_passed_in()
+    public void The_window_that_decides_is_the_one_passed_in()
     {
-        var fresh = SupplierListingReviewPolicy.DecidePendingPrice(
+        var reading = new ReviewedPendingReading(Confirmed, 42.50m, Observed);
+
+        var daily = SupplierListingReviewPolicy.DecidePendingPrice(
             Confirmed,
-            new ReviewedPendingReading(Confirmed, 42.50m, Observed),
+            reading,
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.TwiceWeeklyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(50),
             priceExceptionApproved: false);
 
-        Assert.True(fresh.AcceptsPrice);
+        Assert.False(daily.AcceptsPrice);
+        Assert.Equal(SupplierListingReviewPolicy.StaleReadingReason, daily.Reason);
+
+        // Searched on Wednesday and Sunday: the reading's next search day is the Sunday, whose end
+        // is four days later than the daily supplier's Wednesday.
+        var twiceWeekly = SupplierListingReviewPolicy.DecidePendingPrice(
+            Confirmed,
+            reading,
+            lastAcceptedPackPrice: null,
+            NextSearchDayEnd.AddDays(4),
+            Observed.AddHours(50),
+            priceExceptionApproved: false);
+
+        Assert.True(twiceWeekly.AcceptsPrice);
     }
 
     /// <summary>
@@ -173,7 +205,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(read, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: false);
 
@@ -205,7 +237,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(read, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: false);
 
@@ -260,7 +292,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(read, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: false);
 
@@ -306,7 +338,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(read, 42.50m, Observed),
             lastAcceptedPackPrice: null,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: false);
 
@@ -376,7 +408,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, (decimal)packPrice, Observed),
             last,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: false);
 
@@ -401,7 +433,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, 9.00m, Observed),
             lastAcceptedPackPrice: 40.00m,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: true);
 
@@ -420,7 +452,7 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, 39.00m, Observed),
             lastAcceptedPackPrice: 40.00m,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: true);
 
@@ -439,8 +471,8 @@ public class SupplierListingReviewPolicyTests
             Confirmed,
             new ReviewedPendingReading(Confirmed, 9.00m, Observed),
             lastAcceptedPackPrice: 40.00m,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
-            Observed.AddHours(31),
+            NextSearchDayEnd,
+            Observed.AddHours(39),
             priceExceptionApproved: true);
 
         Assert.False(stale.AcceptsPrice);
@@ -454,7 +486,7 @@ public class SupplierListingReviewPolicyTests
                 9.00m,
                 Observed),
             lastAcceptedPackPrice: 40.00m,
-            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            NextSearchDayEnd,
             Observed.AddHours(1),
             priceExceptionApproved: true);
 

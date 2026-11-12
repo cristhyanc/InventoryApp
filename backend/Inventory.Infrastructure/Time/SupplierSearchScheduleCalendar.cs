@@ -34,6 +34,10 @@ public sealed class SupplierSearchScheduleCalendar : ISupplierSearchScheduleCale
     public DateOnly Today => DateOnly.FromDateTime(Calendar.Today);
 
     /// <inheritdoc />
+    public DateOnly DateOf(DateTime instantUtc) =>
+        DateOnly.FromDateTime(Calendar.ToBusinessDate(instantUtc));
+
+    /// <inheritdoc />
     public DateTime StartOfDayUtc(DateOnly scheduleDate) =>
         Calendar.StartOfBusinessDayUtc(scheduleDate.ToDateTime(TimeOnly.MinValue));
 

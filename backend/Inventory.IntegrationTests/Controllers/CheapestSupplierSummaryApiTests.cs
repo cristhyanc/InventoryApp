@@ -251,6 +251,74 @@ public sealed class CheapestSupplierSummaryApiTests
     }
 
     /// <summary>
+    /// The criterion, over the real contract: a supplier whose <em>Search prices</em> switch is off
+    /// is published with its last price and the new <c>SearchStopped</c> reason - the value
+    /// <strong>7</strong>, which is the public API contract change issue #1200 makes - and is never
+    /// the cheapest, even though its 24-pack special is by far the lowest unit price in the fixture.
+    /// The comparison falls to the next supplier rather than to nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_whose_price_search_is_stopped_is_listed_and_never_cheapest()
+    {
+        var client = _factory.BusinessA();
+        var productId = await _factory.MatchedProductAsync(client);
+
+        await _factory.SetSearchPricesAsync(ApiFactory.CheapSupplierName, searchPrices: false);
+
+        try
+        {
+            var product = Assert.Single(Products(await SummaryAsync(client, [productId])));
+
+            var stopped = Assert.Single(
+                Suppliers(product),
+                supplier => supplier.GetProperty("supplierName").GetString() == ApiFactory.CheapSupplierName);
+
+            Assert.Equal(7, stopped.GetProperty("ineligibility").GetInt32());
+            Assert.Equal(
+                (int)SupplierOfferIneligibility.SearchStopped,
+                stopped.GetProperty("ineligibility").GetInt32());
+            Assert.Equal(ApiFactory.CheapPackPrice, stopped.GetProperty("packPrice").GetDecimal());
+            Assert.False(stopped.GetProperty("isCheapest").GetBoolean());
+
+            // The dearer single is the cheapest comparable offer now, and it is the answer.
+            var cheapest = Assert.Single(
+                Suppliers(product).Where(supplier => supplier.GetProperty("isCheapest").GetBoolean()));
+
+            Assert.Equal(ApiFactory.DearSupplierName, cheapest.GetProperty("supplierName").GetString());
+            Assert.Equal(1.27m, product.GetProperty("cheapestUnitPrice").GetDecimal());
+        }
+        finally
+        {
+            await _factory.SetSearchPricesAsync(ApiFactory.CheapSupplierName, searchPrices: true);
+        }
+    }
+
+    /// <summary>
+    /// The criterion: switching that supplier's searching back on compares its offers again on the
+    /// very next read. The state restored by the test above is the state asserted here, so the switch
+    /// is read from the supplier master record every time rather than remembered anywhere.
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_whose_price_search_is_switched_back_on_is_compared_again()
+    {
+        var client = _factory.BusinessA();
+        var productId = await _factory.MatchedProductAsync(client);
+
+        await _factory.SetSearchPricesAsync(ApiFactory.CheapSupplierName, searchPrices: false);
+        await _factory.SetSearchPricesAsync(ApiFactory.CheapSupplierName, searchPrices: true);
+
+        var product = Assert.Single(Products(await SummaryAsync(client, [productId])));
+        var cheapest = Assert.Single(
+            Suppliers(product).Where(supplier => supplier.GetProperty("isCheapest").GetBoolean()));
+
+        Assert.Equal(ApiFactory.CheapSupplierName, cheapest.GetProperty("supplierName").GetString());
+        Assert.Equal(JsonValueKind.Null, cheapest.GetProperty("ineligibility").ValueKind);
+        Assert.Equal(
+            ApiFactory.CheapPackPrice / ApiFactory.CheapPackSize,
+            product.GetProperty("cheapestUnitPrice").GetDecimal());
+    }
+
+    /// <summary>
     /// The criterion: a match the collector made and nobody has checked is published as such, so the
     /// popup can say "Matched automatically" (#941).
     /// </summary>
@@ -573,6 +641,21 @@ public sealed class CheapestSupplierSummaryApiTests
             {
                 _seedLock.Release();
             }
+        }
+
+        /// <summary>
+        /// Switches one platform supplier record's <em>Search prices</em> flag (issue #1077), which
+        /// since issue #1200 is also what takes that supplier out of the cheapest comparison. A test
+        /// that turns it off restores it, because the fixture is seeded once for the whole class.
+        /// </summary>
+        public async Task SetSearchPricesAsync(string supplierPresetName, bool searchPrices)
+        {
+            await using var db = Database();
+
+            var preset = await db.SupplierPresets.SingleAsync(
+                candidate => candidate.Name == supplierPresetName);
+            preset.SearchPrices = searchPrices;
+            await db.SaveChangesAsync();
         }
 
         /// <summary>

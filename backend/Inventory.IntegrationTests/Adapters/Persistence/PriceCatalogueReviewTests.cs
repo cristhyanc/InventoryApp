@@ -1587,7 +1587,8 @@ public class PriceCatalogueReviewTests
                 new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(
                     fixture.FirstBusinessId),
                 fixture.SummaryStoreFor(fixture.FirstBusinessId),
-                new InventoryApi.Tests.Application.Time.FakeClock(asOfUtc))
+                new InventoryApi.Tests.Application.Time.FakeClock(asOfUtc),
+                PriceCatalogueFixture.ScheduleCalendar())
             .Handle([fixture.FirstBusinessColaId], CancellationToken.None);
 
     /// <summary>The one supplier offer in that answer.</summary>

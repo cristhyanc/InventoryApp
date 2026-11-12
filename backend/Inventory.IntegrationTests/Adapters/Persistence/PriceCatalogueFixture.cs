@@ -6,7 +6,9 @@ using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using Inventory.Application.Time;
 using Inventory.Infrastructure.Persistence;
+using Inventory.Infrastructure.Time;
 using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
@@ -222,7 +224,9 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// the previous call left behind rather than against what was stored.</para>
     /// </summary>
     public IPriceCatalogueReviewStore DeniedReviewStore() =>
-        new EfPriceCatalogueReviewStore(Track(TestAppDbContext.Denied(_options)));
+        new EfPriceCatalogueReviewStore(
+            Track(TestAppDbContext.Denied(_options)),
+            ScheduleCalendar());
 
     /// <summary>
     /// The same store on a context scoped to <em>one business</em>, for the test that says a lease
@@ -230,7 +234,19 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// names a business must never write another business's mapping through it.
     /// </summary>
     public IPriceCatalogueReviewStore ReviewStoreFor(int businessId) =>
-        new EfPriceCatalogueReviewStore(Track(TestAppDbContext.For(_options, businessId)));
+        new EfPriceCatalogueReviewStore(
+            Track(TestAppDbContext.For(_options, businessId)),
+            ScheduleCalendar());
+
+    /// <summary>
+    /// The <strong>real</strong> platform collection calendar (issue #1108), which is what turns a
+    /// held reading's own day and its supplier's next search day into instants (issue #1200). The real
+    /// one rather than a double, because the zone's own daylight-saving rules are the thing a
+    /// hand-rolled offset would get wrong; its clock only answers "today", which this adapter never
+    /// asks.
+    /// </summary>
+    public static ISupplierSearchScheduleCalendar ScheduleCalendar() =>
+        new SupplierSearchScheduleCalendar(new FakeClock(CreatedAt));
 
     /// <summary>
     /// The read-only master-product catalogue store as a platform-admin request reaches it (issue
@@ -822,6 +838,34 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         await db.SaveChangesAsync();
 
         return preset.Id;
+    }
+
+    /// <summary>
+    /// Records one supplier master record's search schedule and its <em>Search prices</em> switch,
+    /// writing the derived freshness limit the same way <c>EfSupplierPresetStore</c> does (issue
+    /// #1108) so the row is one a save could have produced.
+    /// </summary>
+    public async Task SetSupplierSearchAsync(
+        int supplierPresetId,
+        SupplierSearchFrequency frequency,
+        IReadOnlyList<DayOfWeek> daysOfWeek,
+        DateOnly? fortnightStartDate = null,
+        bool searchPrices = true)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var schedule = SupplierSearchSchedulePolicy.Require(
+            new SupplierSearchSchedule(frequency, daysOfWeek, fortnightStartDate));
+
+        var preset = await db.SupplierPresets.SingleAsync(row => row.Id == supplierPresetId);
+        preset.SearchFrequency = schedule.Frequency;
+        preset.SearchDaysOfWeek = SupplierSearchSchedulePolicy.StoredDaysOfWeek(schedule.DaysOfWeek);
+        preset.FortnightStartDate = schedule.FortnightStartDate;
+        preset.PriceCheckFreshnessHours = SupplierSearchSchedulePolicy.FreshnessHoursFor(schedule);
+        preset.SearchPrices = searchPrices;
+        preset.UpdatedAtUtc = CreatedAt;
+
+        await db.SaveChangesAsync();
     }
 
     public async Task<long> SeedMasterProductAsync(

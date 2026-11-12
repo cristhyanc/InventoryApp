@@ -1,7 +1,10 @@
+using Inventory.Application.Time;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using Inventory.Infrastructure.Time;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -837,8 +840,10 @@ public class SupplierPriceObservationStorageTests
 
         /// <summary>
         /// Every confirmed listing with its latest observation and its supplier master record's own
-        /// basis and freshness limit, in <c>CheapestUnitOfferPolicy</c>'s candidate shape. The join
-        /// the summary endpoint of #930 will make, written here to prove the schema carries all of it.
+        /// basis, search schedule and <em>Search prices</em> switch, in
+        /// <c>CheapestUnitOfferPolicy</c>'s candidate shape. The join the summary endpoint of #930
+        /// makes, written here to prove the schema carries all of it - including, since issue #1200,
+        /// the three schedule columns the freshness window is derived from.
         /// </summary>
         public async Task<IReadOnlyList<SupplierUnitOffer>> CandidateOffersAsync()
         {
@@ -858,6 +863,10 @@ public class SupplierPriceObservationStorageTests
                     (pair, preset) => new { pair.observation, pair.listing, preset })
                 .ToListAsync();
 
+            // The real collection calendar, because the window is a true instant derived from a date
+            // of the schedule's own zone; the clock only answers "today", which nothing here asks.
+            var calendar = new SupplierSearchScheduleCalendar(new FakeClock(RecordedAt));
+
             return rows
                 .Select(row => new SupplierUnitOffer(
                     row.listing.Id,
@@ -868,8 +877,14 @@ public class SupplierPriceObservationStorageTests
                     row.observation.SupplierGstRate,
                     row.observation.StockStatus,
                     row.observation.PromotionEndsAtUtc,
-                    row.observation.ObservedAtUtc,
-                    row.preset.PriceCheckFreshnessHours))
+                    row.preset.SearchPrices,
+                    SupplierSearchScheduleWindow.NextSearchDayEndUtc(
+                        calendar,
+                        SupplierSearchSchedulePolicy.Read(
+                            row.preset.SearchFrequency,
+                            row.preset.SearchDaysOfWeek,
+                            row.preset.FortnightStartDate),
+                        row.observation.ObservedAtUtc)))
                 .ToList();
         }
 

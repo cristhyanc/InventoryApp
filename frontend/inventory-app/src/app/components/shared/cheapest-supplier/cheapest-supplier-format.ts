@@ -85,6 +85,9 @@ export function stockLabel(status: SupplierStockStatus | null): string | null {
  * Why an offer was left out of the comparison, in the owner's words rather than the enum's. The
  * offer is still listed: "BIG W is out of stock" is the answer somebody needs, and leaving the row
  * off would read as "BIG W does not sell it".
+ *
+ * Every reason the server can report has a sentence here (issue #1200's `SearchStopped` included),
+ * because a row with no sentence reads as a supplier left out for no reason.
  */
 export function ineligibilityLabel(reason: SupplierOfferIneligibility | null): string | null {
   switch (reason) {
@@ -100,6 +103,8 @@ export function ineligibilityLabel(reason: SupplierOfferIneligibility | null): s
       return 'The special has ended';
     case SupplierOfferIneligibility.Stale:
       return 'Last check is too old to compare';
+    case SupplierOfferIneligibility.SearchStopped:
+      return 'Price search stopped for this supplier, so this price is not compared';
     default:
       return null;
   }

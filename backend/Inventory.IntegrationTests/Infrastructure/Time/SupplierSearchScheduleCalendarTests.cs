@@ -1,3 +1,5 @@
+using System.Globalization;
+using Inventory.Application.Time;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Infrastructure.Time;
 using InventoryApi.Tests.Application.Time;
@@ -128,6 +130,117 @@ public class SupplierSearchScheduleCalendarTests
     }
 
     /// <summary>
+    /// An instant is dated in the collection zone too, which is what decides the day a price was
+    /// observed on (issue #1200): 20:00 UTC on Wednesday 11 November 2026 is already 07:00 on the
+    /// Thursday in Sydney, and reading the UTC date would move the observation a whole day - and with
+    /// it the scheduled run that was meant to refresh it.
+    /// </summary>
+    [Fact]
+    public void An_instant_is_dated_in_the_collection_zone()
+    {
+        var calendar = Calendar();
+
+        Assert.Equal(
+            new DateOnly(2026, 11, 12),
+            calendar.DateOf(new DateTime(2026, 11, 11, 20, 0, 0, DateTimeKind.Utc)));
+        Assert.Equal(
+            new DateOnly(2026, 11, 11),
+            calendar.DateOf(new DateTime(2026, 11, 11, 12, 59, 59, DateTimeKind.Utc)));
+
+        // And it is the same answer Today gives of the current instant.
+        Assert.Equal(
+            CalendarAt(new DateTime(2026, 11, 11, 20, 0, 0, DateTimeKind.Utc)).Today,
+            calendar.DateOf(new DateTime(2026, 11, 11, 20, 0, 0, DateTimeKind.Utc)));
+    }
+
+    /// <summary>
+    /// The criterion: the freshness window is right across both Australia/Sydney daylight-saving
+    /// changes, over the real zone rules rather than an offset somebody wrote down.
+    ///
+    /// <para>Daylight saving starts on Sunday 4 October 2026 and ends on Sunday 5 April 2026, and in
+    /// both weeks a day is an hour shorter or longer than the one before it. What the rule has to
+    /// produce either way is 06:00 Sydney on the morning after the supplier's next search day - which
+    /// is 19:00 UTC the previous day in standard time and 20:00 in daylight-saving time - so a
+    /// boundary built on a fixed offset would be an hour out for a week twice a year.</para>
+    /// </summary>
+    [Theory]
+    // A daily supplier whose price was read on the Saturday before the clocks went forward: the next
+    // search day is Sunday 4 October, which ends at 13:00 UTC, so the price is guidance until 19:00.
+    [InlineData("2026-10-03T06:00:00Z", "2026-10-04T19:00:00Z")]
+    // And one read on that Sunday itself: Monday 5 October ends at 13:00 UTC on the Monday.
+    [InlineData("2026-10-04T06:00:00Z", "2026-10-05T19:00:00Z")]
+    // The Saturday before the clocks went back: Sunday 5 April ends at 14:00 UTC, so 20:00.
+    [InlineData("2026-04-04T06:00:00Z", "2026-04-05T20:00:00Z")]
+    // And that Sunday itself: Monday 6 April ends at 14:00 UTC on the Monday.
+    [InlineData("2026-04-05T06:00:00Z", "2026-04-06T20:00:00Z")]
+    public void The_freshness_boundary_is_right_across_the_daylight_saving_changes(
+        string observedAtUtc,
+        string comparableUntilUtc)
+    {
+        var observed = DateTime.Parse(
+            observedAtUtc,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+
+        var window = SupplierSearchScheduleWindow.NextSearchDayEndUtc(
+            Calendar(),
+            SupplierSearchSchedulePolicy.Daily,
+            observed);
+
+        Assert.Equal(
+            DateTime.Parse(
+                comparableUntilUtc,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal),
+            SupplierPriceFreshnessPolicy.ComparableUntilUtc(window));
+    }
+
+    /// <summary>
+    /// The owner's own examples, end to end over the real zone (issue #1200): Coles on Wednesday and
+    /// Sunday, BIG W every second Saturday, a daily supplier, and a Coles price read by a manual run
+    /// on a Tuesday.
+    /// </summary>
+    [Fact]
+    public void The_owners_examples_come_out_as_he_stated_them()
+    {
+        var colesWednesdayAndSunday = SupplierSearchSchedulePolicy.Require(
+            new SupplierSearchSchedule(
+                SupplierSearchFrequency.Weekly,
+                [DayOfWeek.Wednesday, DayOfWeek.Sunday],
+                null));
+
+        // Checked on Wednesday 11 November 2026: current until Monday 16 November 06:00 Sydney.
+        Assert.Equal(
+            new DateTime(2026, 11, 15, 19, 0, 0, DateTimeKind.Utc),
+            ComparableUntil(colesWednesdayAndSunday, new DateTime(2026, 11, 11, 6, 0, 0, DateTimeKind.Utc)));
+
+        // Read by a manual run on Tuesday 10 November: Wednesday is the next run, so Thursday 06:00.
+        Assert.Equal(
+            new DateTime(2026, 11, 11, 19, 0, 0, DateTimeKind.Utc),
+            ComparableUntil(colesWednesdayAndSunday, new DateTime(2026, 11, 10, 6, 0, 0, DateTimeKind.Utc)));
+
+        // BIG W every second Saturday, the on weeks starting Monday 9 November: a price read on
+        // Saturday 14 November is current until the Sunday 06:00 after the next on-week Saturday,
+        // which is 29 November.
+        var bigWFortnightly = SupplierSearchSchedulePolicy.Require(
+            new SupplierSearchSchedule(
+                SupplierSearchFrequency.Fortnightly,
+                [DayOfWeek.Saturday],
+                new DateOnly(2026, 11, 9)));
+
+        Assert.Equal(
+            new DateTime(2026, 11, 28, 19, 0, 0, DateTimeKind.Utc),
+            ComparableUntil(bigWFortnightly, new DateTime(2026, 11, 14, 6, 0, 0, DateTimeKind.Utc)));
+
+        // JB Metro daily, read at 05:39 Sydney on Thursday 12 November: current until Saturday 06:00.
+        Assert.Equal(
+            new DateTime(2026, 11, 13, 19, 0, 0, DateTimeKind.Utc),
+            ComparableUntil(
+                SupplierSearchSchedulePolicy.Daily,
+                new DateTime(2026, 11, 11, 18, 39, 0, DateTimeKind.Utc)));
+    }
+
+    /// <summary>
     /// The collection zone is the one the Domain declares. Stated here so a change to that constant
     /// is a visible change to what a collection day means rather than a quiet one.
     /// </summary>
@@ -136,6 +249,19 @@ public class SupplierSearchScheduleCalendarTests
     {
         Assert.Equal("Australia/Sydney", SupplierSearchSchedulePolicy.TimeZoneId);
     }
+
+    /// <summary>
+    /// When a price observed at <paramref name="observedAtUtc"/> stops being compared under
+    /// <paramref name="schedule"/>: the window the calendar derives, plus the Domain's own margin.
+    /// </summary>
+    private static DateTime ComparableUntil(
+        SupplierSearchSchedule schedule,
+        DateTime observedAtUtc) =>
+        SupplierPriceFreshnessPolicy.ComparableUntilUtc(
+            SupplierSearchScheduleWindow.NextSearchDayEndUtc(
+                Calendar(),
+                schedule,
+                observedAtUtc));
 
     private static SupplierSearchScheduleCalendar Calendar() =>
         CalendarAt(new DateTime(2026, 11, 5, 0, 0, 0, DateTimeKind.Utc));

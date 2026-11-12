@@ -42,13 +42,15 @@ public sealed record SupplierSearchSchedule(
 /// When one supplier's prices are searched, and how old one of its prices may be as a consequence
 /// (issue #1108, the owner's decision of 5 November 2026, parent #817).
 ///
-/// <para><strong>The schedule lives on the supplier master record, and the freshness limit is derived
-/// from it.</strong> Until this issue the two were separate stored numbers: how often a supplier was
-/// searched depended only on how often somebody started a run, and
+/// <para><strong>The schedule lives on the supplier master record, and how old one of its prices may
+/// be follows from it.</strong> Until this issue the two were separate stored numbers: how often a
+/// supplier was searched depended only on how often somebody started a run, and
 /// <c>SupplierPreset.PriceCheckFreshnessHours</c> was a hand-kept value beside it that nothing
 /// stopped from disagreeing. <see cref="FreshnessHoursFor"/> is now the only way that column is
-/// written, so a supplier's schedule and its freshness limit cannot say different things about the
-/// same cadence.</para>
+/// written, so a supplier's schedule and that figure cannot say different things about the same
+/// cadence - and since issue #1200 the comparison asks the schedule itself rather than the column:
+/// <see cref="NextOccurrenceAfter"/> is the date a price stays current until, which
+/// <see cref="SupplierPriceFreshnessPolicy"/> turns into a boundary.</para>
 ///
 /// <para><strong>Weeks run Monday to Sunday, and the dates are the schedule's own calendar's.</strong>
 /// Every date and weekday here is <see cref="TimeZoneId"/>'s - the platform's single collection
@@ -370,6 +372,46 @@ public static class SupplierSearchSchedulePolicy
     }
 
     /// <summary>
+    /// The <strong>next occurrence</strong> after <paramref name="date"/>: the first scheduled date
+    /// strictly after it.
+    ///
+    /// <para>It is the mirror of <see cref="CurrentOccurrenceOn"/> and it is what decides how long one
+    /// of this supplier's prices stays comparable (issue #1200): a price read on a day is current
+    /// until the run that was next due has had its chance, so the date this answers is the day that
+    /// chance falls on. Strictly after, because the run on the observation's own day is the one that
+    /// produced the price - a price is never kept alive by the search that read it.</para>
+    ///
+    /// <para>A date the supplier is not searched on is answered exactly the same way: a price read by
+    /// a manual run on a Tuesday is current until Wednesday's scheduled run, which is the next
+    /// occurrence after Tuesday.</para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// The schedule is not a storable one, so no occurrence can be derived from it.
+    /// </exception>
+    public static DateOnly NextOccurrenceAfter(SupplierSearchSchedule schedule, DateOnly date)
+    {
+        ArgumentNullException.ThrowIfNull(schedule);
+
+        // A validated schedule always has one within its own cycle: daily on the next day, weekly
+        // within seven days, fortnightly within fourteen.
+        var cycleDays = CycleDaysOf(Require(schedule).Frequency);
+
+        for (var ahead = 1; ahead <= cycleDays; ahead++)
+        {
+            var candidate = date.AddDays(ahead);
+
+            if (IsScheduledOn(schedule, candidate))
+            {
+                return candidate;
+            }
+        }
+
+        // Unreachable for a validated schedule, and a refusal rather than a guess if it ever is not:
+        // an invented occurrence would silently decide how long a price of this supplier is compared.
+        throw new DomainValidationException(WeekdayRequiredMessage);
+    }
+
+    /// <summary>
     /// The longest gap, in days, between two consecutive occurrences over one whole cycle - seven
     /// days for a weekly schedule, fourteen for a fortnightly one, wrapping round to the next cycle's
     /// first occurrence.
@@ -416,8 +458,13 @@ public static class SupplierSearchSchedulePolicy
     /// gap between two consecutive occurrences in days, times 24, plus
     /// <see cref="SupplierPriceFreshnessPolicy.MarginHours"/>.
     ///
-    /// <para>This is the one way <c>SupplierPreset.PriceCheckFreshnessHours</c> is written since issue
-    /// #1108, so the stored schedule and the stored limit cannot disagree. The shipped answers are
+    /// <para><strong>It describes a cadence and no longer decides anything.</strong> Since issue #1200
+    /// whether one of a supplier's prices is still compared is
+    /// <see cref="NextOccurrenceAfter"/>'s answer and <see cref="SupplierPriceFreshnessPolicy.IsFreshUntil"/>'s
+    /// boundary, not a number of hours; this remains the one way
+    /// <c>SupplierPreset.PriceCheckFreshnessHours</c> is written, so the stored schedule and the
+    /// stored figure cannot disagree, and that column is still what the Super Admin page shows. The
+    /// shipped answers are
     /// 30 hours daily, 102 twice a week, 174 once a week and 342 once a fortnight - the owner's own
     /// numbers of 27 October and 1 November 2026, now derived rather than kept by hand. The cases are
     /// stored once, in <c>docs/test-vectors/supplier-search-schedule.json</c>, which the backend tests
