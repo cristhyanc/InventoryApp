@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Observable, of } from 'rxjs';
-import { PurchaseListComponent } from './purchase-list.component';
+import { PURCHASE_DEFAULT_PAGE_SIZE, PurchaseListComponent } from './purchase-list.component';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import {
@@ -66,9 +66,11 @@ async function render(
   purchases: Purchase[],
   gst: PurchaseGstSummary | null = null,
   validation: PurchaseValidation | null = null,
-  sessionActive: Observable<boolean> = of(false)
+  sessionActive: Observable<boolean> = of(false),
+  overrides: { getAll?: jest.Mock; delete?: jest.Mock } = {}
 ) {
-  const getAll = jest.fn(() => of(purchases));
+  const getAll = overrides.getAll ?? jest.fn(() => of(purchases));
+  const deleteFn = overrides.delete ?? jest.fn(() => of(undefined));
   const attachDocument = jest.fn(() => of(purchases[0]));
   await TestBed.configureTestingModule({
     imports: [PurchaseListComponent],
@@ -78,7 +80,7 @@ async function render(
         provide: PurchaseService,
         useValue: {
           getAll,
-          delete: jest.fn(() => of(undefined)),
+          delete: deleteFn,
           getFile: jest.fn(() => of(new Blob())),
           attachDocument,
           getValidationFor: jest.fn(() => validation),
@@ -91,7 +93,7 @@ async function render(
 
   const fixture = TestBed.createComponent(PurchaseListComponent);
   fixture.detectChanges();
-  return { fixture, host: fixture.nativeElement as HTMLElement, getAll, attachDocument };
+  return { fixture, host: fixture.nativeElement as HTMLElement, getAll, attachDocument, delete: deleteFn };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -350,5 +352,184 @@ describe('PurchaseListComponent write controls during a support session (issue #
 
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(deleteSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Pagination over the one existing `getAll` read (issue #1209), reusing `ListPaginationComponent`
+ * and `paging.ts` the same way All Products (#1093) and the Expenses register (#1170) do: a page
+ * is a window onto the already-fetched list, so turning a page or choosing a size re-requests
+ * nothing, and the thumbnail downloads (`loadThumbnails`) follow onto only the page shown.
+ */
+describe('PurchaseListComponent pagination (issue #1209)', () => {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    let next = 0;
+    (URL as unknown as { createObjectURL: (blob: Blob) => string }).createObjectURL = () => `blob:purchase-${(next += 1)}`;
+    (URL as unknown as { revokeObjectURL: (url: string) => void }).revokeObjectURL = jest.fn();
+  });
+
+  afterEach(() => {
+    // Destroys the fixture (which revokes through the stub) before the stub is removed: the
+    // top-level `afterEach` that resets the testing module runs after this one, by which point
+    // `URL.revokeObjectURL` would otherwise be back to jsdom's own (absent) implementation.
+    TestBed.resetTestingModule();
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  const many = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      purchase({ id: index + 1, title: `Purchase ${String(index + 1).padStart(2, '0')}` })
+    );
+  const image = (id: number, title: string) => purchase({ id, title, contentType: 'image/png' });
+  const titles = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('tbody > tr.table-row strong')).map((el) => el.textContent?.trim());
+
+  it('shows ten purchases per page by default and offers exactly 5, 10, 20, 50 and 100', async () => {
+    const { host } = await render(many(25));
+
+    expect(PURCHASE_DEFAULT_PAGE_SIZE).toBe(10);
+    expect(titles(host)).toHaveLength(10);
+    const select = host.querySelector('[data-testid="list-pagination-size"]') as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => Number(option.value))).toEqual([5, 10, 20, 50, 100]);
+    expect(host.querySelector('[data-testid="list-pagination-range"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Showing 1–10 of 25 purchases'
+    );
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent?.trim()).toBe('Page 1 of 3');
+  });
+
+  it('turns pages without missing or repeating a purchase, in the order the API returned, and requests nothing more', async () => {
+    const purchases = many(25);
+    const { fixture, host, getAll } = await render(purchases);
+    const before = getAll.mock.calls.length;
+    const seen: (string | undefined)[] = [...titles(host)];
+
+    for (let page = 1; page < 3; page += 1) {
+      (host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      seen.push(...titles(host));
+    }
+
+    expect(seen).toEqual(purchases.map((p) => p.title));
+    expect((host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(getAll.mock.calls.length).toBe(before);
+  });
+
+  it('returns to page 1 when the page size changes, without requesting the list again', async () => {
+    const { fixture, host, getAll } = await render(many(25));
+    fixture.componentInstance.onPageIndexChange(2);
+    fixture.detectChanges();
+    const before = getAll.mock.calls.length;
+
+    const select = host.querySelector('[data-testid="list-pagination-size"]') as HTMLSelectElement;
+    select.value = '5';
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.pageIndex).toBe(0);
+    expect(titles(host)).toEqual(['Purchase 01', 'Purchase 02', 'Purchase 03', 'Purchase 04', 'Purchase 05']);
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent?.trim()).toBe('Page 1 of 5');
+    expect(getAll.mock.calls.length).toBe(before);
+  });
+
+  it('shows the single page for exactly one purchase, with Previous and Next both disabled', async () => {
+    const { host } = await render([purchase({ id: 1 })]);
+
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent?.trim()).toBe('Page 1 of 1');
+    expect((host.querySelector('[data-testid="list-pagination-previous"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows a partial last page: 11 purchases at 10 per page leaves one on page 2', async () => {
+    const { fixture, host } = await render(many(11));
+    (host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(titles(host)).toEqual(['Purchase 11']);
+    expect(host.querySelector('[data-testid="list-pagination-range"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Showing 11–11 of 11 purchases'
+    );
+  });
+
+  it('shows no pager alongside the empty-state card when there are no purchases', async () => {
+    const { host } = await render([]);
+
+    expect(host.textContent).toContain('No purchases recorded yet.');
+    expect(host.querySelector('[data-testid="list-pagination"]')).toBeNull();
+  });
+
+  it('keeps the current page across a reload (Delete, Add document) that still contains it', async () => {
+    const purchases = many(25);
+    const { fixture, host } = await render(purchases);
+    const component = fixture.componentInstance;
+    component.onPageIndexChange(1);
+    fixture.detectChanges();
+
+    component.load();
+    fixture.detectChanges();
+
+    expect(component.pageIndex).toBe(1);
+    expect(titles(host)).toEqual(purchases.slice(10, 20).map((p) => p.title));
+  });
+
+  it('moves to the previous page when a Delete empties the last page', async () => {
+    const purchases = many(11);
+    const getAll = jest.fn().mockReturnValueOnce(of(purchases)).mockReturnValueOnce(of(purchases.slice(0, 10)));
+    const { fixture, host } = await render(purchases, null, null, of(false), { getAll });
+    const component = fixture.componentInstance;
+    component.onPageIndexChange(1);
+    fixture.detectChanges();
+    expect(titles(host)).toEqual(['Purchase 11']);
+
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    component.remove(purchases[10]);
+    fixture.detectChanges();
+
+    expect(component.pageIndex).toBe(0);
+    expect(titles(host)).toHaveLength(10);
+  });
+
+  it('fetches thumbnails only for image purchases on the visible page, and the new page’s when it turns', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => image(i + 1, `Purchase ${String(i + 1).padStart(2, '0')}`));
+    const pageTwo = [image(11, 'Purchase 11'), withoutDocument({ id: 12, title: 'Purchase 12' })];
+    const { fixture, host } = await render([...pageOne, ...pageTwo]);
+    const getFile = TestBed.inject(PurchaseService).getFile as jest.Mock;
+
+    expect(getFile).toHaveBeenCalledTimes(10);
+    expect(getFile.mock.calls.map((call) => call[0]).sort((a, b) => a - b)).toEqual(pageOne.map((p) => p.id));
+
+    getFile.mockClear();
+    (host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(getFile).toHaveBeenCalledWith(11);
+  });
+
+  it('releases the previous page’s object URLs when a page turns', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => image(i + 1, `Purchase ${String(i + 1).padStart(2, '0')}`));
+    const pageTwo = [image(11, 'Purchase 11')];
+    const { fixture, host } = await render([...pageOne, ...pageTwo]);
+    const revoke = URL.revokeObjectURL as jest.Mock;
+    revoke.mockClear();
+
+    (host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(revoke).toHaveBeenCalledTimes(10);
+  });
+
+  it('releases every object URL when leaving the page', async () => {
+    const images = Array.from({ length: 3 }, (_, i) => image(i + 1, `Purchase ${String(i + 1).padStart(2, '0')}`));
+    const { fixture } = await render(images);
+    const revoke = URL.revokeObjectURL as jest.Mock;
+    revoke.mockClear();
+
+    fixture.destroy();
+
+    expect(revoke).toHaveBeenCalledTimes(3);
   });
 });

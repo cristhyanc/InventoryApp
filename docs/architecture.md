@@ -8181,6 +8181,15 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 
 The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing. Since issue #475 the Actions cell holds an Edit **link** to `/purchases/:id/edit` (see [Purchase edit page](#purchase-edit-page-issue-475)) beside the unchanged `remove(r)` Delete button; the sticky behaviour is the same for both.
 
+Since issue #1209 the list is paged client-side over the one full `getAll` read, with the same shared
+`ListPaginationComponent` and `paging.ts` helpers as All Products (#1093) and the Expenses register (#1170):
+5/10/20/50/100 per page, default 10, kept only in `pageIndex`/`pageSize` on the component (never in the
+address or browser storage), clamped with `clampPageIndex` on every re-read (Delete, Add document) so the
+page stays where it is or moves to the new last page, and turning a page or choosing a size slices the
+already-fetched list with `pageSlice` rather than requesting it again. `loadThumbnails()` fetches a document
+only for the current page's image purchases, releasing the previous page's `ObjectUrlCache` object URLs
+first.
+
 #### Needs Ordering: row navigation, sortable columns, and Delete removal (issue #498)
 
 `/products/needs-ordering` (`ProductNeedsOrderingComponent`) follows the row-navigation and

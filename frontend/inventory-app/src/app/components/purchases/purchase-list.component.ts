@@ -9,6 +9,14 @@ import { IconComponent } from '../shared/icon.component';
 import { gstClassificationLabel, isChargePresent } from './gst-classification-options';
 import { PurchaseDocumentAttachComponent } from './purchase-document-attach/purchase-document-attach.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { ListPaginationComponent } from '../shared/list-pagination/list-pagination.component';
+import { clampPageIndex, pageSlice } from '../shared/list-pagination/paging';
+
+/** The page sizes the Purchases pager offers (issue #1209), the same set as All Products and Expenses. */
+export const PURCHASE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100] as const;
+
+/** The page size every visit starts at (issue #1209's approved design). Not persisted. */
+export const PURCHASE_DEFAULT_PAGE_SIZE = 10;
 
 /**
  * The purchases list (issue #475: display only). Editing a purchase is the dedicated
@@ -24,11 +32,21 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 @Component({
   selector: 'app-purchase-list',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent, PurchaseDocumentAttachComponent],
+  imports: [CommonModule, RouterLink, IconComponent, PurchaseDocumentAttachComponent, ListPaginationComponent],
   templateUrl: './purchase-list.component.html'
 })
 export class PurchaseListComponent implements OnInit, OnDestroy {
   purchases: Purchase[] = [];
+
+  /**
+   * The page of the API's one full read shown on screen (issue #1209), client-side over the same
+   * list `loadThumbnails` already draws from - the same strategy as All Products and Expenses - so
+   * turning a page or choosing a size re-requests nothing. Every visit starts at page 1, and
+   * neither value is persisted.
+   */
+  pageIndex = 0;
+  pageSize: number = PURCHASE_DEFAULT_PAGE_SIZE;
+  readonly pageSizeOptions: readonly number[] = PURCHASE_PAGE_SIZE_OPTIONS;
 
   /**
    * Whether a support session is active (issue #657, extending #554): Add Purchase and Delete are
@@ -63,8 +81,31 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   load(): void {
     this.purchaseService.getAll().subscribe((r) => {
       this.purchases = r;
+      // A refresh (Delete, Add document) can shorten the list: stay on the same page while it
+      // still exists, and never land on an empty one past the end (issue #1209).
+      this.pageIndex = clampPageIndex(this.pageIndex, this.purchases.length, this.pageSize);
       this.loadThumbnails();
     });
+  }
+
+  /** The purchases on the current page, in the API's own order - nothing here re-sorts or re-filters. */
+  get pagedPurchases(): Purchase[] {
+    return pageSlice(this.purchases, this.pageIndex, this.pageSize);
+  }
+
+  onPageIndexChange(index: number): void {
+    this.pageIndex = clampPageIndex(index, this.purchases.length, this.pageSize);
+    this.loadThumbnails();
+  }
+
+  /** A new page size is a fresh view of the same list, so it returns to page 1. */
+  onPageSizeChange(size: number): void {
+    if (!this.pageSizeOptions.includes(size)) {
+      return;
+    }
+    this.pageSize = size;
+    this.pageIndex = 0;
+    this.loadThumbnails();
   }
 
   getValidation(purchase: Purchase): PurchaseValidation | null {
@@ -108,10 +149,15 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     return purchase.storedFileName !== null && purchase.storedFileName !== undefined;
   }
 
+  /**
+   * Thumbnails for the current page's image-document purchases only (issue #1209): turning a page
+   * or changing the size releases every object URL this drew for the previous page before fetching
+   * the new page's, so neither a stale thumbnail nor a leaked blob survives the move.
+   */
   private loadThumbnails(): void {
     this.objectUrls.releaseAll();
     this.thumbnailUrls = new Map<number, string>();
-    this.purchases
+    this.pagedPurchases
       .filter((purchase) => this.isImage(purchase))
       .forEach((purchase) =>
         this.purchaseService.getFile(purchase.id).subscribe({

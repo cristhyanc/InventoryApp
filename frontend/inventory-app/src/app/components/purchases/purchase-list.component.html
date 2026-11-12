@@ -42,7 +42,7 @@
             </tr>
           </thead>
           <tbody>
-            @for (r of purchases; track r.id) {
+            @for (r of pagedPurchases; track r.id) {
               <tr class="table-row align-top">
                 <td class="table-cell">
                   <div class="flex min-w-56 items-start gap-3">
@@ -171,6 +171,16 @@
             }
           </tbody>
         </table>
+      </div>
+      <div class="card-footer">
+        <app-list-pagination
+          itemLabel="purchases"
+          [totalItems]="purchases.length"
+          [pageIndex]="pageIndex"
+          [pageSize]="pageSize"
+          [pageSizeOptions]="pageSizeOptions"
+          (pageIndexChange)="onPageIndexChange($event)"
+          (pageSizeChange)="onPageSizeChange($event)"></app-list-pagination>
       </div>
     </div>
   }
