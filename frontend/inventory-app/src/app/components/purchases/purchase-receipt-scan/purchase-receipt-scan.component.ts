@@ -135,6 +135,9 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   private readonly destroyed$ = new Subject<void>();
   private readonly planFeature: Subscription;
 
+  /** The running estimate's timer, owned by the one scan it belongs to and stopped when that scan ends. */
+  private progressTimer?: Subscription;
+
   /** The open confirmation panel, while there is one, so withdrawing it leaves the top layer. */
   private panel?: HTMLDialogElement;
   private readonly panelListeners: (() => void)[] = [];
@@ -157,6 +160,7 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.stopProgress();
     this.destroyed$.next();
     this.destroyed$.complete();
     this.cancelled$.complete();
@@ -237,6 +241,7 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
    */
   cancel(): void {
     if (this.state !== 'scanning') return;
+    this.stopProgress();
     this.cancelled$.next();
     this.state = 'idle';
   }
@@ -258,10 +263,12 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
       .pipe(takeUntil(this.cancelled$), takeUntil(this.destroyed$))
       .subscribe({
         next: (draft) => {
+          this.stopProgress();
           this.state = 'idle';
           this.scanned.emit({ draft, file });
         },
         error: (error: unknown) => {
+          this.stopProgress();
           // A plan refusal is this business's own answer rather than a failure to retry, exactly as
           // an inline optional part treats one (issue #979).
           const requiredPlan = planRequiredOfError(error);
@@ -277,31 +284,32 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   }
 
   /**
-   * Starts the estimated progress bar. It stops by itself when the state leaves `scanning` - an
-   * answer, a failure, a plan lock or Cancel - and when the component is destroyed.
+   * Starts the estimated progress bar for the scan that is starting. Any earlier timer is stopped
+   * first, and every way a scan ends (an answer, a failure, a plan lock, Cancel, destruction) stops
+   * this one synchronously, so a finished scan's timer can never tick into the next scan's bar.
    */
   private startProgress(): void {
+    this.stopProgress();
     const started = Date.now();
     this.progressPercent = 0;
     this.progressHint = 'This usually takes 20 to 30 seconds.';
 
-    const ticks = interval(PROGRESS_TICK_MS)
-      .pipe(takeUntil(this.cancelled$), takeUntil(this.destroyed$))
-      .subscribe(() => {
-        if (this.state !== 'scanning') {
-          ticks.unsubscribe();
-          return;
-        }
+    this.progressTimer = interval(PROGRESS_TICK_MS).subscribe(() => {
+      const elapsed = Date.now() - started;
+      this.progressPercent = Math.round(PROGRESS_CEILING * (1 - Math.exp(-elapsed / PROGRESS_TIME_CONSTANT_MS)));
+      if (elapsed >= SLOW_READ_MS) {
+        this.progressHint = 'Still reading. A long receipt can take up to a minute.';
+      }
+    });
+  }
 
-        const elapsed = Date.now() - started;
-        this.progressPercent = Math.round(PROGRESS_CEILING * (1 - Math.exp(-elapsed / PROGRESS_TIME_CONSTANT_MS)));
-        if (elapsed >= SLOW_READ_MS) {
-          this.progressHint = 'Still reading. A long receipt can take up to a minute.';
-        }
-      });
+  private stopProgress(): void {
+    this.progressTimer?.unsubscribe();
+    this.progressTimer = undefined;
   }
 
   private lock(requiredPlan: string): void {
+    this.stopProgress();
     this.planLockMessage = `${SCAN_DESTINATION} needs the ${requiredPlan} plan.`;
     this.errorMessage = '';
     this.pendingFile = null;
