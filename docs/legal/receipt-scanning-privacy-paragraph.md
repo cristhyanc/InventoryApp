@@ -21,11 +21,10 @@ for naming Anthropic as a processor.
 
 > When you scan a receipt, Restockroo sends the receipt image or PDF, along with the names and IDs
 > of your active products and suppliers, to Anthropic so that it can read the receipt and suggest
-> matches. The scan itself does not save the receipt file or a purchase draft in Restockroo; it
-> records only that a scan was made, so that your plan's monthly scan allowance can be counted. The
-> suggested purchase is shown to you with the scanned receipt attached. Nothing is saved unless you
-> choose to save the purchase. If you do, Restockroo stores the purchase as you save it and, unless
-> you remove the receipt before saving, the receipt file with it.
+> matches. The scan does not save the receipt file or a purchase draft in Restockroo. Restockroo
+> counts each scan against your plan's monthly scan allowance. When a scan succeeds, the receipt is
+> attached to the suggested purchase, and it is stored with the purchase when you save it unless
+> you remove it first.
 
 The paragraph limits its no-storage statement to Restockroo's own scan step. It makes no promise
 about how long Anthropic retains what it receives, and no claim about where Anthropic processes it,
@@ -40,15 +39,15 @@ choose to save the purchase or attach the receipt, Restockroo stores what you sa
 
 The first two sentences are kept in substance. Two points were adjusted to match the code:
 
-1. **A scan count is stored.** The scan step writes one thing: a per-business, per-month counter of
+1. **A scan count is stored.** The scan step stores one thing in the database: a per-business, per-month counter of
    scans used, for the plan's monthly allowance (issue #1164). It holds no receipt, file name,
-   product or draft. The paragraph says so, so that "does not save" is not read as "writes
-   nothing".
+   product or draft. The paragraph says that scans are counted, and limits "does not save" to the
+   receipt file and the purchase draft.
 2. **The scanned receipt is attached by default.** Attaching the receipt is not a separate choice
    the person makes after scanning: the Add Purchase page attaches the scanned file to the
    purchase form automatically, and it is uploaded with the purchase on Save unless the person
-   removes it first (issue #1166). The paragraph therefore ties storage to saving the purchase, and
-   mentions that the receipt can be removed before saving.
+   removes it first (issue #1166). The paragraph therefore says a successful scan pre-attaches the
+   receipt and that it is stored when the purchase is saved unless removed first.
 
 ## What the code does (verified against `develop` for issue #1202)
 
