@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subject, Subscription, takeUntil } from 'rxjs';
 import { PurchaseService } from '../../services/purchase.service';
 import { GstClassification, Purchase, PurchaseGstSummary, PurchaseValidation } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
@@ -63,6 +63,11 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   // The thumbnail downloads for the page shown; cancelled when another page replaces it, so a late
   // answer can never place a revoked or another page's image.
   private thumbnailSubscription = new Subscription();
+  // The page's lifetime (PR #1210 review): a list read or Delete answered after the page has been
+  // left must not start thumbnail downloads or create object URLs nobody will release. `destroyed`
+  // also covers work started after teardown, which a completed `destroy$` would no longer stop.
+  private readonly destroy$ = new Subject<void>();
+  private destroyed = false;
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
@@ -77,6 +82,9 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
+    this.destroy$.next();
+    this.destroy$.complete();
     this.thumbnailSubscription.unsubscribe();
     this.objectUrls.releaseAll();
     this.sessionActiveSubscription.unsubscribe();
@@ -87,7 +95,10 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
    * still exists and otherwise moves to the new last page.
    */
   load(): void {
-    this.purchaseService.getAll().subscribe((r) => {
+    if (this.destroyed) {
+      return;
+    }
+    this.purchaseService.getAll().pipe(takeUntil(this.destroy$)).subscribe((r) => {
       this.purchases = r;
       this.pageIndex = clampPageIndex(this.pageIndex, r.length, this.pageSize);
       this.loadThumbnails();
@@ -161,6 +172,9 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
 
   /** Downloads the thumbnails of the page shown only, releasing the previous page's object URLs. */
   private loadThumbnails(): void {
+    if (this.destroyed) {
+      return;
+    }
     this.thumbnailSubscription.unsubscribe();
     this.thumbnailSubscription = new Subscription();
     this.objectUrls.releaseAll();
@@ -189,7 +203,7 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
       return;
     }
     if (!confirm(`Delete purchase "${purchase.title}"?`)) return;
-    this.purchaseService.delete(purchase.id).subscribe(() => this.load());
+    this.purchaseService.delete(purchase.id).pipe(takeUntil(this.destroy$)).subscribe(() => this.load());
   }
 
   formatSize(bytes: number | null): string {

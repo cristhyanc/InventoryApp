@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, Subject, of } from 'rxjs';
 import { PurchaseListComponent } from './purchase-list.component';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -550,5 +550,39 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
     expect(TestBed.inject(PurchaseService).delete).toHaveBeenCalledWith(11);
     expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 1');
     expect(rowTitles(host)).toHaveLength(10);
+  });
+
+  it('starts no thumbnail download and creates no object URL when the list arrives after the page was left', async () => {
+    const late = new Subject<Purchase[]>();
+    const { fixture, getAll } = await render([]);
+    getAll.mockReturnValueOnce(late.asObservable());
+    fixture.componentInstance.load();
+
+    fixture.destroy();
+    late.next(many(3, image));
+    late.complete();
+
+    expect(late.observed).toBe(false);
+    expect(TestBed.inject(PurchaseService).getFile).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.purchases).toEqual([]);
+  });
+
+  it('reads nothing when a Delete is answered after the page was left', async () => {
+    const lateDelete = new Subject<void>();
+    const { fixture, getAll } = await render(many(2, image));
+    const service = TestBed.inject(PurchaseService);
+    (service.delete as jest.Mock).mockReturnValueOnce(lateDelete.asObservable());
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    (service.getFile as jest.Mock).mockClear();
+    (URL.createObjectURL as jest.Mock).mockClear();
+
+    fixture.componentInstance.remove(many(2)[0]);
+    fixture.destroy();
+    lateDelete.next();
+
+    expect(getAll).toHaveBeenCalledTimes(1);
+    expect(service.getFile).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 });
