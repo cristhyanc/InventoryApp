@@ -1546,22 +1546,24 @@ export function workflowSteps(workflowText) {
 export function verifyAppTokenStepsRunTrustedScripts(read = readRepositoryFile) {
   for (const path of [implementPath, architecturePath, repairPath]) {
     for (const step of workflowSteps(read(path))) {
-      if (!/steps\.[a-z_]+_app_token\.outputs\.token/.test(step)) continue;
-      const name = step.match(/- name: (.*)/)?.[1] ?? 'unnamed step';
-      const source = `${path} step "${name}" holds a GitHub App token`;
-      const run = step.split('run: |')[1] ?? '';
-      if (/(^|[\s;&|(])(bash|sh|node|source|\.)\s+(\.\/)?scripts\//m.test(run) || /(^|[\s;&|(])\.\/scripts\//m.test(run)) {
-        throw new Error(`${source} and must not run a script from the agent-editable checkout`);
-      }
-      if (/\bgit\s+(-c\s+\S+\s+)*(push|ls-remote|fetch)\b/.test(run)) {
-        throw new Error(`${source} and must run credentialed Git only through the trusted publisher`);
-      }
-      for (const match of run.matchAll(/bash "\$([a-z_]+)"/g)) {
-        if (!run.includes(`${match[1]}="$RUNNER_TEMP/`) || !run.includes('?ref=$GITHUB_WORKFLOW_SHA" > "$' + match[1] + '"')) {
-          throw new Error(`${source} and runs $${match[1]}, which was not fetched from the workflow's own commit`);
-        }
-      }
+      if (/steps\.[a-z_]+_app_token\.outputs\.token/.test(step)) verifyAppTokenStep(path, step);
     }
+  }
+}
+
+const CHECKOUT_SCRIPT_RUN = /(?:^|[\s;&|(])(?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js)\b/m;
+const DIRECT_CREDENTIALED_GIT = /\bgit(?: -c \S+)* (?:push|ls-remote|fetch)\b/;
+
+function verifyAppTokenStep(path, step) {
+  const name = step.match(/- name: (.*)/)?.[1] ?? 'unnamed step';
+  const source = `${path} step "${name}" holds a GitHub App token`;
+  const run = step.split('run: |')[1] ?? '';
+  if (CHECKOUT_SCRIPT_RUN.test(run)) throw new Error(`${source} and must not run a script from the agent-editable checkout`);
+  if (DIRECT_CREDENTIALED_GIT.test(run)) throw new Error(`${source} and must run credentialed Git only through the trusted publisher`);
+  for (const match of run.matchAll(/bash "\$([a-z_]+)"/g)) {
+    const variable = match[1];
+    const fetched = run.includes(`${variable}="$RUNNER_TEMP/`) && run.includes(`?ref=$GITHUB_WORKFLOW_SHA" > "$${variable}"`);
+    if (!fetched) throw new Error(`${source} and runs $${variable}, which was not fetched from the workflow's own commit`);
   }
 }
 
@@ -1601,7 +1603,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   const appPushRetry = read(appPushRetryPath);
   for (const required of [
     'set -euo pipefail',
-    '[ -n "${GH_TOKEN:-}" ]',
+    '[[ -n "${GH_TOKEN:-}" ]]',
     'delays=(0 2 5 10)',
     'sleep "$delay"',
     "grep -Eqi '403|Permission to .* denied'",

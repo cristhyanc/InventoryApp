@@ -14,11 +14,10 @@
 //   node agent-trusted-context.mjs pr <pr-number> <issue-number> <output-file>
 //
 // Environment: GITHUB_REPOSITORY, GITHUB_REPOSITORY_OWNER, optional AGENT_AUTOMATION_APP_BOT_LOGIN,
-// and a GH_TOKEN that can read issues and pull requests.
+// and a GH_TOKEN that can read issues and pull requests (optional GITHUB_API_URL).
 //
 // This file is standalone (no imports besides Node built-ins) because workflows fetch it from the
 // trusted workflow commit and run it directly, never from the agent-editable checkout.
-import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -44,10 +43,16 @@ function text(value) {
 }
 
 function describe(item) {
-  const when = item.submitted_at ?? item.created_at ?? '';
-  const where = item.path ? ` on ${item.path}${item.line ?? item.original_line ? `:${item.line ?? item.original_line}` : ''}` : '';
-  const state = item.state ? ` (${item.state})` : '';
-  return `${item.user.login}${state}${where}${when ? `, ${when}` : ''}`;
+  let label = item.user.login;
+  if (item.state) label += ` (${item.state})`;
+  if (item.path) {
+    label += ` on ${item.path}`;
+    const line = item.line ?? item.original_line;
+    if (line) label += `:${line}`;
+  }
+  const when = item.submitted_at ?? item.created_at;
+  if (when) label += `, ${when}`;
+  return label;
 }
 
 function renderSection(title, items, trust) {
@@ -96,14 +101,25 @@ export function renderPullRequestContext({ prNumber, pr, comments, reviews, revi
   ].join('\n');
 }
 
-function ghJson(path) {
-  return JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+/** Reads one GitHub REST path with the job's token. */
+export function githubReader(env = process.env) {
+  const api = env.GITHUB_API_URL || 'https://api.github.com';
+  const token = env.GH_TOKEN ?? '';
+  if (!token) throw new Error('GH_TOKEN is required');
+  return async (path) => {
+    const response = await fetch(`${api}/${path}`, {
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' },
+    });
+    if (!response.ok) throw new Error(`GitHub API ${path} returned ${response.status}`);
+    return response.json();
+  };
 }
 
-function ghList(path, get = ghJson) {
+async function ghList(path, get) {
   const items = [];
+  const separator = path.includes('?') ? '&' : '?';
   for (let page = 1; page <= 50; page += 1) {
-    const batch = get(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+    const batch = await get(`${path}${separator}per_page=100&page=${page}`);
     if (!Array.isArray(batch)) throw new Error(`Unexpected response for ${path}`);
     items.push(...batch);
     if (batch.length < 100) return items;
@@ -112,15 +128,19 @@ function ghList(path, get = ghJson) {
 }
 
 function requireNumber(value, name) {
-  if (!/^[1-9][0-9]*$/.test(value ?? '')) throw new Error(`${name} must be a positive number`);
+  if (!/^[1-9]\d*$/.test(value ?? '')) throw new Error(`${name} must be a positive number`);
   return value;
 }
 
-export function main(argv = process.argv.slice(2), env = process.env, get = ghJson) {
+export async function main(argv = process.argv.slice(2), env = process.env, get = undefined) {
   const repo = env.GITHUB_REPOSITORY ?? '';
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('GITHUB_REPOSITORY is required');
   const trust = { owner: env.GITHUB_REPOSITORY_OWNER ?? repo.split('/')[0], appBot: env.AGENT_AUTOMATION_APP_BOT_LOGIN ?? '' };
   const [mode, ...rest] = argv;
+  if (mode !== 'issue' && mode !== 'pr') {
+    throw new Error('usage: agent-trusted-context.mjs issue <issue> <output> | pr <pr> <issue> <output>');
+  }
+  const read = get ?? githubReader(env);
   let output;
   let content;
   if (mode === 'issue') {
@@ -128,8 +148,8 @@ export function main(argv = process.argv.slice(2), env = process.env, get = ghJs
     output = rest[1];
     content = renderIssueContext({
       issueNumber,
-      issue: get(`repos/${repo}/issues/${issueNumber}`),
-      comments: ghList(`repos/${repo}/issues/${issueNumber}/comments`, get),
+      issue: await read(`repos/${repo}/issues/${issueNumber}`),
+      comments: await ghList(`repos/${repo}/issues/${issueNumber}/comments`, read),
     }, trust);
   } else if (mode === 'pr') {
     const prNumber = requireNumber(rest[0], 'pull request number');
@@ -137,16 +157,14 @@ export function main(argv = process.argv.slice(2), env = process.env, get = ghJs
     output = rest[2];
     content = renderPullRequestContext({
       prNumber,
-      pr: get(`repos/${repo}/pulls/${prNumber}`),
-      comments: ghList(`repos/${repo}/issues/${prNumber}/comments`, get),
-      reviews: ghList(`repos/${repo}/pulls/${prNumber}/reviews`, get),
-      reviewComments: ghList(`repos/${repo}/pulls/${prNumber}/comments`, get),
+      pr: await read(`repos/${repo}/pulls/${prNumber}`),
+      comments: await ghList(`repos/${repo}/issues/${prNumber}/comments`, read),
+      reviews: await ghList(`repos/${repo}/pulls/${prNumber}/reviews`, read),
+      reviewComments: await ghList(`repos/${repo}/pulls/${prNumber}/comments`, read),
       issueNumber,
-      issue: get(`repos/${repo}/issues/${issueNumber}`),
-      issueComments: ghList(`repos/${repo}/issues/${issueNumber}/comments`, get),
+      issue: await read(`repos/${repo}/issues/${issueNumber}`),
+      issueComments: await ghList(`repos/${repo}/issues/${issueNumber}/comments`, read),
     }, trust);
-  } else {
-    throw new Error('usage: agent-trusted-context.mjs issue <issue> <output> | pr <pr> <issue> <output>');
   }
   if (!output) throw new Error('an output file is required');
   writeFileSync(output, content);
@@ -155,7 +173,7 @@ export function main(argv = process.argv.slice(2), env = process.env, get = ghJs
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(`::error::Trusted agent context could not be built: ${error.message}`);
     process.exit(1);
