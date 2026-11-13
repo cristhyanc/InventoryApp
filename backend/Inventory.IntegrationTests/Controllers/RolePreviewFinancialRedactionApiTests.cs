@@ -54,18 +54,20 @@ public sealed class RolePreviewFinancialRedactionApiTests
 
     /// <summary>
     /// The figures <c>Dashboard.ViewFinancials</c> governs on a site row (issue #697, with issue
-    /// #1012's two additive periods, issue #1177's previous comparable day and issue #1180's
-    /// previous comparable month under the same rule).
+    /// #1012's two additive periods, issue #1177's previous comparable day, issue #1180's
+    /// previous comparable month and issue #1215's whole previous day under the same rule).
     /// </summary>
     private static readonly string[] SiteRevenueFields =
     [
         "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
         "monthToDateRevenue", "previousComparableDayRevenue", "previousComparableMonthRevenue",
+        "previousDayRevenue",
     ];
 
     /// <summary>
     /// The figures it governs on a machine row (issue #698, with issue #1177's previous comparable
-    /// day and issue #1180's previous comparable month under the same rule).
+    /// day, issue #1180's previous comparable month and issue #1215's whole previous day under the
+    /// same rule).
     /// </summary>
     private static readonly string[] MachineFinancialFields =
     [
@@ -74,7 +76,7 @@ public sealed class RolePreviewFinancialRedactionApiTests
         "todayDirectProfit", "currentWeekDirectProfit", "lastWeekDirectProfit",
         "twoWeeksAgoDirectProfit", "previousComparableWeekDirectProfit", "monthToDateDirectProfit",
         "profitabilityStatus", "previousComparableDayGrossRevenue",
-        "previousComparableMonthGrossRevenue",
+        "previousComparableMonthGrossRevenue", "previousDayGrossRevenue",
     ];
 
     private readonly ApiFactory _factory;

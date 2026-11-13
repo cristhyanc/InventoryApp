@@ -102,6 +102,9 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
         Assert.Equal(
             left.PreviousComparableMonthGrossRevenue + right.PreviousComparableMonthGrossRevenue,
             site.PreviousComparableMonthRevenue);
+        Assert.Equal(
+            left.PreviousDayGrossRevenue + right.PreviousDayGrossRevenue,
+            site.PreviousDayRevenue);
 
         // The fixtures really do put money in each of the six periods, so the equalities above are
         // not six pairs of zeroes agreeing with each other.
@@ -111,6 +114,10 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
         Assert.Equal(171m, site.MonthToDateRevenue);
         Assert.Equal(68m, site.PreviousComparableDayRevenue);
         Assert.Equal(104m, site.PreviousComparableMonthRevenue);
+
+        // The whole of Wednesday 4 October (issue #1215): the two sales inside the same-time
+        // baseline and the 41.00 sale past its cutoff, on both machines.
+        Assert.Equal(109m, site.PreviousDayRevenue);
     }
 
     /// <summary>

@@ -164,6 +164,12 @@ public class OperatorReadableFinancialFigureTests
                 + "at all for a caller without the capability. The read reaches further back for "
                 + "it, which changes how much is read and not who may see it."),
         new(
+            "SiteSummaryDto.PreviousDayRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1215 added yesterday in full as Today's Dashboard baseline, under issue #697's "
+                + "unchanged rule: one more sum over the completed-sales read that is not made at "
+                + "all for a caller without the capability."),
+        new(
             "SiteProductDto.EstimatedCardProfit",
             FigureOutcome.Withheld,
             "Issue #697: null without the capability, and GetSiteProducts resolves neither the card "
@@ -196,6 +202,12 @@ public class OperatorReadableFinancialFigureTests
             "Issue #1180 added Month to date's baseline on exactly the terms of the day baseline "
                 + "above: one more sum over the same completed sales, written out as null by "
                 + "MachineResponseMapper.Redacted, and carrying no profit of its own."),
+        new(
+            "MachineResponse.PreviousDayGrossRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1215 added yesterday in full as Today's Dashboard baseline on exactly the terms "
+                + "of the baselines above: one more sum over the same completed sales, written out "
+                + "as null by MachineResponseMapper.Redacted, and carrying no profit of its own."),
         new(
             "MachineResponse.ProfitabilityStatus",
             FigureOutcome.Withheld,

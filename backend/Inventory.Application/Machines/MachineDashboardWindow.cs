@@ -25,9 +25,10 @@ public readonly record struct MachineDashboardPeriodUtc(
 
 /// <summary>
 /// The machine and site dashboards' reference window (issue #310): the current instant, the
-/// business date it falls on, and the eight rolling comparison periods
+/// business date it falls on, and the nine rolling comparison periods
 /// (today, the previous comparable day, week-to-date, the previous comparable week, last full week,
-/// month-to-date, the previous comparable month, two weeks ago) expressed as UTC instants.
+/// month-to-date, the previous comparable month, two weeks ago, and the whole previous day)
+/// expressed as UTC instants.
 ///
 /// <para><see cref="PreviousComparableDay"/> is Today's own baseline (issue #1177): yesterday's
 /// business day up to the same elapsed time since business-local midnight as now is into today's,
@@ -40,6 +41,15 @@ public readonly record struct MachineDashboardPeriodUtc(
 /// midnight to the same point into that month's comparable day - today's day of the month, or that
 /// month's last day when it has fewer days - as now is into today. It too adds no
 /// <see cref="IBusinessCalendar"/> member.</para>
+///
+/// <para><see cref="PreviousDay"/> is yesterday in full (issue #1215): the previous business date
+/// from its own business-local midnight to one millisecond before today's business-local midnight,
+/// so it ends exactly where <see cref="Today"/> begins and includes every sale made later yesterday
+/// than the current time today. It is the Dashboard's Today baseline since issue #1215.
+/// <see cref="PreviousComparableDay"/> keeps its same-elapsed-time meaning, unchanged, for every
+/// existing caller. Across a daylight-saving transition the whole previous day is 23 or 25 hours
+/// long, because both of its boundaries come from <see cref="IBusinessCalendar.StartOfBusinessDayUtc"/>
+/// rather than from a fixed 24 hours.</para>
 ///
 /// The day boundaries come from the business day through <see cref="IBusinessCalendar"/>,
 /// never from the host's local timezone - an App Service host runs in UTC, where a server-local
@@ -63,7 +73,8 @@ public sealed record MachineDashboardWindow(
     MachineDashboardPeriodUtc LastWeek,
     MachineDashboardPeriodUtc MonthToDate,
     MachineDashboardPeriodUtc TwoWeeksAgo,
-    MachineDashboardPeriodUtc PreviousComparableMonth)
+    MachineDashboardPeriodUtc PreviousComparableMonth,
+    MachineDashboardPeriodUtc PreviousDay)
 {
     /// <summary>
     /// Resolves the window from one current instant. The business date is derived from that same
@@ -140,7 +151,14 @@ public sealed record MachineDashboardWindow(
                         nowUtc,
                         EndOfBusinessDayUtc(businessCalendar, comparableDate)),
                 previousMonthStart,
-                comparableDate));
+                comparableDate),
+            // Yesterday in full (issue #1215): from its own midnight to the instant before today's,
+            // whatever the time is now.
+            PreviousDay: new(
+                previousComparableDayStartUtc,
+                todayStartUtc.AddMilliseconds(-1),
+                previousBusinessDate,
+                previousBusinessDate));
     }
 
     /// <summary>

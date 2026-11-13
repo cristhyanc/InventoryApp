@@ -26,6 +26,10 @@ public readonly record struct MachineDashboardPeriodFacts(
 /// <see cref="MachineDashboardWindow.PreviousComparableMonth"/>, counted by the policy
 /// <see cref="MonthToDate"/>'s revenue is counted by, with no profit, no commission resolution and
 /// no processing-fee lookup of its own.</para>
+///
+/// <para><see cref="PreviousDayGrossRevenue"/> is yesterday's revenue in full (issue #1215), the
+/// Dashboard's Today baseline: the completed-sale revenue of
+/// <see cref="MachineDashboardWindow.PreviousDay"/>, revenue only on exactly the same terms.</para>
 /// </summary>
 public sealed record MachineDashboardFacts(
     MachineDashboardPeriodFacts Today,
@@ -36,6 +40,7 @@ public sealed record MachineDashboardFacts(
     MachineDashboardPeriodFacts TwoWeeksAgo,
     decimal PreviousComparableDayGrossRevenue,
     decimal PreviousComparableMonthGrossRevenue,
+    decimal PreviousDayGrossRevenue,
     MachineProfitabilityStatusInputs StatusInputs);
 
 /// <summary>

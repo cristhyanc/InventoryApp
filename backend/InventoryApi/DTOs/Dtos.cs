@@ -328,6 +328,12 @@ public record PurchaseResponseDto(
 // that month is shorter - which gives Month to date the baseline This week and Today already have. It
 // is appended after previousComparableDayRevenue so every key before it keeps its name, order and
 // value, and it is governed by the same redaction and the same honest 0.
+//
+// previousDayRevenue is additive on exactly those terms (issue #1215): yesterday's completed-sale
+// revenue for the whole previous business day, from its business-local midnight up to today's, so it
+// includes sales made later yesterday than the current time today. It is the Dashboard's Today
+// baseline. previousComparableDayRevenue keeps its same-elapsed-time meaning for existing callers.
+// It is appended last and governed by the same redaction and the same honest 0.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -342,7 +348,8 @@ public record SiteSummaryDto(
     decimal? MonthToDateRevenue,
     IReadOnlyList<SiteMachineStockDto> MachineStocks,
     decimal? PreviousComparableDayRevenue,
-    decimal? PreviousComparableMonthRevenue
+    decimal? PreviousComparableMonthRevenue,
+    decimal? PreviousDayRevenue
 );
 
 // One machine on a GET /api/sites row (issues #1013 and #1019); see SiteSummaryDto above and

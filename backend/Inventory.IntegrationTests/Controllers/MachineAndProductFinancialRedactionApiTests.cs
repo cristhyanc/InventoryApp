@@ -86,7 +86,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         "todayDirectProfit", "currentWeekDirectProfit", "lastWeekDirectProfit",
         "twoWeeksAgoDirectProfit", "previousComparableWeekDirectProfit", "monthToDateDirectProfit",
         "profitabilityStatus", "previousComparableDayGrossRevenue",
-        "previousComparableMonthGrossRevenue",
+        "previousComparableMonthGrossRevenue", "previousDayGrossRevenue",
     ];
 
     /// <summary>
@@ -170,6 +170,15 @@ public sealed class MachineAndProductFinancialRedactionApiTests
             costed.GetProperty("previousComparableMonthGrossRevenue").GetDecimal());
         Assert.Equal(0m, uncosted.GetProperty("previousComparableMonthGrossRevenue").GetDecimal());
 
+        // Issue #1215's whole previous day: the uncosted machine sold at 21:00 yesterday, later than
+        // the 15:00 the read is taken at, so the sale is in yesterday's full-day figure and not in
+        // the same-time baseline; the costed machine sold nothing yesterday.
+        Assert.Equal(
+            ApiFactory.YesterdayLateSaleValue,
+            uncosted.GetProperty("previousDayGrossRevenue").GetDecimal());
+        Assert.Equal(0m, uncosted.GetProperty("previousComparableDayGrossRevenue").GetDecimal());
+        Assert.Equal(0m, costed.GetProperty("previousDayGrossRevenue").GetDecimal());
+
         Assert.NotEqual(JsonValueKind.Null, costed.GetProperty("todayDirectProfit").ValueKind);
         Assert.True(costed.GetProperty("todayDirectProfit").GetDecimal() > 0m);
 
@@ -185,7 +194,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
     }
 
     /// <summary>
-    /// Redaction withholds the fifteen figures and changes nothing else: every other key of every
+    /// Redaction withholds the sixteen figures and changes nothing else: every other key of every
     /// machine in the list is byte-identical to the one a Manager is given over the same fleet.
     /// </summary>
     [Fact]
@@ -224,6 +233,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
             Assert.DoesNotContain(Literal(ApiFactory.UncostedSaleValue), body, StringComparison.Ordinal);
             Assert.DoesNotContain(
                 Literal(ApiFactory.PreviousComparableMonthSaleValue), body, StringComparison.Ordinal);
+            Assert.DoesNotContain(Literal(ApiFactory.YesterdayLateSaleValue), body, StringComparison.Ordinal);
             Assert.DoesNotContain(Literal(ApiFactory.CostOfGoodsSold), body, StringComparison.Ordinal);
             Assert.DoesNotContain("COGS", body, StringComparison.OrdinalIgnoreCase);
         }
@@ -426,6 +436,14 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         /// </summary>
         public const decimal PreviousComparableMonthSaleValue = 234.56m;
 
+        /// <summary>
+        /// The uncosted machine's sale at 21:00 on 14 October 2026 in Sydney (issue #1215): yesterday,
+        /// but later than the 15:00 the read is taken at, so it is in the whole previous day only.
+        /// It has no persisted COGS, like the uncosted machine's other sale, so that machine's
+        /// profitability status is unchanged.
+        /// </summary>
+        public const decimal YesterdayLateSaleValue = 45.67m;
+
         private const int BusinessId = 1;
         private const long SiteId = 9;
 
@@ -441,6 +459,10 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         /// <summary>12:00 on 15 September 2026 in Sydney: inside the previous comparable month.</summary>
         private static readonly DateTime PreviousComparableMonthSaleUtc =
             new(2026, 9, 15, 2, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>21:00 on 14 October 2026 in Sydney (AEDT, +11).</summary>
+        private static readonly DateTime YesterdayLateSaleUtc =
+            new(2026, 10, 14, 10, 0, 0, DateTimeKind.Utc);
 
         private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
 
@@ -547,7 +569,8 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                     CostedMachineId,
                     PreviousComparableMonthSaleValue,
                     null,
-                    PreviousComparableMonthSaleUtc));
+                    PreviousComparableMonthSaleUtc),
+                CompletedCardSale(4, UncostedMachineId, YesterdayLateSaleValue, null, YesterdayLateSaleUtc));
 
             await db.SaveChangesAsync();
             _seeded = true;

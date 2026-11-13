@@ -75,9 +75,11 @@ const MACHINE: Machine = {
   previousComparableWeekDirectProfit: 30,
   monthToDateGrossRevenue: 400,
   monthToDateDirectProfit: 180,
-  // The baselines Today and This month are compared against (issues #1177, #1180 and #1178).
-  previousComparableDayGrossRevenue: 48,
+  // The baselines Today and This month are compared against (issues #1215, #1180 and #1178); the
+  // same-time day figure (#1177) is still published but no longer Today's baseline.
+  previousComparableDayGrossRevenue: 20,
   previousComparableMonthGrossRevenue: 320,
+  previousDayGrossRevenue: 48,
   profitabilityStatus: null
 };
 
@@ -92,8 +94,9 @@ const SITE: Site = {
   currentWeekRevenue: 123.9,
   previousComparableWeekRevenue: 75.9,
   monthToDateRevenue: 400,
-  previousComparableDayRevenue: 48,
-  previousComparableMonthRevenue: 320
+  previousComparableDayRevenue: 20,
+  previousComparableMonthRevenue: 320,
+  previousDayRevenue: 48
 };
 
 function reminder(): MachineRestockSyncReminder {
@@ -290,7 +293,7 @@ describe('Dashboard narrow-screen performance cards (issues #972 and #987)', () 
     // Since issue #1178 the card offers exactly these three periods, and each one names its own
     // comparison rather than borrowing or dropping the week's.
     for (const [label, sales, comparison] of [
-      ['Today', '$57.60 sales', 'vs same time yesterday'],
+      ['Today', '$57.60 sales', 'vs yesterday'],
       ['This month', '$400.00 sales', 'vs same time last month']
     ]) {
       periodButton(label).click();

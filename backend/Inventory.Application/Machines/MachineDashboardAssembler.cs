@@ -66,7 +66,9 @@ internal static class MachineDashboardAssembler
             // is decided from.
             facts.PreviousComparableDayGrossRevenue,
             // Month to date's baseline, on the same terms (issue #1180).
-            facts.PreviousComparableMonthGrossRevenue);
+            facts.PreviousComparableMonthGrossRevenue,
+            // Yesterday in full, the Dashboard's Today baseline, on the same terms (issue #1215).
+            facts.PreviousDayGrossRevenue);
     }
 
     private static (decimal GrossRevenue, decimal? DirectProfit) Resolve(MachineDashboardPeriodFacts period) =>

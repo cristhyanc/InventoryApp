@@ -184,6 +184,82 @@ public class EfMachineDashboardFactsStoreTests
     }
 
     /// <summary>
+    /// The whole previous day (issue #1215), over the relational database and the real Sydney
+    /// calendar. It is Wednesday 11 March from its own midnight (10 March 13:00 UTC) to one
+    /// millisecond before Thursday 12 March's (11 March 13:00 UTC), whatever the time is now - so,
+    /// unlike the previous comparable day, it includes the 20:00 sale made long after the current
+    /// time of day. Both midnight boundaries are pinned to the millisecond.
+    /// </summary>
+    [Fact]
+    public async Task PreviousDay_counts_every_completed_sale_of_yesterday_and_no_others()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.AddRange(
+            // 00:00 on Wednesday 11 March in Sydney: yesterday's first instant.
+            CardSale(1, new DateTime(2026, 3, 10, 13, 0, 0, DateTimeKind.Utc), settlementValue: 7m, costOfGoodsSold: 1m),
+            // 23:59:59.999 on Tuesday 10 March in Sydney: one millisecond before yesterday began.
+            CardSale(2, new DateTime(2026, 3, 10, 12, 59, 59, 999, DateTimeKind.Utc), settlementValue: 1000m, costOfGoodsSold: 1m),
+            // 20:00 on Wednesday 11 March in Sydney: later yesterday than the current time today.
+            CardSale(3, YesterdayInSydney, settlementValue: 20m, costOfGoodsSold: 1m),
+            // 23:59:59.999 on Wednesday 11 March in Sydney: yesterday's last instant.
+            CardSale(4, new DateTime(2026, 3, 11, 12, 59, 59, 999, DateTimeKind.Utc), settlementValue: 4m, costOfGoodsSold: 1m),
+            // 00:00 on Thursday 12 March in Sydney: today's first instant, never yesterday's.
+            CardSale(5, new DateTime(2026, 3, 11, 13, 0, 0, DateTimeKind.Utc), settlementValue: 300m, costOfGoodsSold: 1m),
+            // Refunded yesterday: counted by neither figure, by the same completed-sale policy.
+            RefundedCardSale(6, new DateTime(2026, 3, 11, 2, 0, 0, DateTimeKind.Utc), settlementValue: 3000m));
+        await db.SaveChangesAsync();
+
+        var facts = await Store(db).GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(31m, facts.PreviousDayGrossRevenue);
+        Assert.Equal(300m, facts.Today.GrossRevenue);
+
+        // The same-time baseline keeps its meaning: only the first ninety minutes of yesterday.
+        Assert.Equal(7m, facts.PreviousComparableDayGrossRevenue);
+    }
+
+    /// <summary>
+    /// A whole previous day with no completed sale is an honest <c>0</c>, not a missing figure.
+    /// </summary>
+    [Fact]
+    public async Task PreviousDay_is_zero_when_no_completed_sale_falls_in_it()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.Add(CardSale(1, TodayInSydney, settlementValue: 6m, costOfGoodsSold: 3m));
+        await db.SaveChangesAsync();
+
+        var facts = await Store(db).GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(0m, facts.PreviousDayGrossRevenue);
+        Assert.Equal(6m, facts.Today.GrossRevenue);
+    }
+
+    /// <summary>
+    /// Revenue only (issue #1215): the fee engine is still asked for exactly the six periods whose
+    /// direct profit subtracts a fee, and never for the whole previous day.
+    /// </summary>
+    [Fact]
+    public async Task PreviousDay_asks_the_fee_engine_for_nothing()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.Add(CardSale(1, YesterdayInSydney, settlementValue: 20m, costOfGoodsSold: 1m));
+        await db.SaveChangesAsync();
+        var fees = new RecordingProcessingFees(TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
+
+        var facts = await new EfMachineDashboardFactsStore(db, fees)
+            .GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(20m, facts.PreviousDayGrossRevenue);
+        Assert.Equal(6, fees.Periods.Count);
+        Assert.DoesNotContain(Time.Window.PreviousDay.EndUtc, fees.Periods.Select(period => period.EndUtc));
+        Assert.DoesNotContain(
+            new DateTime(2026, 3, 11), fees.Periods.Select(period => period.FirstBusinessDate));
+    }
+
+    /// <summary>
     /// The previous comparable month (issue #1180), over the relational database and the real Sydney
     /// calendar. 01:30 on Thursday 12 March in Sydney is ninety minutes into today, so the baseline is
     /// February from 1 February's own midnight (31 January 13:00 UTC) to 01:30 on 12 February

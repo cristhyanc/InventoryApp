@@ -1,4 +1,5 @@
 using Inventory.Application.Machines;
+using Inventory.Infrastructure.Time;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -417,6 +418,121 @@ public class MachineDashboardWindowTests
     }
 
     /// <summary>
+    /// The whole previous day (issue #1215): yesterday from its own business-local midnight to one
+    /// millisecond before today's, whatever the time is now. At 15:00 on Thursday 12 March 2026 in
+    /// Sydney that is all of Wednesday 11 March, so it reaches past the same-time baseline - which
+    /// keeps its own meaning - and ends exactly where today begins.
+    /// </summary>
+    [Fact]
+    public void Resolve_CoversTheWholePreviousDayWhateverTheTimeNow()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 12, 4, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(new DateTime(2026, 3, 11), window.PreviousDay.FirstBusinessDate);
+        Assert.Equal(new DateTime(2026, 3, 11), window.PreviousDay.LastBusinessDate);
+
+        // Same start as the same-time baseline, which is unchanged and ends fifteen hours in.
+        Assert.Equal(window.PreviousComparableDay.StartUtc, window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 11, 4, 0), window.PreviousComparableDay.EndUtc);
+        Assert.True(window.PreviousDay.EndUtc > window.PreviousComparableDay.EndUtc);
+    }
+
+    /// <summary>
+    /// One minute into Thursday 12 March in Sydney the whole previous day is still all of
+    /// Wednesday 11 March: it does not shrink with the time elapsed into today.
+    /// </summary>
+    [Fact]
+    public void Resolve_KeepsTheWholePreviousDayJustAfterBusinessMidnight()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 11, 13, 1, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 3, 12), window.BusinessToday);
+        Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(2026, 3, 10, 13, 1), window.PreviousComparableDay.EndUtc);
+    }
+
+    /// <summary>
+    /// The day after daylight saving starts in Sydney: Sunday 4 October 2026 is 23 hours long, from
+    /// its AEST (+10) midnight to Monday's AEDT (+11) midnight, and the whole previous day is exactly
+    /// those 23 hours.
+    /// </summary>
+    [Fact]
+    public void Resolve_CoversA23HourPreviousDayAfterDaylightSavingStarts()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 10, 4, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 10, 5), window.BusinessToday);
+        Assert.Equal(Utc(2026, 10, 3, 14, 0), window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(2026, 10, 4, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(
+            TimeSpan.FromHours(23) - TimeSpan.FromMilliseconds(1),
+            window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
+        Assert.Equal(new DateTime(2026, 10, 4), window.PreviousDay.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// The day after daylight saving ends in Sydney: Sunday 5 April 2026 is 25 hours long, from its
+    /// AEDT (+11) midnight to Monday's AEST (+10) midnight, and the whole previous day is all 25.
+    /// </summary>
+    [Fact]
+    public void Resolve_CoversA25HourPreviousDayAfterDaylightSavingEnds()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 4, 5, 23, 0, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 4, 6), window.BusinessToday);
+        Assert.Equal(Utc(2026, 4, 4, 13, 0), window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(2026, 4, 5, 14, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(
+            TimeSpan.FromHours(25) - TimeSpan.FromMilliseconds(1),
+            window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
+        Assert.Equal(new DateTime(2026, 4, 5), window.PreviousDay.LastBusinessDate);
+    }
+
+    /// <summary>
+    /// The same rule in a second zone (AGENTS.md: timezone behaviour is tested in two zones). In
+    /// <c>America/New_York</c> daylight saving starts at 02:00 EST on Sunday 8 March 2026, so on
+    /// Monday 9 March the whole previous day runs from Sunday's EST (-5) midnight to Monday's EDT
+    /// (-4) midnight - 23 hours - and on Monday 2 November, after it ends on Sunday 1 November, the
+    /// previous day runs from Sunday's EDT midnight to Monday's EST midnight - 25 hours.
+    /// </summary>
+    [Theory]
+    [InlineData(2026, 3, 9, 15, 2026, 3, 8, 5, 2026, 3, 9, 4, 23)]
+    [InlineData(2026, 11, 2, 15, 2026, 11, 1, 4, 2026, 11, 2, 5, 25)]
+    public void Resolve_CoversTheWholePreviousDayInAnotherZoneAcrossDaylightSaving(
+        int nowYear, int nowMonth, int nowDay, int nowHour,
+        int startYear, int startMonth, int startDay, int startHour,
+        int endYear, int endMonth, int endDay, int endHour,
+        int expectedHours)
+    {
+        var clock = new FakeClock(new DateTime(nowYear, nowMonth, nowDay, nowHour, 0, 0, DateTimeKind.Utc));
+        var calendar = ZonedBusinessCalendar.ForTimeZone(clock, "America/New_York");
+
+        var window = MachineDashboardWindow.Resolve(clock, calendar);
+
+        Assert.Equal(new DateTime(nowYear, nowMonth, nowDay), window.BusinessToday);
+        Assert.Equal(Utc(startYear, startMonth, startDay, startHour, 0), window.PreviousDay.StartUtc);
+        Assert.Equal(Utc(endYear, endMonth, endDay, endHour, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(
+            TimeSpan.FromHours(expectedHours) - TimeSpan.FromMilliseconds(1),
+            window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
+        Assert.Equal(new DateTime(startYear, startMonth, startDay), window.PreviousDay.FirstBusinessDate);
+        Assert.Equal(new DateTime(startYear, startMonth, startDay), window.PreviousDay.LastBusinessDate);
+    }
+
+    /// <summary>
     /// The previous comparable month (issue #1180): the previous calendar month from its own first
     /// business-day midnight to the same point into the comparable day as now is into today. 01:30 on
     /// Thursday 12 March 2026 in Sydney is ninety minutes into today, so the baseline runs from
@@ -654,12 +770,14 @@ public class MachineDashboardWindowTests
             (new DateTime(2026, 2, 1), new DateTime(2026, 2, 12)),
             BusinessDates(window.PreviousComparableMonth));
         Assert.Equal((new DateTime(2026, 2, 23), new DateTime(2026, 3, 1)), BusinessDates(window.TwoWeeksAgo));
+        Assert.Equal((new DateTime(2026, 3, 11), new DateTime(2026, 3, 11)), BusinessDates(window.PreviousDay));
 
         // Each period's own instants fall on the first and last business date it claims to cover.
         MachineDashboardPeriodUtc[] periods =
         [
             window.Today, window.PreviousComparableDay, window.CurrentWeek, window.PreviousComparableWeek,
-            window.LastWeek, window.MonthToDate, window.PreviousComparableMonth, window.TwoWeeksAgo
+            window.LastWeek, window.MonthToDate, window.PreviousComparableMonth, window.TwoWeeksAgo,
+            window.PreviousDay,
         ];
         Assert.All(periods, period =>
         {
