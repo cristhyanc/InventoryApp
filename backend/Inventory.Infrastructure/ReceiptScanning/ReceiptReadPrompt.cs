@@ -67,8 +67,11 @@ internal static class ReceiptReadPrompt
         - A discount, credit or promotion printed under an item belongs to the item above it: report
           it as that item's discountTotal, as a positive amount, and not as a line of its own.
         - priceIncludesGst says whether the printed price already includes GST: "yes", "no", or
-          "unknown" when the document does not say. It is required on every line. Where a tax invoice
-          prints both an ex-GST and an inc-GST column, use either consistently and say which you used.
+          "unknown" when the document does not say. It is required on every line. When the document
+          states that its total includes GST (for example "Total inc GST" or "Invoice total includes
+          GST of") and the line amounts add up to that total, the line prices include GST: answer
+          "yes". Where a tax invoice prints both an ex-GST and an inc-GST column, use either
+          consistently and say which you used.
         - taxable says whether the document marks the line as carrying GST; report the marker you saw
           in gstMarker.
 

@@ -2407,7 +2407,9 @@ and record it through Add Purchase as usual, which is still where a purchase is 
   suggested.
 - **Prices are converted to the GST-inclusive figures this application records.** A line printed without GST
   that the receipt marks as taxable has 10% added; one whose GST the receipt does not state comes back with no
-  unit cost rather than a figure that could be 10% out.
+  unit cost rather than a figure that could be 10% out. The exception is a receipt whose own total says it
+  includes GST, such as a supermarket tax invoice: when its lines, bags and delivery add up to that total to
+  the cent, the line prices are GST-inclusive and are filled in.
 - **A product or supplier is only ever suggested from your own list**, and a suggestion you do not want is
   just an edit away. The line always keeps the text the receipt printed.
 - **If the receipt cannot be read** you are told so and nothing else happens: enter the purchase manually.
