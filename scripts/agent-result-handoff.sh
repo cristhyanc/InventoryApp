@@ -11,11 +11,13 @@
 # Usage (from a checkout of the trusted starting commit, with GH_TOKEN able to read Actions):
 #   agent-result-handoff.sh restore <artifact-name>
 #
-# Writes to $GITHUB_OUTPUT: restored, branch, head_sha, worktree, has_bundle.
-# Copies run-status, pr-title and pr-body.md, when present, to .agent-run-status, .agent-pr-title
-# and .agent-pr-body.md in the working tree (untracked; never committed or executed).
-# Every value in the artifact is untrusted: callers must still verify ancestry, protected paths
-# and branch names before publishing.
+# Writes to $GITHUB_OUTPUT: restored, branch, head_sha, worktree, has_bundle, metadata_dir.
+# The run files (run-status, pr-title, pr-body.md) stay in metadata_dir, a private directory under
+# $RUNNER_TEMP outside the checkout; nothing from the artifact is written into the working tree.
+# Before anything is checked out, the new commits must descend from the trusted starting commit and
+# must not touch .github, .agent-* or inventory.db, so a crafted tree (for example a symlink to
+# .git/config) is never materialised. Every value in the artifact is untrusted: callers still verify
+# the branch name and the run files before publishing.
 set -euo pipefail
 
 fail() { echo "::error::$1"; exit 1; }
@@ -76,15 +78,23 @@ worktree="$(head -n 1 "$result/worktree")"
 
 safe_git() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 
+base_sha="$(safe_git rev-parse --verify 'HEAD^{commit}')"
 has_bundle=false
 if [[ -f "$result/result.bundle" ]]; then
   [[ -n "$branch" ]] || fail "A result bundle needs a branch."
   has_bundle=true
   safe_git bundle verify --quiet "$result/result.bundle" >/dev/null 2>&1 || fail "The result bundle does not apply to the trusted starting commit."
-  safe_git fetch --quiet --no-tags "$result/result.bundle" "refs/heads/$branch:refs/heads/$branch" \
+  # Fetched into a private ref, not a branch, so a refused result leaves the checkout untouched.
+  safe_git fetch --quiet --no-tags "$result/result.bundle" "refs/heads/$branch:refs/agent-result/head" \
     || fail "The result bundle does not contain branch $branch."
-  [[ "$(safe_git rev-parse --verify "refs/heads/$branch^{commit}")" == "$head_sha" ]] || fail "The result bundle does not match the reported head."
-  safe_git checkout --quiet "$branch" --
+  [[ "$(safe_git rev-parse --verify "refs/agent-result/head^{commit}")" == "$head_sha" ]] || fail "The result bundle does not match the reported head."
+  safe_git merge-base --is-ancestor "$base_sha" "$head_sha" || fail "The agent result does not descend from the trusted starting commit."
+  while IFS= read -r commit; do
+    protected_bytes="$(safe_git diff-tree --root -r -m --no-commit-id --name-only -z "$commit" -- .github '.agent-*' inventory.db | wc -c)"
+    [[ "$protected_bytes" -eq 0 ]] || fail "Agent commit $commit touches .github, .agent-* or inventory.db; refusing to check it out."
+  done < <(safe_git rev-list "$base_sha..$head_sha")
+  safe_git update-ref -d refs/agent-result/head
+  safe_git checkout --quiet -B "$branch" "$head_sha" --
 else
   [[ "$(safe_git rev-parse HEAD)" == "$head_sha" ]] || fail "The agent reported a new head but uploaded no bundle."
   if [[ -n "$branch" ]]; then
@@ -92,17 +102,12 @@ else
   fi
 fi
 
-for entry in run-status pr-title pr-body.md; do
-  if [[ -f "$result/$entry" ]]; then
-    cp -- "$result/$entry" ".agent-$entry"
-  fi
-done
-
 {
   echo "restored=true"
   echo "branch=$branch"
   echo "head_sha=$head_sha"
   echo "worktree=$worktree"
   echo "has_bundle=$has_bundle"
+  echo "metadata_dir=$result"
 } >> "$GITHUB_OUTPUT"
 echo "Restored agent result: branch '${branch:-<none>}' at $head_sha (bundle: $has_bundle, working tree: $worktree)."

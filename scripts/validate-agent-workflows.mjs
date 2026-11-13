@@ -1282,9 +1282,10 @@ function verifyImplementationJob(implementationWorkflow) {
   const implementationResult = section(job, '      - name: Verify implementation result\n', '      - name: Create GitHub App token for implementation publish\n', 'agent-implement.yml implementation result');
   for (const required of [
     'id: implementation_result', '.agent-run-status', '[ -z "$(git ls-files -- .agent-run-status)" ]',
-    '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', '.agent-pr-title', '.agent-pr-body.md',
+    '[ "$(cat "$AGENT_METADATA/run-status")" = "blocked" ]', 'echo "blocked=true"', '"$AGENT_METADATA/pr-title"', '"$AGENT_METADATA/pr-body.md"',
+    'AGENT_METADATA: ${{ steps.restore.outputs.metadata_dir }}',
     'PR metadata scratch files must remain untracked', trustedScriptFetch(DOCUMENTATION_IMPACT_VALIDATOR, 'doc_impact'),
-    'node "$doc_impact" --pr-body .agent-pr-body.md',
+    'node "$doc_impact" --pr-body "$AGENT_METADATA/pr-body.md"',
     'git diff --quiet', 'git diff --cached --quiet', 'echo "ready=true"', 'echo "branch=$branch"', 'echo "head_sha=$head_sha"',
   ]) requireText(implementationResult, required, 'agent-implement.yml implementation result');
 
@@ -1298,9 +1299,14 @@ function verifyImplementationJob(implementationWorkflow) {
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     trustedScriptFetch(appPushRetryPath, 'publisher'),
     'AGENT_PUBLISH_BASE_SHA="$BASE_SHA" bash "$publisher" "https://github.com/${GITHUB_REPOSITORY}.git" "$HEAD_SHA:refs/heads/$BRANCH"',
-    'gh pr create', '--body-file .agent-pr-body.md', '.user.login == $author', '.head.sha == $sha',
+    'gh pr create', '--body-file "$AGENT_METADATA/pr-body.md"', 'AGENT_METADATA: ${{ steps.restore.outputs.metadata_dir }}', '.user.login == $author', '.head.sha == $sha',
     'echo "pr_number=$pr_number"', 'echo "head_sha=$HEAD_SHA"',
   ]) requireText(implementationPublish, required, 'agent-implement.yml implementation publish');
+  // The run files come from the restore step's private directory, never from the restored checkout.
+  for (const forbidden of ['cat .agent-', '--body-file .agent-', '--pr-body .agent-']) {
+    forbidText(implementationResult, forbidden, 'agent-implement.yml implementation result');
+    forbidText(implementationPublish, forbidden, 'agent-implement.yml implementation publish');
+  }
 
   for (const forbidden of ['Run Claude Code architecture agent', 'architecture_app_token', 'Push architecture head']) {
     forbidText(job, forbidden, 'agent-implement.yml must not contain architecture execution');
@@ -1614,7 +1620,7 @@ function jobOutputs(job, label) {
   const match = /\n {4}outputs:\n((?: {6}[A-Za-z0-9_-]+: .*\n)+)/.exec(job);
   if (!match) return [];
   return match[1].trimEnd().split('\n').map((line) => {
-    const [, name, value] = line.match(/^ {6}([A-Za-z0-9_-]+): (.*)$/) ?? [];
+    const [, name, value] = /^ {6}([A-Za-z0-9_-]+): (.*)$/.exec(line) ?? [];
     if (!name) throw new Error(`${label}: unreadable output line ${line}`);
     return { name, value };
   });
@@ -1681,7 +1687,11 @@ export function verifyAgentPublishIsolation(read = readRepositoryFile) {
   for (const required of [
     'set -euo pipefail', 'python3 -I', 'stat.S_ISLNK(mode)', '"branch", "head_sha", "worktree", "result.bundle", "run-status", "pr-title", "pr-body.md"',
     '[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]', 'bundle verify', 'core.hooksPath=/dev/null', 'select(.expired == false)',
+    'merge-base --is-ancestor "$base_sha" "$head_sha"', 'echo "metadata_dir=$result"',
+    "diff-tree --root -r -m --no-commit-id --name-only -z \"$commit\" -- .github '.agent-*' inventory.db",
   ]) requireText(handoff, required, HANDOFF_SCRIPT);
+  requireOrder(handoff, "-- .github '.agent-*' inventory.db", 'checkout --quiet -B "$branch" "$head_sha"', HANDOFF_SCRIPT, 'protected paths must be refused before the result is checked out.');
+  for (const forbidden of ['cp -- "$result/', '> ".agent-', '.agent-$entry']) forbidText(handoff, forbidden, `${HANDOFF_SCRIPT} must not write into the checkout`);
 }
 
 export function runContractChecks({ read = readRepositoryFile } = {}) {

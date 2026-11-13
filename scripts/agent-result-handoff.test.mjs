@@ -4,7 +4,7 @@
 // script, including an agent environment that was poisoned in every way the agent job allows.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,10 +100,16 @@ describe('agent result handoff', () => {
     execFileSync('python3', ['-I', '-c', 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "a").write(sys.argv[2], "result.bundle")', archive, join(root, 'result.bundle')]);
     const result = restore(archive);
     assert.equal(result.status, 0, result.stderr + result.stdout);
-    assert.deepEqual(outputs(output), { restored: 'true', branch: BRANCH, head_sha: head, worktree: 'clean', has_bundle: 'true' });
+    const values = outputs(output);
+    const { metadata_dir: metadata, ...rest } = values;
+    assert.deepEqual(rest, { restored: 'true', branch: BRANCH, head_sha: head, worktree: 'clean', has_bundle: 'true' });
     assert.equal(git(['rev-parse', 'HEAD']), head);
     assert.equal(git(['branch', '--show-current']), BRANCH);
-    assert.equal(readFileSync(join(git(['rev-parse', '--show-toplevel']), '.agent-run-status'), 'utf8'), 'success\n');
+    // The run files stay in a private directory outside the checkout; nothing is written into the tree.
+    assert.ok(metadata.startsWith(root) && !metadata.startsWith(git(['rev-parse', '--show-toplevel'])));
+    assert.equal(readFileSync(join(metadata, 'run-status'), 'utf8'), 'success\n');
+    assert.equal(readFileSync(join(metadata, 'pr-title'), 'utf8'), 'Fix it\n');
+    assert.equal(git(['status', '--porcelain', '--ignored']), '');
   }));
 
   it('restores a result with no new commits on the starting commit', () => fixture(({ root, start, restore, output, git }) => {
@@ -212,7 +218,37 @@ describe('poisoned agent environment', () => {
     assert.ok(!existsSync(marker), `poisoned agent state ran in the publish job: ${existsSync(marker) ? readFileSync(marker, 'utf8') : ''}`);
   }));
 
-  it('still refuses a poisoned result that touches workflow files', () => fixture(({ root, agentRepo, start, commit, restore, output, publishRepo }) => {
+  it('refuses a bundle that commits a run-file symlink into .git before anything is checked out or written', () => fixture(({ root, agentRepo, start, restore, output, publishRepo, git }) => {
+    // The bundle commits .agent-pr-body.md as a symlink to .git/config, and the artifact carries an
+    // otherwise valid pr-body.md whose content would configure a command if it ever reached .git/config.
+    const marker = join(root, 'configured-command-ran');
+    symlinkSync('.git/config', join(agentRepo, '.agent-pr-body.md'));
+    execFileSync('git', ['add', '.agent-pr-body.md'], { cwd: agentRepo });
+    execFileSync('git', ['commit', '--quiet', '-m', 'symlink'], { cwd: agentRepo });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: agentRepo, encoding: 'utf8' }).trim();
+    execFileSync('git', ['bundle', 'create', join(root, 'result.bundle'), `${start}..refs/heads/${BRANCH}`], { cwd: agentRepo, stdio: 'ignore' });
+    const archive = join(root, 'result.zip');
+    zip(archive, [
+      ['branch', BRANCH], ['head_sha', head], ['worktree', 'clean'], ['run-status', 'success'], ['pr-title', 'Fix'],
+      ['pr-body.md', `[core]\n\tfsmonitor = touch '${marker}'\n\tpager = touch '${marker}'\n[diff]\n\texternal = touch '${marker}'\n`],
+    ]);
+    execFileSync('python3', ['-I', '-c', 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "a").write(sys.argv[2], "result.bundle")', archive, join(root, 'result.bundle')]);
+    const configBefore = readFileSync(join(publishRepo, '.git', 'config'), 'utf8');
+
+    const result = restore(archive);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /touches \.github, \.agent-\* or inventory\.db; refusing to check it out/);
+    assert.equal(readFileSync(join(publishRepo, '.git', 'config'), 'utf8'), configBefore);
+    assert.equal(git(['rev-parse', 'HEAD']), start);
+    assert.ok(!existsSync(join(publishRepo, '.agent-pr-body.md')));
+    assert.ok(!existsSync(output) || !readFileSync(output, 'utf8').includes('restored=true'));
+    // Later Git commands in the publish job run with the original configuration.
+    git(['diff', '--quiet']);
+    git(['diff', '--cached', '--quiet']);
+    assert.ok(!existsSync(marker));
+  }));
+
+  it('refuses a poisoned result that touches workflow files before checking it out', () => fixture(({ root, agentRepo, start, commit, restore, git }) => {
     commit('.github/workflows/evil.yml');
     const agentTemp = join(root, 'agent-temp');
     mkdirSync(agentTemp);
@@ -222,11 +258,10 @@ describe('poisoned agent environment', () => {
     assert.equal(packaged.status, 0, packaged.stderr);
     const archive = join(root, 'artifact.zip');
     zipDirectory(archive, join(agentTemp, 'agent-result'));
-    assert.equal(restore(archive).status, 0);
-    const verify = spawnSync('bash', ['-c', stepShell(repairPath, 'Verify repair result')], {
-      cwd: publishRepo, encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: output, HEAD_REF: BRANCH, START_SHA: start, AGENT_WORKTREE: 'clean' },
-    });
-    assert.notEqual(verify.status, 0);
-    assert.match(verify.stdout + verify.stderr, /touches \.github, \.agent-\* or inventory\.db/);
+    const restored = restore(archive);
+    assert.notEqual(restored.status, 0);
+    assert.match(restored.stdout + restored.stderr, /touches \.github, \.agent-\* or inventory\.db/);
+    assert.equal(git(['rev-parse', 'HEAD']), start);
+    assert.ok(!existsSync(join(root, 'publish', '.github')));
   }));
 });

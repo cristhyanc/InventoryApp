@@ -670,7 +670,7 @@ describe('architecture pass contract', () => {
     for (const required of [
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
       '[ -z "$(git ls-files -- .agent-run-status)" ]',
-      '[ "$(cat .agent-run-status)" = "blocked" ]',
+      '[ "$(cat "$AGENT_METADATA/run-status")" = "blocked" ]',
       'echo "blocked=true"', '.agent-pr-title', '.agent-pr-body.md', 'echo "ready=true"',
       'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}', '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {

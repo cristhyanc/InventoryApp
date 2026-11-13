@@ -566,6 +566,8 @@ jobs:
         if: success() && needs.implement.outputs.claude_outcome == 'success'
         env:
           AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
+          # The agent's run files, kept by the restore step in a private directory outside the checkout.
+          AGENT_METADATA: ${{ steps.restore.outputs.metadata_dir }}
         run: |
           set -euo pipefail
           {
@@ -577,9 +579,9 @@ jobs:
 
           branch="$(git branch --show-current)"
           if [ "$branch" = "develop" ] &&
-             [ -f .agent-run-status ] &&
+             [ -f "$AGENT_METADATA/run-status" ] &&
              [ -z "$(git ls-files -- .agent-run-status)" ] &&
-             [ "$(cat .agent-run-status)" = "blocked" ]; then
+             [ "$(cat "$AGENT_METADATA/run-status")" = "blocked" ]; then
             echo "blocked=true" >> "$GITHUB_OUTPUT"
             echo "Implementation agent intentionally stopped for a human decision."
             exit 0
@@ -590,18 +592,18 @@ jobs:
           [ "$AGENT_WORKTREE" = "clean" ] || { echo "::error::Tracked working-tree changes remain after implementation"; exit 1; }
           git diff --quiet || { echo "::error::Tracked working-tree changes remain after implementation"; exit 1; }
           git diff --cached --quiet || { echo "::error::Staged changes remain after implementation"; exit 1; }
-          [ -f .agent-pr-title ] || { echo "::error::Missing .agent-pr-title"; exit 1; }
-          [ -f .agent-pr-body.md ] || { echo "::error::Missing .agent-pr-body.md"; exit 1; }
+          [ -f "$AGENT_METADATA/pr-title" ] || { echo "::error::Missing .agent-pr-title"; exit 1; }
+          [ -f "$AGENT_METADATA/pr-body.md" ] || { echo "::error::Missing .agent-pr-body.md"; exit 1; }
           [ -z "$(git ls-files -- .agent-pr-title .agent-pr-body.md)" ] || { echo "::error::PR metadata scratch files must remain untracked"; exit 1; }
 
-          title="$(cat .agent-pr-title)"
+          title="$(cat "$AGENT_METADATA/pr-title")"
           [ -n "$title" ] || { echo "::error::PR title is empty"; exit 1; }
           [[ "$title" != *$'\n'* ]] || { echo "::error::PR title must be a single line"; exit 1; }
           [ "${#title}" -le 256 ] || { echo "::error::PR title is too long"; exit 1; }
           # Run the validator from this workflow's own commit, never the agent-edited copy.
           doc_impact="$RUNNER_TEMP/validate-documentation-impact.mjs"
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/validate-documentation-impact.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$doc_impact"
-          node "$doc_impact" --pr-body .agent-pr-body.md
+          node "$doc_impact" --pr-body "$AGENT_METADATA/pr-body.md"
 
           head_sha="$(git rev-parse HEAD)"
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve implementation HEAD"; exit 1; }
@@ -651,6 +653,7 @@ jobs:
           BRANCH: ${{ steps.implementation_result.outputs.branch }}
           HEAD_SHA: ${{ steps.implementation_result.outputs.head_sha }}
           BASE_SHA: ${{ needs.implement.outputs.base_sha }}
+          AGENT_METADATA: ${{ steps.restore.outputs.metadata_dir }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -678,8 +681,8 @@ jobs:
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
           AGENT_PUBLISH_BASE_SHA="$BASE_SHA" bash "$publisher" "https://github.com/${GITHUB_REPOSITORY}.git" "$HEAD_SHA:refs/heads/$BRANCH"
 
-          title="$(cat .agent-pr-title)"
-          pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --title "$title" --body-file .agent-pr-body.md)"
+          title="$(cat "$AGENT_METADATA/pr-title")"
+          pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --title "$title" --body-file "$AGENT_METADATA/pr-body.md")"
           pr_number="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')"
           [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "Could not determine created pull request number."
 
