@@ -9,13 +9,6 @@ export interface NayaxSalesImportResult {
   skipped: number;
 }
 
-export interface ImportedFileImportResult {
-  importedFiles: number;
-  importedReimbursements: number;
-  skippedFiles: number;
-  failedFiles: number;
-}
-
 /**
  * What `POST api/imports/reimbursement-report` answers with (issue #1149): the id of the job the
  * accepted upload became, and nothing else. The upload has imported nothing yet, so there is no
@@ -82,12 +75,15 @@ export interface ReimbursementImportJobDetail {
 }
 
 /**
- * The uploaded sales import, the pending reimbursement XML import, and the Reimbursement Report
- * ZIP upload with its job status reads.
+ * The uploaded sales import, and the Reimbursement Report ZIP upload with its job status reads.
  *
  * <p>There is no product catalogue import here: `POST api/imports/products` was replaced by the
  * catalogue review for every business in issue #739, so the catalogue is imported through
  * `CatalogueReviewService` instead - previewed, decided per entry and applied.</p>
+ *
+ * <p>And no pending-XML import either: `POST api/imports/pending-xml` read reimbursement reports
+ * from a folder on the server, which issue #1237 retired. A reimbursement report is uploaded
+ * through the Reimbursement Report page and nowhere else.</p>
  *
  * <p>It stays the sole authority for every import call the frontend makes (issue #1152): the
  * Reimbursement Report page reads and writes through the three methods below and reimplements no
@@ -105,10 +101,6 @@ export class ImportService {
     const formData = new FormData();
     formData.append('file', file, file.name);
     return this.http.post<NayaxSalesImportResult>(`${this.baseUrl}/nayax-sales`, formData);
-  }
-
-  importPendingXmlFiles(): Observable<ImportedFileImportResult> {
-    return this.http.post<ImportedFileImportResult>(`${this.baseUrl}/pending-xml`, {});
   }
 
   /**

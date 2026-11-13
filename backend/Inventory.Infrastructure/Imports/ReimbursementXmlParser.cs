@@ -11,12 +11,11 @@ namespace Inventory.Infrastructure.Imports;
 /// <summary>
 /// The one parser of Nayax reimbursement report XML (issue #299, extracted here by issue #1149).
 ///
-/// <para><strong>It is shared, and that is the point.</strong> There are two ways a reimbursement
-/// report reaches this application - the server's pending folder
-/// (<see cref="FileSystemPendingReimbursementXmlSource"/>) and an uploaded Nayax ZIP
-/// (<see cref="ZipReimbursementArchiveReader"/>) - and a second parser would be a second set of
-/// decisions about what a settlement figure means. Every one of those decisions lives here, and
-/// neither caller restates any of them.</para>
+/// <para><strong>It is the one parser, and that is the point.</strong> It was extracted when a
+/// reimbursement report reached this application two ways - the server's pending folder (retired by
+/// issue #1237) and an uploaded Nayax ZIP (<see cref="ZipReimbursementArchiveReader"/>) - because a
+/// second parser would be a second set of decisions about what a settlement figure means. Every one
+/// of those decisions lives here, and the reader restates none of them.</para>
 ///
 /// <para><strong>The decisions imported financial data depends on, unchanged since issue
 /// #299.</strong> Attribute values are read with <see cref="CultureInfo.InvariantCulture"/>; a date
@@ -29,9 +28,8 @@ namespace Inventory.Infrastructure.Imports;
 ///
 /// <para><strong>It throws rather than deciding what a failure means.</strong> Translating a
 /// malformed file into "this file failed" is the calling adapter's job at its own boundary
-/// (docs/architecture.md § Exception ownership table), because the two callers report it
-/// differently: the pending folder leaves the file in place and counts it, and an uploaded archive
-/// records a per-file outcome against the job.</para>
+/// (docs/architecture.md § Exception ownership table): an uploaded archive records a per-file
+/// outcome against the job and imports the reports beside it.</para>
 /// </summary>
 public static class ReimbursementXmlParser
 {

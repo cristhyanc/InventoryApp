@@ -1,8 +1,8 @@
 namespace Inventory.Application.Imports;
 
 /// <summary>
-/// One pending reimbursement file, already read and parsed by the
-/// <see cref="IPendingReimbursementXmlSource"/> adapter (issue #299).
+/// One reimbursement report file, already read and parsed by the Infrastructure adapter that
+/// produced it (issue #299; since issue #1237 that is the uploaded-archive reader alone).
 ///
 /// These are raw imported facts, deliberately kept separate from any derived accounting value:
 /// the use case decides what to do with the file, the persistence port writes exactly these

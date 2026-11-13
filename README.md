@@ -1307,7 +1307,7 @@ Super Admin menu switch as Imports — switching `admin.imports` off hides both 
 [Super Admin menu visibility](#super-admin-menu-visibility)). Its address still opens if you go to it
 directly, and every endpoint behind it checks the same access itself.
 
-The page has three things on it:
+The page has two things on it:
 
 - **Upload the reimbursement report.** Choose the ZIP and press **Upload**. Upload it **exactly as
   Nayax emails it** — do not unzip it, rename it or take files out of it. An accepted upload says so
@@ -1319,12 +1319,13 @@ The page has three things on it:
   failed file and the short reason recorded for it. While an upload is `Queued` or `Processing` the
   list refreshes itself; once nothing is running it stops, and leaving the page and coming back shows
   the current state. Nothing financial is on the page: no figure, no payment detail and no XML.
-- **Import XML files.** The older pending-folder import, moved here unchanged from Admin → Imports:
-  it processes reimbursement XML files already on the server and reports how many files and
-  reimbursements it imported.
 
-Both uploads and the pending-XML import are unavailable during a read-only support session, which the
-page says; the recent uploads are still shown, because reading them changes nothing.
+Uploading is the only way a reimbursement report enters the app (issue #1237). The older **Import XML
+files** button, which imported reimbursement XML files somebody had put on the server, is gone; if a
+report has not been imported yet, upload it here.
+
+Uploading is unavailable during a read-only support session, which the page says; the recent uploads
+are still shown, because reading them changes nothing.
 
 ### What you upload, and what is refused
 
@@ -2303,8 +2304,9 @@ other form page in the application behaves.
 The Purchases list shows **10 purchases per page** by default, newest first, with a per-page choice of 5, 10,
 20, 50 or 100 and **Previous** / **Next** below the table (issue #1209). Every visit starts on page 1. After a
 Delete or an Add document the list stays on the page you were on, or moves to the last page if that page no
-longer exists. Document thumbnails are downloaded only for the purchases on the page shown, so a long purchase
-history no longer slows the page down.
+longer exists. The list itself never downloads a receipt (issue #1234): a row with a document shows a
+lightweight attachment icon built from the list's own metadata, whatever the page size or page shown, and the
+file is fetched only when you open it, exactly as it always has been.
 
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
 both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue

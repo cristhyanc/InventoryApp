@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { BusinessTimeZoneService } from '../../../../formatting/business-time-zone.service';
 import { ImportService } from '../../../../services/import.service';
 import { ToastService } from '../../../../services/toast.service';
@@ -42,8 +42,9 @@ function button(host: HTMLElement, label: string): HTMLButtonElement | undefined
 afterEach(() => TestBed.resetTestingModule());
 
 /**
- * The dedicated Reimbursement Report page (issue #1152): the ZIP upload, the recent uploads list and
- * the pending-XML action that moved here from Admin → Imports.
+ * The dedicated Reimbursement Report page (issue #1152): the ZIP upload and the recent uploads
+ * list. The pending-XML action that used to stand beside them went with the server-folder import
+ * issue #1237 retired.
  */
 describe('ReimbursementReportPageComponent (issue #1152)', () => {
   it('names itself and links back to the Imports page it is reached from', async () => {
@@ -78,58 +79,27 @@ describe('ReimbursementReportPageComponent (issue #1152)', () => {
     expect((list.componentInstance as ReimbursementImportJobsComponent).reloadToken).not.toBe(before);
   });
 
-  it('runs the pending reimbursement XML import and reports the counts it imported', async () => {
-    const importPendingXmlFiles = jest.fn(() =>
-      of({ importedFiles: 2, importedReimbursements: 4, skippedFiles: 1, failedFiles: 0 })
-    );
-    const success = jest.fn();
-    const { fixture, host } = await render({ importPendingXmlFiles }, { success });
+  /**
+   * The server-folder import is retired (issue #1237): the page offers the upload and nothing else,
+   * so there is no button here that imports a file nobody on this page chose.
+   */
+  it('offers no XML import button of its own', async () => {
+    const { host } = await render();
 
-    button(host, 'Import XML files')?.click();
-
-    expect(importPendingXmlFiles).toHaveBeenCalledTimes(1);
-    expect(success).toHaveBeenCalledWith('Imported 2 file(s) and 4 reimbursement(s).');
-    expect(fixture.componentInstance.xmlLoading).toBe(false);
-  });
-
-  it('reports the API error and clears loading when the pending XML import fails', async () => {
-    const importPendingXmlFiles = jest.fn(() => throwError(() => ({ error: 'No pending XML files found.' })));
-    const error = jest.fn();
-    const { fixture } = await render({ importPendingXmlFiles }, { error });
-
-    fixture.componentInstance.importXml();
-
-    expect(error).toHaveBeenCalledWith('No pending XML files found.');
-    expect(fixture.componentInstance.xmlLoading).toBe(false);
-  });
-
-  it('falls back to the generic XML failure message when the API returns no body', async () => {
-    const importPendingXmlFiles = jest.fn(() => throwError(() => ({})));
-    const error = jest.fn();
-    const { fixture } = await render({ importPendingXmlFiles }, { error });
-
-    fixture.componentInstance.importXml();
-
-    expect(error).toHaveBeenCalledWith('The XML import could not be started.');
+    expect(button(host, 'Import XML files')).toBeUndefined();
   });
 
   /**
-   * A read-only support session (issue #661) refuses every `POST` centrally, so both writes on this
-   * page are withheld - and the handler checks it too, so the action is unavailable rather than
-   * merely inert. The job list is a `GET`, which a session may make, so it is left alone.
+   * A read-only support session (issue #661) refuses every `POST` centrally, so the upload on this
+   * page is withheld. The job list is a `GET`, which a session may make, so it is left alone.
    */
   describe('in a support session', () => {
-    it('says so and withholds both of the page\'s writes', async () => {
-      const importPendingXmlFiles = jest.fn();
-      const { fixture, host } = await render({ importPendingXmlFiles }, undefined, of(true));
+    it('says so and withholds the page\'s upload', async () => {
+      const { fixture, host } = await render({}, undefined, of(true));
       const upload = fixture.debugElement.query(By.directive(ReimbursementReportUploadComponent));
 
       expect(host.querySelector('[data-testid="reimbursement-support-session-notice"]')).not.toBeNull();
-      expect(button(host, 'Import XML files')?.disabled).toBe(true);
       expect((upload.componentInstance as ReimbursementReportUploadComponent).disabled).toBe(true);
-
-      fixture.componentInstance.importXml();
-      expect(importPendingXmlFiles).not.toHaveBeenCalled();
     });
 
     it('still reads the recent uploads, because the status endpoint is a GET', async () => {
@@ -139,12 +109,11 @@ describe('ReimbursementReportPageComponent (issue #1152)', () => {
       expect(reimbursementReportJobs).toHaveBeenCalled();
     });
 
-    it('leaves both controls available while no session is active', async () => {
+    it('leaves the upload available while no session is active', async () => {
       const { fixture, host } = await render({}, undefined, of(false));
       const upload = fixture.debugElement.query(By.directive(ReimbursementReportUploadComponent));
 
       expect(host.querySelector('[data-testid="reimbursement-support-session-notice"]')).toBeNull();
-      expect(button(host, 'Import XML files')?.disabled).toBe(false);
       expect((upload.componentInstance as ReimbursementReportUploadComponent).disabled).toBe(false);
     });
   });

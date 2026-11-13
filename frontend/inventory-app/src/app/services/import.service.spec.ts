@@ -63,14 +63,15 @@ describe('ImportService Reimbursement Report calls (issue #1152)', () => {
     expect(http.post.mock.calls[0][0]).toBe('https://api.example.com/imports/reimbursement-report');
   });
 
-  /** The two calls that were already here are untouched by the page that moved (issue #1152). */
-  it('leaves the Nayax sales and pending-XML calls exactly as they were', () => {
+  /**
+   * The Nayax sales call is untouched by the page that moved (issue #1152) and by the server-folder
+   * import's retirement (issue #1237): it is the only `POST` left here besides the ZIP upload.
+   */
+  it('leaves the Nayax sales call exactly as it was', () => {
     const { service, http } = createService();
 
-    service.importPendingXmlFiles().subscribe();
     service.importNayaxSales(new File([], 'sales.csv')).subscribe();
 
-    expect(http.post.mock.calls[0][0]).toBe('/api/imports/pending-xml');
-    expect(http.post.mock.calls[1][0]).toBe('/api/imports/nayax-sales');
+    expect(http.post.mock.calls[0][0]).toBe('/api/imports/nayax-sales');
   });
 });

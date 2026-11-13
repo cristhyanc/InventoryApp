@@ -355,8 +355,8 @@ describe('PurchaseListComponent write controls during a support session (issue #
 
 /**
  * Paging (issue #1209): the list is read once and paged in the browser with the shared
- * `ListPaginationComponent`, and thumbnails are downloaded only for the image documents on the page
- * shown.
+ * `ListPaginationComponent`. The list never downloads a receipt itself (issue #1234): rows show an
+ * attachment icon built from list metadata, and a file is fetched only once the operator opens it.
  */
 describe('PurchaseListComponent pagination (issue #1209)', () => {
   const originalCreate = URL.createObjectURL;
@@ -365,12 +365,11 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
 
   beforeEach(() => {
     created = 0;
-    URL.createObjectURL = jest.fn(() => `blob:thumb-${++created}`);
+    URL.createObjectURL = jest.fn(() => `blob:opened-${++created}`);
     URL.revokeObjectURL = jest.fn();
   });
 
   afterEach(() => {
-    // Destroy the fixture (which revokes its thumbnails) while the URL stubs are still in place.
     TestBed.resetTestingModule();
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
@@ -497,32 +496,47 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
     expect(getAll).toHaveBeenCalledTimes(1);
   });
 
-  it('downloads thumbnails only for the image documents on the page shown', async () => {
+  it('requests no purchase attachment and creates no object URL on initial load, refresh, pagination or a page-size change, even for rows with an image receipt', async () => {
     // Odd ids have an image, even ids a PDF; 3 and 13 have none at all.
     const list = many(15, (id) => (id === 3 || id === 13 ? { ...withoutDocument(), title: `Purchase ${id}` } : id % 2 ? image(id) : {}));
-    const { fixture, host } = await render(list);
+    const { fixture, host, getAll } = await render(list);
 
-    expect(fileIds()).toEqual([1, 5, 7, 9]);
+    expect(fileIds()).toEqual([]);
 
     click(host, 'list-pagination-next');
     fixture.detectChanges();
+    chooseSize(host, 5);
+    fixture.detectChanges();
+    fixture.componentInstance.load();
+    fixture.detectChanges();
 
-    expect(fileIds()).toEqual([1, 5, 7, 9, 11, 15]);
+    expect(fileIds()).toEqual([]);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(getAll).toHaveBeenCalledTimes(2);
   });
 
-  it("releases the previous page's thumbnail URLs when the page turns, and the rest on leaving", async () => {
-    const { fixture, host } = await render(many(12, image));
-    expect(URL.createObjectURL).toHaveBeenCalledTimes(10);
-    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+  it('shows an accessible attachment control built from list metadata for both an image and a PDF receipt, with no thumbnail image rendered', async () => {
+    const { host } = await render([purchase({ id: 1, title: 'Image receipt', ...image(1) }), purchase({ id: 2, title: 'PDF receipt' })]);
 
-    click(host, 'list-pagination-next');
-    fixture.detectChanges();
+    expect(host.querySelector('[aria-label="Open document for Image receipt"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Open document for PDF receipt"]')).not.toBeNull();
+    expect(host.querySelectorAll('img')).toHaveLength(0);
+    expect(fileIds()).toEqual([]);
+  });
 
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(10);
-    expect(URL.createObjectURL).toHaveBeenCalledTimes(12);
+  it('fetches the file and opens it only once the operator activates the attachment control, and revokes its object URL on teardown', async () => {
+    const { fixture, host } = await render([purchase({ id: 1, title: 'Weekly restock', ...image(1) })]);
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+
+    (host.querySelector('[aria-label="Open document for Weekly restock"]') as HTMLButtonElement).click();
+
+    expect(fileIds()).toEqual([1]);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith('blob:opened-1', '_blank', 'noopener');
 
     fixture.destroy();
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(12);
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
   });
 
   it('stays on the page shown after a re-read that keeps it', async () => {
@@ -552,7 +566,7 @@ describe('PurchaseListComponent pagination (issue #1209)', () => {
     expect(rowTitles(host)).toHaveLength(10);
   });
 
-  it('starts no thumbnail download and creates no object URL when the list arrives after the page was left', async () => {
+  it('starts no file request and creates no object URL when the list arrives after the page was left', async () => {
     const late = new Subject<Purchase[]>();
     const { fixture, getAll } = await render([]);
     getAll.mockReturnValueOnce(late.asObservable());

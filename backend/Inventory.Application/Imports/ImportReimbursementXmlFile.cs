@@ -26,24 +26,22 @@ public readonly record struct ReimbursementXmlFileImportOutcome(
 /// hash dedupe, then the atomic write of the file with its reimbursement graph, then the settlement
 /// coverage the committed file proves.
 ///
-/// <para><strong>Why it is its own type.</strong> There are now two ways a reimbursement report
-/// reaches this application - the server's pending folder
-/// (<see cref="ImportPendingReimbursementXmlFiles"/>, issue #299) and an uploaded Nayax ZIP (issue
-/// #1149) - and both must do exactly the same thing with a file once it has been parsed. Two copies
-/// of "skip the duplicate, write the rows, record the coverage" is how a settlement import quietly
-/// starts recording coverage on one path and not the other, so the steps live here and each caller
-/// decides only where its files come from and what it reports.</para>
+/// <para><strong>Why it is its own type.</strong> It was extracted when a reimbursement report
+/// reached this application two ways - the server's pending folder (issue #299, retired by issue
+/// #1237) and an uploaded Nayax ZIP (issue #1149) - because both had to do exactly the same thing
+/// with a file once it had been parsed. Two copies of "skip the duplicate, write the rows, record
+/// the coverage" is how a settlement import quietly starts recording coverage on one path and not
+/// the other. The upload is now the only caller, and the steps stay here: what a parsed file becomes
+/// is one decision, separate from where the file came from and what the caller reports.</para>
 ///
-/// <para><strong>It deliberately owns no transaction.</strong> The pending-folder import commits
-/// each file as the store's own single <c>SaveChanges</c>, exactly as it did before this type
-/// existed; the uploaded-archive worker wraps this call and its own per-file outcome row in one
-/// explicit transaction, so a file is never committed without the record of what happened to it.
-/// Which unit of work a caller needs is the caller's own decision.</para>
+/// <para><strong>It deliberately owns no transaction.</strong> The uploaded-archive worker wraps
+/// this call and its own per-file outcome row in one explicit transaction, so a file is never
+/// committed without the record of what happened to it. Which unit of work a caller needs is the
+/// caller's own decision.</para>
 ///
 /// <para><strong>A persistence failure is not caught here</strong>, exactly as it was not before: it
-/// propagates to the caller, which is what lets the pending import keep reporting a database problem
-/// as a failure rather than as a handful of failed files, and lets the worker roll its transaction
-/// back and count an attempt.</para>
+/// propagates to the caller, which lets the worker roll its transaction back and count an attempt
+/// rather than record the file as one more failed entry.</para>
 /// </summary>
 public sealed class ImportReimbursementXmlFile
 {
@@ -86,9 +84,8 @@ public sealed class ImportReimbursementXmlFile
     /// <summary>
     /// Records the settlement periods a committed file accounted for (issue #730, parent #329
     /// decision P9) - <b>one coverage row per period the file proves, never one row spanning them
-    /// all</b>. Moved here unchanged in behaviour from
-    /// <see cref="ImportPendingReimbursementXmlFiles"/> when issue #1149 gave the step a second
-    /// caller.
+    /// all</b>. Moved here unchanged in behaviour from the pending-folder import (issue #299, since
+    /// retired) when issue #1149 gave the step a second caller.
     ///
     /// <para>Each reimbursement row declares its own settled period through
     /// <c>ReimbursementStartDate</c>/<c>ReimbursementEndDate</c>, which is the provider's own

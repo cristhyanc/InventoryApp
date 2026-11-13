@@ -40,9 +40,10 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
  *
  * <p><strong>And so does the reimbursement report</strong> (issue #1152):
  * `/admin/imports/reimbursement-report` (`ReimbursementReportPageComponent`) hosts #1149's ZIP
- * upload, its job status list **and** the pending reimbursement XML import that used to be the
- * `Import XML files` card here, so this page's Reimbursement Report card is a link to it and runs
- * neither. The Nayax sales upload and the timestamp repair are unchanged.</p>
+ * upload and its job status list, so this page's Reimbursement Report card is a link to it and runs
+ * no reimbursement import of its own. The `Import XML files` card that used to stand here moved
+ * there with issue #1152 and went with the server-folder import issue #1237 retired. The Nayax
+ * sales upload and the timestamp repair are unchanged.</p>
  *
  * <p><strong>The Nayax sales card carries an inline plan lock</strong> (issue #979), and only that
  * card: this is a mixed page, so the two links beside it and the client-side template download are
