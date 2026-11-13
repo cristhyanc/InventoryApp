@@ -185,13 +185,17 @@ function json(route: Route, body: unknown, status = 200): Promise<void> {
 
 type Plan = 'Pro' | 'Starter';
 
-async function answerApi(page: Page, plan: Plan): Promise<void> {
+async function answerApi(page: Page, plan: Plan, holdScan = false): Promise<void> {
   await page.route('**/api/**', (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
 
     if (request.method() !== 'GET') {
       // The scan stores nothing; everything else is refused rather than photographed as a save.
+      if (path.endsWith('/purchases/scan') && holdScan) {
+        // Never answered, so the page stays on the reading progress for the photograph.
+        return new Promise<void>(() => undefined);
+      }
       return path.endsWith('/purchases/scan')
         ? json(route, scanDraft)
         : json(route, { title: 'This visual run makes no writes.' }, 500);
@@ -215,9 +219,9 @@ async function answerApi(page: Page, plan: Plan): Promise<void> {
   });
 }
 
-async function open(page: Page, width: number, plan: Plan = 'Pro'): Promise<void> {
+async function open(page: Page, width: number, plan: Plan = 'Pro', holdScan = false): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
-  await answerApi(page, plan);
+  await answerApi(page, plan, holdScan);
   await page.goto('/purchases/new');
   await page.addStyleTag({
     content: '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }'
@@ -321,6 +325,23 @@ test.describe('Scan receipt on Add Purchase (issue #1166)', () => {
       await expect(page.locator('[data-testid="purchase-receipt-scan-start"]')).toHaveText(/Scan receipt/);
       await expect(page.locator('[data-testid="purchase-scanned-receipt"]')).toHaveCount(0);
       await capture(page, width, 'add-purchase-scan-ready');
+    });
+
+    test(`the estimated progress bar while the receipt is read, at ${width}px`, async ({ page }) => {
+      await open(page, width, 'Pro', true);
+      await page.locator('[data-testid="purchase-receipt-scan-input"]').setInputFiles({
+        name: 'sample-receipt.png',
+        mimeType: 'image/png',
+        buffer: await drawnReceipt(page)
+      });
+
+      const bar = page.locator('[data-testid="purchase-receipt-scan-progress-bar"]');
+      await expect(bar).toBeVisible();
+      await expect(page.locator('[data-testid="purchase-receipt-scan-cancel"]')).toBeVisible();
+      await expect
+        .poll(() => bar.evaluate((element) => (element as HTMLProgressElement).value), { timeout: 15_000 })
+        .toBeGreaterThan(30);
+      await capture(page, width, 'add-purchase-scan-progress');
     });
 
     test(`the filled form, with the receipt beside the lines, at ${width}px`, async ({ page }) => {

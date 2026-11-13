@@ -112,6 +112,86 @@ describe('PurchaseReceiptScanComponent (issue #1166)', () => {
     expect(byTestId('purchase-receipt-scan-cancel')).not.toBeNull();
   });
 
+  describe('estimated progress bar', () => {
+    afterEach(() => jest.useRealTimers());
+
+    const bar = () => byTestId('purchase-receipt-scan-progress-bar');
+    const valueNow = () => (bar() as HTMLProgressElement | null)?.value ?? Number.NaN;
+
+    it('rises while the receipt is read, never shows finished, and says when a read runs long', async () => {
+      const pending = new Subject<PurchaseScanDraft>();
+      await render({ scanResult: pending });
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+      await pick();
+
+      expect(valueNow()).toBe(0);
+      expect(byTestId('purchase-receipt-scan-progress-hint')?.textContent).toContain('20 to 30 seconds');
+
+      jest.advanceTimersByTime(24_000);
+      fixture.detectChanges();
+      const atTypicalRead = valueNow();
+      expect(atTypicalRead).toBeGreaterThan(70);
+      expect(atTypicalRead).toBeLessThan(95);
+
+      jest.advanceTimersByTime(36_000);
+      fixture.detectChanges();
+      expect(valueNow()).toBeGreaterThan(atTypicalRead);
+      expect(valueNow()).toBeLessThanOrEqual(95);
+      expect(byTestId('purchase-receipt-scan-progress-hint')?.textContent).toContain('up to a minute');
+    });
+
+    it('goes away when the draft arrives', async () => {
+      const pending = new Subject<PurchaseScanDraft>();
+      await render({ scanResult: pending });
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+      await pick();
+      jest.advanceTimersByTime(10_000);
+
+      pending.next(draft());
+      fixture.detectChanges();
+
+      expect(bar()).toBeNull();
+      expect(scanned).toHaveLength(1);
+    });
+
+    it.each([
+      ['completes', (first: Subject<PurchaseScanDraft>) => first.next(draft())],
+      ['fails', (first: Subject<PurchaseScanDraft>) => first.error(new HttpErrorResponse({ status: 422 }))]
+    ])(
+      'a scan that %s stops its own bar at once, so the next scan starts clean',
+      async (_outcome, finish: (first: Subject<PurchaseScanDraft>) => void) => {
+        const first = new Subject<PurchaseScanDraft>();
+        const second = new Subject<PurchaseScanDraft>();
+        await render();
+        const answers = [first, second];
+        scan.mockImplementation(() => answers.shift());
+        jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+
+        await pick();
+        // A long first read, stopped half way between two ticks of its timer.
+        jest.advanceTimersByTime(40_100);
+        fixture.detectChanges();
+        expect(byTestId('purchase-receipt-scan-progress-hint')?.textContent).toContain('up to a minute');
+
+        finish(first);
+        fixture.detectChanges();
+        await pick();
+        expect(scan).toHaveBeenCalledTimes(2);
+
+        // The first scan's timer would have ticked at 150 ms; the second's first tick is at 250 ms.
+        jest.advanceTimersByTime(200);
+        fixture.detectChanges();
+        expect(valueNow()).toBe(0);
+        expect(byTestId('purchase-receipt-scan-progress-hint')?.textContent).toContain('20 to 30 seconds');
+
+        jest.advanceTimersByTime(10_000);
+        fixture.detectChanges();
+        expect(valueNow()).toBeLessThan(50);
+        expect(byTestId('purchase-receipt-scan-progress-hint')?.textContent).toContain('20 to 30 seconds');
+      }
+    );
+  });
+
   it('stops waiting when Cancel is pressed, and ignores an answer that arrives afterwards', async () => {
     const pending = new Subject<PurchaseScanDraft>();
     await render({ scanResult: pending });
