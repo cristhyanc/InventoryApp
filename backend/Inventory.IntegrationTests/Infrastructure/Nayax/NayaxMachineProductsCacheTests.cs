@@ -30,6 +30,14 @@ public class NayaxMachineProductsCacheTests
 
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// How many times
+    /// <see cref="A_failed_read_reaches_every_caller_in_two_hundred_consecutive_executions"/> repeats
+    /// the failure-sharing scenario: the count issue #1235 asks for, kept here so the number a
+    /// reader sees is the number that runs.
+    /// </summary>
+    private const int FailureSharingExecutions = 200;
+
     [Fact]
     public async Task A_second_read_inside_sixty_seconds_answers_from_memory()
     {
@@ -132,16 +140,52 @@ public class NayaxMachineProductsCacheTests
             HttpStatusCode.ServiceUnavailable));
     }
 
+    /// <summary>
+    /// The determinism check of issue #1235, committed rather than reported once from one machine.
+    /// The scenario above is a race between three thread-pool callers and the moment the single read
+    /// is failed, so a join barrier that only usually held would still read as a green test: the
+    /// evidence that it always holds is the scenario repeated, and evidence nobody can rerun is not
+    /// evidence. <see cref="FailureSharingExecutions"/> consecutive executions of
+    /// <see cref="A_failed_read_reaches_every_caller_and_is_not_held"/> - each one three executions
+    /// of the scenario, once per failure it asserts - therefore run in every validation of this
+    /// repository, which costs a few seconds and fails the build the first time the barrier slips.
+    ///
+    /// <para>On its own:
+    /// <c>dotnet test backend/Inventory.IntegrationTests/Inventory.IntegrationTests.csproj --filter
+    /// "FullyQualifiedName~A_failed_read_reaches_every_caller_in_two_hundred_consecutive_executions"</c>
+    /// runs it for both caches.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_failed_read_reaches_every_caller_in_two_hundred_consecutive_executions()
+    {
+        for (var execution = 0; execution < FailureSharingExecutions; execution++)
+        {
+            await A_failed_read_reaches_every_caller_and_is_not_held();
+        }
+    }
+
     private static async Task AssertFailureIsSharedAndNotHeld(Exception failure)
     {
         var cache = new NayaxMachineProductsCache(new FakeClock(Now));
         var reader = new Reader(blockedCalls: [1]);
+        var joined = 0;
 
         var callers = Enumerable
             .Range(0, 3)
-            .Select(_ => Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None)))
+            .Select(_ => Task.Run(() =>
+            {
+                var caller = cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None);
+
+                // Recorded only once this caller has actually joined the single in-flight read - a
+                // caller that Task.Run schedules late must not be allowed to reach the cache only
+                // after the failure below has been released, which would start a fresh read instead
+                // of sharing the one being failed.
+                Interlocked.Increment(ref joined);
+                return caller;
+            }))
             .ToList();
 
+        await WaitUntil(() => Volatile.Read(ref joined) == callers.Count, "every caller to join the single in-flight read");
         await WaitUntil(() => reader.Waiting(1), "the single upstream read to start");
         reader.Fail(1, failure);
 
