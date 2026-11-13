@@ -126,10 +126,11 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+    # Only values the runner computes or that steps before the agent wrote. Anything a step after the
+    # agent writes is untrusted, so the publish job reads the agent's result from its artifact instead.
     outputs:
-      dispatch_architecture: ${{ steps.outcome.outputs.dispatch_architecture }}
-      pr_number: ${{ steps.outcome.outputs.pr_number }}
-      head_sha: ${{ steps.outcome.outputs.head_sha }}
+      base_sha: ${{ steps.starting_point.outputs.base_sha }}
+      claude_outcome: ${{ steps.claude.outcome }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -324,12 +325,114 @@ jobs:
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr list *),Bash(dotnet run *),Bash(dotnet exec *),Bash(dotnet msbuild *),Bash(npm --prefix frontend/inventory-app exec *)"
             "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
-      # Storage only: independent of clean-tree, validation claims and PR metadata.
-      - name: Inspect persistence candidate
-        id: persistence_candidate
+      # Hand-off only: this job holds no GitHub App credential. Its result reaches the separate publish job as
+      # plain data (a git bundle and a few text files); nothing a step after the agent writes is trusted there.
+      - name: Package implementation result for the publish job
+        id: package
         if: always() && steps.starting_point.outcome == 'success' && steps.claude.outcome != 'skipped'
         env:
           BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/agent-result"
+          mkdir "$out"
+          branch="$(git branch --show-current)"
+          head_sha="$(git rev-parse HEAD)"
+          printf '%s\n' "$branch" > "$out/branch"
+          printf '%s\n' "$head_sha" > "$out/head_sha"
+          if git diff --quiet && git diff --cached --quiet; then echo clean > "$out/worktree"; else echo dirty > "$out/worktree"; fi
+          if [ "$head_sha" != "$BASE_SHA" ] && [ -n "$branch" ]; then
+            git bundle create "$out/result.bundle" "$BASE_SHA..refs/heads/$branch"
+          fi
+          for entry in run-status pr-title pr-body.md; do
+            if [ -f ".agent-$entry" ] && [ ! -L ".agent-$entry" ] && [ -z "$(git ls-files -- ".agent-$entry")" ]; then
+              cp ".agent-$entry" "$out/$entry"
+            fi
+          done
+
+      - name: Upload implementation result for the publish job
+        if: always() && steps.package.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-result
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    name: Publish implementation from a separate trusted job
+    needs: [model, implement]
+    # A fresh runner that never ran agent code. It restores the agent's result from the artifact,
+    # re-verifies it, and only then mints the GitHub App token. It runs whenever the implementation job
+    # ran, so a failed or cancelled agent still has its committed work persisted and its outcome recorded.
+    if: always() && needs.implement.result != 'skipped' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      # Read-only: lets the restore step download this run's agent result artifact.
+      actions: read
+    outputs:
+      dispatch_architecture: ${{ steps.outcome.outputs.dispatch_architecture }}
+      pr_number: ${{ steps.outcome.outputs.pr_number }}
+      head_sha: ${{ steps.outcome.outputs.head_sha }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      READY_LABEL: ${{ github.event.label.name }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Check out the trusted develop base
+        if: needs.implement.outputs.base_sha != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.implement.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore the agent result
+        id: restore
+        if: needs.implement.outputs.base_sha != ''
+        env:
+          ARTIFACT_NAME: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/agent-result-handoff.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-result-handoff.sh?ref=$GITHUB_WORKFLOW_SHA" > "$handoff"
+          bash "$handoff" restore "$ARTIFACT_NAME"
+
+      # Storage only: independent of clean-tree, validation claims and PR metadata.
+      - name: Inspect persistence candidate
+        id: persistence_candidate
+        if: always() && steps.restore.outputs.restored == 'true'
+        env:
+          BASE_SHA: ${{ needs.implement.outputs.base_sha }}
         run: |
           set -euo pipefail
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -356,7 +459,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}
           EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_OUTCOME: ${{ needs.implement.outputs.claude_outcome }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -410,9 +513,9 @@ jobs:
         id: persist_implementation
         if: always() && steps.persistence_candidate.outcome == 'success' && (steps.persistence_app_token.outcome == 'success' || steps.persistence_candidate.outputs.has_commit != 'true')
         env:
-          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+          BASE_SHA: ${{ needs.implement.outputs.base_sha }}
           EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_OUTCOME: ${{ needs.implement.outputs.claude_outcome }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}
@@ -460,7 +563,9 @@ jobs:
 
       - name: Verify implementation result
         id: implementation_result
-        if: success() && steps.claude.outcome == 'success'
+        if: success() && needs.implement.outputs.claude_outcome == 'success'
+        env:
+          AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
         run: |
           set -euo pipefail
           {
@@ -481,6 +586,8 @@ jobs:
           fi
 
           [[ "$branch" == agent/issue-"$ISSUE_NUMBER"-* ]] || { echo "::error::Unexpected feature branch: $branch"; exit 1; }
+          # The agent job reports its own working tree; this job restored only committed history.
+          [ "$AGENT_WORKTREE" = "clean" ] || { echo "::error::Tracked working-tree changes remain after implementation"; exit 1; }
           git diff --quiet || { echo "::error::Tracked working-tree changes remain after implementation"; exit 1; }
           git diff --cached --quiet || { echo "::error::Staged changes remain after implementation"; exit 1; }
           [ -f .agent-pr-title ] || { echo "::error::Missing .agent-pr-title"; exit 1; }
@@ -543,7 +650,7 @@ jobs:
           GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
           BRANCH: ${{ steps.implementation_result.outputs.branch }}
           HEAD_SHA: ${{ steps.implementation_result.outputs.head_sha }}
-          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+          BASE_SHA: ${{ needs.implement.outputs.base_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -592,7 +699,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
-          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+          BASE_SHA: ${{ needs.implement.outputs.base_sha }}
           HEAD_SHA: ${{ steps.publish_implementation.outputs.head_sha }}
         run: |
           set -euo pipefail
@@ -610,7 +717,7 @@ jobs:
         if: always()
         env:
           PERSIST_OUTCOME: ${{ steps.persist_implementation.outcome }}
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_OUTCOME: ${{ needs.implement.outputs.claude_outcome }}
           IMPLEMENTATION_READY: ${{ steps.implementation_result.outputs.ready }}
           AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}
           PUBLISH_OUTCOME: ${{ steps.publish_implementation.outcome }}
@@ -681,8 +788,8 @@ jobs:
 
   dispatch-architecture:
     name: Dispatch trusted architecture pass
-    needs: implement
-    if: always() && needs.implement.outputs.dispatch_architecture == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    needs: publish
+    if: always() && needs.publish.outputs.dispatch_architecture == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
@@ -717,8 +824,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.publish.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.publish.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

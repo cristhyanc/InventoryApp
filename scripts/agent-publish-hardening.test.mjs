@@ -14,6 +14,7 @@ import {
   readRepositoryFile,
   repairPath,
   runContractChecks,
+  verifyAgentPublishIsolation,
   verifyAppTokenStepsRunTrustedScripts,
   verifyTrustedAgentContext,
 } from './validate-agent-workflows.mjs';
@@ -67,7 +68,7 @@ for (const [label, path, name, branchVariable] of [
 ]) {
   describe(`${label} verification step`, () => {
     const script = stepShell(path, name);
-    const env = (start) => ({ START_SHA: start, [branchVariable]: 'agent/issue-9-fix' });
+    const env = (start, worktree = 'clean') => ({ START_SHA: start, [branchVariable]: 'agent/issue-9-fix', AGENT_WORKTREE: worktree });
 
     it('accepts an ordinary new commit and asks for a push', () => fixture(({ commit, run, start, output }) => {
       const head = commit('backend/Fix.cs');
@@ -89,6 +90,14 @@ for (const [label, path, name, branchVariable] of [
         assert.ok(!readFileSync(output, { encoding: 'utf8', flag: 'a+' }).includes('push_required=true'));
       }));
     }
+
+    it('refuses a result whose agent job left tracked changes behind', () => fixture(({ commit, run, start, output }) => {
+      commit('backend/Fix.cs');
+      const result = run(script, env(start, 'dirty'));
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + result.stderr, /Tracked working-tree changes remain/);
+      assert.ok(!readFileSync(output, { encoding: 'utf8', flag: 'a+' }).includes('push_required=true'));
+    }));
 
     it('refuses rewritten history', () => fixture(({ commit, git, run, start }) => {
       commit('backend/Fix.cs');
@@ -152,6 +161,36 @@ describe('publishing hardening contract', () => {
   it('accepts the repository workflows', () => {
     assert.doesNotThrow(() => verifyAppTokenStepsRunTrustedScripts());
     assert.doesNotThrow(() => verifyTrustedAgentContext());
+    assert.doesNotThrow(() => verifyAgentPublishIsolation());
+  });
+
+  it('rejects an App token, the publisher or extra steps in the agent job', () => {
+    for (const [path, workflow, agentStep, packageStep] of [
+      [implementPath, implement, '      - name: Run Claude Code implementation agent\n', '      - name: Package implementation result for the publish job\n'],
+      [repairPath, repair, '      - name: Run Claude Code repair agent\n', '      - name: Package repair result for the publish job\n'],
+      [architecturePath, architecture, '      - name: Run Claude Code architecture agent\n', '      - name: Package architecture result for the publish job\n'],
+    ]) {
+      const token = replaceOnce(workflow, agentStep, '      - name: Mint token early\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n' + agentStep);
+      assert.throws(() => verifyAgentPublishIsolation(readWith({ [path]: token })), /agent job must hold no App credential/, path);
+      const extra = replaceOnce(workflow, packageStep, '      - name: Push from the agent job\n        run: git push origin HEAD\n\n' + packageStep);
+      assert.throws(() => verifyAgentPublishIsolation(readWith({ [path]: extra })), /only the package and upload steps may follow the agent/, path);
+      const env = replaceOnce(workflow, packageStep + '        id: package\n', packageStep + '        id: package\n        # echo "PATH=/tmp" >> "$GITHUB_PATH"\n');
+      assert.throws(() => verifyAgentPublishIsolation(readWith({ [path]: env })), /package step only writes plain data/, path);
+    }
+  });
+
+  it('rejects agent job outputs written after the agent ran', () => {
+    const unsafe = replaceOnce(repair, '      claude_outcome: ${{ steps.claude.outcome }}\n', '      claude_outcome: ${{ steps.claude.outcome }}\n      head_sha: ${{ steps.package.outputs.head_sha }}\n');
+    assert.throws(() => verifyAgentPublishIsolation(readWith({ [repairPath]: unsafe })), /output head_sha must come from a step that ran before the agent/);
+  });
+
+  it('rejects a publish job that runs an agent, skips the trusted handoff or mints the token first', () => {
+    const agent = replaceOnce(implement, '      - name: Restore the agent result\n', '      - name: Agent in publish job\n        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231\n\n      - name: Restore the agent result\n');
+    assert.throws(() => verifyAgentPublishIsolation(readWith({ [implementPath]: agent })), /publish job must never run an agent/);
+    const handoff = replaceOnce(repair, 'contents/scripts/agent-result-handoff.sh?ref=$GITHUB_WORKFLOW_SHA" > "$handoff"', 'contents/scripts/agent-result-handoff.sh?ref=$HEAD_REF" > "$handoff"');
+    assert.throws(() => verifyAgentPublishIsolation(readWith({ [repairPath]: handoff })), /isolation: missing required text/);
+    const early = replaceOnce(architecture, '      - name: Restore the architecture result\n', '      - name: Early token\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n      - name: Restore the architecture result\n');
+    assert.throws(() => verifyAgentPublishIsolation(readWith({ [architecturePath]: early })), /restored before any App token/);
   });
 
   it('rejects an App-token step that runs a script from the agent-edited checkout', () => {

@@ -1267,7 +1267,7 @@ function verifyImplementationJob(implementationWorkflow) {
   verifyAgentAppTokenStep(section(job, '      - name: Create GitHub App token for persistence\n', '      - name: Persist committed implementation\n', 'persistence App token'), 'persistence App token', 'persistence_app_token');
   const persistence = section(job, '      - name: Persist committed implementation\n', '      - name: Verify implementation result\n', 'trusted persistence');
   for (const required of [
-    'if: always()', 'BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}',
+    'if: always()', 'BASE_SHA: ${{ needs.implement.outputs.base_sha }}',
     'EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}',
     'GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}',
     'git merge-base --is-ancestor', '--diff-merges=separate',
@@ -1431,11 +1431,13 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   for (const external of ['needs.claude-check.outputs.findings', 'needs.sonar.outputs.issues']) {
     forbidText(architectureJob.slice(architectureJob.indexOf('prompt: |')), external, 'agent-architecture.yml architecture prompt');
   }
-  requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
-  requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
-  requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
+  // Permissions of the agent job alone; the separate publish job declares its own.
+  const architectureAgentJob = section(architectureWorkflow, '  architecture:\n', '  architecture-publish:\n', 'agent-architecture.yml architecture agent job');
+  requireText(architectureAgentJob, '      contents: read', 'agent-architecture.yml architecture permissions');
+  requireText(architectureAgentJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
+  requireText(architectureAgentJob, '      issues: read', 'agent-architecture.yml architecture permissions');
   forbidText(architectureJob, 'actions: write', 'agent-architecture.yml architecture permissions');
-  requireText(architectureJob, '      actions: read\n', 'agent-architecture.yml architecture permissions');
+  requireText(architectureAgentJob, '      actions: read\n', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, 'ref: ${{ needs.context.outputs.head_sha }}', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'persist-credentials: false', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'git checkout -b "$BRANCH" "$HEAD_SHA"', 'agent-architecture.yml local feature branch');
@@ -1482,11 +1484,11 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
     '[ "$labelled_by_this_run" = "true" ]', 'labelled_by_this_run=true',
     'select(.context == "agent-validation")',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]',
+    "ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result != 'success' && needs.architecture.result || needs.architecture-publish.result }}", '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]',
     'CHECK_JOB_RESULT: ${{ needs.claude-check.result }}', '[ "$CHECK_JOB_RESULT" = "success" ]',
     'CHECK_VERDICT: ${{ needs.claude-check.outputs.verdict }}', '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
     '[ "$checker_label" != "Unknown" ] || fail',
-    'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
+    'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture-publish.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
     'Architecture finalization refused:',
     'any(.labels[]?; .name == "agent-working")',
     'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
@@ -1580,9 +1582,9 @@ export const OPEN_ENDED_AGENT_TOOLS = Object.freeze([
 ]);
 export function verifyTrustedAgentContext(read = readRepositoryFile) {
   const agents = [
-    { path: implementPath, job: ['  implement:\n', '  dispatch-architecture:\n'], agent: '      - name: Run Claude Code implementation agent\n', file: '.git/agent-issue-context.md', command: 'node "$context" issue "$ISSUE_NUMBER" .git/agent-issue-context.md' },
-    { path: architecturePath, job: ['  architecture:\n', '  finalize:\n'], agent: '      - name: Run Claude Code architecture agent\n', file: '.git/agent-pr-context.md', command: 'node "$context" pr "$PR_NUMBER" "$ISSUE_NUMBER" .git/agent-pr-context.md' },
-    { path: repairPath, job: ['  repair:\n', '  dispatch-validation:\n'], agent: '      - name: Run Claude Code repair agent\n', file: '.git/agent-pr-context.md', command: 'node "$context" pr "$PR_NUMBER" "$ISSUE_NUMBER" .git/agent-pr-context.md' },
+    { path: implementPath, job: ['  implement:\n', '  publish:\n'], agent: '      - name: Run Claude Code implementation agent\n', file: '.git/agent-issue-context.md', command: 'node "$context" issue "$ISSUE_NUMBER" .git/agent-issue-context.md' },
+    { path: architecturePath, job: ['  architecture:\n', '  architecture-publish:\n'], agent: '      - name: Run Claude Code architecture agent\n', file: '.git/agent-pr-context.md', command: 'node "$context" pr "$PR_NUMBER" "$ISSUE_NUMBER" .git/agent-pr-context.md' },
+    { path: repairPath, job: ['  repair:\n', '  publish:\n'], agent: '      - name: Run Claude Code repair agent\n', file: '.git/agent-pr-context.md', command: 'node "$context" pr "$PR_NUMBER" "$ISSUE_NUMBER" .git/agent-pr-context.md' },
   ];
   for (const { path, job: [start, end], agent, file, command } of agents) {
     const job = section(read(path), start, end, `${path} agent job`);
@@ -1597,6 +1599,86 @@ export function verifyTrustedAgentContext(read = readRepositoryFile) {
   }
   const script = read(TRUSTED_CONTEXT_SCRIPT);
   for (const forbidden of ['from \'./', 'from "./', "from '../"]) forbidText(script, forbidden, `${TRUSTED_CONTEXT_SCRIPT} must stay standalone`);
+}
+
+const HANDOFF_SCRIPT = 'scripts/agent-result-handoff.sh';
+const AGENT_RESULT_ARTIFACT = 'agent-result-${{ github.run_id }}-${{ github.run_attempt }}';
+const UPLOAD_ARTIFACT_ACTION = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2';
+const AGENT_PUBLISH_JOBS = [
+  { path: implementPath, agentJob: 'implement', agentEnd: '  publish:\n', publishJob: 'publish', publishEnd: '  dispatch-architecture:\n', agentStep: '      - name: Run Claude Code implementation agent\n', agentId: 'claude' },
+  { path: repairPath, agentJob: 'repair', agentEnd: '  publish:\n', publishJob: 'publish', publishEnd: '  dispatch-validation:\n', agentStep: '      - name: Run Claude Code repair agent\n', agentId: 'claude' },
+  { path: architecturePath, agentJob: 'architecture', agentEnd: '  architecture-publish:\n', publishJob: 'architecture-publish', publishEnd: '  finalize:\n', agentStep: '      - name: Run Claude Code architecture agent\n', agentId: 'architect' },
+];
+
+function jobOutputs(job, label) {
+  const match = job.match(/\n    outputs:\n((?: {6}[A-Za-z0-9_-]+: .*\n)+)/);
+  if (!match) return [];
+  return match[1].trimEnd().split('\n').map((line) => {
+    const [, name, value] = line.match(/^ {6}([A-Za-z0-9_-]+): (.*)$/) ?? [];
+    if (!name) throw new Error(`${label}: unreadable output line ${line}`);
+    return { name, value };
+  });
+}
+
+/**
+ * The code-changing agent and the GitHub App credential never share a job (review of PR #1265).
+ * Anything that runs after the agent in its job can be redirected through GITHUB_PATH, GITHUB_ENV,
+ * replaced binaries or leftover processes, so the agent job only packages plain data, holds no App
+ * credential and exports only values written before the agent ran. A separate job on a fresh runner
+ * restores that data with the trusted handoff script and mints the token there.
+ */
+export function verifyAgentPublishIsolation(read = readRepositoryFile) {
+  for (const { path, agentJob, agentEnd, publishJob, publishEnd, agentStep, agentId } of AGENT_PUBLISH_JOBS) {
+    const workflow = read(path);
+    const agent = section(workflow, `  ${agentJob}:\n`, agentEnd, `${path} agent job`);
+    const publish = section(workflow, `  ${publishJob}:\n`, publishEnd, `${path} publish job`);
+    const label = `${path} agent/publish isolation`;
+
+    for (const forbidden of ['create-github-app-token', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'AGENT_AUTOMATION_APP_ID', 'git-push-with-app-retry.sh']) {
+      forbidText(agent, forbidden, `${label}: the agent job must hold no App credential`);
+    }
+    requireText(agent, agentStep, label);
+    const steps = workflowSteps(agent);
+    const agentIndex = steps.findIndex((step) => step.startsWith(agentStep));
+    const after = steps.slice(agentIndex + 1);
+    const allowedAfter = [/^ {6}- name: Package [a-z]+ result for the publish job\n/, /^ {6}- name: Upload [a-z]+ result for the publish job\n/];
+    if (after.length !== 2 || !after.every((step, index) => allowedAfter[index].test(step))) {
+      throw new Error(`${label}: only the package and upload steps may follow the agent in its job.`);
+    }
+    requireText(after[1], UPLOAD_ARTIFACT_ACTION, label);
+    requireText(after[1], `name: ${AGENT_RESULT_ARTIFACT}`, label);
+    for (const forbidden of ['gh ', 'node ', 'npm ', 'dotnet ', 'curl ', 'bash ', 'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_PATH']) {
+      forbidText(after[0], forbidden, `${label}: the package step only writes plain data`);
+    }
+
+    const beforeAgent = steps.slice(0, agentIndex).join('\n');
+    for (const { name, value } of jobOutputs(agent, label)) {
+      const stepOutput = value.match(/^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+ \}\}$/);
+      const outcome = value === `\${{ steps.${agentId}.outcome }}`;
+      if (outcome) continue;
+      if (!stepOutput || !beforeAgent.includes(`        id: ${stepOutput[1]}\n`)) {
+        throw new Error(`${label}: agent job output ${name} must come from a step that ran before the agent (found ${value}).`);
+      }
+    }
+
+    for (const forbidden of ['anthropics/claude-code-action', 'claude_code_oauth_token', 'anthropic_api_key']) {
+      forbidText(publish, forbidden, `${label}: the publish job must never run an agent`);
+    }
+    requireText(publish, agentJob === 'architecture' ? '      - architecture\n' : agentJob, `${label}: publish job needs the agent job`);
+    requireText(publish, trustedScriptFetch(HANDOFF_SCRIPT, 'handoff'), label);
+    requireText(publish, 'bash "$handoff" restore "$ARTIFACT_NAME"', label);
+    requireText(publish, `ARTIFACT_NAME: ${AGENT_RESULT_ARTIFACT}`, label);
+    requireText(publish, 'actions: read', label);
+    requireText(publish, 'AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}', label);
+    requireOrder(publish, 'bash "$handoff" restore', 'create-github-app-token', label, 'the result must be restored before any App token exists.');
+    requireText(publish, 'create-github-app-token', label);
+  }
+
+  const handoff = read(HANDOFF_SCRIPT);
+  for (const required of [
+    'set -euo pipefail', 'python3 -I', 'stat.S_ISLNK(mode)', '"branch", "head_sha", "worktree", "result.bundle", "run-status", "pr-title", "pr-body.md"',
+    '[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]', 'bundle verify', 'core.hooksPath=/dev/null', 'select(.expired == false)',
+  ]) requireText(handoff, required, HANDOFF_SCRIPT);
 }
 
 export function runContractChecks({ read = readRepositoryFile } = {}) {
@@ -1830,6 +1912,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyAgentBranchCleanup(read);
   verifyAppTokenStepsRunTrustedScripts(read);
   verifyTrustedAgentContext(read);
+  verifyAgentPublishIsolation(read);
 }
 
 export const branchCleanupPath = '.github/workflows/agent-branch-cleanup.yml';

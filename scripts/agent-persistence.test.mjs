@@ -47,7 +47,7 @@ test('non-zero agent exit preserves recovery without reporting readiness', () =>
   const head = commit(); const result = run('Persist committed implementation', { CLAUDE_OUTCOME: 'failure' }); assert.equal(result.status, 0, result.stderr);
   assert.equal(git('ls-remote', 'origin', 'refs/heads/agent/recovery-250-123-1').split('\t')[0], head);
   assert.ok(!readFileSync(output, 'utf8').includes('ready=true'));
-  assert.ok(workflow.includes("if: success() && steps.claude.outcome == 'success'"));
+  assert.ok(workflow.includes("if: success() && needs.implement.outputs.claude_outcome == 'success'"));
 }));
 test('no new commit produces no recovery ref', () => fixture(({ run, git }) => {
   const result = run('Persist committed implementation', { CLAUDE_OUTCOME: 'failure' }); assert.equal(result.status, 0, result.stderr); assert.equal(git('ls-remote', 'origin'), '');

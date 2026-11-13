@@ -9,6 +9,7 @@ import './agent-outcomes.test.mjs';
 import './agent-branch-cleanup.test.mjs';
 import './agent-trusted-context.test.mjs';
 import './agent-publish-hardening.test.mjs';
+import './agent-result-handoff.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -343,7 +344,7 @@ describe('preserved guards', () => {
 
   it('has architecture finalization label the PR and dispatch exact-SHA validation only after success', () => {
     const finalize = architectureWorkflow.slice(architectureWorkflow.indexOf('  finalize:\n'));
-    assert.ok(finalize.includes('ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}'));
+    assert.ok(finalize.includes("ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result != 'success' && needs.architecture.result || needs.architecture-publish.result }}"));
     assert.ok(finalize.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
     assert.ok(finalize.includes('gh workflow run validate.yml'));
     assert.ok(finalize.includes('-f dispatch_review=true'));

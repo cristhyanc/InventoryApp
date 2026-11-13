@@ -361,8 +361,8 @@ jobs:
       issues: read
       # Read-only: lets the trusted step below fetch this run's architecture findings artifact.
       actions: read
-    outputs:
-      head_sha: ${{ steps.architecture_result.outputs.head_sha }}
+    # No outputs: anything a step after the agent writes is untrusted. The architecture-publish job reads the
+    # fix from this job's artifact and reports the published head itself.
 
     steps:
       - name: Report and validate runner mode
@@ -529,15 +529,102 @@ jobs:
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
             "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
 
-      - name: Verify architecture result
-        id: architecture_result
+      # Hand-off only: this job holds no GitHub App credential. Its result reaches the separate publish job as
+      # plain data (a git bundle and a few text files); nothing a step after the agent writes is trusted there.
+      - name: Package architecture result for the publish job
+        id: package
         if: steps.architect.outcome == 'success'
         env:
           START_SHA: ${{ needs.context.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/agent-result"
+          mkdir "$out"
+          branch="$(git branch --show-current)"
+          head_sha="$(git rev-parse HEAD)"
+          printf '%s\n' "$branch" > "$out/branch"
+          printf '%s\n' "$head_sha" > "$out/head_sha"
+          if git diff --quiet && git diff --cached --quiet; then echo clean > "$out/worktree"; else echo dirty > "$out/worktree"; fi
+          if [ "$head_sha" != "$START_SHA" ] && [ -n "$branch" ]; then
+            git bundle create "$out/result.bundle" "$START_SHA..refs/heads/$branch"
+          fi
+
+      - name: Upload architecture result for the publish job
+        if: steps.package.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-result
+          retention-days: 3
+          if-no-files-found: error
+
+  architecture-publish:
+    name: Publish architecture fix from a separate trusted job
+    needs:
+      - context
+      - architecture
+    # A fresh runner that never ran agent code. It restores the fix from the artifact, re-verifies it, and
+    # only then mints the GitHub App token.
+    if: ${{ !cancelled() && needs.context.result == 'success' && needs.architecture.result == 'success' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') }}
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Read-only: lets the restore step download this run's architecture result artifact.
+      actions: read
+    outputs:
+      head_sha: ${{ steps.architecture_result.outputs.head_sha }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+
+      - name: Check out the implementation head the architecture pass started from
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore the architecture result
+        id: restore
+        env:
+          ARTIFACT_NAME: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/agent-result-handoff.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-result-handoff.sh?ref=$GITHUB_WORKFLOW_SHA" > "$handoff"
+          bash "$handoff" restore "$ARTIFACT_NAME"
+
+      - name: Verify architecture result
+        id: architecture_result
+        if: steps.restore.outputs.restored == 'true'
+        env:
+          START_SHA: ${{ needs.context.outputs.head_sha }}
           BRANCH: ${{ needs.context.outputs.branch }}
+          AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
         run: |
           set -euo pipefail
           [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Architecture pass changed branch"; exit 1; }
+          # The agent job reports its own working tree; this job restored only committed history.
+          [ "$AGENT_WORKTREE" = "clean" ] || { echo "::error::Tracked working-tree changes remain after architecture pass"; exit 1; }
           git diff --quiet || { echo "::error::Tracked working-tree changes remain after architecture pass"; exit 1; }
           git diff --cached --quiet || { echo "::error::Staged changes remain after architecture pass"; exit 1; }
           head_sha="$(git rev-parse HEAD)"
@@ -589,6 +676,7 @@ jobs:
       - claude-check
       - sonar
       - architecture
+      - architecture-publish
     # Runs even when the target check fails, so a rejected or broken handoff never leaves the
     # issue in agent-working with nothing scheduled.
     if: always() && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
@@ -632,7 +720,7 @@ jobs:
           CONTEXT_JOB_RESULT: ${{ needs.context.result }}
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_START_SHA: ${{ needs.context.outputs.head_sha }}
-          FIX_SHA: ${{ needs.architecture.outputs.head_sha }}
+          FIX_SHA: ${{ needs.architecture-publish.outputs.head_sha }}
           # Only the checker the verified route selected counts; the other job is skipped.
           CHECKER: ${{ needs.context.outputs.checker }}
           CHECK_JOB_RESULT: ${{ needs.claude-check.result }}
@@ -642,7 +730,8 @@ jobs:
           AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           IMPLEMENTER: claude
-          ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}
+          # The fix counts only once its separate publish job succeeded.
+          ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result != 'success' && needs.architecture.result || needs.architecture-publish.result }}
           SONAR_STATUS: ${{ needs.sonar.outputs.status }}
           SONAR_COUNT: ${{ needs.sonar.outputs.count }}
           SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}
