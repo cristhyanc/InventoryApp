@@ -1538,7 +1538,7 @@ function verifyProtectedPathCheck(stepText, source) {
 
 /** Splits a workflow into its steps (each starting at a `- name:` line), keeping the step text. */
 export function workflowSteps(workflowText) {
-  return workflowText.split(/\n(?=\s+- name: )/).slice(1);
+  return workflowText.split(/\n(?= +- name: )/).slice(1);
 }
 
 // Audit finding WF-01: a step that holds a GitHub App token must never execute a script from the
