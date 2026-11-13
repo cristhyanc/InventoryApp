@@ -625,6 +625,15 @@ export interface Machine {
    */
   previousComparableDayGrossRevenue?: number | null;
   previousComparableMonthGrossRevenue?: number | null;
+  /**
+   * Yesterday's gross revenue in full (issue #1215): the whole previous business day, from its
+   * business-local midnight to today's, so it includes sales made later yesterday than the current
+   * time today. It is the baseline the dashboard card compares Today against since #1215, replacing
+   * `previousComparableDayGrossRevenue` there; that field keeps its same-time meaning for other
+   * callers. Published on the same terms: an honest `0` for a day with no completed sale, `null`
+   * for a withheld figure. Revenue only.
+   */
+  previousDayGrossRevenue?: number | null;
   profitabilityStatus?: string | null;
   /**
    * The site the machine stands at - the same id `GET api/sites` answers as `siteId` - or
@@ -697,6 +706,12 @@ export interface Site {
    */
   previousComparableDayRevenue?: number | null;
   previousComparableMonthRevenue?: number | null;
+  /**
+   * Yesterday's revenue in full (issue #1215), the site-level counterpart of
+   * {@link Machine.previousDayGrossRevenue} and the baseline the dashboard card compares Today
+   * against. An honest `0` for a day with no completed sale, `null` for a withheld figure.
+   */
+  previousDayRevenue?: number | null;
   /**
    * The machines standing at this site and each one's own stock percentage (issue #1013), in the
    * order the fleet read returned them. Absent or empty means the response published none, which a

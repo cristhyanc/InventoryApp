@@ -40,8 +40,11 @@ function machine(machineID: number, machineName: string, siteId: number | null):
     previousComparableWeekDirectProfit: 6,
     monthToDateGrossRevenue: 60,
     monthToDateDirectProfit: 24,
-    previousComparableDayGrossRevenue: 8,
+    // The same-time baseline is deliberately different from the whole previous day, so a card
+    // that read the wrong field for Today would show $3.00 rather than $8.00 (issue #1215).
+    previousComparableDayGrossRevenue: 3,
     previousComparableMonthGrossRevenue: 48,
+    previousDayGrossRevenue: 8,
     profitabilityStatus: null,
     siteId
   };
@@ -60,8 +63,9 @@ function site(siteId: number, siteName: string, overrides: Partial<Site> = {}): 
     previousComparableWeekRevenue: 16,
     lastWeekRevenue: 40,
     monthToDateRevenue: 75,
-    previousComparableDayRevenue: 8,
+    previousComparableDayRevenue: 3,
     previousComparableMonthRevenue: 60,
+    previousDayRevenue: 8,
     ...overrides
   };
 }
@@ -499,7 +503,7 @@ describe('Site and machine performance totals (issue #987)', () => {
 });
 
 /**
- * The three comparison modes (issue #1178): Today against yesterday to this time (#1177), This week
+ * The three comparison modes (issue #1178): Today against the whole of yesterday (#1215), This week
  * against last week to this time, and This month against last month to this point (#1180). Every
  * row and the fleet total state the percentage and the baseline amount it was worked out from, on
  * both layouts, and the fleet compares a sum of currents with a sum of baselines or says nothing.
@@ -518,7 +522,7 @@ describe('Site and machine performance three-period comparisons (issue #1178)', 
    * baseline, so the percentage is the same in every mode and only the amounts tell them apart.
    */
   const MODES = [
-    { label: 'Today', heading: 'vs same time yesterday', baseline: 'Yesterday to this time', site: '$8.00', machine: '$8.00', fleet: '$40.00' },
+    { label: 'Today', heading: 'vs yesterday', baseline: 'Yesterday', site: '$8.00', machine: '$8.00', fleet: '$40.00' },
     { label: 'This week', heading: 'vs same time last week', baseline: 'Last week to this time', site: '$16.00', machine: '$16.00', fleet: '$80.00' },
     { label: 'This month', heading: 'vs same time last month', baseline: 'Last month to this time', site: '$60.00', machine: '$48.00', fleet: '$240.00' }
   ];
@@ -582,7 +586,7 @@ describe('Site and machine performance three-period comparisons (issue #1178)', 
 
   it('states a rise and a fall from the figures the response published', async () => {
     const { fixture, host } = await render({
-      sites: [site(1, 'Harbour Point Plaza', { currentWeekRevenue: 150, previousComparableWeekRevenue: 100, todayRevenue: 75, previousComparableDayRevenue: 100 }), PAVILLION]
+      sites: [site(1, 'Harbour Point Plaza', { currentWeekRevenue: 150, previousComparableWeekRevenue: 100, todayRevenue: 75, previousDayRevenue: 100 }), PAVILLION]
     });
 
     expect(lines(host, 'site-comparison-1')).toEqual(['↑ 50.0%', 'Last week to this time $100.00']);
@@ -590,7 +594,47 @@ describe('Site and machine performance three-period comparisons (issue #1178)', 
     periodButton(host, 'Today').click();
     fixture.detectChanges();
 
-    expect(lines(host, 'site-comparison-1')).toEqual(['↓ 25.0%', 'Yesterday to this time $100.00']);
+    expect(lines(host, 'site-comparison-1')).toEqual(['↓ 25.0%', 'Yesterday $100.00']);
+  });
+
+  /**
+   * Issue #1215: Today is compared with yesterday's full-day total, never with the same-time
+   * figure the response still publishes beside it. The site and machine fixtures publish both, and
+   * the same-time one would give a different percentage and amount.
+   */
+  it('compares Today with the whole of yesterday, never with the same-time figure', async () => {
+    const { fixture, host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { todayRevenue: 30, previousDayRevenue: 120, previousComparableDayRevenue: 15 }), PAVILLION],
+      machines: [
+        { ...machine(1, 'Pavillion Left', 2), todayGrossRevenue: 30, previousDayGrossRevenue: 60, previousComparableDayGrossRevenue: 15 },
+        { ...machine(2, 'Avenue Hotel VM', 1), todayGrossRevenue: 30, previousDayGrossRevenue: 60, previousComparableDayGrossRevenue: 15 }
+      ]
+    });
+
+    periodButton(host, 'Today').click();
+    fixture.detectChanges();
+
+    expect(headers(host)).toContain('vs yesterday');
+    expect(headers(host)).not.toContain('vs same time yesterday');
+    expect(lines(host, 'site-comparison-1')).toEqual(['↓ 75.0%', 'Yesterday $120.00']);
+    expect(lines(host, 'machine-comparison-2')).toEqual(['↓ 50.0%', 'Yesterday $60.00']);
+    expect(lines(host, 'totals-comparison')).toEqual(['↓ 50.0%', 'Yesterday $120.00']);
+    expect(host.textContent).not.toContain('to this time $15.00');
+  });
+
+  it('calls a known zero full-day yesterday no prior sales, and reports a withheld one as unavailable', async () => {
+    const { fixture, host } = await render({
+      sites: [site(1, 'Harbour Point Plaza', { previousDayRevenue: 0 }), PAVILLION],
+      machines: [{ ...machine(2, 'Avenue Hotel VM', 1), previousDayGrossRevenue: null }]
+    });
+
+    periodButton(host, 'Today').click();
+    fixture.detectChanges();
+
+    expect(lines(host, 'site-comparison-1')).toEqual(['No prior sales', 'Yesterday $0.00']);
+    expect(lines(host, 'machine-comparison-2')).toEqual(['Unavailable', 'Yesterday Unavailable']);
+    expect(lines(host, 'totals-comparison')).toEqual(['Unavailable', 'Yesterday Unavailable']);
+    expect(text(host, 'machine-comparison-2')).not.toContain('$0.00');
   });
 
   it('calls a known zero baseline no prior sales, and still shows the $0.00 it is', async () => {
@@ -645,7 +689,7 @@ describe('Site and machine performance three-period comparisons (issue #1178)', 
         machine(1, 'Pavillion Left', 2),
         {
           ...machine(2, 'Avenue Hotel VM', 1),
-          previousComparableDayGrossRevenue: null,
+          previousDayGrossRevenue: null,
           previousComparableWeekGrossRevenue: null,
           previousComparableMonthGrossRevenue: null
         }

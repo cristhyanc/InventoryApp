@@ -1,15 +1,23 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { LegalPageComponent } from './legal-page.component';
-import { LegalPageContent } from './legal-page-content';
+import { LegalPageContent, legalTextSegments } from './legal-page-content';
 
 const CONTENT: LegalPageContent = {
   title: 'Restockroo Sample Policy',
-  effectiveDateLabel: '[Effective date]',
-  introduction: '[Approved content to be inserted]',
+  effectiveDateLabel: 'Effective date: 1 January 2027',
+  introduction: 'A sample introduction.',
   sections: [
-    { id: 'section-1', heading: 'First Section', body: '[Approved content to be inserted]' },
-    { id: 'section-2', heading: 'Second Section', body: '[Approved content to be inserted]' }
+    { id: 'section-1', heading: 'First Section', body: ['First body.'] },
+    {
+      id: 'section-2',
+      heading: 'Second Section',
+      body: [
+        'Write to admin@restockroo.com.au, or see https://www.oaic.gov.au, where it applies.',
+        { items: ['First item.', 'Second item.'] },
+        'Closing paragraph.'
+      ]
+    }
   ]
 };
 
@@ -33,11 +41,11 @@ function text(element: Element | null | undefined): string {
 
 /**
  * The shared legal page layout both the Privacy Policy and Terms of Use pages render through
- * (issue #1190). Each page's own spec covers its actual headings and placeholders; this covers the
+ * (issues #1190 and #1214). Each page's own spec covers its actual copy; this covers the
  * layout every page shares: the table of contents, the numbered sections, the business display
  * details, the back-to-home and cross-page links, and keyboard navigation to a section.
  */
-describe('LegalPageComponent (issue #1190)', () => {
+describe('LegalPageComponent (issues #1190 and #1214)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
   });
@@ -48,12 +56,12 @@ describe('LegalPageComponent (issue #1190)', () => {
     const headings = host.querySelectorAll('h1');
     expect(headings).toHaveLength(1);
     expect(text(headings[0])).toBe('Restockroo Sample Policy');
-    expect(text(host.querySelector('[data-testid="legal-effective-date"]'))).toBe('[Effective date]');
+    expect(text(host.querySelector('[data-testid="legal-effective-date"]'))).toBe('Effective date: 1 January 2027');
   });
 
   it('renders the introduction when the content has one', () => {
     const { host } = render();
-    expect(text(host.querySelector('[data-testid="legal-introduction"]'))).toBe('[Approved content to be inserted]');
+    expect(text(host.querySelector('[data-testid="legal-introduction"]'))).toBe('A sample introduction.');
   });
 
   it('renders no introduction when the content has none', () => {
@@ -74,14 +82,48 @@ describe('LegalPageComponent (issue #1190)', () => {
     }
   });
 
-  it('numbers the sections in order, each with its heading and body', () => {
+  it('numbers the sections in order, each with its paragraphs and bulleted lists in order', () => {
     const { host } = render();
 
     const headings = Array.from(host.querySelectorAll('section h2')).map((heading) => text(heading));
     expect(headings).toEqual(['1. First Section', '2. Second Section']);
 
-    const bodies = Array.from(host.querySelectorAll('section p')).map((body) => text(body));
-    expect(bodies).toEqual(['[Approved content to be inserted]', '[Approved content to be inserted]']);
+    const blocks = Array.from(host.querySelectorAll('#section-2 > p, #section-2 > ul')).map((block) => [
+      block.tagName,
+      text(block)
+    ]);
+    expect(blocks).toEqual([
+      ['P', 'Write to admin@restockroo.com.au, or see https://www.oaic.gov.au, where it applies.'],
+      ['UL', 'First item.Second item.'],
+      ['P', 'Closing paragraph.']
+    ]);
+    expect(Array.from(host.querySelectorAll('#section-2 li')).map((item) => text(item))).toEqual(['First item.', 'Second item.']);
+  });
+
+  it('renders email and web addresses in the copy as links, with no space added around them (issue #1214)', () => {
+    const { host } = render();
+    const paragraph = host.querySelector('#section-2 > p')!;
+
+    const links = Array.from(paragraph.querySelectorAll('a')).map((link) => [text(link), link.getAttribute('href')]);
+    expect(links).toEqual([
+      ['admin@restockroo.com.au', 'mailto:admin@restockroo.com.au'],
+      ['https://www.oaic.gov.au', 'https://www.oaic.gov.au']
+    ]);
+    expect(paragraph.textContent).toBe('Write to admin@restockroo.com.au, or see https://www.oaic.gov.au, where it applies.');
+  });
+
+  it('splits text into plain runs and links, keeping sentence punctuation outside a link', () => {
+    expect(legalTextSegments('No links here.')).toEqual([{ text: 'No links here.' }]);
+    expect(legalTextSegments('Contact us at admin@restockroo.com.au.')).toEqual([
+      { text: 'Contact us at ' },
+      { text: 'admin@restockroo.com.au', href: 'mailto:admin@restockroo.com.au' },
+      { text: '.' }
+    ]);
+    expect(legalTextSegments('See https://www.oaic.gov.au.')).toEqual([
+      { text: 'See ' },
+      { text: 'https://www.oaic.gov.au', href: 'https://www.oaic.gov.au' },
+      { text: '.' }
+    ]);
   });
 
   it('shows the exact business display details, with a plain mailto link', () => {

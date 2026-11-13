@@ -27,7 +27,8 @@ public class MachineJsonContractTests
     /// <summary>
     /// The keys the entity never had: the local machine id issue #780 appended, the site id issue
     /// #980 appended after it, the previous comparable day's gross revenue issue #1177 appended after
-    /// that, and the previous comparable month's issue #1180 appended last. The response is compared
+    /// that, the previous comparable month's issue #1180 appended after that, and the whole previous
+    /// day's issue #1215 appended last. The response is compared
     /// against the retired entity's bytes plus exactly these, so the contract stays pinned to "the
     /// old shape, with fields added at the end" rather than to whatever is generated.
     /// </summary>
@@ -35,6 +36,7 @@ public class MachineJsonContractTests
     private const string AppendedSiteIdKey = ",\"siteId\":";
     private const string AppendedPreviousComparableDayGrossRevenueKey = ",\"previousComparableDayGrossRevenue\":";
     private const string AppendedPreviousComparableMonthGrossRevenueKey = ",\"previousComparableMonthGrossRevenue\":";
+    private const string AppendedPreviousDayGrossRevenueKey = ",\"previousDayGrossRevenue\":";
 
     private static MachineSummary FullyPopulatedSummary() => new(
         MachineId: 42,
@@ -57,7 +59,8 @@ public class MachineJsonContractTests
         ProfitabilityStatus: "Direct profit unavailable: 2 sales without persisted COGS.",
         SiteId: 305,
         PreviousComparableDayGrossRevenue: 21.21m,
-        PreviousComparableMonthGrossRevenue: 99.99m);
+        PreviousComparableMonthGrossRevenue: 99.99m,
+        PreviousDayGrossRevenue: 34.56m);
 
     /// <summary>
     /// The <c>Machine</c> the retired <c>MachineService</c> returned for <paramref name="summary"/>,
@@ -85,8 +88,8 @@ public class MachineJsonContractTests
     };
 
     /// <summary>
-    /// The entity's serialised bytes with issue #780's, issue #980's, issue #1177's and issue
-    /// #1180's appended keys, which are the whole of the difference the contract allows.
+    /// The entity's serialised bytes with issue #780's, issue #980's, issue #1177's, issue #1180's
+    /// and issue #1215's appended keys, which are the whole of the difference the contract allows.
     /// </summary>
     private static string ExpectedJson(MachineSummary summary)
     {
@@ -99,6 +102,8 @@ public class MachineJsonContractTests
             JsonSerializer.Serialize(summary.PreviousComparableDayGrossRevenue, WebDefaults),
             AppendedPreviousComparableMonthGrossRevenueKey,
             JsonSerializer.Serialize(summary.PreviousComparableMonthGrossRevenue, WebDefaults),
+            AppendedPreviousDayGrossRevenueKey,
+            JsonSerializer.Serialize(summary.PreviousDayGrossRevenue, WebDefaults),
             "}");
     }
 
@@ -145,7 +150,8 @@ public class MachineJsonContractTests
             ProfitabilityStatus: null,
             SiteId: null,
             PreviousComparableDayGrossRevenue: 0m,
-            PreviousComparableMonthGrossRevenue: 0m);
+            PreviousComparableMonthGrossRevenue: 0m,
+            PreviousDayGrossRevenue: 0m);
 
         var response = JsonSerializer.Serialize(
             MachineResponseMapper.ToResponse(summary, FinancialFigureVisibility.Visible), WebDefaults);
@@ -163,10 +169,11 @@ public class MachineJsonContractTests
         // A machine at no site (issue #980): present and null, never a made-up site.
         Assert.Contains("\"siteId\":null", response, StringComparison.Ordinal);
 
-        // A baseline period with no completed sale (issues #1177 and #1180): an honest 0 for a caller
+        // A baseline period with no completed sale (issues #1177, #1180 and #1215): an honest 0 for a caller
         // who may see it, which is a real comparison rather than a withheld figure.
         Assert.Contains("\"previousComparableDayGrossRevenue\":0", response, StringComparison.Ordinal);
         Assert.Contains("\"previousComparableMonthGrossRevenue\":0", response, StringComparison.Ordinal);
+        Assert.Contains("\"previousDayGrossRevenue\":0", response, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -189,13 +196,15 @@ public class MachineJsonContractTests
             21.21m, document.RootElement.GetProperty("previousComparableDayGrossRevenue").GetDecimal());
         Assert.Equal(
             99.99m, document.RootElement.GetProperty("previousComparableMonthGrossRevenue").GetDecimal());
+        Assert.Equal(
+            34.56m, document.RootElement.GetProperty("previousDayGrossRevenue").GetDecimal());
     }
 
     /// <summary>
     /// The keys clients read, in order: the entity's own seventeen, then the local machine id issue
     /// #780 appended, the site id issue #980 appended after it, the previous comparable day's gross
-    /// revenue issue #1177 appended after that, and the previous comparable month's issue #1180
-    /// appended last. Appended rather than placed beside the other revenue keys so that every key a
+    /// revenue issue #1177 appended after that, the previous comparable month's issue #1180 after
+    /// that, and the whole previous day's issue #1215 appended last. Appended rather than placed beside the other revenue keys so that every key a
     /// client already binds to keeps its position.
     /// </summary>
     private static readonly string[] ExpectedKeys =
@@ -207,12 +216,14 @@ public class MachineJsonContractTests
         "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
         "monthToDateDirectProfit", "profitabilityStatus", "localMachineId", "siteId",
         "previousComparableDayGrossRevenue", "previousComparableMonthGrossRevenue",
+        "previousDayGrossRevenue",
     ];
 
     /// <summary>
     /// The redacted projection (issue #698): the same keys in the same order, with every one of the
-    /// fifteen figures <c>Dashboard.ViewFinancials</c> governs - thirteen, the previous comparable
-    /// day's gross revenue (issue #1177) and the previous comparable month's (issue #1180) -
+    /// sixteen figures <c>Dashboard.ViewFinancials</c> governs - thirteen, the previous comparable
+    /// day's gross revenue (issue #1177), the previous comparable month's (issue #1180) and the whole
+    /// previous day's (issue #1215) -
     /// serialized as an explicit
     /// <c>null</c>. Pinned here, beside the full shape, because "withheld" must stay distinguishable
     /// from both "absent" and "zero" - a key that disappeared would break a client that binds to it,

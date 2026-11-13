@@ -212,6 +212,90 @@ public class ReceiptScanDraftBuilderTests
     }
 
     /// <summary>
+    /// A supermarket tax invoice prints no basis beside its line prices but says its total includes
+    /// GST. When the lines, the bag charge and the delivery fee add up to that total exactly, every
+    /// line is priced as GST-inclusive: amounts, unit costs and charges all come back, and nothing is
+    /// listed as missing for the GST basis.
+    /// </summary>
+    [Fact]
+    public void Unknown_lines_that_add_up_to_a_gst_inclusive_total_are_priced_as_inc_gst()
+    {
+        var payload = Payload(
+            Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "CHEESE AND CRACKERS 38G", packs: 4, unitsPerPack: 1, lineTotal: 10.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "DELIVERY FEE", kind: ReceiptLineKind.Delivery, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown));
+        var draft = Build(payload with { ReceiptTotal = 46.00m })!;
+
+        Assert.Equal(2, draft.Lines.Count);
+        var cans = draft.Lines[0];
+        Assert.Equal(32.00m, cans.LineTotal!.Value);
+        Assert.Equal(32.00m / 30m, cans.UnitCost!.Value);
+        Assert.DoesNotContain(ReceiptLineMissingValue.PriceGstBasis, cans.Missing);
+        Assert.Equal(ReceiptPriceGstBasis.IncludesGst, cans.Gst.PriceBasis);
+        Assert.Equal(2.50m, draft.Lines[1].UnitCost!.Value);
+        Assert.Equal(2.00m, draft.DeliveryCost!.Value);
+        Assert.Equal(2.00m, draft.PackageCost!.Value);
+    }
+
+    /// <summary>
+    /// The same receipt with a total the lines do not add up to - here a fee the reader did not
+    /// report - is left exactly as read: no amounts, and the GST basis listed as missing.
+    /// </summary>
+    [Fact]
+    public void Unknown_lines_that_do_not_add_up_to_the_total_stay_unpriced()
+    {
+        var payload = Payload(
+            Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown));
+        var draft = Build(payload with { ReceiptTotal = 36.00m })!;
+
+        var line = Assert.Single(draft.Lines);
+        Assert.Null(line.LineTotal);
+        Assert.Null(line.UnitCost);
+        Assert.Contains(ReceiptLineMissingValue.PriceGstBasis, line.Missing);
+        Assert.Equal(ReceiptPriceGstBasis.Unknown, line.Gst.PriceBasis);
+        Assert.Null(draft.PackageCost);
+    }
+
+    /// <summary>
+    /// A near match is not a match: lines one cent short of the GST-inclusive total settle nothing.
+    /// </summary>
+    [Fact]
+    public void Unknown_lines_one_cent_short_of_the_total_stay_unpriced()
+    {
+        var payload = Payload(
+            Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown));
+        var draft = Build(payload with { ReceiptTotal = 34.01m })!;
+
+        var line = Assert.Single(draft.Lines);
+        Assert.Null(line.LineTotal);
+        Assert.Contains(ReceiptLineMissingValue.PriceGstBasis, line.Missing);
+    }
+
+    /// <summary>
+    /// A conflicting basis settles nothing: one line the reader said is ex GST makes the receipt a
+    /// mixed one, even when the printed figures happen to add up to the total. The unknown line stays
+    /// unpriced, and the explicit ex-GST line is converted exactly as it always was.
+    /// </summary>
+    [Fact]
+    public void An_explicit_ex_gst_line_stops_the_totals_settling_the_unknown_ones()
+    {
+        var payload = Payload(
+            Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
+            Line(text: "CHIPS 45G X 18", packs: 1, unitsPerPack: 18, lineTotal: 10.00m, basis: ReceiptPriceGstBasis.ExcludesGst));
+        var draft = Build(payload with { ReceiptTotal = 42.00m })!;
+
+        Assert.Equal(2, draft.Lines.Count);
+        Assert.Null(draft.Lines[0].LineTotal);
+        Assert.Equal(ReceiptPriceGstBasis.Unknown, draft.Lines[0].Gst.PriceBasis);
+        Assert.Contains(ReceiptLineMissingValue.PriceGstBasis, draft.Lines[0].Missing);
+        Assert.Equal(11.00m, draft.Lines[1].LineTotal!.Value);
+        Assert.Equal(ReceiptPriceGstBasis.ExcludesGst, draft.Lines[1].Gst.PriceBasis);
+    }
+
+    /// <summary>
     /// The issue's missing-pack criterion: with no printed pack size the units and unit cost are
     /// absent and both are named, and the units per pack is null rather than one.
     /// </summary>

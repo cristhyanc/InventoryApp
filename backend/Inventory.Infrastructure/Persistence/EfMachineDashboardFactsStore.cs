@@ -100,6 +100,12 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         var previousComparableMonthGrossRevenue = CompletedSales(sales, window.PreviousComparableMonth)
             .Sum(sale => sale.SettlementValue);
 
+        // Yesterday in full, the Dashboard's Today baseline since issue #1215, on exactly those
+        // terms. Its first instant is less than two days before now, so the read above already
+        // covers it.
+        var previousDayGrossRevenue = CompletedSales(sales, window.PreviousDay)
+            .Sum(sale => sale.SettlementValue);
+
         var completedSales = lastSales.Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)).ToList();
         var statusInputs = new MachineProfitabilityStatusInputs(
             completedSales.Any(sale => !sale.CostOfGoodsSold.HasValue),
@@ -112,7 +118,8 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
 
         return new MachineDashboardFacts(
             today0, currentWeekFacts, previousComparableWeekFacts, lastWeekFacts, monthToDateFacts, twoWeeksAgoFacts,
-            previousComparableDayGrossRevenue, previousComparableMonthGrossRevenue, statusInputs);
+            previousComparableDayGrossRevenue, previousComparableMonthGrossRevenue, previousDayGrossRevenue,
+            statusInputs);
     }
 
     private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, MachineDashboardPeriodUtc period) =>

@@ -227,20 +227,35 @@ describe('LandingPageComponent (issue #954)', () => {
       }
     });
 
-    it('shows the footer contact details, no Privacy or Terms link, and dates the copyright this year', async () => {
+    it('shows the footer contact details and dates the copyright this year', async () => {
       const { host } = await render();
       const footer = host.querySelector('footer')!;
 
-      expect(text(footer)).not.toMatch(/privacy|terms/i);
       expect(text(footer)).toContain(`© ${new Date().getFullYear()} Restockroo`);
 
       const mailto = footer.querySelector<HTMLAnchorElement>('a[href="mailto:admin@restockroo.com.au"]');
       expect(mailto?.textContent?.trim()).toBe('admin@restockroo.com.au');
       expect(text(byTestId(footer as unknown as HTMLElement, 'landing-footer-contact'))).toContain('Eunhye Chung · ABN 69 235 469 430');
 
-      for (const link of Array.from(footer.querySelectorAll('nav a'))) {
+      for (const link of Array.from(footer.querySelectorAll('nav[aria-labelledby="landing-footer-nav-title"] a'))) {
         expect(link.getAttribute('href')).toMatch(/^#(features|how-it-works|nayax|faqs)$/);
       }
+    });
+
+    it('links the Privacy Policy and Terms of Use from the footer (issue #1214)', async () => {
+      const { host } = await render();
+      const legal = byTestId(host, 'landing-footer-legal')!;
+
+      expect(legal.tagName).toBe('NAV');
+      expect(text(legal.querySelector('h2'))).toBe('Legal');
+      const links = Array.from(legal.querySelectorAll<HTMLAnchorElement>('a')).map((link) => [
+        link.textContent?.trim(),
+        link.getAttribute('href')
+      ]);
+      expect(links).toEqual([
+        ['Privacy Policy', '/privacy-policy'],
+        ['Terms of Use', '/terms-of-use']
+      ]);
     });
 
     it('has no Pricing link in the header, mobile menu or footer navigation', async () => {

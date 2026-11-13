@@ -44,7 +44,9 @@ public static class SiteResponseMapper
         // Copied across like every other revenue figure (issue #1177), withheld null included.
         summary.PreviousComparableDayRevenue,
         // And the month baseline beside it (issue #1180), on the same terms.
-        summary.PreviousComparableMonthRevenue);
+        summary.PreviousComparableMonthRevenue,
+        // And yesterday in full, the Dashboard's Today baseline (issue #1215), on the same terms.
+        summary.PreviousDayRevenue);
 
     /// <summary>
     /// The light site list row (issue #841). Three already-resolved values copied across: the site

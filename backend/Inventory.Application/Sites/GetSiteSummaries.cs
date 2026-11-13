@@ -250,6 +250,9 @@ public sealed class GetSiteSummaries
     /// earlier than every other published period's, so it is the minimum on every date. The figures
     /// are unchanged - each is still selected between its own period's instants - and only the
     /// read reaches further back.
+    ///
+    /// <see cref="MachineDashboardWindow.PreviousDay"/> (issue #1215) is in it by the same rule and,
+    /// like the previous comparable day it shares a start with, never moves the bound.
     /// </summary>
     private static DateTime EarliestPublishedPeriodStartUtc(MachineDashboardWindow window) =>
         new[]
@@ -261,6 +264,7 @@ public sealed class GetSiteSummaries
             window.LastWeek.StartUtc,
             window.MonthToDate.StartUtc,
             window.PreviousComparableMonth.StartUtc,
+            window.PreviousDay.StartUtc,
         }.Min();
 
     /// <summary>
@@ -354,7 +358,10 @@ public sealed class GetSiteSummaries
             // one more of the window's periods, with no arithmetic of its own here either.
             RevenueIn(sales, window.PreviousComparableDay),
             // And Month to date's own baseline (issue #1180), on exactly those terms.
-            RevenueIn(sales, window.PreviousComparableMonth));
+            RevenueIn(sales, window.PreviousComparableMonth),
+            // Yesterday in full, the Dashboard's Today baseline since issue #1215, on exactly those
+            // terms.
+            RevenueIn(sales, window.PreviousDay));
     }
 
     /// <summary>

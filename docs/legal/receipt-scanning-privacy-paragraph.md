@@ -1,21 +1,23 @@
-# DRAFT paragraph: receipt scanning (issue #1202)
+# Receipt-scanning paragraph (issue #1202, published by issue #1214)
 
-**This is a draft, not published legal content.** It holds the proposed Privacy Policy paragraph
-for issue #1202, for the owner to review and place into the Privacy Policy under the legal-pages
-work of issue #1190. It is not legal advice, carries no effective date, and has not had legal
-review. It is not linked from any page and does not change
-`frontend/inventory-app/src/app/public/legal/privacy-policy-content.ts`.
+**Current status:** this paragraph is published. It opens section 5, "AI and supplier-price
+collection", of the public Privacy Policy at `/privacy-policy`, effective 13 November 2026. The
+published source is `frontend/inventory-app/src/app/public/legal/privacy-policy-content.ts`, which
+is the authority for the live wording. This file keeps the paragraph as approved for issue #1202,
+how it was derived from the issue's proposal, and the code evidence behind it. It is not legal
+advice and has not had legal review. How the page is routed and published is in
+[docs/design/restockroo-legal-pages.md](../design/restockroo-legal-pages.md) and
+[docs/architecture.md § The Privacy Policy and Terms of Use pages](../architecture.md#the-privacy-policy-and-terms-of-use-pages-issues-1190-and-1214).
 
-## Why this file exists instead of the Privacy Policy page
+## Historical context: why it was drafted here first
 
-The Privacy Policy layout (`privacy-policy-content.ts`, issue #1190) is reachable only in a
-development build, and every one of its sections intentionally holds nothing but the Stitch
-export's own `"[Approved content to be inserted]"` placeholder - see
-[docs/design/restockroo-legal-pages.md](../design/restockroo-legal-pages.md). There is no approved
-Privacy Policy source in this repository yet, so, per issue #1202's own fallback instruction, the
-paragraph is prepared here for the owner to incorporate. Its most likely home is the layout's
-section 5, "Automated Indexing & Receipts", alongside section 4, "Sub-processors & Infrastructure",
-for naming Anthropic as a processor.
+When issue #1202 was done, the Privacy Policy existed only as issue #1190's layout. That layout was
+reachable only in a development build, and each section held only the Stitch export's
+`"[Approved content to be inserted]"` placeholder. There was no approved Privacy Policy text in the
+repository, so, per issue #1202's own fallback instruction, the paragraph was prepared in this file
+for the owner to place later. Issue #1214 then published the owner-approved Privacy Policy. At the
+owner's request, it used this paragraph as the latest receipt-scanning disclosure and put it at the
+start of section 5, the policy's AI section.
 
 ## The paragraph
 

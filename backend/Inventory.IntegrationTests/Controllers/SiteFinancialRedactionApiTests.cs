@@ -56,14 +56,15 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
     /// <summary>
     /// The revenue figures <c>Dashboard.ViewFinancials</c> governs on a site row. Issue #1012's two
-    /// additive periods, issue #1177's previous comparable day and issue #1180's previous comparable
-    /// month are here for the same reason the first three are: they are sums over the one
+    /// additive periods, issue #1177's previous comparable day, issue #1180's previous comparable
+    /// month and issue #1215's whole previous day are here for the same reason the first three are: they are sums over the one
     /// completed-sales read the capability decides whether to make at all.
     /// </summary>
     private static readonly string[] SiteRevenueProperties =
     [
         "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
         "monthToDateRevenue", "previousComparableDayRevenue", "previousComparableMonthRevenue",
+        "previousDayRevenue",
     ];
 
     private readonly ApiFactory _factory;
@@ -128,6 +129,7 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
                      ApiFactory.TodaysSaleValue, ApiFactory.PreviousComparableWeekSaleValue,
                      ApiFactory.PreviousComparableDaySaleValue, ApiFactory.YesterdayAfterTheCutoffSaleValue,
                      ApiFactory.PreviousComparableMonthSaleValue, ApiFactory.LastMonthAfterTheCutoffSaleValue,
+                     ApiFactory.PreviousComparableDaySaleValue + ApiFactory.YesterdayAfterTheCutoffSaleValue,
                      ApiFactory.EstimatedCardProfit,
                  })
         {
@@ -183,6 +185,32 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
+        Assert.Equal(
+            ApiFactory.PreviousComparableDaySaleValue,
+            site.GetProperty("previousComparableDayRevenue").GetDecimal());
+    }
+
+    /// <summary>
+    /// The contract for issue #1215's additive field, over the real pipeline: a site row publishes
+    /// <c>previousDayRevenue</c>, and it is all of yesterday. The host's clock is 15:00 on Thursday
+    /// 12 March in Sydney, so it is the whole of Wednesday 11 March: both the 13:00 sale and the
+    /// 16:00 sale made later than the current time are in it, while the same-time
+    /// <c>previousComparableDayRevenue</c> keeps only the first.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.ManagerObjectId)]
+    [InlineData(ApiFactory.OwnerObjectId)]
+    public async Task A_site_row_publishes_all_of_yesterdays_sales(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync(SitesUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
+        Assert.Equal(
+            ApiFactory.PreviousComparableDaySaleValue + ApiFactory.YesterdayAfterTheCutoffSaleValue,
+            site.GetProperty("previousDayRevenue").GetDecimal());
         Assert.Equal(
             ApiFactory.PreviousComparableDaySaleValue,
             site.GetProperty("previousComparableDayRevenue").GetDecimal());

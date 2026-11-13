@@ -99,6 +99,7 @@ public class SiteSalesPeriodTests
         Assert.Equal(0m, site.PreviousComparableWeekRevenue);
         Assert.Equal(0m, site.PreviousComparableDayRevenue);
         Assert.Equal(0m, site.PreviousComparableMonthRevenue);
+        Assert.Equal(0m, site.PreviousDayRevenue);
     }
 
     /// <summary>
@@ -131,6 +132,54 @@ public class SiteSalesPeriodTests
         // The excluded sales are in the response's other periods, so they really were read and
         // really were placed - the baseline left them out rather than the fixture.
         Assert.Equal(3023m, site.CurrentWeekRevenue);
+    }
+
+    /// <summary>
+    /// Today's Dashboard baseline since issue #1215: the whole of yesterday. Read at 10:00 on
+    /// Thursday 5 October 2023 in Sydney, it is all of Wednesday 4 October, from that day's own
+    /// midnight (3 October 13:00 UTC) to one millisecond before Thursday's (4 October 13:00 UTC), so
+    /// it includes the sales made later yesterday than 10:00. Both midnights are pinned to the
+    /// millisecond, and the same-time baseline keeps its own meaning beside it.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_day_counts_all_of_yesterday_and_nothing_else()
+    {
+        var facts = Facts(
+            // Wednesday 4 October 2023, 00:00 AEDT: yesterday's first instant, on UTC 3 October.
+            Sale(LeftMachineId, 7m, Utc(2023, 10, 3, 13, 0)),
+            // Wednesday 4 October 2023, 21:00 AEDT: later yesterday than the time now.
+            Sale(LeftMachineId, 100m, Utc(2023, 10, 4, 10, 0)),
+            // Wednesday 4 October 2023, 23:59:59.999 AEDT: yesterday's last instant.
+            Sale(RightMachineId, 30m, Utc(2023, 10, 4, 12, 59, 59, 999)),
+            // Tuesday 3 October 2023, 23:59:59.999 AEDT: one millisecond before yesterday began.
+            Sale(LeftMachineId, 2000m, Utc(2023, 10, 3, 12, 59, 59, 999)),
+            // Thursday 5 October 2023, 00:00 AEDT: today's first instant, never yesterday's.
+            Sale(LeftMachineId, 5m, Utc(2023, 10, 4, 13, 0)));
+
+        var site = Assert.Single(await Summaries(AfterTheAedtTransition, facts));
+
+        Assert.Equal(137m, site.PreviousDayRevenue);
+        Assert.Equal(5m, site.TodayRevenue);
+        Assert.Equal(7m, site.PreviousComparableDayRevenue);
+    }
+
+    /// <summary>
+    /// The final millisecond of yesterday is yesterday's on a site row too (issue #1215 repair): a
+    /// sale at 23:59:59.9995 AEDT on Wednesday 4 October 2023 is counted, and one exactly at
+    /// Thursday's midnight is today's only.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_day_counts_a_sale_inside_its_final_millisecond_and_not_one_at_todays_midnight()
+    {
+        var todaysMidnightUtc = Utc(2023, 10, 4, 13, 0);
+        var facts = Facts(
+            Sale(LeftMachineId, 9m, todaysMidnightUtc.AddTicks(-5_000)),
+            Sale(RightMachineId, 300m, todaysMidnightUtc));
+
+        var site = Assert.Single(await Summaries(AfterTheAedtTransition, facts));
+
+        Assert.Equal(9m, site.PreviousDayRevenue);
+        Assert.Equal(300m, site.TodayRevenue);
     }
 
     /// <summary>
