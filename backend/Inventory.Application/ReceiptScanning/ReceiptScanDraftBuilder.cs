@@ -62,6 +62,8 @@ public static class ReceiptScanDraftBuilder
             return null;
         }
 
+        lines = SettleUnstatedGstBasis(lines, payload);
+
         var evaluated = lines
             .Select((line, index) => Evaluate(index, line, productIds, history))
             .ToList();
@@ -101,6 +103,30 @@ public static class ReceiptScanDraftBuilder
             ChargeTotal(charges),
             ChargeTotal(packaging),
             draftLines);
+    }
+
+    /// <summary>
+    /// The lines with an unstated price basis read as GST-inclusive, when the receipt's own totals say
+    /// so (<see cref="ReceiptGstBasisPolicy"/>), or the lines unchanged. Done once, before any line
+    /// is evaluated, so the amounts, the unit costs, the pack-size suggestion, the levy comparison and
+    /// the charges all see the one basis.
+    /// </summary>
+    private static List<ReceiptScanPayloadLine> SettleUnstatedGstBasis(
+        List<ReceiptScanPayloadLine> lines,
+        ReceiptScanPayload payload)
+    {
+        var settled = ReceiptGstBasisPolicy.UnknownLinesIncludeGst(
+            lines.Select(line => new ReceiptGstBasisLine(line.LineTotal, line.DiscountTotal, line.PriceBasis)).ToList(),
+            payload.ReceiptTotal,
+            payload.ReceiptTotalBasis);
+
+        return settled
+            ? lines
+                .Select(line => line.PriceBasis is ReceiptPriceGstBasis.Unknown
+                    ? line with { PriceBasis = ReceiptPriceGstBasis.IncludesGst }
+                    : line)
+                .ToList()
+            : lines;
     }
 
     /// <summary>
