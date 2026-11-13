@@ -1,7 +1,7 @@
 import { Component, ElementRef, EventEmitter, Input, OnDestroy, Output, Renderer2, ViewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
-import { Subject, Subscription } from 'rxjs';
+import { Subject, Subscription, interval } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 import { AccessService } from '../../../access/access.service';
 import { planRequiredOfError, requiredPlanOf } from '../../../access/plan-feature';
@@ -42,6 +42,19 @@ const FALLBACK_MESSAGES: Readonly<Record<number, string>> = {
   503: 'Receipt scanning is not available.',
   504: 'Reading the receipt took too long. Try again, or enter the purchase manually.'
 };
+
+/**
+ * How the estimated progress bar fills while a receipt is read. Nothing reports real progress -
+ * the reader answers once, at the end - so the bar is an honest estimate: it rises quickly at
+ * first, slows as it approaches {@link PROGRESS_CEILING} and never claims to be finished before the
+ * answer arrives. With a time constant of 15 s a typical 20-30 s read shows about 75-85 %.
+ */
+const PROGRESS_TIME_CONSTANT_MS = 15_000;
+const PROGRESS_CEILING = 95;
+const PROGRESS_TICK_MS = 250;
+
+/** After this long the hint says a long receipt can take up to a minute (the server's timeout). */
+const SLOW_READ_MS = 35_000;
 
 /** What anything else - a transport failure, an unexpected status, no body at all - is told as. */
 const FALLBACK_MESSAGE = 'Could not scan the receipt. Try again, or enter the purchase manually.';
@@ -95,6 +108,12 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
 
   state: PurchaseReceiptScanState = 'idle';
 
+  /** The estimated progress of the read in progress, 0-{@link PROGRESS_CEILING}, while `scanning`. */
+  progressPercent = 0;
+
+  /** The hint under the progress bar, which changes once the read is taking longer than usual. */
+  progressHint = '';
+
   /** Why the last attempt failed, shown while {@link state} is `failed`. */
   errorMessage = '';
 
@@ -115,6 +134,9 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   private readonly cancelled$ = new Subject<void>();
   private readonly destroyed$ = new Subject<void>();
   private readonly planFeature: Subscription;
+
+  /** The running estimate's timer, owned by the one scan it belongs to and stopped when that scan ends. */
+  private progressTimer?: Subscription;
 
   /** The open confirmation panel, while there is one, so withdrawing it leaves the top layer. */
   private panel?: HTMLDialogElement;
@@ -138,6 +160,7 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.stopProgress();
     this.destroyed$.next();
     this.destroyed$.complete();
     this.cancelled$.complete();
@@ -218,6 +241,7 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
    */
   cancel(): void {
     if (this.state !== 'scanning') return;
+    this.stopProgress();
     this.cancelled$.next();
     this.state = 'idle';
   }
@@ -232,16 +256,19 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
   private startScan(file: File): void {
     this.state = 'scanning';
     this.errorMessage = '';
+    this.startProgress();
 
     this.purchaseScan
       .scan(file)
       .pipe(takeUntil(this.cancelled$), takeUntil(this.destroyed$))
       .subscribe({
         next: (draft) => {
+          this.stopProgress();
           this.state = 'idle';
           this.scanned.emit({ draft, file });
         },
         error: (error: unknown) => {
+          this.stopProgress();
           // A plan refusal is this business's own answer rather than a failure to retry, exactly as
           // an inline optional part treats one (issue #979).
           const requiredPlan = planRequiredOfError(error);
@@ -256,7 +283,33 @@ export class PurchaseReceiptScanComponent implements OnDestroy {
       });
   }
 
+  /**
+   * Starts the estimated progress bar for the scan that is starting. Any earlier timer is stopped
+   * first, and every way a scan ends (an answer, a failure, a plan lock, Cancel, destruction) stops
+   * this one synchronously, so a finished scan's timer can never tick into the next scan's bar.
+   */
+  private startProgress(): void {
+    this.stopProgress();
+    const started = Date.now();
+    this.progressPercent = 0;
+    this.progressHint = 'This usually takes 20 to 30 seconds.';
+
+    this.progressTimer = interval(PROGRESS_TICK_MS).subscribe(() => {
+      const elapsed = Date.now() - started;
+      this.progressPercent = Math.round(PROGRESS_CEILING * (1 - Math.exp(-elapsed / PROGRESS_TIME_CONSTANT_MS)));
+      if (elapsed >= SLOW_READ_MS) {
+        this.progressHint = 'Still reading. A long receipt can take up to a minute.';
+      }
+    });
+  }
+
+  private stopProgress(): void {
+    this.progressTimer?.unsubscribe();
+    this.progressTimer = undefined;
+  }
+
   private lock(requiredPlan: string): void {
+    this.stopProgress();
     this.planLockMessage = `${SCAN_DESTINATION} needs the ${requiredPlan} plan.`;
     this.errorMessage = '';
     this.pendingFile = null;

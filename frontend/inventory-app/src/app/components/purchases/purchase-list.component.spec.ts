@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, Subject, of } from 'rxjs';
 import { PurchaseListComponent } from './purchase-list.component';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -350,5 +350,239 @@ describe('PurchaseListComponent write controls during a support session (issue #
 
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(deleteSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Paging (issue #1209): the list is read once and paged in the browser with the shared
+ * `ListPaginationComponent`, and thumbnails are downloaded only for the image documents on the page
+ * shown.
+ */
+describe('PurchaseListComponent pagination (issue #1209)', () => {
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  let created = 0;
+
+  beforeEach(() => {
+    created = 0;
+    URL.createObjectURL = jest.fn(() => `blob:thumb-${++created}`);
+    URL.revokeObjectURL = jest.fn();
+  });
+
+  afterEach(() => {
+    // Destroy the fixture (which revokes its thumbnails) while the URL stubs are still in place.
+    TestBed.resetTestingModule();
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
+  /** `count` purchases with ids 1..count, newest first as the API returns them. */
+  function many(count: number, overrides: (id: number) => Partial<Purchase> = () => ({})): Purchase[] {
+    return Array.from({ length: count }, (_, i) =>
+      purchase({ id: i + 1, title: `Purchase ${i + 1}`, ...overrides(i + 1) })
+    );
+  }
+
+  function image(id: number): Partial<Purchase> {
+    return { fileName: `receipt-${id}.jpg`, storedFileName: `s-${id}.jpg`, contentType: 'image/jpeg' };
+  }
+
+  function rowTitles(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('tbody > tr strong')).map((el) => el.textContent?.trim() ?? '');
+  }
+
+  function rangeText(host: HTMLElement): string {
+    return (host.querySelector('[data-testid="list-pagination-range"]')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  function click(host: HTMLElement, testId: string): void {
+    (host.querySelector(`[data-testid="${testId}"]`) as HTMLButtonElement).click();
+  }
+
+  function chooseSize(host: HTMLElement, size: number): void {
+    const select = host.querySelector('[data-testid="list-pagination-size"]') as HTMLSelectElement;
+    select.value = String(size);
+    select.dispatchEvent(new Event('change'));
+  }
+
+  function fileIds(): number[] {
+    return (TestBed.inject(PurchaseService).getFile as jest.Mock).mock.calls.map(([id]) => id as number);
+  }
+
+  it('shows no pager with no purchases, only the existing empty state', async () => {
+    const { host } = await render([]);
+
+    expect(host.textContent).toContain('No purchases recorded yet.');
+    expect(host.querySelector('[data-testid="list-pagination"]')).toBeNull();
+  });
+
+  it('shows a single purchase on one page with the range "1–1 of 1"', async () => {
+    const { host } = await render(many(1));
+
+    expect(rowTitles(host)).toEqual(['Purchase 1']);
+    expect(rangeText(host)).toBe('Showing 1–1 of 1 purchases');
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 1');
+    expect((host.querySelector('[data-testid="list-pagination-previous"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('starts on page 1 at 10 per page and offers 5, 10, 20, 50 and 100', async () => {
+    const { host } = await render(many(10));
+
+    expect(rowTitles(host)).toHaveLength(10);
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 1');
+    const select = host.querySelector('[data-testid="list-pagination-size"]') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => Number(o.value))).toEqual([5, 10, 20, 50, 100]);
+    expect(select.value).toBe('10');
+  });
+
+  it('puts the eleventh purchase on a second page, with a partial range', async () => {
+    const { fixture, host } = await render(many(11));
+
+    expect(rowTitles(host)).toHaveLength(10);
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 2');
+
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    expect(rowTitles(host)).toEqual(['Purchase 11']);
+    expect(rangeText(host)).toBe('Showing 11–11 of 11 purchases');
+    expect((host.querySelector('[data-testid="list-pagination-next"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((host.querySelector('[data-testid="list-pagination-previous"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('reaches every one of 25 purchases once, in the API order, and steps back with Previous', async () => {
+    const { fixture, host } = await render(many(25));
+    const seen: string[] = [];
+
+    seen.push(...rowTitles(host));
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+    seen.push(...rowTitles(host));
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+    seen.push(...rowTitles(host));
+
+    expect(seen).toEqual(many(25).map((p) => p.title));
+    expect(rangeText(host)).toBe('Showing 21–25 of 25 purchases');
+
+    click(host, 'list-pagination-previous');
+    fixture.detectChanges();
+    expect(rangeText(host)).toBe('Showing 11–20 of 25 purchases');
+  });
+
+  it('returns to page 1 when the page size changes', async () => {
+    const { fixture, host } = await render(many(25));
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    chooseSize(host, 20);
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 2');
+    expect(rowTitles(host)).toHaveLength(20);
+    expect(rowTitles(host)[0]).toBe('Purchase 1');
+  });
+
+  it('reads the list once per load and never again on a page turn or size change', async () => {
+    const { fixture, host, getAll } = await render(many(25));
+
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+    chooseSize(host, 5);
+    fixture.detectChanges();
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    expect(getAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads thumbnails only for the image documents on the page shown', async () => {
+    // Odd ids have an image, even ids a PDF; 3 and 13 have none at all.
+    const list = many(15, (id) => (id === 3 || id === 13 ? { ...withoutDocument(), title: `Purchase ${id}` } : id % 2 ? image(id) : {}));
+    const { fixture, host } = await render(list);
+
+    expect(fileIds()).toEqual([1, 5, 7, 9]);
+
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    expect(fileIds()).toEqual([1, 5, 7, 9, 11, 15]);
+  });
+
+  it("releases the previous page's thumbnail URLs when the page turns, and the rest on leaving", async () => {
+    const { fixture, host } = await render(many(12, image));
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(10);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(10);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(12);
+
+    fixture.destroy();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(12);
+  });
+
+  it('stays on the page shown after a re-read that keeps it', async () => {
+    const { fixture, host, getAll } = await render(many(25));
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+
+    getAll.mockReturnValueOnce(of(many(24)));
+    fixture.componentInstance.load();
+    fixture.detectChanges();
+
+    expect(rangeText(host)).toBe('Showing 11–20 of 24 purchases');
+  });
+
+  it('moves to the new last page when a Delete empties the page shown', async () => {
+    const { fixture, host, getAll } = await render(many(11));
+    click(host, 'list-pagination-next');
+    fixture.detectChanges();
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    getAll.mockReturnValueOnce(of(many(10)));
+
+    fixture.componentInstance.remove(many(11)[10]);
+    fixture.detectChanges();
+
+    expect(TestBed.inject(PurchaseService).delete).toHaveBeenCalledWith(11);
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toBe('Page 1 of 1');
+    expect(rowTitles(host)).toHaveLength(10);
+  });
+
+  it('starts no thumbnail download and creates no object URL when the list arrives after the page was left', async () => {
+    const late = new Subject<Purchase[]>();
+    const { fixture, getAll } = await render([]);
+    getAll.mockReturnValueOnce(late.asObservable());
+    fixture.componentInstance.load();
+
+    fixture.destroy();
+    late.next(many(3, image));
+    late.complete();
+
+    expect(late.observed).toBe(false);
+    expect(TestBed.inject(PurchaseService).getFile).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.purchases).toEqual([]);
+  });
+
+  it('reads nothing when a Delete is answered after the page was left', async () => {
+    const lateDelete = new Subject<void>();
+    const { fixture, getAll } = await render(many(2, image));
+    const service = TestBed.inject(PurchaseService);
+    (service.delete as jest.Mock).mockReturnValueOnce(lateDelete.asObservable());
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    (service.getFile as jest.Mock).mockClear();
+    (URL.createObjectURL as jest.Mock).mockClear();
+
+    fixture.componentInstance.remove(many(2)[0]);
+    fixture.destroy();
+    lateDelete.next();
+
+    expect(getAll).toHaveBeenCalledTimes(1);
+    expect(service.getFile).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 });
