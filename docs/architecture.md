@@ -4744,7 +4744,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts; a route marked with the public layout is rendered with none of that chrome (issue #954) |
-| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954); `legal/` holds the development-only Privacy Policy and Terms of Use page layouts (issue #1190) — see [The Privacy Policy and Terms of Use page layouts](#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190) |
+| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954); `legal/` holds the public Privacy Policy and Terms of Use pages (issues #1190 and #1214) — see [The Privacy Policy and Terms of Use pages](#the-privacy-policy-and-terms-of-use-pages-issues-1190-and-1214) |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
@@ -7985,19 +7985,20 @@ unaffected; only its landing-page presentation is off. See
 [docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for the full before/after
 copy table.
 
-### The Privacy Policy and Terms of Use page layouts (issue #1190)
+### The Privacy Policy and Terms of Use pages (issues #1190 and #1214)
 
-The owner has approved Stitch designs for a Privacy Policy and a Terms of Use page, but the legal
-copy itself is not approved yet, so this issue builds the two page layouts only - reachable in a
-development build and **never in a production build**, following the design-system fixture's own
-pattern (issue #411, `createDesignSystemRoutes(isDevMode())`,
-[Routing and loading](#routing-and-loading) above). `public/legal/legal-routes.ts` declares
-`createLegalRoutes(isDevelopmentBuild)`, asserted for both branches exactly as the fixture's factory
-is; `app.routes.ts` spreads its result (`legalRoutes`) above the wildcard route, after the
-design-system fixture's own spread. Nothing links to either path - not the homepage footer, the
-header, the sign-in page or the application shell - and each route carries `PUBLIC_LAYOUT_DATA` and
-no guard, so a signed-out visitor can open either directly, exactly as `/home` already can be; the
-pages inject no API service, so opening one makes no request either.
+Issue #1190 built the two page layouts from the owner's approved Stitch designs behind a
+development-only route; issue #1214 filled them with the owner-approved copy and published them.
+`public/legal/legal-routes.ts` exports `legalRoutes`, the two paths `/privacy-policy` and
+`/terms-of-use`, in **every build**: it no longer reads `isDevMode()`, and `legal-routes.spec.ts`
+re-imports it with Angular's production mode switched on to prove it. `app.routes.ts` spreads it
+above the wildcard route, after the design-system fixture's own spread. Each route carries
+`PUBLIC_LAYOUT_DATA` and no guard, so a signed-out visitor can open either page directly or refresh
+it, exactly as `/home` already can be (the static host's `navigationFallback` in
+`src/staticwebapp.config.json` serves `index.html` for both deep links); the pages inject no API
+service, so opening one makes no request. The public homepage footer links to both pages from a
+**Legal** navigation list ([The public landing page](#the-public-landing-page-issue-954) above);
+nothing in the signed-in application shell links to them.
 
 **Shared layout, two typed content files.** `legal/legal-page.component.ts` is the one presentational
 component both pages render through: the Restockroo brand and a **Back to home** link (the `/sign-in`
@@ -8009,9 +8010,8 @@ its heading, the same approach the landing page's own in-page navigation uses
 (`scrollToSection`, [The public landing page](#the-public-landing-page-issue-954) above).
 `legal/privacy-policy-content.ts` and `legal/terms-of-use-content.ts` are each page's own typed
 `LegalPageContent` (title, effective-date label, an optional introduction, and the sections, each an
-id, heading and body) - filled only with the Stitch export's own section headings and its two
-placeholders, `"[Approved content to be inserted]"` and `"[Effective date]"`: no legal wording and no
-invented date. `legal/privacy-policy-page.component.ts` and `legal/terms-of-use-page.component.ts`
+id, heading and body) - holding the owner-approved copy and effective date verbatim (issue #1214), within the Stitch
+export's section structure. `legal/privacy-policy-page.component.ts` and `legal/terms-of-use-page.component.ts`
 are the two thin wrapper components the routes load, each supplying its own content file and the
 other page's cross-link. See
 [docs/design/restockroo-legal-pages.md](design/restockroo-legal-pages.md) for the export these are

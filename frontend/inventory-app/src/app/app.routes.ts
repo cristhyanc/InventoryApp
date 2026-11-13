@@ -731,9 +731,8 @@ export const routes: Routes = [
   // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
   // fixture. Must stay above the wildcard, which would otherwise swallow it.
   ...designSystemRoutes,
-  // Empty in every optimized build, for the same reason: the Privacy Policy and Terms of Use page
-  // layouts (issue #1190) are reachable only in a development build, and nothing links to either
-  // path. Must stay above the wildcard, which would otherwise swallow them.
+  // The public Privacy Policy and Terms of Use pages (issues #1190 and #1214), in every build and
+  // linked from the homepage footer. Must stay above the wildcard, which would otherwise swallow them.
   ...legalRoutes,
   { path: '**', redirectTo: '' }
 ];

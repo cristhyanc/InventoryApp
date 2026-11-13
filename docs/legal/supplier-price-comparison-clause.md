@@ -1,21 +1,23 @@
-# DRAFT clause: supplier price comparisons (issue #1183)
+# Supplier price comparison clause (issue #1183, published by issue #1214)
 
-**This is a draft, not published legal content.** It holds the exact owner-approved clause text for
-issue #1183, for the future legal-page task that authors and publishes the real Terms of Use. It is
-not legal advice, carries no effective date, and has not had legal review. It is not linked from any
-page and does not change `frontend/inventory-app/src/app/public/legal/terms-of-use-content.ts`.
+**Current status:** this clause is published. It is the second paragraph of section 7,
+"Integrations, prices and AI outputs", of the public Terms of Use at `/terms-of-use`, effective
+13 November 2026. The published source is
+`frontend/inventory-app/src/app/public/legal/terms-of-use-content.ts`, which is the authority for the
+live wording. This file keeps the clause exactly as the owner approved it for issue #1183, and the
+related in-app wording. It is not legal advice and has not had legal review. How the page is routed
+and published is in [docs/design/restockroo-legal-pages.md](../design/restockroo-legal-pages.md) and
+[docs/architecture.md § The Privacy Policy and Terms of Use pages](../architecture.md#the-privacy-policy-and-terms-of-use-pages-issues-1190-and-1214).
 
-## Why this file exists instead of the Terms of Use page
+## Historical context: why it was drafted here first
 
-The Terms of Use layout (`terms-of-use-content.ts`, issue #1190) is reachable only in a development
-build, and every one of its sections intentionally holds nothing but the Stitch export's own
-`"[Approved content to be inserted]"` placeholder — see
-[docs/design/restockroo-legal-pages.md](../design/restockroo-legal-pages.md). Issue #1190 and its
-design note are explicit that authoring the approved legal copy is separate, later work, and issue
-#1183 explicitly excludes publishing the full Terms. There is therefore no existing Terms source that
-holds real clause text yet, so this clause is drafted here per issue #1183's own fallback
-instruction, for that later task to place into whichever section it decides (most likely "Third-Party
-Integrations & Supplier Data").
+When issue #1183 was done, the Terms of Use existed only as issue #1190's layout. That layout was
+reachable only in a development build, and each section held only the Stitch export's
+`"[Approved content to be inserted]"` placeholder. Issue #1183 explicitly excluded publishing the
+full Terms, so, per its own fallback instruction, the clause was recorded in this file for a later
+task to place. Issue #1214 was that task. At the owner's request, it published the owner-approved
+Terms of Use with this clause as the latest supplier-comparison wording. The clause replaces the
+owner draft's two shorter sentences on supplier prices in section 7.
 
 ## The clause
 

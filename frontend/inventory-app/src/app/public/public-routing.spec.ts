@@ -100,8 +100,8 @@ describe('public root route (issue #954)', () => {
 
       // `auth`, `invite` and the design-system showcase were public before issue #954 (`sign-in`
       // carries only `signInPageGuard`, which is not an authentication guard); `home` is this
-      // issue's. `privacy-policy` and `terms-of-use` are issue #1190's development-only page
-      // layouts, reachable by the same signed-out visitor `/home` already is.
+      // issue's. `privacy-policy` and `terms-of-use` are the public legal pages (issues #1190 and
+      // #1214), reachable by the same signed-out visitor `/home` already is.
       expect(unguardedPaths.sort()).toEqual(
         ['__design-system/widgets', 'auth', 'home', 'invite', 'privacy-policy', 'terms-of-use'].sort()
       );
@@ -245,11 +245,10 @@ describe('public root route (issue #954)', () => {
 });
 
 /**
- * The Privacy Policy and Terms of Use page layouts (issue #1190), on the real route declarations.
- * Jest always runs in development mode, so both are present; `legal-routes.spec.ts` covers the
- * production build having neither.
+ * The public Privacy Policy and Terms of Use pages (issues #1190 and #1214), on the real route
+ * declarations. `legal-routes.spec.ts` covers a production build having both too.
  */
-describe('legal page routes (issue #1190)', () => {
+describe('legal page routes (issue #1214)', () => {
   afterEach(() => {
     TestBed.inject(HttpTestingController).verify();
     TestBed.resetTestingModule();

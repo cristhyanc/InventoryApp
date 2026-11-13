@@ -1,74 +1,91 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { LEGAL_EFFECTIVE_DATE } from './legal-effective-date';
 import { TermsOfUsePageComponent } from './terms-of-use-page.component';
 
 function text(element: Element | null | undefined): string {
   return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function render(): HTMLElement {
+  TestBed.configureTestingModule({ imports: [TermsOfUsePageComponent], providers: [provideRouter([])] });
+  const fixture = TestBed.createComponent(TermsOfUsePageComponent);
+  fixture.detectChanges();
+  return fixture.nativeElement as HTMLElement;
+}
+
 /**
- * The Terms of Use page layout (issue #1190): the Stitch export's own clause headings and
- * placeholders, with no legal wording or invented date. The layout itself - the table of contents,
- * the numbered sections, the business details and the keyboard behaviour - is
- * `LegalPageComponent`'s own spec.
+ * The published Terms of Use (issue #1214): the owner-approved copy, with no placeholder left. The
+ * layout itself is `LegalPageComponent`'s own spec.
  */
-describe('TermsOfUsePageComponent (issue #1190)', () => {
+describe('TermsOfUsePageComponent (issue #1214)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
   });
 
-  it('renders the Terms of Use heading and placeholder effective date, with no introduction', () => {
-    TestBed.configureTestingModule({ imports: [TermsOfUsePageComponent], providers: [provideRouter([])] });
-    const fixture = TestBed.createComponent(TermsOfUsePageComponent);
-    fixture.detectChanges();
-    const host = fixture.nativeElement as HTMLElement;
+  it('renders the Terms of Use heading and the shared effective date, with no introduction', () => {
+    const host = render();
 
     expect(text(host.querySelector('h1'))).toBe('Restockroo Terms of Use');
-    expect(text(host.querySelector('[data-testid="legal-effective-date"]'))).toBe('[Effective date]');
+    expect(text(host.querySelector('[data-testid="legal-effective-date"]'))).toBe(`Effective date: ${LEGAL_EFFECTIVE_DATE}`);
     expect(host.querySelector('[data-testid="legal-introduction"]')).toBeNull();
   });
 
-  it('renders the export’s ten clause headings in order', () => {
-    TestBed.configureTestingModule({ imports: [TermsOfUsePageComponent], providers: [provideRouter([])] });
-    const fixture = TestBed.createComponent(TermsOfUsePageComponent);
-    fixture.detectChanges();
-    const host = fixture.nativeElement as HTMLElement;
+  it('renders the approved eleven clause headings in order', () => {
+    const host = render();
 
     const headings = Array.from(host.querySelectorAll('section h2')).map((heading) => text(heading));
     expect(headings).toEqual([
-      '1. Agreement to Terms',
-      '2. Description of the Service',
-      '3. Public Beta Access & Free Pro Tier',
-      '4. User Accounts & Responsibilities',
-      '5. Acceptable Use Policy',
-      '6. Data Ownership & Intellectual Property',
-      '7. Third-Party Integrations & Supplier Data',
-      '8. Service Availability & Beta Disclaimers',
-      '9. Termination & Account Closure',
-      '10. Governing Law & Dispute Resolution'
+      '1. Agreement and operator',
+      '2. The service',
+      '3. Free introductory Pro access',
+      '4. Accounts and authorised users',
+      '5. Acceptable use',
+      '6. Your data and our software',
+      '7. Integrations, prices and AI outputs',
+      '8. Beta operation and changes',
+      '9. Suspension and closure',
+      '10. Rights and liability',
+      '11. Disputes and applicable law'
     ]);
   });
 
-  it('links back to the Privacy Policy page', () => {
-    TestBed.configureTestingModule({ imports: [TermsOfUsePageComponent], providers: [provideRouter([])] });
-    const fixture = TestBed.createComponent(TermsOfUsePageComponent);
-    fixture.detectChanges();
-    const host = fixture.nativeElement as HTMLElement;
+  it('carries no placeholder, draft review note or implementation note', () => {
+    const pageText = text(render());
 
-    const crossLink = host.querySelector('[data-testid="legal-cross-link"]')!;
+    expect(pageText).not.toContain('[');
+    expect(pageText).not.toMatch(/insert|placeholder|review notes|implementation notes|evidence reviewed|Approved content/i);
+  });
+
+  it('includes the supplier price comparison clause (issue #1183) word for word in section 7', () => {
+    const section = text(render().querySelector('#integrations-prices-and-ai-outputs'));
+
+    expect(section).toContain(
+      'Supplier comparisons are based on recorded offers from supported suppliers and do not cover every supplier or guarantee the lowest final purchase cost. Prices, availability and product matches may be incomplete, delayed or incorrect, including where automated collection or matching is used. Before purchasing, verify the exact product, pack size, GST treatment, location or membership conditions, availability, delivery charges and final total directly with the supplier. Nothing in these terms excludes, restricts or modifies rights or remedies that cannot lawfully be excluded.'
+    );
+  });
+
+  it('uses the owner’s replacement Rights and liability section', () => {
+    const section = text(render().querySelector('#rights-and-liability'));
+
+    expect(section).toContain('limited to the subscription fees you paid Restockroo in the 12 months before the first event giving rise to the claim.');
+    expect(section).toContain('These limits do not apply to fraud, wilful misconduct, or any liability that cannot lawfully be limited.');
+    expect(section).not.toContain('draft terms');
+  });
+
+  it('links onward to the Privacy Policy page', () => {
+    const crossLink = render().querySelector('[data-testid="legal-cross-link"]')!;
+
     expect(text(crossLink)).toBe('View Privacy Policy');
     expect(crossLink.getAttribute('href')).toBe('/privacy-policy');
   });
 
   it('leaves out the export’s invented labels and actions', () => {
-    TestBed.configureTestingModule({ imports: [TermsOfUsePageComponent], providers: [provideRouter([])] });
-    const fixture = TestBed.createComponent(TermsOfUsePageComponent);
-    fixture.detectChanges();
-    const host = fixture.nativeElement as HTMLElement;
-    const pageText = text(host);
+    const pageText = text(render());
 
     expect(pageText).not.toContain('Restockroo Governance');
     expect(pageText).not.toContain('Contact Support');
-    expect(pageText).not.toContain('Stock management, supplier price comparisons');
+    expect(pageText).not.toContain('Start free');
+    expect(pageText).not.toContain('Stock management, supplier price comparisons and refill planning for vending operators.');
   });
 });

@@ -4,9 +4,9 @@ The Privacy Policy and Terms of Use page layouts
 (`frontend/inventory-app/src/app/public/legal/`) implement the owner-approved Stitch designs. This
 note identifies that design and records every place where the implementation intentionally differs
 from it, so a later change - including the one that fills in the approved legal copy and publishes
-the pages - can tell a deliberate adjustment from drift. How the pages are routed, why they are
-reachable only in a development build and why they make no request is in
-[docs/architecture.md § The Privacy Policy and Terms of Use page layouts](../architecture.md#the-privacy-policy-and-terms-of-use-page-layouts-issue-1190).
+the pages - can tell a deliberate adjustment from drift. How the pages are routed, how they became public
+in every build (issue #1214) and why they make no request is in
+[docs/architecture.md § The Privacy Policy and Terms of Use pages](../architecture.md#the-privacy-policy-and-terms-of-use-pages-issues-1190-and-1214).
 
 ## The approved export
 
@@ -19,10 +19,10 @@ reachable only in a development build and why they make no request is in
   committed to this repository, and none of its markup, Tailwind CDN script, inline Tailwind
   configuration, remote Google Fonts or Material Symbols links was copied - the same rule
   [docs/design/restockroo-landing-page.md](restockroo-landing-page.md) applied to its own export.
-- **Content:** every section placeholder in the export already reads
-  `"[Approved content to be inserted]"`, and every date reads `"[Effective date]"`. The export
-  contains no legal text at all, and this task adds none - see the content files themselves
-  (`legal/privacy-policy-content.ts`, `legal/terms-of-use-content.ts`).
+- **Content:** every section placeholder in the export reads `"[Approved content to be inserted]"`,
+  and every date reads `"[Effective date]"`; the export contains no legal text. Issue #1214 replaced
+  those placeholders with the owner-approved copy and effective dates (see
+  [Published copy](#published-copy-issue-1214) below).
 
 ## Omissions (issue #1190's acceptance criteria)
 
@@ -53,12 +53,33 @@ action or decoration rather than something this application has:
 | Interactive scroll-spy script highlighting the active table-of-contents entry while scrolling | Omitted. It is a progressive-enhancement nicety the export implements with inline `<script>`, which this application does not commit; the table of contents still scrolls to and focuses the chosen section (`LegalPageComponent.scrollToSection`, the landing page's own in-page navigation pattern). |
 | Each sign-off card's "Authorised Operator" / "Principal Operator" framing | The business details are shown once, in the table-of-contents rail, without an invented title for who Eunhye Chung is beyond being the operator the ABN belongs to. |
 
+## Published copy (issue #1214)
+
+Issue #1214 put the owner-approved Privacy Policy and Terms of Use text into
+`legal/privacy-policy-content.ts` and `legal/terms-of-use-content.ts`, verbatim, with the effective
+dates the owner supplied, and made both pages public. It includes the receipt-scanning paragraph
+([docs/legal/receipt-scanning-privacy-paragraph.md](../legal/receipt-scanning-privacy-paragraph.md),
+issue #1202) in the Privacy Policy and the supplier price comparison clause
+([docs/legal/supplier-price-comparison-clause.md](../legal/supplier-price-comparison-clause.md),
+issue #1183) in the Terms of Use.
+
+The homepage footer gained a **Legal** list linking to both pages. The legal pages' own header and
+footer stay the minimal chrome described above; nothing else about the layouts changed.
+
+What changed from the #1190 layout and from the owner's draft, deliberately:
+
+| Change | Why |
+| --- | --- |
+| The Stitch export's section headings ("Who We Are and What This Covers", "Data Sovereignty & Cloud Hosting" and so on) are replaced by the approved draft's own eleven headings on each page, and each section's anchor is now a slug of its heading (for example `#who-we-are`) instead of `#section-N`. | The headings are part of the approved copy; the export's were design placeholders. |
+| The draft's "Draft for review" banner, its opening **Review notes**, its **Implementation notes** and its **Evidence reviewed** list are not on either page. | The owner said to leave out the review notes; the other two are marked "not public policy text". |
+| Privacy Policy section 5 opens with the receipt-scanning paragraph from `docs/legal/receipt-scanning-privacy-paragraph.md`. | The owner asked for the latest receipt-scanning disclosure; the draft has no receipt-scanning wording of its own, and section 5 is its AI section. |
+| Privacy Policy section 6 publishes only its first paragraph. | The draft's second paragraph is a bracketed instruction to name verified overseas-processing countries that itself says "Do not publish this placeholder". |
+| Terms of Use section 7's second paragraph is the supplier price comparison clause from `docs/legal/supplier-price-comparison-clause.md`, followed by the draft's two remaining sentences ("Review any AI-assisted match before relying on it. Reports are operational aids and do not replace professional accounting or tax advice."). | The owner asked for the latest supplier-comparison clause; it replaces the draft's own two shorter sentences on the same point. |
+| Terms of Use section 10 is "Rights and liability", the owner's replacement sent on 13 November 2026, in place of the draft's "Rights and responsibility". | The owner strengthened the section before publication. |
+| Both pages share one effective date, 13 November 2026, in `legal/legal-effective-date.ts`. | The draft calls for both pages to use their shared publication date when they go live together; the owner set the date. |
+| A section body is now a list of blocks - paragraphs and bulleted lists - and an email address or `https` address in the text renders as a link (`legalTextSegments`), without binding HTML. | The approved copy has bulleted lists, the contact email and the OAIC web address. |
+
 ## Follow-up
 
-- **Legal copy, effective dates and publishing.** Both pages hold only the export's section
-  headings and its two placeholders. Authoring the approved copy, deciding the effective date and
-  making either page reachable in production or linked from anywhere are legal, business and product
-  work outside issue #1190 (see issue #1191 for the homepage link).
-- **Draft wording held for the legal copy.** Clause text drafted for later placement lives in
-  [docs/legal/](../legal/): the supplier price comparison clause for the Terms of Use (issue #1183)
-  and the receipt-scanning paragraph for the Privacy Policy (issue #1202). Neither is on either page.
+- **Legal review and consent tracking** remain outside the application's scope (issue #1214's
+  exclusions): the pages publish the owner's copy as supplied.
