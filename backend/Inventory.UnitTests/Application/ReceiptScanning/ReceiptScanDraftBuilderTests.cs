@@ -220,12 +220,12 @@ public class ReceiptScanDraftBuilderTests
     [Fact]
     public void Unknown_lines_that_add_up_to_a_gst_inclusive_total_are_priced_as_inc_gst()
     {
-        var draft = Build(Payload(
+        var payload = Payload(
             Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
             Line(text: "CHEESE AND CRACKERS 38G", packs: 4, unitsPerPack: 1, lineTotal: 10.00m, basis: ReceiptPriceGstBasis.Unknown),
             Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown),
-            Line(text: "DELIVERY FEE", kind: ReceiptLineKind.Delivery, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown))
-            with { ReceiptTotal = 46.00m })!;
+            Line(text: "DELIVERY FEE", kind: ReceiptLineKind.Delivery, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown));
+        var draft = Build(payload with { ReceiptTotal = 46.00m })!;
 
         Assert.Equal(2, draft.Lines.Count);
         var cans = draft.Lines[0];
@@ -245,10 +245,10 @@ public class ReceiptScanDraftBuilderTests
     [Fact]
     public void Unknown_lines_that_do_not_add_up_to_the_total_stay_unpriced()
     {
-        var draft = Build(Payload(
+        var payload = Payload(
             Line(packs: 1, unitsPerPack: 30, lineTotal: 32.00m, basis: ReceiptPriceGstBasis.Unknown),
-            Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown))
-            with { ReceiptTotal = 36.00m })!;
+            Line(text: "PAPER BAGS", kind: ReceiptLineKind.Package, packs: null, unitsPerPack: null, lineTotal: 2.00m, basis: ReceiptPriceGstBasis.Unknown));
+        var draft = Build(payload with { ReceiptTotal = 36.00m })!;
 
         var line = Assert.Single(draft.Lines);
         Assert.Null(line.LineTotal);
