@@ -230,6 +230,18 @@ jobs:
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Provider mode: $AGENT_MODE. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON Run: $RUN_URL"
 
+      - name: Store trusted issue context for the agent
+        # Anyone can comment on a public issue, so the agent does not read comments itself. This step writes
+        # the issue and only the owner's and the pipeline's own comments to a file under .git (so it cannot be
+        # committed), using the script from this workflow's own commit.
+        env:
+          AGENT_AUTOMATION_APP_BOT_LOGIN: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          context="$RUNNER_TEMP/agent-trusted-context.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-trusted-context.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$context"
+          node "$context" issue "$ISSUE_NUMBER" .git/agent-issue-context.md
+
       - name: Run Claude Code implementation agent
         id: claude
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
@@ -263,7 +275,7 @@ jobs:
             Complete all work yourself in this single foreground invocation. Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.
 
             Procedure:
-            1. Read the issue with `gh issue view ${{ github.event.issue.number }} --comments`. Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details. The criteria and exclusions are the complete extent of your authority. If the acceptance criteria are materially ambiguous, conflict with each other, with AGENTS.md, with docs/architecture.md, or with existing tests, or if the issue requires a change AGENTS.md reserves for humans, stop: post one comment on the issue with `gh issue comment` stating exactly which human decision is needed, use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line, do not create a branch, and finish. Create this marker only for an intentional human-decision stop before a feature branch exists.
+            1. Read the issue from the file `.git/agent-issue-context.md` with the Read tool. A trusted workflow step wrote it: it holds the issue and only the comments of the repository owner and the pipeline's automation accounts. Do not try to read issue or pull request comments any other way. Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details. The criteria and exclusions are the complete extent of your authority. If the acceptance criteria are materially ambiguous, conflict with each other, with AGENTS.md, with docs/architecture.md, or with existing tests, or if the issue requires a change AGENTS.md reserves for humans, stop: post one comment on the issue with `gh issue comment` stating exactly which human decision is needed, use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line, do not create a branch, and finish. Create this marker only for an intentional human-decision stop before a feature branch exists.
             2. If this is a resumed attempt (${{ steps.starting_point.outputs.resumed }}), continue the existing checked-out feature branch and inspect its commits before editing; do not reimplement completed work or create another branch. Otherwise create the feature branch from the checked-out develop: `git checkout -b agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Never commit to develop or main.
             3. Inspect the relevant production code and tests before designing the change. Make the smallest coherent change that satisfies the acceptance criteria. Do not do nearby cleanup or anything listed as out of scope.
             4. Follow AGENTS.md's selective test-first workflow. For a clear behavioral requirement, add a focused failing test, run it and confirm the intended failure, implement the behavior, then refactor with tests green. Prioritize access boundaries, financial and inventory rules, imports, regressions and API contracts. For a change where a useful test cannot be written first, explain why in the PR and verify the result. Add meaningful edge cases; avoid tests that restate implementation details.
@@ -292,7 +304,7 @@ jobs:
             --settings '{"availableModels":["${{ needs.model.outputs.model }}"]}'
             --max-turns ${{ needs.model.outputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
-            "Bash(gh issue view *),Bash(gh issue comment *),Bash(gh pr view *),Bash(gh pr list *)"
+            "Bash(gh issue comment ${{ github.event.issue.number }} *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git checkout -b agent/issue-${{ github.event.issue.number }}-*),Bash(git switch -c agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
@@ -300,13 +312,17 @@ jobs:
             "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
             "Bash(mkdir -p ${{ github.workspace }}/backend/*),Bash(mkdir -p ${{ github.workspace }}/frontend/*),Bash(mkdir -p ${{ github.workspace }}/docs/*),Bash(mkdir -p ${{ github.workspace }}/scripts/*)"
             "Bash(git add *),Bash(git commit *)"
-            "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(npm --prefix ${{ github.workspace }}/frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
+            "Bash(bash scripts/validate.sh),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
+            "Bash(dotnet restore *),Bash(dotnet build *),Bash(dotnet test *),Bash(dotnet format *),Bash(dotnet ef migrations *)"
+            "Bash(npm --prefix frontend/inventory-app ci),Bash(npm --prefix frontend/inventory-app test),Bash(npm --prefix frontend/inventory-app test -- *),Bash(npm --prefix frontend/inventory-app run lint),Bash(npm --prefix frontend/inventory-app run build)"
+            "Bash(npm --prefix ${{ github.workspace }}/frontend/inventory-app test -- *),Bash(npm --prefix ${{ github.workspace }}/frontend/inventory-app run lint),Bash(npm --prefix ${{ github.workspace }}/frontend/inventory-app run build)"
             "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Agent,WebFetch,WebSearch"
             "mcp__nayax__submit_feedback"
             "Monitor"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
+            "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr list *),Bash(dotnet run *),Bash(dotnet exec *),Bash(dotnet msbuild *),Bash(npm --prefix frontend/inventory-app exec *)"
             "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
       # Storage only: independent of clean-tree, validation claims and PR metadata.
       - name: Inspect persistence candidate
@@ -377,12 +393,12 @@ jobs:
           fi
 
           publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"
-          auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 -w0)"
-          echo "::add-mask::$auth"
+          # Credentialed Git runs only through the publisher from this workflow's own commit, never from the agent's checkout.
+          publisher="$RUNNER_TEMP/git-push-with-app-retry.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
 
           echo "Testing Git write authorization with a non-mutating push --dry-run to $probe_branch."
-          if probe_output="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" \
-            push --dry-run "$publish_remote" "$EXPECTED_HEAD:refs/heads/$probe_branch" 2>&1)"; then
+          if probe_output="$(bash "$publisher" --dry-run "$publish_remote" "$EXPECTED_HEAD:refs/heads/$probe_branch" 2>&1)"; then
             echo "Git dry-run push authorization: OK"
           else
             echo "Git dry-run push authorization: DENIED"
@@ -425,16 +441,18 @@ jobs:
           fi
           # No stored credential or token-bearing remote/config is handed to a later agent.
           publish_remote="${PUBLISH_REMOTE:-https://github.com/${GITHUB_REPOSITORY}.git}"
-          auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 -w0)"
-          echo "::add-mask::$auth"
-          remote_head="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          # The App token is used only by the publisher from this workflow's own commit, which runs Git in a clean
+          # repository and re-checks the protected paths there; the agent-edited checkout's copy is never run.
+          publisher="$RUNNER_TEMP/git-push-with-app-retry.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
+          remote_head="$(bash "$publisher" --ls-remote "$publish_remote" "refs/heads/$saved_branch")"
           if [ -n "$remote_head" ]; then
             [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Existing persistence branch differs; refusing overwrite"
           else
             # Unique run/attempt namespace; ordinary push cannot replace unrelated history.
-            bash scripts/git-push-with-app-retry.sh "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
+            AGENT_PUBLISH_BASE_SHA="$BASE_SHA" bash "$publisher" "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
           fi
-          remote_head="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          remote_head="$(bash "$publisher" --ls-remote "$publish_remote" "refs/heads/$saved_branch")"
           [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Remote persistence verification failed"
           echo "saved_branch=$saved_branch" >> "$GITHUB_OUTPUT"
           echo "saved_sha=$EXPECTED_HEAD" >> "$GITHUB_OUTPUT"
@@ -473,7 +491,10 @@ jobs:
           [ -n "$title" ] || { echo "::error::PR title is empty"; exit 1; }
           [[ "$title" != *$'\n'* ]] || { echo "::error::PR title must be a single line"; exit 1; }
           [ "${#title}" -le 256 ] || { echo "::error::PR title is too long"; exit 1; }
-          node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md
+          # Run the validator from this workflow's own commit, never the agent-edited copy.
+          doc_impact="$RUNNER_TEMP/validate-documentation-impact.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/validate-documentation-impact.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$doc_impact"
+          node "$doc_impact" --pr-body .agent-pr-body.md
 
           head_sha="$(git rev-parse HEAD)"
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve implementation HEAD"; exit 1; }
@@ -522,6 +543,7 @@ jobs:
           GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
           BRANCH: ${{ steps.implementation_result.outputs.branch }}
           HEAD_SHA: ${{ steps.implementation_result.outputs.head_sha }}
+          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -545,7 +567,9 @@ jobs:
             fi
           fi
 
-          bash scripts/git-push-with-app-retry.sh "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          publisher="$RUNNER_TEMP/git-push-with-app-retry.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
+          AGENT_PUBLISH_BASE_SHA="$BASE_SHA" bash "$publisher" "https://github.com/${GITHUB_REPOSITORY}.git" "$HEAD_SHA:refs/heads/$BRANCH"
 
           title="$(cat .agent-pr-title)"
           pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --title "$title" --body-file .agent-pr-body.md)"
@@ -572,10 +596,14 @@ jobs:
           HEAD_SHA: ${{ steps.publish_implementation.outputs.head_sha }}
         run: |
           set -euo pipefail
-          # Run the helper from trusted develop, never from the agent-edited working tree.
+          # Run the helper from this workflow's own commit, never from the agent-edited working tree, and
+          # against a fresh bare repository with no system or global Git configuration, never the agent's .git.
           cleanup="$RUNNER_TEMP/agent-branch-cleanup.sh"
-          git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"
-          bash "$cleanup" "https://github.com/${GITHUB_REPOSITORY}.git" "$ISSUE_NUMBER" contained "$HEAD_SHA"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-branch-cleanup.sh?ref=$GITHUB_WORKFLOW_SHA" > "$cleanup"
+          clean_repo="$(mktemp -d "$RUNNER_TEMP/agent-cleanup.XXXXXX")"
+          GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --bare --template= "$clean_repo"
+          GIT_DIR="$clean_repo" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+            bash "$cleanup" "https://github.com/${GITHUB_REPOSITORY}.git" "$ISSUE_NUMBER" contained "$HEAD_SHA"
 
       - name: Record implementation outcome
         id: outcome

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 const workflow = readFileSync(new URL('../.github/workflows/agent-implement.yml', import.meta.url), 'utf8');
@@ -17,16 +18,21 @@ function fixture(fn) {
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   try {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
-    // The persist step calls the push helper by relative path, so the fixture repo needs its own copy.
+    // The persist step fetches the trusted publisher from the workflow's own commit with `gh api`. A fake
+    // `gh` serves this repository's copy, and the agent repository holds a tampered one that must never run.
+    const bin = join(root, 'bin'), temp = join(root, 'runner-temp');
+    mkdirSync(bin); mkdirSync(temp);
+    const publisher = fileURLToPath(new URL('./git-push-with-app-retry.sh', import.meta.url));
+    writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash\ncase "$*" in *contents/scripts/git-push-with-app-retry.sh?ref=trusted-sha*) cat '${publisher}' ;; *) echo "unexpected gh $*" >&2; exit 1 ;; esac\n`, { mode: 0o755 });
     mkdirSync(join(repo, 'scripts'));
-    writeFileSync(join(repo, 'scripts', 'git-push-with-app-retry.sh'), readFileSync(new URL('./git-push-with-app-retry.sh', import.meta.url)));
+    writeFileSync(join(repo, 'scripts', 'git-push-with-app-retry.sh'), '#!/usr/bin/env bash\necho tampered helper ran >&2\nexit 99\n');
     writeFileSync(join(repo, 'file'), 'base'); git('add', '.'); git('commit', '-m', 'base');
     const base = git('rev-parse', 'HEAD'); git('init', '--bare', remote); git('remote', 'add', 'origin', remote);
     git('checkout', '-b', 'agent/issue-250-fixture');
     const commit = (path = 'file') => { mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), Math.random().toString()); git('add', '.'); git('commit', '-m', 'implementation'); return git('rev-parse', 'HEAD'); };
     const output = join(root, 'output'), summary = join(root, 'summary');
-    const run = (name, extra = {}) => spawnSync('bash', ['-c', shell(name)], { cwd: repo, encoding: 'utf8', env: { ...process.env, ISSUE_NUMBER: '250', RUN_ID: '123', RUN_ATTEMPT: '1', BASE_SHA: base, EXPECTED_HEAD: git('rev-parse', 'HEAD'), GH_TOKEN: 'fixture-token', CLAUDE_OUTCOME: 'success', PUBLISH_REMOTE: remote, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, ...extra } });
-    fn({ git, base, commit, run, output, summary, repo, remote });
+    const run = (name, extra = {}) => spawnSync('bash', ['-c', shell(name)], { cwd: repo, encoding: 'utf8', env: { ...process.env, ISSUE_NUMBER: '250', RUN_ID: '123', RUN_ATTEMPT: '1', BASE_SHA: base, EXPECTED_HEAD: git('rev-parse', 'HEAD'), GH_TOKEN: 'fixture-token', CLAUDE_OUTCOME: 'success', PUBLISH_REMOTE: remote, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, GITHUB_REPOSITORY: 'owner/repo', GITHUB_WORKFLOW_SHA: 'trusted-sha', RUNNER_TEMP: temp, PATH: `${bin}:${process.env.PATH}`, ...extra } });
+    fn({ git, base, commit, run, output, summary, repo, remote, temp });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 for (const stage of ['postcondition/validation', 'architecture', 'PR metadata', 'PR creation']) {
@@ -61,3 +67,13 @@ test('persistence precedes fragile verification and runs on failed agent outcome
   assert.ok(workflow.indexOf('- name: Persist committed implementation') < workflow.indexOf('- name: Verify implementation result'));
   const step = workflow.split('- name: Persist committed implementation')[1]?.split('- name: ')[0]; assert.ok(step?.includes('if: always()'));
 });
+test('persistence runs the trusted publisher, not the agent-edited copy, and ignores agent git hooks', () => fixture(({ commit, run, git, repo }) => {
+  writeFileSync(join(repo, '.git', 'hooks', 'pre-push'), '#!/bin/sh\necho agent hook ran >&2\nexit 1\n', { mode: 0o755 });
+  git('config', `url.file:///nonexistent/.insteadOf`, '/');
+  const head = commit('backend/change.cs'); const result = run('Persist committed implementation');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.ok(!(result.stderr + result.stdout).includes('tampered helper ran'));
+  assert.ok(!(result.stderr + result.stdout).includes('agent hook ran'));
+  git('config', '--unset', 'url.file:///nonexistent/.insteadOf');
+  assert.equal(git('ls-remote', 'origin', 'refs/heads/agent/issue-250-checkpoint-123-1').split('\t')[0], head);
+}));
