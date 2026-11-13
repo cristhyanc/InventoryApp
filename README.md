@@ -2460,7 +2460,10 @@ size** for a closer look.
   plan." with a link to the Plan page, like every other Pro-only entry.
 - **Scanning again asks first** when you have already typed or scanned items: *Replace items* goes ahead,
   *Keep what I typed* sends nothing at all — so a scan you did not want costs you nothing.
-- **Cancel stops waiting** while the receipt is being read.
+- **A progress bar shows while the receipt is being read**, and **Cancel stops waiting**. Reading usually
+  takes 20 to 30 seconds. The bar is an estimate, because the reader answers only once at the end: it rises
+  quickly, slows near the end and never shows finished before the draft arrives. After 35 seconds it says
+  a long receipt can take up to a minute.
 - **If the scan fails you are told why and the form is untouched** — "Receipt scanning is not available."
   when it is switched off, "Could not read this receipt." when nothing usable came back, a message when it
   timed out, and the monthly cap's own sentence when you are over it. Anything you had already typed is still
