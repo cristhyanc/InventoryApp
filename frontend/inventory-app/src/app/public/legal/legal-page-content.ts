@@ -41,27 +41,45 @@ export const LEGAL_CONTACT = {
   email: 'admin@restockroo.com.au'
 } as const;
 
-// An email address or an https URL. A URL never swallows the sentence's own closing punctuation.
-const LINK_PATTERN = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})|(https:\/\/[^\s,;]+[^\s,;.)])/g;
+const TRAILING_PUNCTUATION = '.,;:)';
+
+/** The link a whitespace-separated word stands for, or undefined when it is plain text. */
+function linkFor(word: string): string | undefined {
+  if (word.startsWith('https://')) {
+    return word;
+  }
+  const at = word.indexOf('@');
+  return at > 0 && word.indexOf('.', at) > at + 1 ? `mailto:${word}` : undefined;
+}
 
 /**
  * Splits a paragraph into plain text and links, so the copy can stay a plain string and still render
- * its email address and web addresses as real links - without ever binding HTML.
+ * its email address and web addresses as real links - without ever binding HTML. It walks the text
+ * word by word (no backtracking regular expression), and a link never swallows the sentence's own
+ * closing punctuation.
  */
 export function legalTextSegments(text: string): LegalTextSegment[] {
   const segments: LegalTextSegment[] = [];
-  let last = 0;
-  for (const match of text.matchAll(LINK_PATTERN)) {
-    const index = match.index ?? 0;
-    if (index > last) {
-      segments.push({ text: text.slice(last, index) });
+  let plain = '';
+  for (const part of text.split(/(\s+)/)) {
+    let end = part.length;
+    while (end > 0 && TRAILING_PUNCTUATION.includes(part[end - 1])) {
+      end--;
     }
-    const [value, email] = match;
-    segments.push({ text: value, href: email ? `mailto:${value}` : value });
-    last = index + value.length;
+    const word = part.slice(0, end);
+    const href = linkFor(word);
+    if (!href) {
+      plain += part;
+      continue;
+    }
+    if (plain) {
+      segments.push({ text: plain });
+    }
+    segments.push({ text: word, href });
+    plain = part.slice(end);
   }
-  if (last < text.length) {
-    segments.push({ text: text.slice(last) });
+  if (plain) {
+    segments.push({ text: plain });
   }
   return segments;
 }
