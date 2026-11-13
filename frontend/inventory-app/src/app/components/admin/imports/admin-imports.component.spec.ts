@@ -246,8 +246,9 @@ describe('AdminImportsComponent product catalogue import (issues #739 and #888)'
 
 /**
  * The reimbursement report left this page for its own one (issue #1152). What is left here is a
- * short card that links to it: the ZIP upload, the job status list and the pending reimbursement XML
- * import are all `/admin/imports/reimbursement-report`'s, with their own specs.
+ * short card that links to it: the ZIP upload and the job status list are both
+ * `/admin/imports/reimbursement-report`'s, with their own specs. The `Import XML files` card that
+ * moved with them went with the server-folder import issue #1237 retired.
  */
 describe('AdminImportsComponent Reimbursement Report card (issue #1152)', () => {
   function card(host: HTMLElement, title: string): HTMLElement | undefined {
@@ -256,22 +257,12 @@ describe('AdminImportsComponent Reimbursement Report card (issue #1152)', () => 
     );
   }
 
-  it('links to the Reimbursement Report page instead of hosting the XML import', async () => {
+  it('links to the Reimbursement Report page instead of hosting the reimbursement import', async () => {
     const { host } = await render({});
 
     const reimbursement = card(host, 'Reimbursement Report');
     expect(reimbursement?.querySelector('a')?.getAttribute('href')).toBe('/admin/imports/reimbursement-report');
-    expect(card(host, 'Import XML files')).toBeUndefined();
     expect(reimbursement?.querySelector('button')).toBeNull();
-  });
-
-  it('runs no import of its own for it: there is no XML button left to press', async () => {
-    const importPendingXmlFiles = jest.fn();
-    const { host } = await render({ importPendingXmlFiles });
-
-    const buttons = Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '');
-    expect(buttons.some((text) => text.includes('Import XML files'))).toBe(false);
-    expect(importPendingXmlFiles).not.toHaveBeenCalled();
   });
 
   /** The two imports the issue leaves alone are still here, and still this page's own. */

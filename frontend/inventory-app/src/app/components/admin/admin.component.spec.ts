@@ -120,7 +120,6 @@ describe('AdminComponent Admin split (issue #389)', () => {
     expect(host.querySelector('input[type="file"]')).toBeNull();
     const buttonText = Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '');
     expect(buttonText.some((text) => text.includes('Import products'))).toBe(false);
-    expect(buttonText.some((text) => text.includes('Import XML files'))).toBe(false);
     expect(buttonText.some((text) => text.includes('Download template'))).toBe(false);
   });
 });
