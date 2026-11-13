@@ -330,7 +330,8 @@ public record PurchaseResponseDto(
 // value, and it is governed by the same redaction and the same honest 0.
 //
 // previousDayRevenue is additive on exactly those terms (issue #1215): yesterday's completed-sale
-// revenue for the whole previous business day, from its business-local midnight up to today's, so it
+// revenue for the whole previous business day, from its business-local midnight (inclusive) up to
+// today's (exclusive), so it
 // includes sales made later yesterday than the current time today. It is the Dashboard's Today
 // baseline. previousComparableDayRevenue keeps its same-elapsed-time meaning for existing callers.
 // It is appended last and governed by the same redaction and the same honest 0.

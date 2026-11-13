@@ -43,9 +43,13 @@ public readonly record struct MachineDashboardPeriodUtc(
 /// <see cref="IBusinessCalendar"/> member.</para>
 ///
 /// <para><see cref="PreviousDay"/> is yesterday in full (issue #1215): the previous business date
-/// from its own business-local midnight to one millisecond before today's business-local midnight,
-/// so it ends exactly where <see cref="Today"/> begins and includes every sale made later yesterday
-/// than the current time today. It is the Dashboard's Today baseline since issue #1215.
+/// from its own business-local midnight to one <em>tick</em> before today's business-local
+/// midnight - the last instant a <see cref="DateTime"/> can hold before it - so with the inclusive
+/// filters every dashboard read uses it is exactly the half-open day [yesterday's midnight, today's
+/// midnight): it ends where <see cref="Today"/> begins, includes every sale made later yesterday
+/// than the current time today, and also includes a sale stored inside yesterday's final
+/// millisecond, which a millisecond-earlier end would drop from both days. It is the Dashboard's
+/// Today baseline since issue #1215.
 /// <see cref="PreviousComparableDay"/> keeps its same-elapsed-time meaning, unchanged, for every
 /// existing caller. Across a daylight-saving transition the whole previous day is 23 or 25 hours
 /// long, because both of its boundaries come from <see cref="IBusinessCalendar.StartOfBusinessDayUtc"/>
@@ -152,11 +156,13 @@ public sealed record MachineDashboardWindow(
                         EndOfBusinessDayUtc(businessCalendar, comparableDate)),
                 previousMonthStart,
                 comparableDate),
-            // Yesterday in full (issue #1215): from its own midnight to the instant before today's,
-            // whatever the time is now.
+            // Yesterday in full (issue #1215): from its own midnight to the last tick before
+            // today's, whatever the time is now. A tick rather than a millisecond, so the inclusive
+            // filters make this the half-open day and a sale inside its final millisecond is not
+            // lost between yesterday and today.
             PreviousDay: new(
                 previousComparableDayStartUtc,
-                todayStartUtc.AddMilliseconds(-1),
+                todayStartUtc.AddTicks(-1),
                 previousBusinessDate,
                 previousBusinessDate));
     }

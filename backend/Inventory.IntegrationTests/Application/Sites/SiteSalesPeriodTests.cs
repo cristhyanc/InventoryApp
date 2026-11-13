@@ -164,6 +164,25 @@ public class SiteSalesPeriodTests
     }
 
     /// <summary>
+    /// The final millisecond of yesterday is yesterday's on a site row too (issue #1215 repair): a
+    /// sale at 23:59:59.9995 AEDT on Wednesday 4 October 2023 is counted, and one exactly at
+    /// Thursday's midnight is today's only.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_day_counts_a_sale_inside_its_final_millisecond_and_not_one_at_todays_midnight()
+    {
+        var todaysMidnightUtc = Utc(2023, 10, 4, 13, 0);
+        var facts = Facts(
+            Sale(LeftMachineId, 9m, todaysMidnightUtc.AddTicks(-5_000)),
+            Sale(RightMachineId, 300m, todaysMidnightUtc));
+
+        var site = Assert.Single(await Summaries(AfterTheAedtTransition, facts));
+
+        Assert.Equal(9m, site.PreviousDayRevenue);
+        Assert.Equal(300m, site.TodayRevenue);
+    }
+
+    /// <summary>
     /// Membership is the machine's current site for the baseline too: each site's figure is the sum
     /// of its own machines' sales in that period and nothing else.
     /// </summary>

@@ -220,6 +220,29 @@ public class EfMachineDashboardFactsStoreTests
     }
 
     /// <summary>
+    /// The final millisecond of yesterday is yesterday's (issue #1215 repair): a sale stored at
+    /// 23:59:59.9995 on Wednesday 11 March in Sydney - after the last whole millisecond, before
+    /// Thursday's midnight - round-trips through SQLite and is counted, and a sale exactly at
+    /// Thursday's midnight is today's and not yesterday's.
+    /// </summary>
+    [Fact]
+    public async Task PreviousDay_counts_a_sale_inside_its_final_millisecond_and_not_one_at_todays_midnight()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        var todaysMidnightUtc = new DateTime(2026, 3, 11, 13, 0, 0, DateTimeKind.Utc);
+        db.NayaxSales.AddRange(
+            CardSale(1, todaysMidnightUtc.AddTicks(-5_000), settlementValue: 9m, costOfGoodsSold: 1m),
+            CardSale(2, todaysMidnightUtc, settlementValue: 300m, costOfGoodsSold: 1m));
+        await db.SaveChangesAsync();
+
+        var facts = await Store(db).GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(9m, facts.PreviousDayGrossRevenue);
+        Assert.Equal(300m, facts.Today.GrossRevenue);
+    }
+
+    /// <summary>
     /// A whole previous day with no completed sale is an honest <c>0</c>, not a missing figure.
     /// </summary>
     [Fact]

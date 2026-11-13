@@ -419,7 +419,8 @@ public class MachineDashboardWindowTests
 
     /// <summary>
     /// The whole previous day (issue #1215): yesterday from its own business-local midnight to one
-    /// millisecond before today's, whatever the time is now. At 15:00 on Thursday 12 March 2026 in
+    /// tick before today's - the last representable instant before it - whatever the time is now.
+    /// At 15:00 on Thursday 12 March 2026 in
     /// Sydney that is all of Wednesday 11 March, so it reaches past the same-time baseline - which
     /// keeps its own meaning - and ends exactly where today begins.
     /// </summary>
@@ -431,8 +432,8 @@ public class MachineDashboardWindowTests
         var window = time.Window;
 
         Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousDay.StartUtc);
-        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
-        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddTicks(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(window.Today.StartUtc.AddTicks(-1), window.PreviousDay.EndUtc);
         Assert.Equal(new DateTime(2026, 3, 11), window.PreviousDay.FirstBusinessDate);
         Assert.Equal(new DateTime(2026, 3, 11), window.PreviousDay.LastBusinessDate);
 
@@ -455,7 +456,7 @@ public class MachineDashboardWindowTests
 
         Assert.Equal(new DateTime(2026, 3, 12), window.BusinessToday);
         Assert.Equal(Utc(2026, 3, 10, 13, 0), window.PreviousDay.StartUtc);
-        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(2026, 3, 11, 13, 0).AddTicks(-1), window.PreviousDay.EndUtc);
         Assert.Equal(Utc(2026, 3, 10, 13, 1), window.PreviousComparableDay.EndUtc);
     }
 
@@ -473,9 +474,9 @@ public class MachineDashboardWindowTests
 
         Assert.Equal(new DateTime(2026, 10, 5), window.BusinessToday);
         Assert.Equal(Utc(2026, 10, 3, 14, 0), window.PreviousDay.StartUtc);
-        Assert.Equal(Utc(2026, 10, 4, 13, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(2026, 10, 4, 13, 0).AddTicks(-1), window.PreviousDay.EndUtc);
         Assert.Equal(
-            TimeSpan.FromHours(23) - TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromHours(23) - TimeSpan.FromTicks(1),
             window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
         Assert.Equal(new DateTime(2026, 10, 4), window.PreviousDay.LastBusinessDate);
     }
@@ -493,9 +494,9 @@ public class MachineDashboardWindowTests
 
         Assert.Equal(new DateTime(2026, 4, 6), window.BusinessToday);
         Assert.Equal(Utc(2026, 4, 4, 13, 0), window.PreviousDay.StartUtc);
-        Assert.Equal(Utc(2026, 4, 5, 14, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(2026, 4, 5, 14, 0).AddTicks(-1), window.PreviousDay.EndUtc);
         Assert.Equal(
-            TimeSpan.FromHours(25) - TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromHours(25) - TimeSpan.FromTicks(1),
             window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
         Assert.Equal(new DateTime(2026, 4, 5), window.PreviousDay.LastBusinessDate);
     }
@@ -523,10 +524,10 @@ public class MachineDashboardWindowTests
 
         Assert.Equal(new DateTime(nowYear, nowMonth, nowDay), window.BusinessToday);
         Assert.Equal(Utc(startYear, startMonth, startDay, startHour, 0), window.PreviousDay.StartUtc);
-        Assert.Equal(Utc(endYear, endMonth, endDay, endHour, 0).AddMilliseconds(-1), window.PreviousDay.EndUtc);
-        Assert.Equal(window.Today.StartUtc.AddMilliseconds(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(Utc(endYear, endMonth, endDay, endHour, 0).AddTicks(-1), window.PreviousDay.EndUtc);
+        Assert.Equal(window.Today.StartUtc.AddTicks(-1), window.PreviousDay.EndUtc);
         Assert.Equal(
-            TimeSpan.FromHours(expectedHours) - TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromHours(expectedHours) - TimeSpan.FromTicks(1),
             window.PreviousDay.EndUtc - window.PreviousDay.StartUtc);
         Assert.Equal(new DateTime(startYear, startMonth, startDay), window.PreviousDay.FirstBusinessDate);
         Assert.Equal(new DateTime(startYear, startMonth, startDay), window.PreviousDay.LastBusinessDate);

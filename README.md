@@ -612,8 +612,8 @@ changed, and every "Unavailable" still means unavailable, never zero.
     the sales column names it; This week is what the card opens on. **Today is compared against the
     whole of yesterday** (issue #1215): today's sales so far against yesterday's full-day total,
     headed "vs yesterday", including sales made later yesterday than the time it is now. Yesterday
-    is the previous business day from its midnight to today's midnight in the business's own time
-    zone, so on a daylight-saving change it is 23 or 25 hours long. This week and This month are
+    is the previous business day from its midnight up to, but not including, today's midnight in
+    the business's own time zone, so on a daylight-saving change it is 23 or 25 hours long. This week and This month are
     compared against **the same elapsed window in the previous period**, not a whole previous week
     or month: "vs same time last week" and "vs same time last month". Every site row, every
     expanded machine row and the fleet total show the percentage change *and*, beneath it, the
