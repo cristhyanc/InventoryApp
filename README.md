@@ -2296,6 +2296,12 @@ returns to the Purchases list, and **Cancel** returns without saving. Leaving th
 browser's Back button or by any other link discards unsaved edits without asking first, which is how every
 other form page in the application behaves.
 
+The Purchases list shows **10 purchases per page** by default, newest first, with a per-page choice of 5, 10,
+20, 50 or 100 and **Previous** / **Next** below the table (issue #1209). Every visit starts on page 1. After a
+Delete or an Add document the list stays on the page you were on, or moves to the last page if that page no
+longer exists. Document thumbnails are downloaded only for the purchases on the page shown, so a long purchase
+history no longer slows the page down.
+
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
 both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue
 #1029) — and you can type into either one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
