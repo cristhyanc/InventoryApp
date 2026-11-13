@@ -24,6 +24,14 @@ namespace Inventory.Infrastructure.ReceiptScanning;
 /// request, and a request here contains a receipt, so a failure becomes this application's own
 /// message with the status code's class and nothing from the body.</para>
 ///
+/// <para><strong>The failure still says why, to the log and to nobody else</strong> (issue #1236).
+/// Beside that message the exception carries a <see cref="ReceiptReaderFailure"/>: the status, the
+/// vendor's own <c>error.type</c> and <c>error.message</c> (capped on one line by that type itself),
+/// the response's request id, and - when nothing was answered - which local failure it was. The raw
+/// body is read for exactly those two members and is never logged, stored, echoed or put in an
+/// exception message, and a body that is not the documented error shape simply yields nothing rather
+/// than something guessed.</para>
+///
 /// <para><strong>The vendor contract is this adapter's one unverified part.</strong> The request shape
 /// - <c>output_config.format</c> with a JSON schema, a base64 image or document content block - and
 /// the image, PDF-size and page limits are issue #1163's own specification; this repository's agents
@@ -42,6 +50,12 @@ public sealed class ClaudeReceiptReader : IReceiptReader
 
     /// <summary>The header that pins the API version the request is written against.</summary>
     public const string VersionHeader = "anthropic-version";
+
+    /// <summary>
+    /// The response header the vendor's own request id arrives in, so a failure can be traced with
+    /// the vendor (issue #1236).
+    /// </summary>
+    public const string RequestIdHeader = "request-id";
 
     /// <summary>The API version this request shape is written against.</summary>
     public const string Version = "2023-06-01";
@@ -99,7 +113,9 @@ public sealed class ClaudeReceiptReader : IReceiptReader
         catch (HttpRequestException exception)
         {
             throw new ReceiptReaderUnavailableException(
-                ReceiptReaderUnavailableMessage, exception);
+                ReceiptReaderUnavailableMessage,
+                ReceiptReaderFailure.Local(ReceiptReaderFailureKind.NetworkError),
+                exception);
         }
 
         using (response)
@@ -107,9 +123,11 @@ public sealed class ClaudeReceiptReader : IReceiptReader
             if (!response.IsSuccessStatusCode)
             {
                 // The status code and nothing from the body: an upstream error body can quote the
-                // request, and the request held a receipt.
+                // request, and the request held a receipt. What the failure beside it carries is the
+                // vendor's own error type and message, and nothing else the body holds.
                 throw new ReceiptReaderUnavailableException(
-                    $"The receipt reader answered {(int)response.StatusCode}.");
+                    $"The receipt reader answered {(int)response.StatusCode}.",
+                    await RefusalAsync(response, cancellationToken).ConfigureAwait(false));
             }
 
             try
@@ -122,7 +140,10 @@ public sealed class ClaudeReceiptReader : IReceiptReader
             }
             catch (JsonException exception)
             {
-                throw new ReceiptReaderUnavailableException(ReceiptReaderUnavailableMessage, exception);
+                throw new ReceiptReaderUnavailableException(
+                    ReceiptReaderUnavailableMessage,
+                    ReceiptReaderFailure.Local(ReceiptReaderFailureKind.UnreadableAnswer),
+                    exception);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -133,6 +154,95 @@ public sealed class ClaudeReceiptReader : IReceiptReader
 
     /// <summary>What an unusable reader is reported as, with nothing from upstream in it.</summary>
     private const string ReceiptReaderUnavailableMessage = "The receipt reader could not be reached.";
+
+    /// <summary>
+    /// How much of an error body is read before it is treated as unreadable (issue #1236). The
+    /// documented error document is a few hundred bytes; anything past this is not one, and is not
+    /// parsed at all rather than buffered in a process that is holding a receipt.
+    /// </summary>
+    public const int MaxErrorBodyBytes = 8 * 1024;
+
+    /// <summary>
+    /// What a refusal is recorded as: the status it answered, the request id it carried, and the
+    /// vendor's own <c>error.type</c> and <c>error.message</c> when the body is the documented error
+    /// document and states them. Nothing else from the body is read, and nothing is inferred from
+    /// the status.
+    /// </summary>
+    private static async Task<ReceiptReaderFailure> RefusalAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        var (errorType, errorMessage) = await ErrorAsync(response.Content, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ReceiptReaderFailure.Refused(
+            (int)response.StatusCode,
+            errorType,
+            errorMessage,
+            response.Headers.TryGetValues(RequestIdHeader, out var requestIds)
+                ? requestIds.FirstOrDefault()
+                : null);
+    }
+
+    /// <summary>
+    /// The two members of the documented error document (<c>{"type":"error","error":{"type":…,
+    /// "message":…}}</c>), each only when it is actually a string there. A body that cannot be
+    /// parsed, is not an object, holds no <c>error</c> object, states neither member, or is larger
+    /// than <see cref="MaxErrorBodyBytes"/> yields nothing at all - the status is still recorded,
+    /// and nothing is guessed from a shape this is not.
+    ///
+    /// <para>Every failure to read it is nothing as well: a torn connection or an unreadable body
+    /// while explaining a refusal must not replace the refusal with a different exception.</para>
+    /// </summary>
+    private static async Task<(string? ErrorType, string? ErrorMessage)> ErrorAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var body = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+
+            var buffer = new byte[MaxErrorBodyBytes + 1];
+            var read = 0;
+            while (read < buffer.Length)
+            {
+                var count = await body
+                    .ReadAsync(buffer.AsMemory(read), cancellationToken)
+                    .ConfigureAwait(false);
+                if (count == 0)
+                {
+                    break;
+                }
+
+                read += count;
+            }
+
+            if (read > MaxErrorBodyBytes
+                || JsonNode.Parse(buffer.AsSpan(0, read)) is not JsonObject root
+                || root["error"] is not JsonObject error)
+            {
+                return (null, null);
+            }
+
+            return (Text(error["type"]), Text(error["message"]));
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+        catch (HttpRequestException)
+        {
+            return (null, null);
+        }
+        catch (IOException)
+        {
+            return (null, null);
+        }
+    }
+
+    /// <summary>One member of the error document, when it is a string there and nothing otherwise.</summary>
+    private static string? Text(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     /// <summary>
     /// The request body (issue #1163): the model, the output schema, the system prompt and one user
@@ -201,7 +311,7 @@ public sealed class ClaudeReceiptReader : IReceiptReader
     {
         if (payload is not JsonObject root)
         {
-            throw new ReceiptReaderUnavailableException(ReceiptReaderUnavailableMessage);
+            throw NoTextBlock();
         }
 
         var text = root["content"] is JsonArray content
@@ -213,7 +323,7 @@ public sealed class ClaudeReceiptReader : IReceiptReader
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            throw new ReceiptReaderUnavailableException(ReceiptReaderUnavailableMessage);
+            throw NoTextBlock();
         }
 
         var usage = root["usage"] as JsonObject;
@@ -223,4 +333,14 @@ public sealed class ClaudeReceiptReader : IReceiptReader
 
     private static int? Tokens(JsonObject? usage, string name) =>
         usage?[name] is JsonValue value && value.TryGetValue<int>(out var tokens) ? tokens : null;
+
+    /// <summary>
+    /// An answer that was read and held no text block to use - including one that is not an object
+    /// at all. It answered, so there is no transport failure to report; it said nothing usable, so
+    /// there is no status either (issue #1236).
+    /// </summary>
+    private static ReceiptReaderUnavailableException NoTextBlock() =>
+        new(
+            ReceiptReaderUnavailableMessage,
+            ReceiptReaderFailure.Local(ReceiptReaderFailureKind.NoTextBlock));
 }

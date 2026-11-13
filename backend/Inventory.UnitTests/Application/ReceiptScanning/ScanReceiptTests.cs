@@ -331,6 +331,86 @@ public class ScanReceiptTests
     }
 
     /// <summary>
+    /// Issue #1236's criterion: the reader's refusal is still answered as
+    /// <see cref="ScanReceiptOutcome.Unavailable"/> with the user's message unchanged, and the
+    /// status, the error type, the provider's message and the request id are recorded beside the
+    /// scan's own line.
+    /// </summary>
+    [Fact]
+    public async Task An_unavailable_scan_records_the_status_the_error_type_the_message_and_the_request_id()
+    {
+        var log = new RecordingReceiptScanLog();
+        var reader = FakeReceiptReader.Unavailable(ReceiptReaderFailure.Refused(
+            400, "invalid_request_error", "Schema is too complex", "req_011CTM9fictional"));
+
+        var result = await Scan(reader, log: log).Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.Unavailable, result.Outcome);
+
+        // The user's message is unchanged: the provider's words are for the log and nobody else.
+        Assert.Equal(ScanReceiptResult.UnavailableMessage, result.Message);
+        Assert.DoesNotContain("Schema", result.Message, StringComparison.Ordinal);
+
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(ScanReceiptOutcome.Unavailable, entry.Outcome);
+
+        var failure = Assert.Single(log.Failures);
+        Assert.Equal(BusinessId, failure.BusinessId);
+        Assert.Equal(400, failure.Reason.StatusCode);
+        Assert.Equal("invalid_request_error", failure.Reason.ErrorType);
+        Assert.Equal("Schema is too complex", failure.Reason.ErrorMessage);
+        Assert.Equal("req_011CTM9fictional", failure.Reason.RequestId);
+    }
+
+    /// <summary>
+    /// A failure with nothing answered records which one it was, and no status - and the outcome is
+    /// the same <see cref="ScanReceiptOutcome.Unavailable"/> either way.
+    /// </summary>
+    [Theory]
+    [InlineData(ReceiptReaderFailureKind.NetworkError)]
+    [InlineData(ReceiptReaderFailureKind.UnreadableAnswer)]
+    [InlineData(ReceiptReaderFailureKind.NoTextBlock)]
+    public async Task A_local_failure_is_recorded_as_itself_with_no_status(ReceiptReaderFailureKind kind)
+    {
+        var log = new RecordingReceiptScanLog();
+
+        var result = await Scan(FakeReceiptReader.Unavailable(ReceiptReaderFailure.Local(kind)), log: log)
+            .Handle(Image(), CancellationToken.None);
+
+        Assert.Equal(ScanReceiptOutcome.Unavailable, result.Outcome);
+
+        var failure = Assert.Single(log.Failures);
+        Assert.Equal(kind, failure.Reason.Kind);
+        Assert.Null(failure.Reason.StatusCode);
+    }
+
+    /// <summary>
+    /// Nothing else records a reason: a scan that produced a draft, a timeout, an unreadable answer
+    /// and an unusable reader nobody said anything about each write their one line and no more.
+    /// </summary>
+    [Theory]
+    [InlineData("draft")]
+    [InlineData("timeout")]
+    [InlineData("unreadable")]
+    [InlineData("silent")]
+    public async Task Only_a_failure_with_a_reason_records_one(string scan)
+    {
+        var log = new RecordingReceiptScanLog();
+        var reader = scan switch
+        {
+            "draft" => new FakeReceiptReader(OneLine),
+            "timeout" => FakeReceiptReader.TimingOut(),
+            "unreadable" => new FakeReceiptReader("I'm sorry, I can't read that."),
+            _ => FakeReceiptReader.Unavailable(),
+        };
+
+        await Scan(reader, log: log).Handle(Image(), CancellationToken.None);
+
+        Assert.Single(log.Entries);
+        Assert.Empty(log.Failures);
+    }
+
+    /// <summary>
     /// Every refusal is logged too, with no tokens: a refused scan still has to be countable, and the
     /// absence of a token count is what says nothing was spent.
     /// </summary>

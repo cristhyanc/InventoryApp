@@ -1,3 +1,5 @@
+using Inventory.Domain.ReceiptScanning;
+
 namespace Inventory.Application.ReceiptScanning;
 
 /// <summary>
@@ -145,6 +147,13 @@ public interface IPdfPageCounter
 /// nothing about what was on the receipt. No parameter here can carry receipt text, a file name, a
 /// product name, a supplier name or a draft, which is what makes that structural rather than a matter
 /// of care. It is <c>INayaxSqsReaderLog</c>'s rule, for the same reason.</para>
+///
+/// <para><strong>A scan that ended as unavailable says why, beside that line</strong> (issue #1236).
+/// <see cref="Unavailable"/> takes one value object, and the whole of what a value object of that
+/// type can hold is an upstream status, the provider's own error type, the provider's own message
+/// capped on one line and the provider's request id - so the provider's message is the only free
+/// text either method can carry, and the request, the file and the draft stay as unreachable from
+/// here as they already were.</para>
 /// </summary>
 public interface IReceiptScanLog
 {
@@ -162,4 +171,14 @@ public interface IReceiptScanLog
         int? pageCount,
         int? inputTokens,
         int? outputTokens);
+
+    /// <summary>
+    /// Records why a scan that ended as <see cref="ScanReceiptOutcome.Unavailable"/> was unavailable
+    /// (issue #1236), beside the line <see cref="Completed"/> wrote for it. It is called only for
+    /// that outcome, and only when the adapter knows something beyond the outcome itself, so no
+    /// other scan's logging changes.
+    /// </summary>
+    /// <param name="businessId">The business the scan was made in.</param>
+    /// <param name="failure">What is known about the failure, and the whole of what may be recorded.</param>
+    void Unavailable(int businessId, ReceiptReaderFailure failure);
 }

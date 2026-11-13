@@ -104,6 +104,12 @@ public sealed class ReceiptReaderTimeoutException : Exception
 ///
 /// <para>Its message is this application's own and never the vendor's: an upstream error body can
 /// quote a request, and a request here contains a receipt.</para>
+///
+/// <para><strong>What the operator is told is on <see cref="Failure"/>, not on the message</strong>
+/// (issue #1236). The vendor's own error type and capped message, the status and the request id ride
+/// on a <see cref="ReceiptReaderFailure"/> that only the log is given, so this exception's message
+/// stays this application's own sentence and the reason a scan failed is still recoverable from the
+/// App Service log without reproducing the request.</para>
 /// </summary>
 public sealed class ReceiptReaderUnavailableException : Exception
 {
@@ -121,4 +127,21 @@ public sealed class ReceiptReaderUnavailableException : Exception
         : base(message, innerException)
     {
     }
+
+    public ReceiptReaderUnavailableException(string message, ReceiptReaderFailure failure)
+        : base(message) => Failure = failure;
+
+    public ReceiptReaderUnavailableException(
+        string message,
+        ReceiptReaderFailure failure,
+        Exception innerException)
+        : base(message, innerException) => Failure = failure;
+
+    /// <summary>
+    /// Why the reader could not be used, when the adapter knows: the status it answered, what it
+    /// said about it, and which local failure it was when nothing was answered.
+    /// <see langword="null"/> when nothing beyond "unavailable" is known, and nothing is then
+    /// recorded beyond the outcome itself.
+    /// </summary>
+    public ReceiptReaderFailure? Failure { get; }
 }

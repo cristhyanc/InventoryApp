@@ -96,6 +96,7 @@ public sealed class ScanReceipt
         var started = Stopwatch.StartNew();
         int? pageCount = null;
         ReceiptReadResult? read = null;
+        ReceiptReaderFailure? failure = null;
         var result = ScanReceiptResult.Refused(ScanReceiptOutcome.Unavailable);
 
         try
@@ -183,8 +184,13 @@ public sealed class ScanReceipt
             // Exactly one call was made, and it is not made again here.
             return result = ScanReceiptResult.Refused(ScanReceiptOutcome.TimedOut);
         }
-        catch (ReceiptReaderUnavailableException)
+        catch (ReceiptReaderUnavailableException exception)
         {
+            // What the operator is told is unchanged; why it happened is kept for the log alone
+            // (issue #1236), so a production failure can be diagnosed without reproducing the
+            // request against the reader.
+            failure = exception.Failure;
+
             return result = ScanReceiptResult.Refused(ScanReceiptOutcome.Unavailable);
         }
         finally
@@ -200,6 +206,14 @@ public sealed class ScanReceipt
                 pageCount,
                 read?.InputTokens,
                 read?.OutputTokens);
+
+            if (failure is { } reason)
+            {
+                // Beside that line, and only for an unavailable outcome the reader said something
+                // about: the status, the provider's error type, its capped message and its request
+                // id - nothing from the request and nothing from the receipt.
+                _log.Unavailable(businessId.Value, reason);
+            }
         }
     }
 
