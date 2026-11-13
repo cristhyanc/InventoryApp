@@ -6,8 +6,8 @@ namespace InventoryApi.Tests.Architecture;
 
 /// <summary>
 /// Two boundaries of the uploaded reimbursement report import that are easier to keep by
-/// construction than by review (issue #1149): what its log <em>can</em> carry, and that it has
-/// nothing to do with the server's pending import folder.
+/// construction than by review (issue #1149): what its log <em>can</em> carry, and that no
+/// reimbursement import reads from a folder on the server any more (issue #1237).
 /// </summary>
 public class ReimbursementImportBoundaryTests
 {
@@ -53,19 +53,23 @@ public class ReimbursementImportBoundaryTests
     }
 
     /// <summary>
-    /// <strong>The uploaded-archive import never touches the shared pending folder.</strong> Nothing
-    /// on its path is constructed with the pending-file source or with the host paths that folder is
-    /// resolved from, so there is no way for it to read, write or delete a file there - and the
-    /// archive reader takes nothing but a logger, because every byte it reads is in memory.
+    /// <strong>No reimbursement import reaches a folder on the server.</strong> Issue #1237 retired
+    /// the import that read whatever XML somebody had left in <c>{WebRootPath}/ImportedFiles</c>, so
+    /// its port, its adapter and the options record carrying the host's paths are gone from both
+    /// inner layers - and nothing on the upload's path takes a dependency that carries a host path,
+    /// which is how the retired import reached the folder in the first place. The archive reader
+    /// takes nothing but a logger, because every byte it reads is in memory.
     /// </summary>
     [Fact]
-    public void Nothing_on_the_uploaded_archive_path_can_reach_the_pending_folder()
+    public void No_reimbursement_import_can_reach_a_folder_on_the_server()
     {
-        Type[] forbidden =
+        string[] retired =
         [
-            typeof(IPendingReimbursementXmlSource),
-            typeof(FileSystemPendingReimbursementXmlSource),
-            typeof(PendingReimbursementXmlOptions),
+            "Inventory.Application.Imports.IPendingReimbursementXmlSource",
+            "Inventory.Application.Imports.ImportPendingReimbursementXmlFiles",
+            "Inventory.Application.Imports.ImportedFileImportResult",
+            "Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource",
+            "Inventory.Infrastructure.Imports.PendingReimbursementXmlOptions",
         ];
 
         Type[] onThePath =
@@ -76,6 +80,17 @@ public class ReimbursementImportBoundaryTests
             typeof(ZipReimbursementArchiveReader),
         ];
 
+        var layers = new[]
+        {
+            typeof(UploadReimbursementReportArchive).Assembly,
+            typeof(ZipReimbursementArchiveReader).Assembly,
+        };
+
+        Assert.All(retired, name => Assert.All(layers, layer => Assert.Null(layer.GetType(name))));
+
+        // A host path is how a folder is reached at all, so no dependency on the path may carry one.
+        string[] hostPaths = ["ContentRootPath", "WebRootPath"];
+
         foreach (var type in onThePath)
         {
             var dependencies = type.GetConstructors()
@@ -83,7 +98,9 @@ public class ReimbursementImportBoundaryTests
                 .Select(parameter => parameter.ParameterType)
                 .ToArray();
 
-            Assert.All(dependencies, dependency => Assert.DoesNotContain(dependency, forbidden));
+            Assert.All(dependencies, dependency => Assert.DoesNotContain(
+                dependency.GetProperties().Select(property => property.Name),
+                name => hostPaths.Contains(name, StringComparer.Ordinal)));
         }
 
         // The reader's whole dependency list, written out: a logger and nothing else.

@@ -34,7 +34,7 @@ namespace Inventory.Infrastructure.Imports;
 ///   and doubled quotes, which is why a CSV instant must match that exact text format.</item>
 /// </list>
 ///
-/// Unlike <see cref="FileSystemPendingReimbursementXmlSource"/>, a failure is deliberately *not*
+/// Unlike <see cref="ZipReimbursementArchiveReader"/>, a failure is deliberately *not*
 /// translated into a plain answer here: an upload whose bytes are not a readable workbook must stay
 /// a failure rather than be reported to the operator as an import of zero rows, and the exception
 /// the reader raises keeps reaching <c>ImportsController.ImportNayaxSales</c>'s own handling exactly

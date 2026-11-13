@@ -328,20 +328,6 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
         Assert.Equal(0, await _factory.ImportedFileCountAsync());
     }
 
-    /// <summary>
-    /// The settlement XML import beside it is not the Nayax sales file and carries no plan
-    /// requirement: its figures feed the two reports a Starter business includes.
-    /// </summary>
-    [Fact]
-    public async Task The_reimbursement_xml_import_is_included_in_every_plan()
-    {
-        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Free);
-
-        var response = await Owner().PostAsync("/api/imports/pending-xml", Json("{}"));
-
-        await AssertNotAPlanRefusalAsync(response);
-    }
-
     #endregion
 
     #region A role refusal stays as it is, and a plan never grants a role more access

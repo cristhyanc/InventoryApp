@@ -15,8 +15,7 @@ namespace Inventory.Application.Imports;
 /// </param>
 /// <param name="Parsed">
 /// The parsed file, or <see langword="null"/> when this entry could not be read as a reimbursement
-/// report. The adapter translates its own failures into that <see langword="null"/>, exactly as
-/// <see cref="IPendingReimbursementXmlSource.ReadAsync"/> does for the pending folder, so no XML or
+/// report. The adapter translates its own failures into that <see langword="null"/>, so no XML or
 /// archive exception crosses this port.
 /// </param>
 public sealed record ReimbursementArchiveXmlEntry(
@@ -91,8 +90,8 @@ public sealed record ReimbursementArchiveContents
 /// one level inside it, and the reimbursement XML files in either.
 ///
 /// <para><strong>Nothing is extracted to disk.</strong> Every byte is read in memory, entry names
-/// are treated as untrusted labels rather than paths, and the server's pending import folder is
-/// never touched - this import has nothing to do with it.</para>
+/// are treated as untrusted labels rather than paths, and no folder on the server is read, written
+/// or deleted.</para>
 ///
 /// <para><strong>It is called twice for one upload, on purpose.</strong> The endpoint calls it to
 /// decide whether the archive may be accepted at all, and the worker calls it again on the stored

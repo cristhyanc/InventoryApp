@@ -133,14 +133,11 @@ public class EndpointPlanRequirementTests
         new("HistoricalGstClassificationController.Apply", PlanRequirementKind.None), // POST api/admin/historical-gst-classification/apply
         new("HistoricalGstClassificationController.Preview", PlanRequirementKind.None), // POST api/admin/historical-gst-classification/preview
 
-        // The uploaded Nayax sales export is Pro (decided on #965's review of 29 October 2026); the
-        // reimbursement XML import is a settlement statement the business was sent, and its figures
-        // feed the two reports a Starter business includes.
+        // The uploaded Nayax sales export is Pro (decided on #965's review of 29 October 2026).
         new("ImportsController.ImportNayaxSales", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales
-        new("ImportsController.ImportPendingXmlFiles", PlanRequirementKind.None), // POST api/imports/pending-xml
-        // The uploaded Nayax reimbursement report ZIP of issue #1149 is the same settlement
-        // statement by another delivery route, so it carries no plan requirement either - and
-        // neither do the two reads that report what became of one.
+        // The uploaded Nayax reimbursement report ZIP of issue #1149 is a settlement statement the
+        // business was sent, and its figures feed the two reports a Starter business includes, so it
+        // carries no plan requirement - and neither do the two reads that report what became of one.
         new("ImportsController.UploadReimbursementReport", PlanRequirementKind.None), // POST api/imports/reimbursement-report
         new("ImportsController.ReimbursementReportJobs", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs
         new("ImportsController.ReimbursementReportJob", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs/{jobId:int}
@@ -622,7 +619,6 @@ public class EndpointPlanRequirementTests
     /// </summary>
     [Theory]
     [InlineData("NayaxConnectionController.Status")]
-    [InlineData("ImportsController.ImportPendingXmlFiles")]
     [InlineData("ImportsController.UploadReimbursementReport")]
     [InlineData("ImportsController.ReimbursementReportJobs")]
     [InlineData("ImportsController.ReimbursementReportJob")]

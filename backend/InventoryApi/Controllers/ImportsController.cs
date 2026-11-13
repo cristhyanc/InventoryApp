@@ -29,11 +29,16 @@ namespace InventoryApi.Controllers;
 /// <para><strong>The Nayax sales file import additionally requires
 /// <see cref="PlanFeature.SalesFileImport"/></strong> (issue #967, decided on #965's review of 29
 /// October 2026). It reads an uploaded file rather than the Nayax API, so the credential gate never
-/// sees it and the requirement is declared here, on that one action. The reimbursement XML import
+/// sees it and the requirement is declared here, on that one action. The reimbursement report upload
 /// beside it carries no plan requirement: it is a settlement statement the business was sent, and
 /// the fee and reimbursement figures it records are read by the Bookkeeping and GST reports a
 /// Starter business includes. A refused import stores nothing - the plan is evaluated before the
 /// multipart body is read at all - and nothing already imported is deleted or altered.</para>
+///
+/// <para><strong>A reimbursement report is uploaded here and nowhere else</strong> (issue #1237).
+/// <c>POST api/imports/pending-xml</c> imported whatever XML somebody with server access had left in
+/// a folder under the API's web root; it was the one import that did not take its input from the
+/// signed-in business's own upload, and it is gone. The upload below is the single route.</para>
 /// </summary>
 [ApiController]
 [Route("api/imports")]
@@ -43,20 +48,17 @@ namespace InventoryApi.Controllers;
 public sealed class ImportsController : ControllerBase
 {
     private readonly ImportNayaxSales _importNayaxSales;
-    private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
     private readonly UploadReimbursementReportArchive _uploadReimbursementReport;
     private readonly ListReimbursementImportJobs _listReimbursementImportJobs;
     private readonly GetReimbursementImportJob _getReimbursementImportJob;
 
     public ImportsController(
         ImportNayaxSales importNayaxSales,
-        ImportPendingReimbursementXmlFiles importPendingXmlFiles,
         UploadReimbursementReportArchive uploadReimbursementReport,
         ListReimbursementImportJobs listReimbursementImportJobs,
         GetReimbursementImportJob getReimbursementImportJob)
     {
         _importNayaxSales = importNayaxSales;
-        _importPendingXmlFiles = importPendingXmlFiles;
         _uploadReimbursementReport = uploadReimbursementReport;
         _listReimbursementImportJobs = listReimbursementImportJobs;
         _getReimbursementImportJob = getReimbursementImportJob;
@@ -91,11 +93,6 @@ public sealed class ImportsController : ControllerBase
         }
     }
 
-    [HttpPost("pending-xml")]
-    public async Task<ActionResult<ImportedFileImportResult>> ImportPendingXmlFiles(
-        CancellationToken cancellationToken) =>
-        Ok(await _importPendingXmlFiles.Handle(cancellationToken));
-
     /// <summary>
     /// Accepts the ZIP Nayax emails, exactly as it arrives, and queues it for import (issue #1149).
     ///
@@ -111,9 +108,8 @@ public sealed class ImportsController : ControllerBase
     /// exactly as the two import writes above are - there is nothing endpoint-specific to get
     /// wrong.</para>
     ///
-    /// <para>No plan requirement, for the reason the reimbursement XML import beside it has none: a
-    /// settlement statement the business was sent feeds the Bookkeeping and GST reports a Starter
-    /// business includes.</para>
+    /// <para>No plan requirement, unlike the Nayax sales file import above: a settlement statement
+    /// the business was sent feeds the Bookkeeping and GST reports a Starter business includes.</para>
     /// </summary>
     [HttpPost("reimbursement-report")]
     [Consumes("multipart/form-data")]

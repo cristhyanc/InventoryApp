@@ -243,7 +243,6 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Expenses.Manage", "POST", "/api/operating-expenses", false, "Operator" },
         { "Expenses.Manage", "POST", "/api/operating-expenses", true, "Operator" },
         { "Expenses.Manage", "PUT", $"/api/operating-expenses/{MissingId}", true, "Operator" },
-        { "Imports.Run", "POST", "/api/imports/pending-xml", false, "Operator" },
         { "Data.Repair", "POST", "/api/admin/inventory-cost-repair/preview", false, "Operator,Manager" },
         { "Data.Repair", "POST", "/api/admin/inventory-cost-repair/apply", false, "Operator,Manager" },
         { "Data.Repair", "POST", "/api/admin/inventory-cost-transition/preview", false, "Operator,Manager" },
