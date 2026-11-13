@@ -2303,8 +2303,9 @@ other form page in the application behaves.
 The Purchases list shows **10 purchases per page** by default, newest first, with a per-page choice of 5, 10,
 20, 50 or 100 and **Previous** / **Next** below the table (issue #1209). Every visit starts on page 1. After a
 Delete or an Add document the list stays on the page you were on, or moves to the last page if that page no
-longer exists. Document thumbnails are downloaded only for the purchases on the page shown, so a long purchase
-history no longer slows the page down.
+longer exists. The list itself never downloads a receipt (issue #1234): a row with a document shows a
+lightweight attachment icon built from the list's own metadata, whatever the page size or page shown, and the
+file is fetched only when you open it, exactly as it always has been.
 
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
 both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue
