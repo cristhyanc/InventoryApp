@@ -136,12 +136,24 @@ public class NayaxMachineProductsCacheTests
     {
         var cache = new NayaxMachineProductsCache(new FakeClock(Now));
         var reader = new Reader(blockedCalls: [1]);
+        var joined = 0;
 
         var callers = Enumerable
             .Range(0, 3)
-            .Select(_ => Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None)))
+            .Select(_ => Task.Run(() =>
+            {
+                var caller = cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None);
+
+                // Recorded only once this caller has actually joined the single in-flight read - a
+                // caller that Task.Run schedules late must not be allowed to reach the cache only
+                // after the failure below has been released, which would start a fresh read instead
+                // of sharing the one being failed.
+                Interlocked.Increment(ref joined);
+                return caller;
+            }))
             .ToList();
 
+        await WaitUntil(() => Volatile.Read(ref joined) == callers.Count, "every caller to join the single in-flight read");
         await WaitUntil(() => reader.Waiting(1), "the single upstream read to start");
         reader.Fail(1, failure);
 
