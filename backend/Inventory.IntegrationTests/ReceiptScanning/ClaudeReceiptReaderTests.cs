@@ -57,6 +57,28 @@ public class ClaudeReceiptReaderTests
     }
 
     /// <summary>
+    /// The GST basis is extraction, not reconciliation: the prompt asks only for what is printed
+    /// about a line's price and tells the reader never to work it out by adding lines up, because
+    /// <c>ReceiptGstBasisPolicy</c> is the one place that reconciles an unknown basis with the totals
+    /// - and a "yes" the reader worked out for itself would bypass every guard that policy has.
+    /// </summary>
+    [Fact]
+    public async Task The_prompt_leaves_reconciling_the_gst_basis_to_the_application()
+    {
+        var handler = new RecordingHandler(Completion("{}"));
+        await Reader(handler).ReadAsync(Request(), CancellationToken.None);
+
+        var system = Flatten(handler.Body.GetProperty("system").GetString()!);
+        Assert.Contains("never by adding lines up or comparing them with a total", system, StringComparison.Ordinal);
+        Assert.DoesNotContain("add up to that total", system, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("answer \"yes\"", system, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The prompt's text with its line breaks and indentation collapsed to single spaces.</summary>
+    private static string Flatten(string text) =>
+        string.Join(' ', text.Split((char[])[' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
     /// The schema publishes exactly the declared vocabularies, so the shape the model is asked for
     /// and the shape the parser accepts cannot drift apart.
     /// </summary>
