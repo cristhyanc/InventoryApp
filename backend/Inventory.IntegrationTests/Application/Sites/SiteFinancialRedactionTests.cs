@@ -68,6 +68,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(site.MonthToDateRevenue);
         Assert.Null(site.PreviousComparableDayRevenue);
         Assert.Null(site.PreviousComparableMonthRevenue);
+        Assert.Null(site.PreviousDayRevenue);
     }
 
     /// <summary>
@@ -108,6 +109,9 @@ public class SiteFinancialRedactionTests
         // The 7.00 sale is at the previous comparable month's own first instant (issue #1180), which
         // is in no other published period, so the month baseline is that sale and nothing else moved.
         Assert.Equal(7m, site.PreviousComparableMonthRevenue);
+        // The 5.00 sale is at yesterday's first instant, so it is also the whole previous day
+        // (issue #1215).
+        Assert.Equal(5m, site.PreviousDayRevenue);
         Assert.Single(facts.CompletedSalesRequests);
     }
 
@@ -133,6 +137,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(asOperator.MonthToDateRevenue);
         Assert.Null(asOperator.PreviousComparableDayRevenue);
         Assert.Null(asOperator.PreviousComparableMonthRevenue);
+        Assert.Null(asOperator.PreviousDayRevenue);
         Assert.Equal(asOwner.SiteId, asOperator.SiteId);
         Assert.Equal(asOwner.SiteName, asOperator.SiteName);
         Assert.Equal(asOwner.MachineCount, asOperator.MachineCount);
@@ -165,6 +170,7 @@ public class SiteFinancialRedactionTests
         Assert.Equal(17m, site.MonthToDateRevenue);
         Assert.Equal(5m, site.PreviousComparableDayRevenue);
         Assert.Equal(7m, site.PreviousComparableMonthRevenue);
+        Assert.Equal(5m, site.PreviousDayRevenue);
     }
 
     /// <summary>

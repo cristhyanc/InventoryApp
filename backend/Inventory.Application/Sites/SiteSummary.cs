@@ -62,6 +62,12 @@ public sealed record SiteMachineStock(
 /// completed-sales read reaches back to this period's own first instant, which is what makes the
 /// figure complete rather than short.</para>
 ///
+/// <para><b>And yesterday in full</b> (issue #1215). <see cref="PreviousDayRevenue"/> is
+/// <see cref="Inventory.Application.Machines.MachineDashboardWindow.PreviousDay"/> summed by that
+/// same rule: the whole previous business day, from its business-local midnight to today's, which
+/// is the Dashboard's Today baseline. <see cref="PreviousComparableDayRevenue"/> keeps its
+/// same-elapsed-time meaning. It is appended last and withheld on exactly the same terms.</para>
+///
 /// <para><b>Every revenue figure is withheld from a request without
 /// <c>Dashboard.ViewFinancials</c></b> (issue #697). They are <see langword="null"/> for such a
 /// request and <see cref="GetSiteSummaries"/> does not read the site's completed sales at all, so
@@ -93,4 +99,5 @@ public sealed record SiteSummary(
     decimal? MonthToDateRevenue,
     IReadOnlyList<SiteMachineStock> MachineStocks,
     decimal? PreviousComparableDayRevenue,
-    decimal? PreviousComparableMonthRevenue);
+    decimal? PreviousComparableMonthRevenue,
+    decimal? PreviousDayRevenue);

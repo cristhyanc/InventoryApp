@@ -20,9 +20,10 @@ namespace InventoryApi.DTOs;
 /// <para><b>Every revenue, profit and status field is nullable because it may be withheld</b>
 /// (issue #698). A caller without <c>Dashboard.ViewFinancials</c> - today an Operator - still reaches
 /// these endpoints for the restocking work they exist for, and is answered <c>null</c> in all
-/// fifteen of them (thirteen, since issue #1177
-/// <see cref="PreviousComparableDayGrossRevenue"/> and since issue #1180
-/// <see cref="PreviousComparableMonthGrossRevenue"/>);
+/// sixteen of them (thirteen, since issue #1177
+/// <see cref="PreviousComparableDayGrossRevenue"/>, since issue #1180
+/// <see cref="PreviousComparableMonthGrossRevenue"/> and since issue #1215
+/// <see cref="PreviousDayGrossRevenue"/>);
 /// <see cref="InventoryApi.Adapters.Mapping.FinancialFigureVisibility"/> is the one
 /// thing that decides which projection it gets. A withheld figure must never arrive as <c>0</c>,
 /// which a client would read as a real "no sales" figure, and the gross-revenue fields stay
@@ -114,4 +115,18 @@ public sealed record MachineResponse
     /// withheld, on exactly the same terms as every other revenue field here.</para>
     /// </summary>
     public required decimal? PreviousComparableMonthGrossRevenue { get; init; }
+
+    /// <summary>
+    /// Yesterday's gross revenue in full, which is the Dashboard's Today baseline (issue #1215): the
+    /// completed-sale revenue of the whole previous business day, from its business-local midnight
+    /// up to today's, counted exactly as <see cref="TodayGrossRevenue"/> is. Unlike
+    /// <see cref="PreviousComparableDayGrossRevenue"/>, whose same-elapsed-time meaning is unchanged,
+    /// it includes sales made later yesterday than the current time today. Appended last so every
+    /// key before it keeps its name, order and value.
+    ///
+    /// <para>Revenue only, like the baselines above. <c>0</c> means the machine recorded no completed
+    /// sale yesterday; <c>null</c> means the figure is withheld, on exactly the same terms as every
+    /// other revenue field here.</para>
+    /// </summary>
+    public required decimal? PreviousDayGrossRevenue { get; init; }
 }

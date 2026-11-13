@@ -118,6 +118,7 @@ const sites = [
     // The baselines Today and This month are compared against (issues #1177, #1180 and #1178).
     previousComparableDayRevenue: 44.2,
     previousComparableMonthRevenue: 902.15,
+    previousDayRevenue: 61.8,
     // Each machine's own stock level (issue #1013) and its own low/empty counts (issue #1019),
     // keyed by the provider machine id the machine read uses. The figures are deliberately not the
     // site's, so a capture shows a machine row's own percentage and counts rather than repeated
@@ -140,6 +141,7 @@ const sites = [
     monthToDateRevenue: 3904.8,
     previousComparableDayRevenue: 188.4,
     previousComparableMonthRevenue: 4120.55,
+    previousDayRevenue: 241.35,
     // Two machines in different stock bands under one site in the warning band, so a capture shows
     // the per-machine colours and words differing from the site's and from each other. Their
     // low/empty counts differ from the site's 15 and 3 as well (issue #1019): a product low on both
@@ -168,6 +170,7 @@ const sites = [
     // beside the $0.00 it is, rather than unavailable (issue #1178).
     previousComparableDayRevenue: 0,
     previousComparableMonthRevenue: 0,
+    previousDayRevenue: 0,
     // No machine stood at it, so there is no machine figure either.
     machineStocks: []
   }
@@ -195,6 +198,7 @@ function machine(id: number, name: string, today: number, week: number, lastWeek
     // compared against, so every one of issue #1178's three modes paints a real change.
     previousComparableDayGrossRevenue: Math.round(today * 85) / 100,
     previousComparableMonthGrossRevenue: Math.round(mtd * 85) / 100,
+    previousDayGrossRevenue: Math.round(today * 110) / 100,
     profitabilityStatus: null
   };
 }

@@ -11,8 +11,8 @@ import { IconComponent } from '../../shared/icon.component';
 
 /**
  * The three sales periods this card offers (issue #1178, narrowing the four of issue #972): each
- * one has a published baseline of its own elapsed window, so each is a comparison rather than a
- * figure on its own. Since issue #987 one shared control chooses between them for both the site and
+ * one has a published baseline of its own (since issue #1215 Today's is the whole of yesterday),
+ * so each is a comparison rather than a figure on its own. Since issue #987 one shared control chooses between them for both the site and
  * the machine rows, on every width, so no period is reachable on one layout only.
  *
  * Last week is deliberately not among them any more: it is a *whole* previous week, which no
@@ -88,22 +88,24 @@ const UNAVAILABLE = 'Unavailable';
 
 /**
  * What each period's comparison is called, in the column heading and beside the percentage on the
- * narrow layout (issue #1178). Every one of the three is "the same elapsed time into the previous
- * period", which is what the server's baselines measure (issues #1177, #1180 and the existing
- * previous comparable week), so none of them promises a whole previous day, week or month.
+ * narrow layout (issue #1178). This week and This month are "the same elapsed time into the previous
+ * period", which is what those baselines measure (issue #1180 and the existing previous comparable
+ * week), so neither promises a whole previous week or month. Today is compared with the whole of
+ * yesterday since issue #1215, so its heading carries no same-time wording.
  */
 const COMPARISON_HEADINGS: Record<PerformancePeriod, string> = {
-  today: 'vs same time yesterday',
+  today: 'vs yesterday',
   week: 'vs same time last week',
   monthToDate: 'vs same time last month'
 };
 
 /**
  * What the baseline *amount* beneath the percentage is labelled (issue #1178), so the figure the
- * change was worked out from is on screen rather than implied by the percentage alone.
+ * change was worked out from is on screen rather than implied by the percentage alone. Today's is
+ * yesterday's full-day total (issue #1215).
  */
 const BASELINE_LABELS: Record<PerformancePeriod, string> = {
-  today: 'Yesterday to this time',
+  today: 'Yesterday',
   week: 'Last week to this time',
   monthToDate: 'Last month to this time'
 };
@@ -153,9 +155,9 @@ export function groupSitesAndMachines(
  * is the same `profit / sales` presentation the former card did.
  *
  * Since issue #1012 `GET api/sites` publishes every period a site row shows, on both layouts. Since
- * issue #1178 the card offers exactly the three periods both responses publish a comparable
- * baseline for - Today (issue #1177), This week and This month (issue #1180) - so every row and the
- * fleet total state a percentage change *and* the baseline amount it was worked out from, and no
+ * issue #1178 the card offers exactly the three periods both responses publish a baseline for -
+ * Today (the whole of yesterday since issue #1215), This week and This month (issue #1180) - so
+ * every row and the fleet total state a percentage change *and* the baseline amount it was worked out from, and no
  * period is left saying there is no comparison for it. The only arithmetic here is still the direct
  * margin, the per-period fleet sums the former Machine performance card displayed and, since #1178,
  * the fleet's sum of baselines; the fleet totals are taken over the machine rows alone.
@@ -309,8 +311,7 @@ export class SiteMachinePerformanceComponent {
 
   /**
    * The comparison column's heading, which names the comparison the selected period makes (issue
-   * #1178). Each of the three periods has its own published baseline over the same elapsed window,
-   * so each heading is about the period beside it and none borrows another period's comparison.
+   * #1178). Each of the three periods has its own published baseline, so each heading is about the period beside it and none borrows another period's comparison.
    */
   get comparisonHeader(): string {
     return COMPARISON_HEADINGS[this.period];
@@ -525,10 +526,11 @@ export class SiteMachinePerformanceComponent {
 
   /**
    * One site's percentage change for the selected period (issue #1178), from that period's own
-   * published pair: the figure the Sales column states and the baseline over the same elapsed time
-   * in the previous day, week or month. `trendLabel` keeps the three answers the card has always
-   * made - the arrow and percentage, "No prior sales" for a known zero baseline, and "Unavailable"
-   * when either figure was withheld - so nothing here invents a comparison from one figure.
+   * published pair: the figure the Sales column states and its baseline - the whole of yesterday
+   * for Today (issue #1215), or the same elapsed time in the previous week or month. `trendLabel`
+   * keeps the three answers the card has always made - the arrow and percentage, "No prior sales"
+   * for a known zero baseline, and "Unavailable" when either figure was withheld - so nothing here
+   * invents a comparison from one figure.
    */
   siteComparisonText(site: Site): string {
     const { current, baseline } = siteComparison(site, this.period);
@@ -712,15 +714,16 @@ interface ComparisonFigures {
 
 /**
  * The pair one site's comparison is made from (issue #1178): the period's own sales figure and the
- * server's baseline over the same elapsed window - the previous business date to this time of day
- * (issue #1177), last week to this time, or the previous calendar month to this point of the month
- * (issue #1180). Each period reads its own two fields and no other, so no figure is ever compared
- * against a window it is not about, and a full previous period is never a baseline.
+ * server's baseline for it - the whole previous business day for Today (issue #1215, replacing
+ * #1177's same-time baseline here), last week to this time, or the previous calendar month to this
+ * point of the month (issue #1180). Each period reads its own two fields and no other, so no figure
+ * is ever compared against a window it is not about. A whole previous week or month is never a
+ * baseline; the whole previous day is Today's by the owner's decision in #1215.
  */
 function siteComparison(site: Site, period: PerformancePeriod): ComparisonFigures {
   switch (period) {
     case 'today':
-      return { current: site.todayRevenue, baseline: site.previousComparableDayRevenue };
+      return { current: site.todayRevenue, baseline: site.previousDayRevenue };
     case 'week':
       return { current: site.currentWeekRevenue, baseline: site.previousComparableWeekRevenue };
     case 'monthToDate':
@@ -732,7 +735,7 @@ function siteComparison(site: Site, period: PerformancePeriod): ComparisonFigure
 function machineComparison(machine: Machine, period: PerformancePeriod): ComparisonFigures {
   switch (period) {
     case 'today':
-      return { current: machine.todayGrossRevenue, baseline: machine.previousComparableDayGrossRevenue };
+      return { current: machine.todayGrossRevenue, baseline: machine.previousDayGrossRevenue };
     case 'week':
       return { current: machine.currentWeekGrossRevenue, baseline: machine.previousComparableWeekGrossRevenue };
     case 'monthToDate':

@@ -38,6 +38,12 @@ namespace Inventory.Application.Machines;
 /// <paramref name="MonthToDateGrossRevenue"/> is counted. It is revenue only for the same reason,
 /// and is appended after the day baseline so every figure before it keeps its name, order and
 /// value.</para>
+///
+/// <para><paramref name="PreviousDayGrossRevenue"/> is yesterday's revenue in full (issue #1215):
+/// the completed-sale revenue of <see cref="MachineDashboardWindow.PreviousDay"/>, from yesterday's
+/// business-local midnight to today's, counted exactly as <paramref name="TodayGrossRevenue"/> is
+/// counted. It is the Dashboard's Today baseline; <paramref name="PreviousComparableDayGrossRevenue"/>
+/// keeps its same-elapsed-time meaning. Revenue only, and appended last.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,
@@ -60,4 +66,5 @@ public sealed record MachineSummary(
     string? ProfitabilityStatus,
     long? SiteId,
     decimal PreviousComparableDayGrossRevenue,
-    decimal PreviousComparableMonthGrossRevenue);
+    decimal PreviousComparableMonthGrossRevenue,
+    decimal PreviousDayGrossRevenue);

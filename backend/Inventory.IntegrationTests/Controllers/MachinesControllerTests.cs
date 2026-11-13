@@ -619,6 +619,7 @@ public class MachinesControllerTests
                 period, period, period, period, period, period,
                 PreviousComparableDayGrossRevenue: 0m,
                 PreviousComparableMonthGrossRevenue: 0m,
+                PreviousDayGrossRevenue: 0m,
                 new MachineProfitabilityStatusInputs(false, false, true, false)));
         return facts.Object;
     }
