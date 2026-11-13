@@ -1611,7 +1611,7 @@ const AGENT_PUBLISH_JOBS = [
 ];
 
 function jobOutputs(job, label) {
-  const match = job.match(/\n    outputs:\n((?: {6}[A-Za-z0-9_-]+: .*\n)+)/);
+  const match = /\n {4}outputs:\n((?: {6}[A-Za-z0-9_-]+: .*\n)+)/.exec(job);
   if (!match) return [];
   return match[1].trimEnd().split('\n').map((line) => {
     const [, name, value] = line.match(/^ {6}([A-Za-z0-9_-]+): (.*)$/) ?? [];
@@ -1627,51 +1627,54 @@ function jobOutputs(job, label) {
  * credential and exports only values written before the agent ran. A separate job on a fresh runner
  * restores that data with the trusted handoff script and mints the token there.
  */
+function verifyAgentJobPackagesOnly(agent, agentStep, agentId, label) {
+  for (const forbidden of ['create-github-app-token', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'AGENT_AUTOMATION_APP_ID', 'git-push-with-app-retry.sh']) {
+    forbidText(agent, forbidden, `${label}: the agent job must hold no App credential`);
+  }
+  requireText(agent, agentStep, label);
+  const steps = workflowSteps(agent);
+  const agentIndex = steps.findIndex((step) => step.startsWith(agentStep));
+  const after = steps.slice(agentIndex + 1);
+  const allowedAfter = [/^ {6}- name: Package [a-z]+ result for the publish job\n/, /^ {6}- name: Upload [a-z]+ result for the publish job\n/];
+  if (after.length !== 2 || !after.every((step, index) => allowedAfter[index].test(step))) {
+    throw new Error(`${label}: only the package and upload steps may follow the agent in its job.`);
+  }
+  requireText(after[1], UPLOAD_ARTIFACT_ACTION, label);
+  requireText(after[1], `name: ${AGENT_RESULT_ARTIFACT}`, label);
+  for (const forbidden of ['gh ', 'node ', 'npm ', 'dotnet ', 'curl ', 'bash ', 'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_PATH']) {
+    forbidText(after[0], forbidden, `${label}: the package step only writes plain data`);
+  }
+  verifyAgentJobOutputs(agent, steps.slice(0, agentIndex).join('\n'), agentId, label);
+}
+
+function verifyAgentJobOutputs(agent, beforeAgent, agentId, label) {
+  for (const { name, value } of jobOutputs(agent, label)) {
+    if (value === `\${{ steps.${agentId}.outcome }}`) continue;
+    const stepOutput = /^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+ \}\}$/.exec(value);
+    if (!stepOutput || !beforeAgent.includes(`        id: ${stepOutput[1]}\n`)) {
+      throw new Error(`${label}: agent job output ${name} must come from a step that ran before the agent (found ${value}).`);
+    }
+  }
+}
+
+function verifyPublishJobRestoresFirst(publish, agentJob, label) {
+  for (const forbidden of ['anthropics/claude-code-action', 'claude_code_oauth_token', 'anthropic_api_key']) {
+    forbidText(publish, forbidden, `${label}: the publish job must never run an agent`);
+  }
+  requireText(publish, agentJob === 'architecture' ? '      - architecture\n' : agentJob, `${label}: publish job needs the agent job`);
+  for (const required of [
+    trustedScriptFetch(HANDOFF_SCRIPT, 'handoff'), 'bash "$handoff" restore "$ARTIFACT_NAME"', `ARTIFACT_NAME: ${AGENT_RESULT_ARTIFACT}`,
+    'actions: read', 'AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}', 'create-github-app-token',
+  ]) requireText(publish, required, label);
+  requireOrder(publish, 'bash "$handoff" restore', 'create-github-app-token', label, 'the result must be restored before any App token exists.');
+}
+
 export function verifyAgentPublishIsolation(read = readRepositoryFile) {
   for (const { path, agentJob, agentEnd, publishJob, publishEnd, agentStep, agentId } of AGENT_PUBLISH_JOBS) {
     const workflow = read(path);
-    const agent = section(workflow, `  ${agentJob}:\n`, agentEnd, `${path} agent job`);
-    const publish = section(workflow, `  ${publishJob}:\n`, publishEnd, `${path} publish job`);
     const label = `${path} agent/publish isolation`;
-
-    for (const forbidden of ['create-github-app-token', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'AGENT_AUTOMATION_APP_ID', 'git-push-with-app-retry.sh']) {
-      forbidText(agent, forbidden, `${label}: the agent job must hold no App credential`);
-    }
-    requireText(agent, agentStep, label);
-    const steps = workflowSteps(agent);
-    const agentIndex = steps.findIndex((step) => step.startsWith(agentStep));
-    const after = steps.slice(agentIndex + 1);
-    const allowedAfter = [/^ {6}- name: Package [a-z]+ result for the publish job\n/, /^ {6}- name: Upload [a-z]+ result for the publish job\n/];
-    if (after.length !== 2 || !after.every((step, index) => allowedAfter[index].test(step))) {
-      throw new Error(`${label}: only the package and upload steps may follow the agent in its job.`);
-    }
-    requireText(after[1], UPLOAD_ARTIFACT_ACTION, label);
-    requireText(after[1], `name: ${AGENT_RESULT_ARTIFACT}`, label);
-    for (const forbidden of ['gh ', 'node ', 'npm ', 'dotnet ', 'curl ', 'bash ', 'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_PATH']) {
-      forbidText(after[0], forbidden, `${label}: the package step only writes plain data`);
-    }
-
-    const beforeAgent = steps.slice(0, agentIndex).join('\n');
-    for (const { name, value } of jobOutputs(agent, label)) {
-      const stepOutput = value.match(/^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+ \}\}$/);
-      const outcome = value === `\${{ steps.${agentId}.outcome }}`;
-      if (outcome) continue;
-      if (!stepOutput || !beforeAgent.includes(`        id: ${stepOutput[1]}\n`)) {
-        throw new Error(`${label}: agent job output ${name} must come from a step that ran before the agent (found ${value}).`);
-      }
-    }
-
-    for (const forbidden of ['anthropics/claude-code-action', 'claude_code_oauth_token', 'anthropic_api_key']) {
-      forbidText(publish, forbidden, `${label}: the publish job must never run an agent`);
-    }
-    requireText(publish, agentJob === 'architecture' ? '      - architecture\n' : agentJob, `${label}: publish job needs the agent job`);
-    requireText(publish, trustedScriptFetch(HANDOFF_SCRIPT, 'handoff'), label);
-    requireText(publish, 'bash "$handoff" restore "$ARTIFACT_NAME"', label);
-    requireText(publish, `ARTIFACT_NAME: ${AGENT_RESULT_ARTIFACT}`, label);
-    requireText(publish, 'actions: read', label);
-    requireText(publish, 'AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}', label);
-    requireOrder(publish, 'bash "$handoff" restore', 'create-github-app-token', label, 'the result must be restored before any App token exists.');
-    requireText(publish, 'create-github-app-token', label);
+    verifyAgentJobPackagesOnly(section(workflow, `  ${agentJob}:\n`, agentEnd, `${path} agent job`), agentStep, agentId, label);
+    verifyPublishJobRestoresFirst(section(workflow, `  ${publishJob}:\n`, publishEnd, `${path} publish job`), agentJob, label);
   }
 
   const handoff = read(HANDOFF_SCRIPT);
