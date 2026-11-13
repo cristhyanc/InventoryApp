@@ -852,8 +852,8 @@ InventoryApp/
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the two Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxSales) with their source/reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the Imports use cases (ImportReimbursementXmlFile, ImportNayaxSales) with their reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), ReimbursementXmlParser, ZipReimbursementArchiveReader and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
 │   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
 │   │   ├── Models/                  EF entities and enums
@@ -1687,7 +1687,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
-| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `api/imports/pending-xml`, `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -5458,9 +5458,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
   nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
-  `ReimbursementReportPageComponent` renders the same notice, disables the ZIP upload and the
-  pending-XML action and guards both handlers, while leaving its recent-uploads list alone, because
-  those reads are `GET`s a read-only session may make.
+  `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
+  leaving its recent-uploads list alone, because those reads are `GET`s a read-only session may make.
+  (It disabled and guarded a second write, the pending-XML action, until issue #1237 retired that
+  import.)
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -7769,9 +7770,10 @@ import went rather than implying it still runs here.
 
 **And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
 is now a short **Reimbursement Report** card whose control is a `routerLink` to
-`/admin/imports/reimbursement-report`, where #1149's ZIP upload, its job status list and that same
-pending-XML action now live; this page runs no reimbursement import of its own and
-`AdminImportsComponent.importXml` is gone. The link is neither hidden nor disabled during a support
+`/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
+page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
+pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
+so the upload is the only way in. The link is neither hidden nor disabled during a support
 session, for the reason the Import products link is not. See
 [The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
 card description names that destination too.
@@ -13655,8 +13657,7 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
 - **Workbook/CSV parsing** sits behind the `INayaxSalesWorkbookReader` port, implemented by
   `Inventory.Infrastructure.Imports.ClosedXmlNayaxSalesWorkbookReader` - a real Infrastructure
   adapter from the start - unlike the EF adapters of the time, which were still API-owned - for the
-  same reason as
-  `FileSystemPendingReimbursementXmlSource`: it needs no `AppDbContext`, only the uploaded bytes.
+  same reason the reimbursement XML adapter was: it needs no `AppDbContext`, only the uploaded bytes.
   ClosedXML therefore moved to `Inventory.Infrastructure`, and the former
   `InventoryApi.Services.NayaxSalesWorkbook` CSV-to-worksheet conversion moved into the adapter with
   it. The adapter keeps the parsing decisions imported financial data depends on: headers matched on
@@ -13665,8 +13666,8 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception
   being an absent settlement value, which the legacy import read as `0`), and an instant taken from
   a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
-  left `null` so the row is skipped. Unlike the pending-XML source, a read failure is deliberately
-  *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
+  left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
+  deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
   `FileFormatException`, which the controller's `InvalidOperationException` handling does not claim,
   so it reaches `GlobalExceptionHandler` as a generic `500` exactly as before) rather than being
   reported to the operator as an import of zero rows. A CSV, by contrast, is always readable, so
@@ -13754,72 +13755,56 @@ child 3 of #149), moved unchanged in behaviour from the removed
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
-The import side of that flow (`POST api/imports/pending-xml`) is the
-`Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case (issue #299, child 1 of
-3 of #151), moved unchanged in behaviour from the removed
-`InventoryApi.Services.ImportService.ImportPendingXmlFilesAsync`:
+**A reimbursement report enters the application one way: the upload on the Reimbursement Report page**
+(issue #1149, described in full [below](#reimbursement-report-zip-upload-and-background-import-issue-1149)).
+Issue #299's second route — `POST api/imports/pending-xml`, which imported whatever XML somebody with
+server access had left in `{WebRootPath}/ImportedFiles` — was **retired by issue #1237**: it was the
+one import that did not take its input from the signed-in business's own upload, and the endpoint,
+the use case, the port and the filesystem adapter behind it are gone. No application code reads,
+lists, creates or deletes anything under that folder any more. (The `ImportedFiles` *table* is
+unrelated to it and stays: it is where an imported reimbursement file is recorded.)
 
-- **The use case** walks the pending queue and, per file, reads it, skips it when this business has
-  already imported the same bytes, otherwise persists it, and removes it from the queue either way.
-  It owns the reported counts (`ImportedFileImportResult`, moved here from
-  `InventoryApi.Services.Interfaces` with no JSON change): a file that could not be read, parsed or
-  removed is counted as failed and stays in the queue rather than being silently dropped, a file
-  whose hash is already present is counted as skipped, and the reimbursement rows of a file that was
-  persisted but then could not be removed are still counted as imported - the same counter order the
-  legacy loop had. A persistence failure is deliberately not caught and still propagates.
-- **Discovery and parsing** sit behind the `IPendingReimbursementXmlSource` port, implemented by
-  `Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource` - a real Infrastructure
-  adapter from the start - unlike the EF adapters of the time, which were still API-owned - because
-  it needs no `AppDbContext`. It resolves
-  `{WebRootPath}/ImportedFiles` from the `PendingReimbursementXmlOptions` host paths the composition
-  root supplies through `AddPendingReimbursementXmlSource()` (the same arrangement
-  [Document storage](#document-storage) uses, so no filesystem path reaches the Application layer),
-  and keeps the parsing decisions imported financial data depends on: invariant-culture numbers and
-  dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
-  parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
-  attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
-  `row` fragment retried wrapped in a root element. Since issue #1149's review one further decision
-  joins them: a file whose element names one attribute *twice* — the same local name in two
-  namespaces — is refused as unreadable rather than recorded with one of the two values dropped,
-  because nothing here may decide which half of a settlement figure to keep. Filesystem and XML
-  failures are translated here
-  and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
-  by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
-  "translated to a plain answer at that layer's own boundary" rule in the
-  [exception ownership table](#exception-ownership-table). Caller cancellation is excluded from that
-  translation and stays cancellation.
+The rules the remaining route follows, each in the type that owns it:
+
+- **Parsing** is `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, the one parser of
+  reimbursement XML in the application, and it keeps the decisions imported financial data depends on
+  unchanged since issue #299: invariant-culture numbers and dates, a date without an offset assumed
+  to be UTC, a numeric attribute read as a boolean when it parses to a non-zero integer, an
+  unparsable number or date left `null` rather than zero, every attribute preserved as raw JSON, a
+  root `row` element treated as the single row, and a bare `row` fragment retried wrapped in a root
+  element. Since issue #1149's review one further decision joins them: a file whose element names one
+  attribute *twice* — the same local name in two namespaces — is refused as unreadable rather than
+  recorded with one of the two values dropped, because nothing here may decide which half of a
+  settlement figure to keep. The parser **throws** rather than deciding what a failure means;
+  `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader` translates that into one entry's
+  own recorded failure at its own boundary, matching the "translated to a plain answer at that
+  layer's own boundary" rule in the [exception ownership table](#exception-ownership-table).
+- **Per-file import** is `Inventory.Application.Imports.ImportReimbursementXmlFile`: skip the file
+  whose bytes this business has already imported, otherwise persist its reimbursement graph, then
+  record the settlement coverage the committed file proves. A persistence failure is deliberately not
+  caught and propagates, so a database problem is never reported as a handful of failed files.
 - **Persistence** sits behind the narrow `IImportedReimbursementStore` port (the hash question plus
   one atomic write of the file with its reimbursement/device/device-payment/fee/payment-method
   graph), implemented by
   `Inventory.Infrastructure.Persistence.EfImportedReimbursementStore`, which moved there with the
-  rest of the adapter family in issue #309. The duplicate lookup is the same
-  tenant-filtered `ImportedFiles` query as before, with no business predicate of its own, so
+  rest of the adapter family in issue #309. The duplicate lookup is a
+  tenant-filtered `ImportedFiles` query with no business predicate of its own, so
   file-hash idempotency stays per business: two businesses may legitimately import the same file and
   neither is told its own first import is a duplicate. Ownership is stamped centrally on save.
-- `ImportsController.ImportPendingXmlFiles` calls the use case directly; the route, the
-  `ImportedFileImportResult` response shape and the status codes are unchanged. The action now also
-  binds the request's `CancellationToken` and passes it through both ports, which the legacy
-  signature did not. This was the first of the three import endpoints to leave `IImportService`; the
-  product catalogue import followed under issue #300 (see [Nayax product catalogue
-  import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
-  (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
-  deleted `ImportService`/`IImportService` entirely.
-- Since issue #1149 the **per-file steps** — the hash dedupe, the atomic write and the coverage the
-  committed file proves — are `Inventory.Application.Imports.ImportReimbursementXmlFile`, shared with
-  the uploaded-archive import below. Nothing about this use case's behaviour changed: the same
-  counters move in the same order, a persistence failure still propagates rather than being reported
-  as a handful of failed files, and the pending folder is still the only place it looks. The parsing
-  moved the same way, into `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, which is now the
-  one parser of reimbursement XML in the application; every parsing decision listed above is
-  unchanged, and `FileSystemPendingReimbursementXmlSource` still owns discovery, the folder
-  confinement and removal, and still translates its own failures into `null`/`false` at the port.
+
+Issue #299 was also the first of the three import endpoints to leave `IImportService`; the product
+catalogue import followed under issue #300 (see [Nayax product catalogue
+import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
+(see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
+deleted `ImportService`/`IImportService` entirely.
 
 ### Reimbursement Report ZIP upload and background import (issue #1149)
 
 Nayax emails the reimbursement report as a ZIP, and until this issue the only way to import one was
-to unzip it twice by hand and get the XML files onto the server's own pending folder. This adds the
-second route: an authorised operator uploads the attachment exactly as it arrived, the upload is
-accepted in seconds, and the import happens in the background with the same pipeline.
+to unzip it twice by hand and get the XML files onto a folder on the server. This added the second
+route: an authorised operator uploads the attachment exactly as it arrived, the upload is accepted in
+seconds, and the import happens in the background with the same pipeline. Since issue #1237 retired
+the folder import it is the only route.
 
 **The HTTP surface, on `ImportsController` under the existing `Imports.Run` capability.**
 `POST api/imports/reimbursement-report` takes one multipart file, checks the archive, stores it as a
@@ -13831,8 +13816,8 @@ tenant-scoped centrally, so another business's job is not found. The business is
 resolved business: nothing in the request can choose one. A role preview and a read-only support
 session are refused on the upload centrally, because it is a `POST`, exactly as the two import writes
 beside it are; the two reads are `GET`s, so a support session may make them. None of the three
-carries a plan requirement, for the reason the pending-XML import carries none: a settlement
-statement the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
+carries a plan requirement, unlike the Nayax sales file import beside them: a settlement statement
+the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
 
 **Reading the archive: `Inventory.Application.Imports.IReimbursementArchiveReader`, implemented by
 `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader`.** The real shape is
@@ -13854,11 +13839,9 @@ XLSX and an XML per report day, so the rules are:
   reduces a name to a label that is only recorded and displayed: both separators normalised, every
   `.`/`..` segment dropped, a leading separator and a drive prefix removed, control characters
   replaced, and the result capped. A name of nothing but traversal segments becomes a positional label
-  rather than a guess. The server's own pending import folder is not touched — this import has nothing
-  to do with it.
+  rather than a guess. No folder on the server is read, written or deleted at all.
 - A file that is not a readable reimbursement report is **that entry's own** failure, answered across
-  the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
-  unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
+  the port as a parsed `null`. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
   the whole upload. "Not readable" includes an XML that is *well-formed* and still ambiguous — one
   that names the same attribute twice on an element, in two namespaces — which the parser refuses as
   its own declared parse failure (issue #1149's review); it used to escape the walk as an
@@ -13966,17 +13949,18 @@ a key of its own — the shared-key rule of [Switchable Admin menu
 visibility](#switchable-admin-menu-visibility-issues-873-and-1148). Its breadcrumb is the first
 three-item trail in `breadcrumbs/breadcrumb-routes.ts`: `BreadcrumbParent` may now declare a parent of
 its own, so Admin › Imports › Reimbursement Report is that chain read outwards rather than a second
-way of writing a trail. `/admin/imports` keeps the `Import XML files` card's place with a short
-**Reimbursement Report** card that links here, and the Nayax sales upload and the sale timestamp
-repair are untouched.
+way of writing a trail. `/admin/imports` keeps the retired `Import XML files` card's place with a
+short **Reimbursement Report** card that links here, and the Nayax sales upload and the sale
+timestamp repair are untouched.
 
 **Composition.** Per [Page composition boundary](#page-composition-boundary-issue-191)
 `ReimbursementReportPageComponent` is the boundary: `ReimbursementReportUploadComponent` owns the
 chosen file, the in-flight upload and the refusal, and emits `(uploaded)` with the accepted job id;
 `ReimbursementImportJobsComponent` owns the list read, the refresh lifecycle, the per-row expansion
 and both reads' failures, and is told to read again through one `[reloadToken]`. The page itself keeps
-the support-session answer, that token, and the one-button pending-XML action that moved here
-unchanged — a single call with its own toast, which is not a workflow of its own.
+the support-session answer and that token. It also kept the one-button pending-XML action that moved
+here with it, until issue #1237 retired that import and the button with it; the upload is now the
+only way a reimbursement report enters the app.
 
 **What the page decides, which is nothing about an import.** Every state, count and reason on screen
 is the server's answer, counted there from its own per-file outcome rows;
@@ -14006,7 +13990,7 @@ before it makes the next one: the superseded request is cancelled outright, its 
 failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
 newest read.
 
-**Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
+**Support session.** The upload is withheld and the page says so; the two status reads are `GET`s a
 read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
 way — the page withholds the controls so no refusable request is sent.
 
@@ -14022,7 +14006,7 @@ row at 1440px, and that the longest file name stays inside its own row. Its capt
 end-to-end suite](#browser-level-end-to-end-suite-issue-46).
 
 **Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
-pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
+absent XML import button and the support session), `reimbursement-report-upload.component.spec.ts`
 (the picker and the note, the selection, the accepted upload and its emitted id, the server's `400`,
 a `ProblemDetails` body, the bodiless failure, the busy state and its second click, the withheld
 session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
@@ -14099,7 +14083,7 @@ nothing writes it (below): a transaction export declares neither.
   business-wide completeness for time nothing accounted for. The imported sales are reported in
   full and their period stays `Unverified` until a fully successful synchronization covers it.
   **Do not reintroduce a range derived from the instants a workbook happens to contain.**
-- `ImportPendingReimbursementXmlFiles` claims the periods the file **proves**, one coverage row per
+- `ImportReimbursementXmlFile` claims the periods the file **proves**, one coverage row per
   proven interval, immediately after that file's graph is committed. Each reimbursement row declares
   its own `[ReimbursementStartDate, the midnight after ReimbursementEndDate)` — the provider's own
   statement of what that row settles, never the payout date and never the import instant
@@ -19688,13 +19672,14 @@ files" as the historical record of that slice, not as a test to look for today.
 
 10. **Imports slices done** (umbrella issue #151, three children; **this completes the #151 imports
     slice** - no import endpoint is served from `InventoryApi/Services` any more)
-    - **Pending reimbursement XML import done** (issue #299, child 1 of 3). `POST api/imports/pending-xml`
-      is now the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
+    - **Pending reimbursement XML import done** (issue #299, child 1 of 3; **the route itself was
+      retired by issue #1237** — a reimbursement report is uploaded on the Reimbursement Report page
+      and the server-folder import is gone, so everything below is history). `POST api/imports/pending-xml`
+      became the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
       `IPendingReimbursementXmlSource` discovery/parsing port and the narrow
-      `IImportedReimbursementStore` persistence port; see
+      `IImportedReimbursementStore` persistence port, which remains; see
       [Reimbursement import and reconciliation](#reimbursement-import-and-reconciliation) for the
-      full behaviour, including the preserved file-hash idempotency, parsing decisions and
-      imported/skipped/failed counting. Unlike every slice before it, its non-persistence adapter is a
+      file-hash idempotency and parsing decisions the upload route still follows. Unlike every slice before it, its non-persistence adapter was a
       real `Inventory.Infrastructure` resident (`Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource`,
       registered with `AddPendingReimbursementXmlSource()`) rather than a temporary API-owned one,
       because filesystem discovery and XML parsing need no `AppDbContext`; only
@@ -19948,7 +19933,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Hourly Nayax sales reconciliation — `Inventory.Application.NayaxReconciliation.ReconcileNayaxSalesWithProvider` | In-process, in a hosted loop: about five minutes after startup and then every 60 minutes it runs once for each business whose SQS sender is enabled and whose own lifecycle is active, one business at a time, in a service scope resolved to that business. Each run reuses `SyncLatestNayaxSales` with `force: true` under a shared per-business lock, then compares what `lastSales` returned with the sales SQS delivered and records the evidence | Implemented (#1104); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104) | No, for the queue reader's reasons exactly: it writes the `/home` SQLite file, so an out-of-process runner is outside the single-writer envelope, and it needs each business's own stored Nayax credentials, which the API already resolves per call. It is the **third** scheduled workload and the first that is scheduled *in-process* rather than by the WebJob of issue #333 — because unlike the backup and the connected-machine counts it has to serialise against request-driven synchronizations through an in-memory lock, which a separate process could not share. It is assessed explicitly under each criterion below. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
-| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files left in a folder on the server | Retired (#1237); the uploaded reimbursement report import below replaces it | No. |
 | Uploaded reimbursement report import — `Inventory.Application.Imports.ProcessReimbursementImportJob` | In-process, in a hosted loop: an operator uploads the ZIP Nayax emails and the endpoint stores it as a queued job; the worker takes the oldest job that is **due**, one at a time, in a service scope resolved to that job's own business, and commits each XML's rows, its coverage and its per-file outcome in one transaction | Implemented (#1149); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file for its whole duration, so an out-of-process importer is outside the single-writer envelope; it needs no credential at all; and it is **not scheduled** — it is work an operator started, moved off the request so a 1.3 MB archive is acknowledged in seconds and a database problem becomes a bounded retry instead of a failed upload. It is assessed explicitly under each criterion below. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
