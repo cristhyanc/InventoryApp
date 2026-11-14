@@ -191,7 +191,7 @@ internal static class EfReportingSharedQueries
     public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
         AppDbContext db, IGetSiteCommissionReport siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
         long? machineId, CancellationToken cancellationToken) =>
-        ResolveMachineCommissionsAsync(db, siteCommissions, from, to, from, endExclusive, machineId, cancellationToken);
+        ResolveMachineCommissionsAsync(db, siteCommissions, new CommissionResolutionBounds(from, to, from, endExclusive), machineId, cancellationToken);
 
     /// <summary>
     /// The same resolution for a business-date window (issue #1250): the commission report still
@@ -202,14 +202,25 @@ internal static class EfReportingSharedQueries
     public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
         AppDbContext db, IGetSiteCommissionReport siteCommissions, BusinessDateSalesWindow window,
         long? machineId, CancellationToken cancellationToken) =>
-        ResolveMachineCommissionsAsync(db, siteCommissions, window.FirstBusinessDate, window.LastBusinessDate,
-            window.StartUtc, window.EndExclusiveUtc, machineId, cancellationToken);
+        ResolveMachineCommissionsAsync(
+            db, siteCommissions,
+            new CommissionResolutionBounds(window.FirstBusinessDate, window.LastBusinessDate, window.StartUtc, window.EndExclusiveUtc),
+            machineId, cancellationToken);
+
+    /// <summary>
+    /// The commission report's own date pair (<see cref="From"/>/<see cref="To"/>, because an
+    /// agreement is effective-dated) alongside the UTC instants the completed-sale machine IDs it is
+    /// gated on are actually selected between (<see cref="SalesStartUtc"/>/<see cref="SalesEndExclusiveUtc"/>)
+    /// - the same pair for a plain calendar-date request, and the business-date window's dates and
+    /// instants for a <see cref="BusinessDateSalesWindow"/> request (issue #1250).
+    /// </summary>
+    private readonly record struct CommissionResolutionBounds(DateTime From, DateTime To, DateTime SalesStartUtc, DateTime SalesEndExclusiveUtc);
 
     private static async Task<CommissionResolutionResult> ResolveMachineCommissionsAsync(
-        AppDbContext db, IGetSiteCommissionReport siteCommissions, DateTime from, DateTime to,
-        DateTime salesStart, DateTime salesEndExclusive, long? machineId, CancellationToken cancellationToken)
+        AppDbContext db, IGetSiteCommissionReport siteCommissions, CommissionResolutionBounds bounds,
+        long? machineId, CancellationToken cancellationToken)
     {
-        var report = await siteCommissions.Handle(from, to, null, cancellationToken);
+        var report = await siteCommissions.Handle(bounds.From, bounds.To, null, cancellationToken);
 
         // An unusable provider makes the commission report an availability answer rather than a set
         // of zero-commission sites (issue #731). Commission therefore stays *incomplete* here: a
@@ -248,7 +259,7 @@ internal static class EfReportingSharedQueries
             : relevantRows.Any(x => x.HasOverlap);
         var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
         var hasMissingSiteMapping = false;
-        var saleMachineIds = await SalesQuery(db, salesStart, salesEndExclusive, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
+        var saleMachineIds = await SalesQuery(db, bounds.SalesStartUtc, bounds.SalesEndExclusiveUtc, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
         if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
         {
             warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
