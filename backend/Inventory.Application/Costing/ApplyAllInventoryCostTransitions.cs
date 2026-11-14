@@ -24,13 +24,14 @@ public sealed class ApplyAllInventoryCostTransitions
     public ApplyAllInventoryCostTransitions(
         IInventoryCostTransitionStore store,
         INayaxLynxClient nayax,
+        INayaxProductLinkStore productLinks,
         IRebuildProductCost rebuild,
         IClock clock)
     {
         _store = store;
         _rebuild = rebuild;
         _clock = clock;
-        _builder = new InventoryCostTransitionPreviewBuilder(store, nayax, clock);
+        _builder = new InventoryCostTransitionPreviewBuilder(store, nayax, productLinks, clock);
     }
 
     public async Task<InventoryCostTransitionBatchPreview> Handle(

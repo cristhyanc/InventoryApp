@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
@@ -24,17 +25,27 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 public sealed class EfReconciliationReportFactsProvider : IReconciliationReportFactsProvider
 {
     private readonly AppDbContext _db;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public EfReconciliationReportFactsProvider(AppDbContext db) => _db = db;
+    public EfReconciliationReportFactsProvider(AppDbContext db, IBusinessCalendar businessCalendar)
+    {
+        _db = db;
+        _businessCalendar = businessCalendar;
+    }
 
     public async Task<ReconciliationReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
+        // Sales are selected and attributed by business date (issue #1250): between the
+        // business-day midnights the requested dates cover, and - inside the loop below - on the
+        // business date of each sale's own instant. A reimbursement's own coverage dates are
+        // date-only values and keep their plain calendar-date comparison.
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
         var endExclusive = to.Date.AddDays(1);
         var isMachineFiltered = machineId.HasValue;
 
-        var paymentSummary = await PaymentSummaryAsync(from, endExclusive, machineId, cancellationToken);
-        var sales = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
-        var statusSales = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
+        var paymentSummary = await PaymentSummaryAsync(window, machineId, cancellationToken);
+        var sales = await EfReportingSharedQueries.SalesQuery(_db, window, machineId).ToListAsync(cancellationToken);
+        var statusSales = await EfReportingSharedQueries.AllSalesQuery(_db, window, machineId).ToListAsync(cancellationToken);
         var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
             .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue)
             .Include(x => x.Devices)
@@ -55,19 +66,20 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
         {
             var periodFrom = reimbursement.ReimbursementStartDate!.Value.Date;
             var periodTo = reimbursement.ReimbursementEndDate!.Value.Date;
-            var periodSales = sales.Where(x => x.MachineAuthorizationTime.Date >= periodFrom &&
-                x.MachineAuthorizationTime.Date <= periodTo).ToList();
+            // A reimbursement period's dates are date-only values, and the sale belongs to the
+            // period that covers its *business* date (issue #1250) - not the UTC date of its
+            // instant, which for the first 10-11 hours of a Sydney day is the previous one.
+            var periodSales = sales.Where(x => IsInPeriod(x, periodFrom, periodTo)).ToList();
             // Issue #477: each period's own non-completed transactions, so a period-level
             // data-quality flag describes that period instead of repeating the whole range's counts.
-            var periodStatusSales = statusSales.Where(x => x.MachineAuthorizationTime.Date >= periodFrom &&
-                x.MachineAuthorizationTime.Date <= periodTo).ToList();
+            var periodStatusSales = statusSales.Where(x => IsInPeriod(x, periodFrom, periodTo)).ToList();
             periods.Add(BuildPeriodFacts(reimbursement, periodSales, periodStatusSales, machineId));
         }
         if (periods.Count == 0)
             periods.Add(BuildPeriodFacts(null, sales, statusSales, machineId, from, to));
 
         var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
-            _db, from, endExclusive, statusSales.Count > 0,
+            _db, window, statusSales.Count > 0,
             // Any imported reimbursement *overlapping* the range, not only one this report could
             // match entirely inside it (issue #731). A settlement that straddles the boundary is
             // still settlement data for these dates, so the fee figures are unverified rather than
@@ -97,6 +109,16 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             ExcludedByReviewTransactionCount = statusSales.Count(x =>
                 NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };
+    }
+
+    /// <summary>
+    /// Whether a sale falls in one imported reimbursement's coverage period, compared on the sale's
+    /// business date against the period's date-only bounds (issue #1250).
+    /// </summary>
+    private bool IsInPeriod(NayaxSales sale, DateTime periodFrom, DateTime periodTo)
+    {
+        var businessDate = _businessCalendar.ToBusinessDate(sale.MachineAuthorizationTime).Date;
+        return businessDate >= periodFrom && businessDate <= periodTo;
     }
 
     // The status counts are read before the completed-sale predicate removes those rows, which is
@@ -198,9 +220,10 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
     private static decimal FeeExGst(ImportedFee fee) =>
         fee.TotalSum ?? (fee.TotalSumWithVat.HasValue ? fee.TotalSumWithVat.Value - FeeGst(fee) : 0m);
 
-    private async Task<SalesPaymentSummary> PaymentSummaryAsync(DateTime from, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)
+    private async Task<SalesPaymentSummary> PaymentSummaryAsync(
+        EfReportingSharedQueries.BusinessDateSalesWindow window, long? machineId, CancellationToken cancellationToken)
     {
-        var rows = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
+        var rows = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
             .Select(x => new { x.PaymentMethod, x.SettlementValue })
             .ToListAsync(cancellationToken);
         var classified = rows.GroupBy(x => PaymentMethodClassifier.Classify(x.PaymentMethod))

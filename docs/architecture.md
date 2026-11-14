@@ -852,8 +852,8 @@ InventoryApp/
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the two Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxSales) with their source/reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the Imports use cases (ImportReimbursementXmlFile, ImportNayaxSales) with their reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), ReimbursementXmlParser, ZipReimbursementArchiveReader and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
 │   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
 │   │   ├── Models/                  EF entities and enums
@@ -1687,7 +1687,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
-| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `api/imports/pending-xml`, `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -3195,7 +3195,7 @@ Why the eligibility is decided *behind* the work-list port rather than in front 
 
 **One endpoint turns a receipt image or PDF into a suggested purchase draft, and it stores nothing about the receipt.** Issue #1163 — sub-issue B of #975 — adds `POST /api/purchases/scan` (multipart, one `file` part). It writes no file, no draft and no purchase: the receipt's bytes are read into memory, sent once to an external reader, and dropped. The operator edits the suggestion and submits it through the ordinary `POST /api/purchases`, which is where a purchase is created and validated. That slice had **no migration, no table and no new entity**; issue #1164 adds exactly one table, the monthly scan counter described in [The monthly scan cap](#the-monthly-scan-cap-issue-1164) below, which holds a month and a number and nothing about what was scanned.
 
-**The port is in Application and the adapter is in Infrastructure.** `Inventory.Application.ReceiptScanning.IReceiptReader` is the narrow port — the file, this business's product and supplier names, in; the model's JSON text, out — and `Inventory.Infrastructure.ReceiptScanning.ClaudeReceiptReader` is the one adapter, a typed `HttpClient` registered by `AddReceiptScanning`, in the shape the Nayax Lynx client already has ([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)). The adapter deliberately **does not parse** the answer: validating it against the published schema is `ReceiptScanPayloadParser`'s single responsibility, so a second reader could not come to accept a different shape. Three further ports keep configuration and the file format out of the use case: `IReceiptScanSettings` (is a key configured, and the limits), `IPdfPageCounter` (how many pages, because counting them means parsing a file format) and `IReceiptScanLog` (the one log line). The controller is thin: it adapts `IFormFile` to the same transport-free `PurchaseFileInput` the create and attach paths use, invokes `ScanReceipt`, and maps the outcome to a status code.
+**The port is in Application and the adapter is in Infrastructure.** `Inventory.Application.ReceiptScanning.IReceiptReader` is the narrow port — the file, this business's product and supplier names, in; the model's JSON text, out — and `Inventory.Infrastructure.ReceiptScanning.ClaudeReceiptReader` is the one adapter, a typed `HttpClient` registered by `AddReceiptScanning`, in the shape the Nayax Lynx client already has ([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)). The adapter deliberately **does not parse** the answer: validating it against the published schema is `ReceiptScanPayloadParser`'s single responsibility, so a second reader could not come to accept a different shape. Three further ports keep configuration and the file format out of the use case: `IReceiptScanSettings` (is a key configured, and the limits), `IPdfPageCounter` (how many pages, because counting them means parsing a file format) and `IReceiptScanLog` (the scan's own log line, and since issue #1236 the one warning an unavailable scan adds beside it). The controller is thin: it adapts `IFormFile` to the same transport-free `PurchaseFileInput` the create and attach paths use, invokes `ScanReceipt`, and maps the outcome to a status code.
 
 **The plan feature is `ReceiptScanning`, only Pro includes it, and it is the one feature that fails closed.** `[RequirePlan(PlanFeature.ReceiptScanning)]` on the action runs before model binding, so a refused request never has its file read and never costs anything, and the capability is this controller's existing `Purchasing.Operate` — exactly the permission creating a purchase needs, and no more. Unlike every other feature, it is **also refused while plan enforcement is off**: that is `PlanFeaturePolicy.FailsClosedWhileUnenforced`'s one entry, described in [Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967), and the reason is that every scan spends real money — there is no state in which opening it to every business in the deployment is the cautious answer. The refusal is the ordinary `403` with the stable `plan_required` code, the plan the business would need and the feature, so a client learns one word for one answer.
 
@@ -3213,9 +3213,15 @@ Why the eligibility is decided *behind* the work-list port rather than in front 
 
 **A container deposit levy is part of the cost of the drinks it was charged for, and the totals decide whether it already is.** `ReceiptLevyPolicy` compares the lines — the stock lines **and** the `other` lines, plus delivery and package — against the printed total, on **one** GST basis: the printed total's own, with each line's printed amount converted onto it, never converted and converted back. Three outcomes: **already included** (the sum matches the printed total without the levy — JB Metro's online order, which puts the levy in each drink's price and prints it again as a disclosure — so nothing is added and the levy is not returned as a line); **not included** (the sum matches only with the levy added, so the reader's own drink-container marks decide which stock lines share it, by number of units, with the remainder cents on the last line); and **unresolved** (neither matches, or one amount could not be put on the comparison basis, or no line is marked as a drink) — in which case **no line's cost changes** and the levy comes back as its own `levy` entry with its printed amount and an `unresolved` flag. "Already included" is tested first, so a receipt both readings would fit keeps the one that changes no line cost.
 
-**Errors map to one outcome each, and each is a different thing to tell the operator.** Switched off is `503` with "Receipt scanning is not available" — the shipped state, with no outbound call at all; a refused file is `400` with the reason (a HEIC photograph gets "Convert the photo to JPEG and try again", which is the one refusal somebody can act on); an answer with nothing usable in it is `422`; a timeout is `504`; an unusable reader is `502`; and a business that has used its whole month's allowance is `429` (issue #1164, below). The timeout is the configured one, applied by the `HttpClient`, and there is **no resilience handler on this client, deliberately** — unlike the Nayax client — because a retried scan is a second payment. An upstream error body is never echoed: a vendor error can quote the request, and the request held a receipt.
+**Errors map to one outcome each, and each is a different thing to tell the operator.** Switched off is `503` with "Receipt scanning is not available" — the shipped state, with no outbound call at all; a refused file is `400` with the reason (a HEIC photograph gets "Convert the photo to JPEG and try again", which is the one refusal somebody can act on); an answer with nothing usable in it is `422`; a timeout is `504`; an unusable reader is `502`; and a business that has used its whole month's allowance is `429` (issue #1164, below). The timeout is the configured one, applied by the `HttpClient`, and there is **no resilience handler on this client, deliberately** — unlike the Nayax client — because a retried scan is a second payment. An upstream error body is never echoed: a vendor error can quote the request, and the request held a receipt. Since issue #1236 the vendor's own error type and capped message do reach the **log**, and nothing else from the body does, and nothing from it reaches the operator at all — see the two paragraphs on the unavailable scan's warning below.
 
 **The log line is the privacy rule, structurally.** `IReceiptScanLog.Completed` takes a business id, an outcome, a duration, a page count and two token counts, and has no parameter that could carry receipt text, a file name, a product name, a supplier name or any part of the draft — the same reason `INayaxSqsReaderLog` has the shape it has ([The Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103)). Every attempt is logged, refusals included, so a scan is countable; the absence of a token count is what says nothing was spent.
+
+**An unavailable scan says why, in one warning beside that line** (issue #1236). Two production failures of 11 and 12 November 2026 — a `400 invalid_request_error` "Extra inputs are not permitted" and a `400` "Schema is too complex" — each had to be reproduced against the API by hand, because the one line a scan wrote said only `ended as Unavailable`. So `IReceiptScanLog` gained a second method, `Unavailable(businessId, failure)`, which `ScanReceipt` calls in the same `finally` immediately after `Completed` and **only** for that outcome and only when the adapter knows something: every other outcome, the successful line included, is byte for byte what it was. What it records is `Inventory.Domain.ReceiptScanning.ReceiptReaderFailure`, and the whole of what that type can hold is the upstream HTTP status, the provider's own `error.type`, the provider's own `error.message` and the response's `request-id` — or, when nothing was answered, which local failure it was (`NetworkError`, `UnreadableAnswer`, `NoTextBlock`), with **no status**, because a status nobody answered would be a reading of a failure that did not happen. `LoggingReceiptScanLog` writes it as a warning whose fields are structured names, beginning `Receipt scan for business {BusinessId}` so the one search finds both of a scan's lines.
+
+**The provider's message is the only free text, and it is capped by the type rather than by its caller.** The owner decided on 13 November 2026 that the message is worth logging; it is cut to its **first 200 characters on one line**, every control character and Unicode line separator becoming a space, and a blank value is recorded as nothing rather than as an empty one. The error type and the request id travel the same way, because they come from the same answer. **A message that quotes the request is withheld, not capped** (the owner's decision of 14 November 2026, after review found a cap keeps whatever the first 200 characters of a quote hold): the provider refuses a malformed request before it reads the receipt, so the only business data a refusal can quote is what the request carried — this business's product and supplier names and the file as base64. `ReceiptRequestEcho` therefore withholds a message that contains **any product or supplier name of this business, whatever its length** — one of three characters or more anywhere in the message, and a one- or two-character name ("7D" is a real drinks brand) where it stands as a name of its own, with no letter or digit beside it, so it is caught where it is quoted without withholding every message whose own words happen to contain those letters ("co" inside "complex") — **any 16-character run of base64** that appears in the encoded file, **any 8-character run of the API key** (a credential is random, so eight of its characters are in no ordinary message by chance), **any 24 characters of the system prompt, the output schema or the catalogue text** (compared with case, whitespace and JSON escapes of line breaks ignored, so a re-wrapped quote still matches), or **one distinctive word of those texts** — six characters or more carrying a digit, an inner capital or an inner `-`, `_` or `.`, such as `unitsPerPack`, `yyyy-MM-dd` or `vending-machine` — because nothing but this application's own text writes one. Every comparison ignores case. The short-name rule, the key's own run and the distinctive word are the repair of 14 November 2026: a valid two-character supplier name, eight characters of the key and a twelve-character quote of the prompt each reached the log under the thresholds that preceded them. `ReceiptReaderFailure.MessageWithheld` is then `true`, `ErrorMessage` is nothing, and the warning's `{MessageWithheld}` field says so while the status, error type and request id are still logged. `ReceiptReaderFailure`'s constructor is private, its factories do the cleaning and the record is sealed — so its copy constructor is private too and no `with` expression can put an uncapped, multi-line value back in. **The raw error body is never logged, stored or echoed**: `ClaudeReceiptReader` reads at most 8 KiB of it, takes `error.type` and `error.message` only when each is actually a string there, and yields nothing at all for a body that is larger, is not JSON, is not an object, holds no `error` object or states neither member — the status is still recorded, and nothing is guessed from it. The exception's own message is unchanged, so nothing the vendor said reaches `ReceiptReaderUnavailableException.Message`, the `502` answer or the operator, who still reads "Receipt scanning is temporarily unavailable". The Anthropic error document (`{"type":"error","error":{"type":…,"message":…}}`) and the `request-id` response header are issue #1236's own specification and, like the request shape, **could not be re-verified against the published documentation here**: this repository's agents reach only the Nayax documentation server (AGENTS.md § Nayax contract verification). Everything about the shape is therefore read defensively — a member that is not there, or not a string, is simply nothing.
+
+**What the check deliberately does not look for, and the exposure that leaves.** This is recognition, not a guarantee, and the line is drawn by what the message could be about. **Nothing about the business or the credential is left to a threshold of meaning**: a catalogue name of any length, any 16-character run of the file and any 8-character run of the key are all looked for. An **ordinary English word of the fixed prompt or schema** — "printed", "delivery", "single" — is not: it is indistinguishable from the provider's own wording, and the prompt and schema are this application's own fixed text, identical for every business, saying nothing about the business or about the receipt. The residual exposure is therefore a provider message that quotes **less than one of those runs** — under 16 base64 characters of the file, under 8 characters of the key — or a **short, ordinary-word excerpt of the fixed prompt**; it is recorded here rather than claimed away. The cost is paid in the other direction as well, deliberately: a diagnostic that names a schema keyword this application's own schema uses ("`additionalProperties` is not supported") is withheld, and the status, the error type and the `request-id` still identify the failure to the vendor. A **guarantee** rather than a recognition would mean logging no provider message at all — which contradicts the owner's decision of 13 November 2026 that the message is worth logging, so it is a decision for the owner to revisit and not for this adapter to take.
 
 **Configuration, and the launch gate.** `ReceiptScanning:ApiKey` is a secret and its absence is the shipped state: no key means the feature is off, so deploying without it is safe. `ReceiptScanning:Model` defaults to the model decided on 10 November 2026 after a test on 8 real receipts; `ReceiptScanning:TimeoutSeconds` defaults to 60; `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` default to the reader's documented limits and are settings rather than constants precisely because a vendor's limits change. A key configured beside a broken setting fails at startup with the setting named. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** — the launch gate recorded on #1163, which the cap below satisfies — and until then the fail-closed plan rule refuses every scan anyway. **The cap itself is not configuration**: it is compiled into `PlanCatalogue`, for the reason the storage allowance is, so a setting cannot disagree with what was actually spent. See [Configuration and secrets](../README.md#configuration-and-secrets).
 
@@ -3241,7 +3247,7 @@ Why the eligibility is decided *behind* the work-list port rather than in front 
 
 **What proves it.** `ReceiptScanQuotaPolicyTests` pins the cap, the month key, the `used < limit` boundary, the non-negative remainder and the refusal sentence by value. `ScanReceiptTests` covers the hundredth scan running with none left, the refusal that calls nothing, the single count against the current month, a scan counted into the next month while the previous month's count stands, every refusal that is **not** counted, and every failure after the call that **stays** counted. `Adapters/Persistence/ReceiptScanUsageStoreTests` is the relational half against a real database **file** with one connection per writer — the two-at-once race with one scan left (exactly one counted, and the stored count never past the cap), the same race from an empty month (two counted, one row), the month rollover, tenant isolation in both directions, the unique index as the backstop, and the platform read's business pinning, its zero-versus-not-found distinction, its two-businesses-two-zones month and its fail-closed refusal of an unresolvable zone. `Adapters/Persistence/AddReceiptScanUsageMigrationTests` is the upgrade test: the table and both indexes arrive, the column list is asserted **in full** because what is absent from it is the privacy rule, recorded purchases are untouched, no business starts with a count, and the rollback removes exactly that table. `Controllers/ReceiptScanApiTests` adds the whole pipeline over real HTTP — the `429` with the reader uncalled and the count unmoved, the hundredth scan's own `usage`, the usage endpoint on every plan, a stranger refused, and another business at its cap not stopping this one — and `Controllers/SuperAdminReceiptScanUsageApiTests` covers who may reach the platform read, what it reports, the unknown business, and that every other method on its route is refused with every counter unchanged.
 
-**What proves it.** `ReceiptLineArithmeticPolicyTests` and `ReceiptLevyPolicyTests` pin the money rules by value, including the issue's own worked examples and all three levy outcomes; `ReceiptGstBasisPolicyTests` pins when a GST-inclusive total settles an unstated line basis and every refusal (a cent out, no total, a total not stated inc GST, an unread line total, an ex-GST line); `ClaudeReceiptReaderTests.The_prompt_leaves_reconciling_the_gst_basis_to_the_application` pins that the prompt asks only for printed basis evidence; `ReceiptScanFilePolicyTests` and `ReceiptPurchaseDatePolicyTests` pin the file verdicts and the date choice; `ReceiptScanPayloadParserTests` covers malformed JSON, extra fields, every dropped-line reason and the strict value kinds; `ReceiptScanDraftBuilderTests` covers the foreign and unknown ids, the supermarket-invoice case priced end to end, and its unmatched-total, one-cent-out and conflicting-basis (an explicit ex-GST line) counterparts left unpriced while the explicit line is still converted, the charges, the `other` line counting towards the reconciliation, and each levy outcome end to end; `ScanReceiptTests` covers what is refused before the reader is reached, the one call with no retry, and the log line. `Controllers/ReceiptScanApiTests` is the whole pipeline over real HTTP against relational SQLite — the plan gate plan by plan, the fail-closed refusal with enforcement off, the switched-off `503`, the file refusals, the timeout, and **no writes**: a row-count comparison plus a strict document-storage mock with no write configured, so a scan that saved a byte fails the request. Its page-limit cases are the repairs' regressions — a complete PDF that declares `/Count 1` and reaches one page more than the limit is refused with **no call to the reader at all**, a page tree replaced through a cross-reference stream is refused as unreadable with no call, an ordinary incremental update whose active tree is over the limit is refused with the page-limit message and no call, and a two-page one is scanned with the verified count — and `Controllers/ReceiptScanUploadLimitTests` pins both upload caps and the absence of `[DisableRequestSizeLimit]`. `ReceiptScanning/ClaudeReceiptReaderTests` asserts the built request against a fake HTTP handler (the model from configuration, the schema present, no tools, the base64 block, the key and version headers, and only the two columns of catalogue), and `PdfPageCounterTests` counts the pages of real PDF files built by `ReceiptScanning/PdfFixture` — header, objects, a cross-reference table with offsets the test itself verifies, trailer — covering an understated and an overstated `/Count`, a nested tree, both sides of the counter's own ceiling, an incremental update counted from its active tree in both directions, and every structure and format it refuses to count; `The_cross_reference_stream_fixture_really_does_replace_the_page_tree` takes the finding's file apart to prove the page tree is defined once in the plain bytes as the old two-page tree while its object stream holds the 101-page one. **No test makes a live call to the reader**, which issue #1163 excludes.
+**What proves it.** `ReceiptLineArithmeticPolicyTests` and `ReceiptLevyPolicyTests` pin the money rules by value, including the issue's own worked examples and all three levy outcomes; `ReceiptGstBasisPolicyTests` pins when a GST-inclusive total settles an unstated line basis and every refusal (a cent out, no total, a total not stated inc GST, an unread line total, an ex-GST line); `ClaudeReceiptReaderTests.The_prompt_leaves_reconciling_the_gst_basis_to_the_application` pins that the prompt asks only for printed basis evidence; `ReceiptScanFilePolicyTests` and `ReceiptPurchaseDatePolicyTests` pin the file verdicts and the date choice; `ReceiptScanPayloadParserTests` covers malformed JSON, extra fields, every dropped-line reason and the strict value kinds; `ReceiptScanDraftBuilderTests` covers the foreign and unknown ids, the supermarket-invoice case priced end to end, and its unmatched-total, one-cent-out and conflicting-basis (an explicit ex-GST line) counterparts left unpriced while the explicit line is still converted, the charges, the `other` line counting towards the reconciliation, and each levy outcome end to end; `ScanReceiptTests` covers what is refused before the reader is reached, the one call with no retry, and the log line. `Controllers/ReceiptScanApiTests` is the whole pipeline over real HTTP against relational SQLite — the plan gate plan by plan, the fail-closed refusal with enforcement off, the switched-off `503`, the file refusals, the timeout, and **no writes**: a row-count comparison plus a strict document-storage mock with no write configured, so a scan that saved a byte fails the request. Its page-limit cases are the repairs' regressions — a complete PDF that declares `/Count 1` and reaches one page more than the limit is refused with **no call to the reader at all**, a page tree replaced through a cross-reference stream is refused as unreadable with no call, an ordinary incremental update whose active tree is over the limit is refused with the page-limit message and no call, and a two-page one is scanned with the verified count — and `Controllers/ReceiptScanUploadLimitTests` pins both upload caps and the absence of `[DisableRequestSizeLimit]`. `ReceiptScanning/ClaudeReceiptReaderTests` asserts the built request against a fake HTTP handler (the model from configuration, the schema present, no tools, the base64 block, the key and version headers, and only the two columns of catalogue) and, since issue #1236, the reason each failure carries: a `400 invalid_request_error` with its message and request id, a message over 200 characters with line breaks in it, 429, 529 and 401, a non-JSON body, a body with no `error` member, members of the wrong kind, an empty body, a body past the reading limit, a transport failure, an unreadable answer and an answer with no text block — each either the status with what the body stated or the local failure with no status at all. `ReceiptScanning/ReceiptScanFailureLoggingTests` is the log-capture half over the **real** adapter and the **real** `LoggingReceiptScanLog`: the warning's queryable fields, the capped one-line message, an unparsable body logging the status and never itself, each local failure with no status field at all, the unchanged successful line, a message quoting a product name, a supplier name, a piece of the file, the system prompt (also re-wrapped and upper-cased), the catalogue text or the API key withheld with the status, type and request id kept, `A_short_name_or_a_short_distinctive_fragment_is_withheld_too` doing the same for the three short quotes the first thresholds let through (a two-character supplier and a two-character product quoted in the other case, one twelve-character word of the prompt and schema, and eight characters of the key), every safe diagnostic the issue exists for — "Schema is too complex", "Extra inputs are not permitted", "Overloaded" and the rate-limit sentence — still logged as stated beside a catalogue of two-character names, and the sweep — an error body that quotes the request back outside its own message leaves no line holding the file, the base64, the product or supplier names, the receipt's text, the prompt or the key. `ReceiptReaderFailureTests` pins the cleaning rule itself by value, and `ScanReceiptTests` covers the unavailable outcome and its unchanged user message, each local failure, and that a draft, a timeout, an unreadable answer and a reasonless refusal each record nothing extra. `PdfPageCounterTests` counts the pages of real PDF files built by `ReceiptScanning/PdfFixture` — header, objects, a cross-reference table with offsets the test itself verifies, trailer — covering an understated and an overstated `/Count`, a nested tree, both sides of the counter's own ceiling, an incremental update counted from its active tree in both directions, and every structure and format it refuses to count; `The_cross_reference_stream_fixture_really_does_replace_the_page_tree` takes the finding's file apart to prove the page tree is defined once in the plain bytes as the old two-page tree while its object stream holds the 101-page one. **No test makes a live call to the reader**, which issue #1163 excludes.
 
 #### The Scan receipt screen (issue #1166)
 
@@ -4003,14 +4009,69 @@ collapsing two endpoints into one line would hide which of them was refused:
 
 | Check | Endpoint | Scope |
 | --- | --- | --- |
-| `SignIn` | `GET devices` | Proves the token authenticates at all |
-| `Machines` | `GET machines` | Also decides whether the machine checks run |
+| `Machines` | `GET machines` | The credential gate; also decides whether the machine checks run |
 | `Machine` | `GET machines/{id}` | Machine-scoped |
 | `ProductCatalogue` | `GET operators/{operatorId}/products` | Operator-scoped |
 | `ProductGroups` | `GET operators/{operatorId}/productGroups` | Operator-scoped |
 | `MachineProducts` | `GET machines/{id}/machineProducts` | Machine-scoped |
 | `MachineLastSales` | `GET machines/{id}/lastSales` | Machine-scoped |
 | `MachineLastAlerts` | `GET machines/{id}/lastAlerts` | Machine-scoped |
+
+**There is no sign-in probe, and `GET devices` is never called** (issue #1310). The list above used to
+open with a `SignIn` check whose only purpose was to prove the token authenticated, and it was
+retired: Nayax's device *hardware* inventory is a permission an owner has no reason to hold, so a
+`403` there made setup inconclusive — and could stop an Owner saving a token — even when
+`GET machines` answered perfectly. The machine list is the read this application cannot work without
+and the one every owner's token is meant to cover, so judging the credentials by it asks for nothing
+extra, and a run that reads it has already proved the token authenticates. Each run therefore makes
+exactly **one** `GET machines` call and **zero** `GET devices` calls, which
+`NayaxConnectionCheckRunnerTests.No_check_ever_calls_the_devices_endpoint` asserts over the wire for
+a success, a `401`, a `403` and a `5xx`.
+
+**One is one *live request*, not one method call.** The runner's `HttpClient` carries the production
+`NayaxResilienceHandler`, which retries a transient `GET` up to three more times, so calling
+`GetMachinesAsync` once would still have sent the gate's probe up to four times. The gate therefore
+has its own read, `NayaxLynxClient.ReadMachineListForConnectionGateAsync`, which marks the request
+`NayaxResilienceHandler.SingleAttemptOnly` — see
+[HTTP resilience policy](#http-resilience-policy). The other six probes keep the ordinary retry
+budget, so a momentary `5xx` on the product catalogue is still not reported to an owner as a missing
+permission. `NayaxConnectionCheckRunnerResilienceTests` asserts both over the **production
+composition** (the runner resolved from `AddNayaxLynxClient` with only its transport substituted),
+because a count taken above the handler — as the rest of `NayaxConnectionCheckRunnerTests` is — counts
+method calls rather than requests.
+
+**A `200` that is not an array is not a verified empty fleet.** Nayax documents this endpoint's
+success as a JSON array of machine objects ([Get All Machine Basic
+Info](https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info)), and every
+ordinary read in `NayaxLynxClient` coalesces an absent body into an empty collection — harmless for a
+list of products. Since the machine list became the credential gate, that coalescing would read a
+`200 null` as "this token listed your machines and you have none" and let an untested candidate
+replace a working connection, so the gate's read refuses a `null` or otherwise non-array body as
+`UnexpectedResponse`, which concludes `Inconclusive` and may not be saved. An empty array `[]` is
+unchanged: it is a real answer, concludes `Ready` and may be saved. No other consumer's behaviour
+changed.
+
+**Nor is an array of entries the gate cannot act on.** The same reference documents the array as
+holding machine *objects* whose `MachineID` is an `int64` that the contract itself allows to be
+`null`, and the gate reads two things out of those entries that an Owner then acts on: how many
+machines the token listed, and which machine the four machine-scoped probes are run against. So
+`[null]` deserializes to a one-element list holding nothing and `[{}]` to a machine whose id defaults
+to `0`; unchecked, the first would be saveable while reporting one machine that cannot be named and
+running no machine-scoped check, and the second would be saveable while probing `machines/0/`, which
+is not the business's machine. `ReadMachineListForConnectionGateAsync` therefore refuses a `null`
+entry or a machine with no usable `MachineID` as `UnexpectedResponse`, before the runner reports the
+line as `Passed` or reads a count or a machine id out of it. The **whole** answer is refused rather
+than filtered, for the same reason a `null` body is: a list that cannot be read is not a verified
+fleet, and reporting a smaller fleet than Nayax sent would be an answer nobody gave. The rule is the
+gate's alone — the ordinary reads still hand the fleet, the machine-list cache and the sync exactly
+what Nayax sent — and it costs no extra request: it is applied to the one answer already received.
+`NayaxConnectionCheckRunnerTests.A_machine_list_entry_that_is_not_a_usable_machine_concludes_nothing_and_cannot_be_saved`
+pins it over the runner, including that no machine endpoint is called and that the gate still sends
+exactly one `machines` request.
+
+The enum **reserves the retired value `1`** rather than
+reusing it, because a report serialized before the change still names that check by number — see
+[Reports that name a retired check](#reports-that-name-a-retired-check-issue-1310) below.
 
 **`POST machines/{id}/machineProducts` is never called**, and it is absent from the vocabulary rather
 than merely unused: testing a connection must not change an operator's Nayax data.
@@ -4047,6 +4108,33 @@ wrong one ends up on somebody's screen. The mapping is Nayax's own documented vo
   check that carries no operator id, or a body that is not the documented shape. An answer nobody
   has interpreted is never presented as one that has been.
 
+#### Reports that name a retired check (issue #1310)
+
+A completed report is **stored**: serialized into the business's test draft, read back by the save,
+and — for a draft an Owner left outstanding across a deployment — read back by a build that no longer
+declares every check it names. Enum values are serialized as numbers, so the retired `SignIn` line
+survives in storage as `1` long after the check itself stopped existing. One rule covers it:
+
+- **`NayaxConnectionCheckPolicy.IsDeclared` decides what counts**, and
+  `NayaxConnectionCheckReport.DeclaredLines` is every line that passes it. `NothingFailed`,
+  `MachineChecksPending` and `Outcome` are all derived from that, and both response projections
+  publish it, so **the retired row is never published and never decides anything**. `Lines` itself is
+  left exactly as stored, because it is the record of what that run did.
+- **An undeclared line is evidence about nothing**, in both directions, and that is the whole point.
+  A refusal of a permission this application no longer asks for must not decide a stored status, hold
+  `NothingFailed` back, or put a failing row on an Owner's screen. A *pass* of a probe this
+  application no longer makes must not vouch for a token either: a pending legacy draft is judged by
+  the machine list like any other, so one whose machine list was refused cannot be promoted on the
+  strength of its sign-in line, while one refused **only** the device-inventory probe saves as
+  `Ready`.
+- **The frontend drops the same line by name** (`isRetiredNayaxConnectionCheck` /
+  `withoutRetiredNayaxConnectionChecks` in `provider/nayax-read-areas.ts`), because a response from an
+  instance that has not been deployed yet can still carry it. A retired name is dropped rather than
+  rendered raw — which is what an *unrecognised* name gets — because the two are opposites: a check a
+  newer deployment reports is something this application may yet depend on, while a retired one is
+  something it has stopped depending on, and naming it would ask an Owner to chase a permission
+  nothing needs.
+
 **The checks go through `NayaxLynxClient`, with the one thing that differs swapped.** That client is
 the single place a Nayax request is built, authenticated, sent and then accepted or rejected, and the
 runner needs exactly that — the same relative endpoints, the same `Authorization: Bearer` header, the
@@ -4061,7 +4149,9 @@ been stored, so there is no revision it belongs to and no row it may touch. **A 
 therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
 operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
 same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
-the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+the same thing on a test as on a sync — the one request that opts out of retrying is the gate's
+machine-list read, and it opts out per request rather than in that registration. This is **not** the
+gate-free re-test read of
 [issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
 all.
 
@@ -4091,7 +4181,7 @@ connection is issue #537's separate, reviewed step.
   delete and the insert are one transaction, so a failed replacement leaves the previous draft in
   place rather than leaving the business with none.
 - **It expires after fifteen minutes** (`TestNayaxConnection.DraftLifetime`) — long enough to read
-  eight result lines and decide, short enough that an abandoned browser tab does not leave a
+  seven result lines and decide, short enough that an abandoned browser tab does not leave a
   decryptable token in the database for the rest of the day. Expiry is a **read** rule, not a sweep:
   past the instant the draft stops existing for every caller, and the row goes when the next test
   replaces it.
@@ -4109,7 +4199,7 @@ draft, and a cached `GET` response would hand a caller a verdict about credentia
 
 **The rate limit is per business, and spent before anything is sent.**
 `Inventory.Application.Nayax.NayaxConnectionTestRateLimiter` allows five runs per business per rolling
-ten minutes. The bucket is the **business**, not the actor: one run is eight calls against somebody
+ten minutes. The bucket is the **business**, not the actor: one run is seven calls against somebody
 else's API, a Test button is trivially clickable in a loop, and rate-limiting the actor would let a
 second Owner start again from zero against the same operator account. The window **slides**, because
 a fixed ten-minute bucket would allow five runs at the end of one and five at the start of the next.
@@ -4150,8 +4240,13 @@ immediately below, and the Owner-facing wizard over all of it with issue #538 �
 [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
-documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
-so a check, status or cause added later has to make a decision there.
+documented status on every check, the two `404` readings, no answer at all, the vocabulary itself,
+so a check, status or cause added later has to make a decision there, and every declared check being
+declared while the retired `1` is not.
+`Inventory.UnitTests/Application/Nayax/NayaxConnectionCheckReportTests` — a retired line's refusal
+not being a failure and still concluding `Ready`, a retired line that passed not standing in for the
+machine list, the pending machine checks unchanged by one, the whole rule holding across the JSON
+round trip a stored report actually takes, and a report with no machine-list line concluding nothing.
 `Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
 and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
 reopening a slot, one business not spending another's allowance, and, above the tracking threshold
@@ -4162,9 +4257,11 @@ against clearing out granting the five runs exactly once.
 a blank field refused before any call or allowance, no token in the result or the stored results,
 the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
 calling Nayax not at all. `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxConnectionCheckRunnerTests`
-— the eight endpoints called once each with the submitted bearer token, no write call ever, each
-status mapping over a fake handler, zero machines, the first machine only, a transport failure, an
-unreadable body, caller cancellation, and the token/body log sweep.
+— the seven endpoints called once each with the submitted bearer token, one `GET machines` call and
+no `GET devices` call whatever Nayax answers, no write call ever, each
+status mapping over a fake handler, a refused machine list concluding nothing, zero machines, the
+first machine only, a transport failure, an unreadable machine list, caller cancellation, and the
+token/body log sweep.
 `Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — relational SQLite with two businesses:
 ciphertext at rest and no plaintext in any column, replacement, expiry, actor binding, cross-business
 isolation in both directions, an unscoped write refused, and a protector that cannot encrypt leaving
@@ -4172,9 +4269,10 @@ the previous draft alone. `Adapters/Persistence/AddNayaxConnectionTestDraftsMigr
 table and its unique index arrive, a second draft per business is refused by SQLite, the stored
 connection is byte-for-byte unchanged, and nothing is backfilled.
 `Controllers/NayaxConnectionTestApiTests` — the published response shape through the real pipeline and
-the real migration history, the token never echoed, the draft encrypted and bound, a second test
-replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
-its `Retry-After`. `CapabilityAuthorizationApiTests` and
+the real migration history (the seven declared names, with a retired line in the report published
+neither as a row nor as a failure), the token never echoed, the draft encrypted and bound, a second
+test replacing the first, the stored connection untouched, `400` for a missing field, and the `429`
+with its `Retry-After`. `CapabilityAuthorizationApiTests` and
 `EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
 
 ### Saving a tested connection and re-testing it (issue #537)
@@ -4227,36 +4325,45 @@ Inside it:
   another business's, another member's, and one a previous save already claimed, because
   distinguishing them would tell a caller that somebody else's draft exists.
 - **A refusal commits nothing.** The transaction is simply not committed, so a save refused for a
-  failed sign-in, or one whose credential write fails, puts the claimed draft back rather than
+  failed machine list, or one whose credential write fails, puts the claimed draft back rather than
   destroying a tested token the Owner can no longer save.
 
 **The status comes from that draft's own results, through one Domain rule.**
 `Inventory.Domain.Nayax.NayaxConnectionCheckOutcomePolicy` is the only place a completed run is
 interpreted, beside `NayaxConnectionCheckPolicy` and `NayaxConnectionStatusGate` and for the same
 reason: "this token works", "this token is missing a permission" and "this token is dead" need
-completely different actions from an operator. It takes the three facts it needs — the sign-in line's
-status, its failure cause, and whether any other executed check failed — so the Domain keeps no
+completely different actions from an operator. It takes the three facts it needs — the machine-list
+line's status, its failure cause, and whether any other executed check failed — so the Domain keeps no
 dependency on the Application layer's report type; the projection lives on
 `NayaxConnectionCheckReport.Outcome`.
+
+**The machine list is the credential gate** (issue #1310). It was a `GET devices` sign-in probe until
+that issue retired it, for the reason given above — see
+[Nayax connection checks and the Test endpoint](#nayax-connection-checks-and-the-test-endpoint-issue-536)
+— and every row below moved with it, including which runs may be saved.
 
 | Run | Outcome | Status it concludes | May be saved |
 | --- | --- | --- | --- |
 | Every executed check passed | `Ready` | `Ready` | ✔ |
-| Sign-in passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
-| Sign-in refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
-| Sign-in did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
+| Machine list passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
+| Machine list refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
+| Machine list did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
 
 **Only a `401` is a verdict on the token.** That is Nayax's own documented meaning — "the token is
 invalid or has expired", against a `403`'s "Insufficient permissions to perform this action", a
 verdict on one endpoint's scope
 ([App tokens](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens), confirmed
-for this change). Every other way a sign-in can fail to pass — Nayax unavailable, an answer nobody
-has interpreted, the sign-in endpoint itself refused for lack of a scope, a line never checked —
-concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the fail-closed
-reading of the rest, because concluding anything from an answer nobody interpreted would either break
-a working connection or bless a dead one. A save is refused whenever the sign-in did not pass (`400`,
-*"The tested token did not sign in to Nayax, so it was not saved…"*): a token that has never been
-shown to authenticate must not replace what the business is using today.
+again for issue #1310). Every other way the machine list can fail to pass — Nayax unavailable, an
+answer nobody has interpreted, the machine list itself refused for lack of a scope, a line never
+checked — concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the
+fail-closed reading of the rest, because concluding anything from an answer nobody interpreted would
+either break a working connection or bless a dead one. A save is refused whenever the machine list did
+not pass (`400`, *"The tested token could not read this business's machine list from Nayax, so it was
+not saved…"*): a token that has never been shown to read this business's machines must not replace
+what it is using today. A machine-list `403` is therefore refused as well, and refused **as a
+permission refusal**: the stored status, its last-tested instant and the stored credentials are all
+left exactly as they were, and the checklist names the machine list rather than telling an Owner their
+token expired.
 
 **"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
 business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
@@ -4265,9 +4372,9 @@ against, which is a fact about the account and not a fault of the credentials. T
 and a machine-scoped line was still never checked" — which checks need a machine stays
 `NayaxConnectionCheckPolicy.RequiresMachine`'s answer. A machine list that was itself refused or
 never checked leaves the flag unset (issue #681): those lines are unchecked for want of the list,
-not of a machine, the refused line already records `PendingPermissions` (or the sign-in's own
-verdict), and "re-test once your machines are set up" would send an Owner who has machines to the
-wrong fix. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+not of a machine, that run concludes nothing and is not saved at all since issue #1310, and "re-test
+once your machines are set up" would send an Owner who has machines to the wrong fix. A later re-test
+that reaches them clears it. `false` is therefore both "the machine checks
 passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
 their machines are set up, so the additive migration backfills nothing and the connection the
 human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
@@ -4280,7 +4387,7 @@ which deliberately ignores `NayaxConnectionStatusGate` — a connection in `Need
 the one an operator has to recover, and the gate that refuses ordinary calls in that state would make
 recovery impossible. It is listed in `NayaxRetestCredentialBoundaryTests`' allow-list as the reviewed
 exception that boundary always anticipated, and nothing else may join it. It runs the same read-only
-checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
+checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same seven
 `GET`s and no write.
 
 **Every result is bound to the revision it tested — whatever it concluded — and a run that learned
@@ -4292,7 +4399,7 @@ replacement token while a re-test is in flight therefore keeps the replacement's
 cases: the older run describes credentials that no longer exist, so its result is discarded — never
 returned beside the replacement's summary — and the caller gets `409` with the fixed sentence *"The
 connection changed while testing. Run the test again."* A connection that has been removed by then is
-the same answer as a replaced one. When the sign-in produced no verdict at all — a `5xx`, a timeout,
+the same answer as a replaced one. When the machine list produced no verdict at all — a `5xx`, a timeout,
 an open circuit — **nothing is written** either way, not even a last-tested instant that would claim
 the current credentials had been checked: at the tested revision the response is `200` with
 `statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
@@ -4303,7 +4410,7 @@ comparison and the summary returned with it come from **one** read of the row
 reads could pair the old run's report with the new credentials' state. A business with no stored
 credentials has nothing to re-test and gets the stable `nayax_not_connected` `409`.
 
-**Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
+**Test and re-test share one per-business allowance.** A re-test is the same seven calls against the
 same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
 runner, and the two count together: five runs per business per rolling ten minutes in any mix, then
 `429` with a `Retry-After` and no Nayax call at all.
@@ -4319,13 +4426,15 @@ controller: a controller-level `Integration.Manage` would mean this read require
 Owner-only (issues #525 and #526).
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckOutcomePolicyTests` — every
-row of the table above, each unstated sign-in failure concluding nothing, a failed sign-in deciding
-the outcome whatever else failed, and an undeclared status or outcome refused rather than defaulted.
+row of the table above, each unstated machine-list failure concluding nothing — the permission refusal
+among them — a failed machine list deciding the outcome whatever else failed, and an undeclared status
+or outcome refused rather than defaulted.
 `Inventory.UnitTests/Application/Nayax/SaveNayaxConnectionTests` — the status from the draft's own
 results, the stored credentials being the tested ones, unchecked machine lines saved `Ready` with the
-flag set, a failed sign-in refused with nothing stored and nothing committed, a draft saved only once
-with the revision increased once, expiry and actor binding refused identically, and a missing draft id
-refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
+flag set, each machine-list failure refused with nothing stored and nothing committed, a legacy draft
+neither promoted by a passed retired sign-in line nor held back by a refused one (issue #1310), a
+draft saved only once with the revision increased once, expiry and actor binding refused identically,
+and a missing draft id refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
 `Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
 byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
 cleared, a replacement saved mid-run keeping its own status for a concluded *and* for an inconclusive
@@ -4346,7 +4455,9 @@ result that states it, and cleared by a credential save.
 other column or index changes, the existing connection is byte-for-byte unchanged and reads "not
 pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
 through the real pipeline and the real migration history: test then save, the token as ciphertext and
-never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
+never echoed, every refusal's status and sentence — including a machine-list `401` and a machine-list
+`403` each refusing the save with the draft left in place (issue #1310) — the re-test outcomes
+including the recovery from
 `NeedsAttention` and both the concluded and the inconclusive re-test overtaken by a save — the `409`,
 its exact sentence and the replacement's row byte-for-byte unchanged — the shared `429`, the status
 read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
@@ -4356,8 +4467,11 @@ endpoints' capability rows.
 ### The Nayax connection wizard (issue #538)
 
 Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
-six-step wizard on Admin → Integrations (called Nayax Settings until issue #729), beside the
-processing-fee editor it did not replace. It is
+connection card and setup flow on Admin → Integrations (called Nayax Settings until issue #729),
+beside the processing-fee editor it did not replace. Issue #538 built it as a six-step wizard inline
+on the page; since issue #1311 setup is the three-step **Connect Nayax** dialog described in
+[The Connect Nayax dialog](#the-connect-nayax-dialog-issue-1311), and what this section says about the
+token, the checklist, the support request and save/re-test holds for that dialog unchanged. It is
 **frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
 
 `NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
@@ -4385,9 +4499,14 @@ failure, and it says *why* from the machine count: zero machines reads "no machi
 account yet", while no count at all reads "the machine list could not be read" — a business that has
 machines must not be sent to set them up. The checklist also states that the restock write call is
 never tested and is checked on first real use, because a connection test must not change an
-operator's Nayax data.
+operator's Nayax data. The one line it drops is a **retired** read's (issue #1310): the checklist,
+the refusal advice and the support request all filter it, so an older stored report cannot put a
+"Signing in (GET devices)" row on screen, count towards the failure summary, or ask Nayax for the
+device-hardware permission this application no longer uses. A line naming a check this build merely
+does not *recognise* is still rendered under its raw name, because that is a read the application may
+yet depend on.
 
-**Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
+**The support request exists because the fix is usually Nayax's to make.** When any line was refused for lack of a permission, the review
 composes a ready-to-copy request naming the operator id that was tested — captured with the result,
 not read from the field an Owner may have edited since — and every area refused for lack of a
 permission (`PermissionNotGranted`) with its cause, links the Nayax support portal
@@ -4396,16 +4515,18 @@ contact. The request names no token. A line refused for any other cause is not a
 could grant, so it is left out of the request and gets its own advice instead (issue #681): an
 invalid or expired token asks for a new token, an operator id mismatch asks the Owner to check the
 operator id, an unavailable Nayax asks for another try, and an answer nobody interpreted asks for a
-re-test before anyone is asked about it. Step 5 is skipped entirely when the server reported nothing
-failed.
+re-test before anyone is asked about it. Neither appears when the server reported nothing failed.
 
-**Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
-pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
-on a known refusal. A consumed or refused draft is withdrawn from the screen, so a second save is
+**Save and re-test say what the server said.** Save is not offered for a run whose machine list did
+not pass, or whose draft has expired — the server refuses both, and this only avoids spending a
+request on a known refusal. The sentence it shows names the machine list and points at the checklist
+for which refusal it was, rather than claiming the token did not authenticate. A consumed or refused draft is withdrawn from the screen, so a second save is
 impossible here as well as refused. The stored-connection panel reads `GET …/status` on arrival,
 shows the status, prompts "Re-test once your machines are set up" while the machine checks are
 pending, and offers Re-test in every status including `NeedsAttention`. A re-test that concluded
-nothing says the stored status is left exactly as it was; a `409` shows the server's own *"The
+nothing says the stored status is left exactly as it was — and when that is because Nayax refused
+the machine list (issue #1311), it says so and asks for read access to the machine list instead of
+suggesting a retry; a `409` shows the server's own *"The
 connection changed while testing. Run the test again."*, and the component carries that sentence
 itself for a refusal that arrives with no body.
 
@@ -4416,6 +4537,82 @@ starts granted, so an unanswered read leaves the wizard as it was before roles w
 
 **What is deliberately not here.** The connection banners on other screens (#539) and any backend
 change.
+
+### The Connect Nayax dialog (issue #1311)
+
+Issue #1311 moved setup off the page and into a dialog. The Integrations page keeps one **Nayax
+connection** card — the stored connection, its status badge, **Re-test this connection** and the
+re-test checklist — and one launcher: **Connect Nayax** when nothing is stored, **Replace
+connection** when something is. The launcher opens the shared `ModalDialogComponent`
+(`components/shared/modal-dialog/`, issue #1174) in its new `size="wide"` (1024px) variant, so the
+dialog inherits that shell's native modal `<dialog>`, Escape and Close as close requests, the Tab
+cycle that never leaves the panel, focus returned to the launcher, and the full-height sheet below
+640px. The default 600px width is unchanged for every other dialog. Because a save swaps **Connect
+Nayax** for **Replace connection**, the opener can be gone when the dialog closes; the card then
+focuses whichever launcher it now shows.
+
+**Three steps, with a progress indicator: Operator ID, Lynx token, Review & save.** The two input
+steps put **In Nayax Core** — numbered text instructions, links to the official Nayax guides that
+show each screen, and an **Open Nayax Core** link (`https://my.nayax.com/core/LoginPage.aspx`, the
+address Nayax's guide links), all opening a new tab — beside **In Restockroo**, the field; below
+`lg` they stack, guidance first. The guidance is `NayaxCoreGuideComponent`, which is
+presentational: its steps and sources are constants in `nayax-connection-wizard.component.ts`.
+The token step combines the instructions,
+the write-only field and **Test connection**, which sits in the dialog's fixed action row beside
+Back so it is reachable without scrolling on a phone. The review shows the server's checklist (the
+machine list once, and never the retired *Signing in (GET devices)* row), the outcome above it, the
+copyable support request only when a permission was refused, and **Save connection**.
+
+**Every test outcome has its own state.** On the token step: *testing*; *Nayax refused this token*
+(the machine-list line failed with `InvalidOrExpiredToken`); and *Nayax did not answer in time* (the
+machine-list line failed with `NayaxUnavailable`, or the test request itself came back `408`/`504`).
+The last two have different guidance and both keep the Owner on the token step with the field empty
+and focused, because there is nothing to review. Every other completed run goes to the review, which
+decides its message in this order: an **expired** draft (Save withdrawn, **Test again** returns to
+the token step — a timer set to the draft's `expiresAtUtc` re-renders the review when it lapses, so
+Save does not stay clickable on a draft the server has dropped); a machine list that did not pass
+(**This token cannot be saved**, for a permission refusal or an operator id mismatch); a
+save-eligible **partial** run (Save offered, the support request below); an empty account
+(**Connection test passed. No machines found yet.**, Save offered); and a clean pass. **Nayax
+connected** appears only after the save succeeded, with **Done** in place of Back.
+
+**Nothing of an abandoned attempt survives.** Back from the token step clears the field and retires
+the test sequence; Back from the review drops the result, so returning there needs a fresh test.
+Closing the dialog — Escape, the backdrop, Close or Done — clears the field, unsubscribes a test in
+flight, retires its sequence so a late answer can neither fill a step nor reopen the dialog, and
+drops the unsaved result; reopening starts again at an empty Operator ID. Close is refused, and the
+Close control disabled, only while a save is in flight, because that answer decides what is stored.
+A failed save returns to the token step with the server's sentence, since the draft is single-use.
+The stored connection is untouched until a save succeeds.
+
+**No Nayax screenshot is embedded; the official guides are linked instead.** The Operator ID step
+links Nayax's *How to find your Operator ID in Nayax Core* instructions and the operator screen in
+its *Create an operator — verify creation* guide; the token step links the *Lynx API security —
+access token* guide. Every screenshot those guides publish is from Nayax's demo account and shows an
+account identifier — the demo user's name (the username menu, the User Tokens "Created By" column),
+the operator name and operator id (the Operator screen), or a token and its QR code (Show Token) —
+and the issue excludes account identifiers from what this page delivers. Nayax's developer portal
+states no terms that would allow a redacted copy to be bundled, and no identifier-free official
+screenshot of these screens was found, so — as the issue directs for that case — the page uses the
+linked-guide fallback: the numbered text carries the instructions on its own, and each guide opens
+in a new tab as the place to see the screens. No Nayax image is requested by the page, and none
+appears in the committed evidence.
+
+**What proves it.** `nayax-connection-wizard.component.spec.ts` covers the launcher in both states,
+the three-step progress, each step's guidance and guide links with no Nayax image embedded, the empty masked field at launch and after every failed test, the token in no component
+state or storage, every test state, each review state including the expiry timer, Save for a
+partial and an empty-account run, **Nayax connected** only after a save, Back clearing the field and
+dropping the result, close and reopen, a late test answer after close, close refused during a save,
+a re-test refused the machine list getting permission guidance rather than the no-answer notice, and the existing Owner-only and support-session rules. `nayax-settings.component.spec.ts` pins the
+page as the single page behind the dialog with no inline steps, and `modal-dialog.component.spec.ts`
+the `wide` size. In the browser, `e2e/visual/nayax-connect-dialog.visual.ts` captures all three steps,
+the saved state, the partial, zero-machine and expired reviews and the invalid-token and timeout
+states at 1440px and 390px into `docs/screenshots/issue-1311/`, and measures what jsdom cannot: no
+sideways scroll of the page, panel or body, the guide beside the field at 1440px and above it at
+390px, the body scrolling vertically at 390px with the action row inside the viewport, no embedded Nayax image with the official guides linked in a new tab, the Tab cycle staying inside the dialog, and Escape closing it with the token
+field gone and focus back on the launcher. Like every visual run it answers `/api/` in the browser
+with synthetic data, so no Nayax account is called and nothing is stored, and it is not part of
+`scripts/validate.sh`.
 
 ### Nayax connection status banners (issue #539)
 
@@ -4643,6 +4840,8 @@ Issue #165 made that log entry explicit at the HTTP boundary: an unreachable or 
 #### HTTP resilience policy
 
 `Inventory.Infrastructure.Nayax.NayaxResilienceHandler` (issue #48) is a `DelegatingHandler` registered by `AddNayaxLynxClient` (`.AddHttpMessageHandler<NayaxResilienceHandler>()`), so every call `NayaxLynxClient` makes through its `HttpClient` passes through it first. It sits entirely below `NayaxLynxClient`, which is unchanged: `NayaxLynxClient` still inspects the final `HttpResponseMessage` exactly as before and has no knowledge that some calls were retried underneath it, and retry/timeout/circuit-breaker types (`Polly.*`) never appear in `INayaxLynxClient` or any other Application-facing contract.
+
+**One request may opt out of retrying, and it says so on the request** (issue #1310). `NayaxResilienceHandler.SingleAttemptOnly` is an `HttpRequestOptionsKey<bool>`; a request carrying it is never retried, however retryable the answer is, while the per-attempt timeout and the circuit breaker still apply to it exactly as to everything else. The connection check's machine-list read is the only caller, because it is the credential gate: "each check run makes one live `GET /v1/machines` call" is part of what a connection test promises an owner, and a machine list that did not pass concludes nothing whether it failed once or four times — see [Nayax connection checks and the Test endpoint](#nayax-connection-checks-and-the-test-endpoint-issue-536). It is stated per request rather than configured per client because the check runner sends its other six probes through the same `HttpClient` and they keep the ordinary budget; `SendAsync` sets the flag from the request on every call, because the Polly context is pooled, and `NayaxResilienceHandlerTests` pins both that a marked request is not retried and that the marker does not outlive it.
 
 It composes three bounded Polly v8 strategies, built once per handler instance (`NayaxResilienceOptions` holds the tunables - fixed engineering constants, not environment configuration, so there is nothing here for `appsettings.json`/README to document):
 
@@ -5458,9 +5657,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
   nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
-  `ReimbursementReportPageComponent` renders the same notice, disables the ZIP upload and the
-  pending-XML action and guards both handlers, while leaving its recent-uploads list alone, because
-  those reads are `GET`s a read-only session may make.
+  `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
+  leaving its recent-uploads list alone, because those reads are `GET`s a read-only session may make.
+  (It disabled and guarded a second write, the pending-XML action, until issue #1237 retired that
+  import.)
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -6930,9 +7130,10 @@ not of pages, taken from the reads this application already declares in
 | `providerRecords` | what only needs Nayax to be *part of* this business and makes no live read at all: the "Nayax Sync Restock" source of an already-recorded movement, the "Nayax monthly fee" expense category | none - no permission can be granted or refused for it |
 
 `PROVIDER_FEATURE_CHECKS` is that mapping, and it is the feature-to-permission mapping issue #729
-(E2) reads for a locked menu item. A check no feature claims - `SignIn`, which is about the
-credentials rather than about a read, and `Machine` and `MachineLastAlerts`, which no screen depends
-on - is evidence about nothing here rather than about the feature it most resembles.
+(E2) reads for a locked menu item. A check no feature claims - `Machine` and `MachineLastAlerts`,
+which no screen depends on - is evidence about nothing here rather than about the feature it most
+resembles, and a line naming a **retired** read (issue #1310) names no feature at all, so a refusal
+of the old `GET devices` probe locks nothing.
 
 Every feature then carries one `ProviderFeatureAvailability`, and the four states are answers rather
 than labels on each other:
@@ -7769,9 +7970,10 @@ import went rather than implying it still runs here.
 
 **And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
 is now a short **Reimbursement Report** card whose control is a `routerLink` to
-`/admin/imports/reimbursement-report`, where #1149's ZIP upload, its job status list and that same
-pending-XML action now live; this page runs no reimbursement import of its own and
-`AdminImportsComponent.importXml` is gone. The link is neither hidden nor disabled during a support
+`/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
+page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
+pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
+so the upload is the only way in. The link is neither hidden nor disabled during a support
 session, for the reason the Import products link is not. See
 [The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
 card description names that destination too.
@@ -8868,11 +9070,18 @@ A machine refill is an internal location transfer: it changes physical storage b
 
 Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
-Historical sale cost precedence is:
+Historical sale cost precedence is four steps, not three (`AGENTS.md` § Inventory and historical
+costing invariants holds the authoritative wording):
 
 1. persisted internal AVCO/ledger cost when reliable;
-2. transaction-level Nayax Product Cost Price captured on that sale;
-3. uncosted/unknown.
+2. in the cost replay, when the ledger has no known cost before the sale, the unit cost of the latest
+   costed purchase (restock) replayed before it, stored as `Costed` with `CostSource = Estimated`;
+3. the transaction-level Nayax Product Cost Price captured on that sale;
+4. otherwise the sale is left uncosted, which the replay reports as the **non-fatal**
+   `UncostedSale` issue (issue #1239).
+
+The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -8905,10 +9114,26 @@ sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` is
 as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
 it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
 fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
-before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
-earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+before the sale makes the next replay cost it from the ledger again.
 A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
 purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
+
+**A sale with no known cost at all is left uncosted, and that does not block a stock write**
+(repository owner's decision of 13 November 2026, issue #1239). A completed sale that steps 1 to 3
+cannot cost - no ledger cost, no earlier costed purchase and no valid Nayax cost, which is the state a
+business that connects Nayax with machines already stocked starts in - is reported as the non-fatal
+`UncostedSale` issue, consumes no costing quantity or value, and stages no sale cost. Because it is not
+fatal, `RebuildProductCost` no longer throws for it: a purchase dated *after* such a sale, a pick-list
+refill, a manual adjustment and a Take Inventory apply all commit, where every one of them used to be
+rolled back with `InventoryCostDataQualityException` and the only way out was to backdate a purchase
+before the sale (`UncostedSaleLaterStockWritesTests` walks those four writes). The sale stays uncosted
+and keeps being reported - in the `InventoryCostRebuildResult` issues and in the costing-repair
+preview's `remainingUncostedSaleIssues`, each naming the product, the transaction and the sale time -
+until a purchase or a costing repair before it is recorded, which is what makes the next replay cost it
+from the ledger. The sale is still listed in the replay's `UncostableSales`, so a costing repair is
+still previewed and placed against it. Everything else the replay calls fatal stays fatal: an uncosted
+positive `Restock`, a correction or write-off with no known cost, physically or cost-negative stock, and
+the end-of-replay opening reconciliation.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -8919,7 +9144,7 @@ source ID - and returns the physical/costing quantity, inventory value, unrounde
 the cost assigned to each movement and sale, the position each repair landed on, the completed sales
 it could not cost, and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
 (`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
-`LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
+`CostFallback`, `UncostedSale` and `LegacyUnlinkedCostedRestock` are not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
 quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
 physical stock with `InsufficientStockException`. Neither takes an
@@ -8970,7 +9195,10 @@ in behaviour:
   `EfProductStore`, `EfLatestNayaxSalesStore`, the sale-costing use cases (issue #297), the
   inventory-cost transition apply use cases (issue #298), and the uploaded sales import (issue #301) -
   keep their existing transaction around a movement and the rebuild it triggers, so both still
-  commit or roll back together.
+  commit or roll back together. Where the decision to record the movement is made from a read, that
+  transaction is the `BEGIN IMMEDIATE` write lock and it is opened before that read: inside
+  `EfStockAdjustmentStore.ApplyAsync` for a manual adjustment, and in the `ApplyInventoryCount` use
+  case for Take Inventory, whose comparison happens before the movement is staged (issue #1241).
 
 Sale costing and its backfills are Application use cases since issue #297; see
 [Sale import and costing](#sale-import-and-costing).
@@ -8991,6 +9219,29 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   `DomainValidationException` with the message the API has always returned.
   `Inventory.Domain.Costing.InventoryCostBaselineSource` mirrors the persisted
   `Inventory.Infrastructure.Models.InventoryCostBaselineSource` value-for-value (a parity test enforces this).
+- **A machine slot is matched to a product through the provider link, and an unlinked slot is counted
+  for nobody (issue #1256).** A slot's `NayaxProductID` is the Lynx contract's "unique identifier of
+  the product in the Nayax system" (`GET /v1/machines/{MachineID}/machineProducts`,
+  `integer<int64>`, nullable), so `InventoryCostTransitionPreviewBuilder` resolves it to a local
+  product id through `INayaxProductLinkStore` — the same lookup
+  [the live machine readers use](#resolving-a-nayax-product-id-to-a-local-product-issue-733), awaited
+  after the Nayax fan-out — and never compares it with `Product.Id`. Comparing them worked only while
+  the local key happened to *be* the Nayax id; since [issue #735](#the-local-key-is-the-databases-own-issue-735)
+  that is a coincidence, and here it decided a costing baseline: a product whose ids differed recorded
+  an opening quantity with **no** machine stock at all, and one whose Nayax id equalled another
+  product's local key recorded **that** product's units. A slot this business holds no link for is an
+  unknown product and is added to no product's machine stock. The same builder serves all four use
+  cases, so the single-product and all-products preview and apply resolve identically; recorded
+  baselines are not changed by this and a human decides, from a read-only check, which of them were
+  taken while a product's ids differed.
+- **A product the provider does not name says so.** Machine stock is looked up *through* the
+  product's recorded provider id (`Product.ExternalProductId`, travelling on
+  `InventoryCostTransitionProduct`), so a product carrying none can be matched to no slot in any
+  machine. Its opening quantity is home stock alone and its preview carries
+  `InventoryCostTransitionPolicy.UnresolvedMachineStockNote` in front of the legacy note, in the
+  single-product preview and in each row of the all-products preview, because an empty machine stock
+  that was never measured must not read as a measured zero. The slot side cannot answer that on its
+  own: a linked product that is in no machine and an unlinked product both match no slot.
 - `Inventory.Application.Costing.PreviewInventoryCostTransition`, `ApplyInventoryCostTransition`,
   `PreviewAllInventoryCostTransitions` and `ApplyAllInventoryCostTransitions` orchestrate them, and own
   the request/response contracts moved unchanged in name and shape from the removed
@@ -9024,9 +9275,11 @@ releases exactly the one unit of costing inventory it consumed.
 
 A costing repair is the one supported way to restore costing history that was never recorded. It
 exists for a single situation: physical stock the business genuinely held was never valued in the
-ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` reports
-`UnknownCost`/`MissingOpening` for the completed sales that depend on it, and every later write to
-that product (purchase, count, refill apply, sales sync) fails on the same fatal issue. Restock,
+ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` cannot cost the
+completed sales that depend on it and reports each of them as the non-fatal `UncostedSale` (since
+issue #1239; before that they were fatal and every later write to the product - purchase, count,
+refill apply, sales sync - failed on the same issue, which is why a repair was the only way to unblock
+the product rather than only the way to value its history). Restock,
 Correction, Damaged, Expired and MachineRefill are physical movements and keep their meanings, so
 none of them can express "the costing history was incomplete" without misstating physical stock; a
 repair is the explicit, auditable, costing-only alternative. It is never inferred - not from
@@ -9077,8 +9330,12 @@ and it never substitutes for a real purchase, correction or write-off.
   It replays the ledger twice through the shared `InventoryCostRepairProjection` - as it stands, and
   with the proposed repair - and reports the costing quantity/value immediately before the repair,
   the quantity/value it adds, the resulting average unit cost, the first completed sale the ledger
-  cannot cost today, whether the repair replays before it, the projected costing quantity/value, and
-  the fatal issues a partial repair would leave behind.
+  cannot cost today, whether the repair replays before it, the projected costing quantity/value,
+  the fatal issues a partial repair would leave behind, and - since issue #1239 - the completed sales
+  a partial repair would leave **uncosted** (`remainingUncostedSaleIssues`, each naming the product,
+  the transaction and the sale time). The second list does not block the apply: a repair too small to
+  reach those sales is recorded and they stay uncosted and flagged, so the operator has to be able to
+  see which ones before approving it.
 - **`ApplyInventoryCostRepair`** runs in one transaction, and in one order deliberately: the
   authoritative ledger read, the expected-state comparison and the write are a single operation.
   Because the preview stores nothing, the stale-preview model of
@@ -9089,8 +9346,11 @@ and it never substitutes for a real purchase, correction or write-off.
   the apply recomputes and requires to match. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
-  fatal data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a
-  product.
+  fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
+  with no known cost - fails and persists nothing at all. A completed sale the repair does not reach
+  is no longer such an issue (issue #1239): that repair is recorded, the sales it does reach are
+  costed from the ledger, and the ones it does not stay uncosted and flagged, which the preview
+  reported before it was approved.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by
   `Inventory.Infrastructure.Persistence.EfInventoryCostRepairStore`; it moved to
@@ -9104,7 +9364,7 @@ and it never substitutes for a real purchase, correction or write-off.
 
   | Endpoint | Request | Success response |
   | --- | --- | --- |
-  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues`, `remainingUncostedSaleIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
   | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
   | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
 
@@ -10003,6 +10263,49 @@ size from one key press alone, and hands focus on into the pager. Its captures a
 `reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
 (the focus ring on the selector).
 
+#### Restockroo logo (issue #1272)
+
+Issue #1272 puts the owner-approved Restockroo logo (teal kangaroo with a stock box, navy
+wordmark, transparent background) everywhere the app already showed its brand. It is a
+presentation change: no navigation label, destination, order, grouping, permission, route,
+account or business control, homepage copy or colour theme changed.
+
+**Source and files.** The approved original is kept, unchanged, at
+`docs/brand/restockroo-logo-original.png` (1600 x 533 PNG). It is the only source and is not part
+of the Angular build. Two files are made from it by trimming transparent canvas and resizing only
+(no recolouring, redrawing or effects) and ship as ordinary bundled assets under
+`frontend/inventory-app/src/assets/brand/`:
+
+| File | Content | Pixels | Displayed at |
+| --- | --- | --- | --- |
+| `restockroo-logo.png` | Full logo: symbol and navy wordmark | 404 x 108 | 32-36px high |
+| `restockroo-symbol.png` | Kangaroo-and-box symbol alone | 81 x 96 | 32px high |
+
+Both are PNG, not SVG, and are exported at about three times their largest display height so they
+stay sharp on high-density screens. There is no white-wordmark variant, because no surface that
+shows the brand is dark; one would be made from the same original if a dark surface is added. No
+image, font or logo is loaded from Stitch, Google or any other remote host.
+
+**`BrandLogoComponent`** (`components/shared/brand-logo.component.ts`) is the one place the logo is
+rendered. Its `variant` input picks the file (`full` or `symbol`) and its `height` input sets the
+visible height in CSS pixels; the width follows the file's own aspect ratio, and the `<img>` carries
+the file's `width`/`height` attributes so the box is reserved before it loads. Its `alt` is
+"Restockroo" and callers put no visible "Restockroo" text beside it, so the brand is announced once.
+It renders no link: a caller that links the brand wraps it in its own anchor.
+
+**Where it appears.**
+
+- Landing header, legal pages and sign-in page: the full logo, 36px, inside the existing brand link
+  to `/home` (unchanged destination, `min-h-11` target and focus style).
+- Landing footer: the full logo, 32px, not a link.
+- Sidebar, expanded, and the narrow-layout More sheet: the full logo, 32px, in the header row
+  beside the collapse or Close control, not a link.
+- Sidebar collapsed to the `w-16` rail: the symbol alone, 32px, stacked and centred above the
+  expand control, which keeps its 44px target; not a link.
+- The authenticated top bar on a narrow layout has no logo, as before.
+
+The favicon, page titles and any social, PWA or email branding are unchanged.
+
 #### Shared help toggletip (issues #1015 and #1016)
 
 `components/shared/help-toggletip/` is the one help toggletip the application has, built once on the
@@ -10728,12 +11031,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Reports keep the calendar-date `Handle` overload with their own date filters unchanged: `FeeDate` is null there, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
 
 What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks in the report facts adapters.
-- The Transaction Sales report filters its requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter.
+- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
+- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -10912,7 +11215,8 @@ changed.
 
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
-([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
+([the dashboard rule above](#time)), the money reports select their sales between the same kind of
+boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -10924,19 +11228,64 @@ its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays
 row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
 business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
 status counts and fee estimate all describe the same business day. Imported reimbursement coverage
-dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
-shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
-them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
+dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted.
+Before issue #380 the daily report bucketed and
 filtered by the UTC date of the instant, so a sale in the first 10–11 hours of a Sydney day landed on
 the previous day's row; the owner decided on PR #392 that this belongs to #380's acceptance
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
+**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
+(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
+business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
+`Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
+in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
+COGS, fees and GST on sales disagreed between reports for the same dates. The conversion is now made
+once, by `EfReportingSharedQueries.SalesWindow`, into a `BusinessDateSalesWindow` - the two requested
+business dates and the UTC instants of business-day midnight at the start of the first and at the
+start of the day after the last - and every shared helper that selects *sales* takes that window:
+the completed-sale and all-status queries, the cost projection, the commission calculation and total,
+and the provider-coverage query. Four things follow it:
+
+- The **fee rates and imported fee days** come from the same window (`HandleBusinessPeriod` over
+  `BusinessDateSalesWindow.FeePeriod`), so a sale is charged a fee, and estimated at the rate
+  effective, on the business date whose revenue counted it.
+- **Recorded provider coverage is judged over those instants**, not the calendar range: the
+  bookkeeping facts now carry the one `ReportCoverageFacts` record every other sales-based report
+  already carried (issue #730/#731), and `GetBookkeepingReport` decides both availability states from
+  it instead of re-deriving the period from the request. A coverage range may only be compared with
+  the window the figures were measured over.
+- **Reconciliation attributes a sale to the reimbursement period covering its business date**
+  (`ToBusinessDate`), not the UTC date of its instant.
+- The **site commission these reports subtract is calculated over the same window**
+  (`IGetSiteCommissionReport.HandleBusinessPeriod` over `BusinessDateSalesWindow.CommissionPeriod`).
+  The first fix moved only the window the commission was *gated* on — which machines had a completed
+  sale — and left the dollar `CommissionDue` coming from the calendar-date `Handle`, so bookkeeping
+  counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
+  net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
+  separates the two questions the calculation asks: its two UTC instants select the completed sales,
+  and its two business dates resolve the effective-dated agreement, the recorded payments and the
+  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
+  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+
+Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
+and purchase dates keep their plain calendar-date bounds in these reports too.
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
+daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
+date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
+on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
+the standalone Commission report still answering $0.35 for the 4th. Figures for past
+ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
+anyone who has exported or lodged figures from these reports.
+
 Transaction Sales still filters its `from`/`to` by the UTC date of the instant
 (`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
 on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
 outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and is an open follow-up.
+inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -11363,15 +11712,48 @@ which offer both of the line's prices as linked inputs: type the amount paid for
 it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
+**A create with opening stock has an initial unit cost, and that is now a rule rather than a
+description (issue #1238).** `POST api/products` records opening stock above zero as a costed
+opening `Restock` movement, and `WeightedAverageCostReplay` treats a positive `Restock` with no unit
+cost as a fatal data-quality fault (`UnknownCost`). While the cost was optional, a create that left
+it empty produced a product whose *every* later stock write — a pick-list refill, a manual
+adjustment, a Take Inventory apply, a new purchase — ended in a rebuild that refused the opening
+movement with "Restock adjustment … has no valid unit cost", and no ordinary screen could repair it.
+So `Inventory.Domain.Products.ProductInitialCostPolicy` is a rule about two fields: **opening stock
+above zero requires an initial unit cost**, refused with
+`ProductInitialCostPolicy.InitialUnitCostRequiredMessage` as `400`. `0` is a cost — stock that was
+free — and is accepted; a negative one is still refused with the existing message; and opening stock
+of zero or absent records no movement and keeps the cost optional, exactly as before. `CreateProduct`
+applies it before anything is saved and `EfProductStore.CreateAsync` applies it again at the write,
+the same way the name and unit-label rules are applied twice, so neither the product nor the opening
+movement is written. Making an uncosted `Restock` non-fatal in the replay, and repairing products
+created before this rule, are deliberately *not* part of it.
+
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
 (`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
 their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
 create/update/delete (`EfPurchaseStore`, whose purchase-linked restock movements still come from
-`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`)
+`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`,
+whose initial stock carries a cost because issue #1238 requires one)
 write their movements as before. All five then rebuild the affected product's cost through
 `Inventory.Application.Costing.IRebuildProductCost` inside the same transaction as before (issue
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
+
+**A manual adjustment's stock check runs inside the write lock** (issue #1241).
+`EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
+it stages the movement, because staging it is what reads the stored quantity that
+`StockMovementCostPolicy`'s "this would make physical stock negative" check is decided on. Read
+before the transaction opened, two simultaneous write-offs of 4 against a stock of 5 both read 5,
+both computed a new stock of 1, and the loser's movement was then refused by the cost replay as
+*becomes physically negative* — an `InventoryCostDataQualityException`, which no HTTP handler claims,
+so an operator whose adjustment simply no longer fitted got a `500`. Inside the lock the loser reads
+the quantity the winner left and is refused with the established `InsufficientStockException`
+(`400`, "Not enough products in stock. Available stock: 1"), and two adjustments that both fit are
+both recorded, the second against the quantity the first left.
+`ManualStockAdjustmentConcurrencyTests` holds both. Take Inventory's apply takes the same lock, in
+its use case rather than its adapter, because its comparison is decided before the movement is
+staged; see [Take Inventory](#take-inventory-issue-245).
 
 **A purchase write moves the stored physical stock with its movements, before the rebuild (issue
 #831).** Purchase create, update and delete add each product's net change to its purchase-linked
@@ -13579,13 +13961,29 @@ audit trail for Take Inventory.
 through the narrow `IInventoryCountAdjustmentStore` port (implemented by
 `Inventory.Infrastructure.Persistence.EfInventoryCountAdjustmentStore`, the same pattern as
 `EfMachineStockEventStore`). The request carries both the counted quantity and the current quantity
-the operator counted against (`ExpectedCurrentStock`); the use case re-reads the authoritative
-current quantity at the mutation boundary and throws `DomainConflictException` (409) when it no
-longer matches, instead of silently applying a delta against a quantity that has since changed
-underneath a stale UI row. An invalid count or a missing restock-cost suggestion throws
-`DomainValidationException` (400). Both map to a `ProblemDetails` response through the existing
-central `DomainExceptionHandler`, described under [Domain and application error
-mapping](#domain-and-application-error-mapping).
+the operator counted against (`ExpectedCurrentStock`).
+
+**The read, the comparison and the mutation are one write-locked operation** (issue #1241). The use
+case opens `IInventoryCountAdjustmentStore.BeginWriteTransactionAsync` — `SqliteWriteLockTransaction`,
+so SQLite's write lock is held from `BEGIN IMMEDIATE` until the commit — and only then reads the
+authoritative current quantity, compares it with `ExpectedCurrentStock`, resolves the difference and
+records the movement, all inside that one transaction. "Has this quantity changed since the operator
+counted it?" is a check-then-write rule, and reading it before the transaction opened left a gap
+another writer could commit in: stock 10, the operator counts 8, a refill of 4 commits, and the
+stale -2 was applied to 14, leaving storage reporting 12. A competing change can now only land
+*before* that read, where it is answered with `DomainConflictException` (409) and **no movement is
+recorded**; a count that arrives while another writer holds the lock waits, re-reads the committed
+quantity and is answered the same way, never with a provider lock error. The zero-difference
+`Confirmed` outcome reads under the same lock and writes nothing, so it commits nothing. An invalid
+count or a missing restock-cost suggestion throws `DomainValidationException` (400). Both map to a
+`ProblemDetails` response through the existing central `DomainExceptionHandler`, described under
+[Domain and application error mapping](#domain-and-application-error-mapping).
+
+`InventoryCountApplyConcurrencyTests` is what holds that: a competing restock driven at the instant
+the count has read its quantity cannot even begin and the count applies exactly what was counted; a
+change that commits while the count waits for the lock is answered `409` with no movement; two
+simultaneous counts of one product apply exactly one; and a zero-difference count is refused the
+same way when the quantity changed first.
 
 ### Sale import and costing
 
@@ -13655,8 +14053,7 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
 - **Workbook/CSV parsing** sits behind the `INayaxSalesWorkbookReader` port, implemented by
   `Inventory.Infrastructure.Imports.ClosedXmlNayaxSalesWorkbookReader` - a real Infrastructure
   adapter from the start - unlike the EF adapters of the time, which were still API-owned - for the
-  same reason as
-  `FileSystemPendingReimbursementXmlSource`: it needs no `AppDbContext`, only the uploaded bytes.
+  same reason the reimbursement XML adapter was: it needs no `AppDbContext`, only the uploaded bytes.
   ClosedXML therefore moved to `Inventory.Infrastructure`, and the former
   `InventoryApi.Services.NayaxSalesWorkbook` CSV-to-worksheet conversion moved into the adapter with
   it. The adapter keeps the parsing decisions imported financial data depends on: headers matched on
@@ -13665,8 +14062,8 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception
   being an absent settlement value, which the legacy import read as `0`), and an instant taken from
   a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
-  left `null` so the row is skipped. Unlike the pending-XML source, a read failure is deliberately
-  *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
+  left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
+  deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
   `FileFormatException`, which the controller's `InvalidOperationException` handling does not claim,
   so it reaches `GlobalExceptionHandler` as a generic `500` exactly as before) rather than being
   reported to the operator as an import of zero rows. A CSV, by contrast, is always readable, so
@@ -13754,72 +14151,56 @@ child 3 of #149), moved unchanged in behaviour from the removed
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
-The import side of that flow (`POST api/imports/pending-xml`) is the
-`Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case (issue #299, child 1 of
-3 of #151), moved unchanged in behaviour from the removed
-`InventoryApi.Services.ImportService.ImportPendingXmlFilesAsync`:
+**A reimbursement report enters the application one way: the upload on the Reimbursement Report page**
+(issue #1149, described in full [below](#reimbursement-report-zip-upload-and-background-import-issue-1149)).
+Issue #299's second route — `POST api/imports/pending-xml`, which imported whatever XML somebody with
+server access had left in `{WebRootPath}/ImportedFiles` — was **retired by issue #1237**: it was the
+one import that did not take its input from the signed-in business's own upload, and the endpoint,
+the use case, the port and the filesystem adapter behind it are gone. No application code reads,
+lists, creates or deletes anything under that folder any more. (The `ImportedFiles` *table* is
+unrelated to it and stays: it is where an imported reimbursement file is recorded.)
 
-- **The use case** walks the pending queue and, per file, reads it, skips it when this business has
-  already imported the same bytes, otherwise persists it, and removes it from the queue either way.
-  It owns the reported counts (`ImportedFileImportResult`, moved here from
-  `InventoryApi.Services.Interfaces` with no JSON change): a file that could not be read, parsed or
-  removed is counted as failed and stays in the queue rather than being silently dropped, a file
-  whose hash is already present is counted as skipped, and the reimbursement rows of a file that was
-  persisted but then could not be removed are still counted as imported - the same counter order the
-  legacy loop had. A persistence failure is deliberately not caught and still propagates.
-- **Discovery and parsing** sit behind the `IPendingReimbursementXmlSource` port, implemented by
-  `Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource` - a real Infrastructure
-  adapter from the start - unlike the EF adapters of the time, which were still API-owned - because
-  it needs no `AppDbContext`. It resolves
-  `{WebRootPath}/ImportedFiles` from the `PendingReimbursementXmlOptions` host paths the composition
-  root supplies through `AddPendingReimbursementXmlSource()` (the same arrangement
-  [Document storage](#document-storage) uses, so no filesystem path reaches the Application layer),
-  and keeps the parsing decisions imported financial data depends on: invariant-culture numbers and
-  dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
-  parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
-  attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
-  `row` fragment retried wrapped in a root element. Since issue #1149's review one further decision
-  joins them: a file whose element names one attribute *twice* — the same local name in two
-  namespaces — is refused as unreadable rather than recorded with one of the two values dropped,
-  because nothing here may decide which half of a settlement figure to keep. Filesystem and XML
-  failures are translated here
-  and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
-  by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
-  "translated to a plain answer at that layer's own boundary" rule in the
-  [exception ownership table](#exception-ownership-table). Caller cancellation is excluded from that
-  translation and stays cancellation.
+The rules the remaining route follows, each in the type that owns it:
+
+- **Parsing** is `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, the one parser of
+  reimbursement XML in the application, and it keeps the decisions imported financial data depends on
+  unchanged since issue #299: invariant-culture numbers and dates, a date without an offset assumed
+  to be UTC, a numeric attribute read as a boolean when it parses to a non-zero integer, an
+  unparsable number or date left `null` rather than zero, every attribute preserved as raw JSON, a
+  root `row` element treated as the single row, and a bare `row` fragment retried wrapped in a root
+  element. Since issue #1149's review one further decision joins them: a file whose element names one
+  attribute *twice* — the same local name in two namespaces — is refused as unreadable rather than
+  recorded with one of the two values dropped, because nothing here may decide which half of a
+  settlement figure to keep. The parser **throws** rather than deciding what a failure means;
+  `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader` translates that into one entry's
+  own recorded failure at its own boundary, matching the "translated to a plain answer at that
+  layer's own boundary" rule in the [exception ownership table](#exception-ownership-table).
+- **Per-file import** is `Inventory.Application.Imports.ImportReimbursementXmlFile`: skip the file
+  whose bytes this business has already imported, otherwise persist its reimbursement graph, then
+  record the settlement coverage the committed file proves. A persistence failure is deliberately not
+  caught and propagates, so a database problem is never reported as a handful of failed files.
 - **Persistence** sits behind the narrow `IImportedReimbursementStore` port (the hash question plus
   one atomic write of the file with its reimbursement/device/device-payment/fee/payment-method
   graph), implemented by
   `Inventory.Infrastructure.Persistence.EfImportedReimbursementStore`, which moved there with the
-  rest of the adapter family in issue #309. The duplicate lookup is the same
-  tenant-filtered `ImportedFiles` query as before, with no business predicate of its own, so
+  rest of the adapter family in issue #309. The duplicate lookup is a
+  tenant-filtered `ImportedFiles` query with no business predicate of its own, so
   file-hash idempotency stays per business: two businesses may legitimately import the same file and
   neither is told its own first import is a duplicate. Ownership is stamped centrally on save.
-- `ImportsController.ImportPendingXmlFiles` calls the use case directly; the route, the
-  `ImportedFileImportResult` response shape and the status codes are unchanged. The action now also
-  binds the request's `CancellationToken` and passes it through both ports, which the legacy
-  signature did not. This was the first of the three import endpoints to leave `IImportService`; the
-  product catalogue import followed under issue #300 (see [Nayax product catalogue
-  import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
-  (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
-  deleted `ImportService`/`IImportService` entirely.
-- Since issue #1149 the **per-file steps** — the hash dedupe, the atomic write and the coverage the
-  committed file proves — are `Inventory.Application.Imports.ImportReimbursementXmlFile`, shared with
-  the uploaded-archive import below. Nothing about this use case's behaviour changed: the same
-  counters move in the same order, a persistence failure still propagates rather than being reported
-  as a handful of failed files, and the pending folder is still the only place it looks. The parsing
-  moved the same way, into `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, which is now the
-  one parser of reimbursement XML in the application; every parsing decision listed above is
-  unchanged, and `FileSystemPendingReimbursementXmlSource` still owns discovery, the folder
-  confinement and removal, and still translates its own failures into `null`/`false` at the port.
+
+Issue #299 was also the first of the three import endpoints to leave `IImportService`; the product
+catalogue import followed under issue #300 (see [Nayax product catalogue
+import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
+(see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
+deleted `ImportService`/`IImportService` entirely.
 
 ### Reimbursement Report ZIP upload and background import (issue #1149)
 
 Nayax emails the reimbursement report as a ZIP, and until this issue the only way to import one was
-to unzip it twice by hand and get the XML files onto the server's own pending folder. This adds the
-second route: an authorised operator uploads the attachment exactly as it arrived, the upload is
-accepted in seconds, and the import happens in the background with the same pipeline.
+to unzip it twice by hand and get the XML files onto a folder on the server. This added the second
+route: an authorised operator uploads the attachment exactly as it arrived, the upload is accepted in
+seconds, and the import happens in the background with the same pipeline. Since issue #1237 retired
+the folder import it is the only route.
 
 **The HTTP surface, on `ImportsController` under the existing `Imports.Run` capability.**
 `POST api/imports/reimbursement-report` takes one multipart file, checks the archive, stores it as a
@@ -13831,8 +14212,8 @@ tenant-scoped centrally, so another business's job is not found. The business is
 resolved business: nothing in the request can choose one. A role preview and a read-only support
 session are refused on the upload centrally, because it is a `POST`, exactly as the two import writes
 beside it are; the two reads are `GET`s, so a support session may make them. None of the three
-carries a plan requirement, for the reason the pending-XML import carries none: a settlement
-statement the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
+carries a plan requirement, unlike the Nayax sales file import beside them: a settlement statement
+the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
 
 **Reading the archive: `Inventory.Application.Imports.IReimbursementArchiveReader`, implemented by
 `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader`.** The real shape is
@@ -13854,11 +14235,9 @@ XLSX and an XML per report day, so the rules are:
   reduces a name to a label that is only recorded and displayed: both separators normalised, every
   `.`/`..` segment dropped, a leading separator and a drive prefix removed, control characters
   replaced, and the result capped. A name of nothing but traversal segments becomes a positional label
-  rather than a guess. The server's own pending import folder is not touched — this import has nothing
-  to do with it.
+  rather than a guess. No folder on the server is read, written or deleted at all.
 - A file that is not a readable reimbursement report is **that entry's own** failure, answered across
-  the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
-  unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
+  the port as a parsed `null`. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
   the whole upload. "Not readable" includes an XML that is *well-formed* and still ambiguous — one
   that names the same attribute twice on an element, in two namespaces — which the parser refuses as
   its own declared parse failure (issue #1149's review); it used to escape the walk as an
@@ -13966,17 +14345,18 @@ a key of its own — the shared-key rule of [Switchable Admin menu
 visibility](#switchable-admin-menu-visibility-issues-873-and-1148). Its breadcrumb is the first
 three-item trail in `breadcrumbs/breadcrumb-routes.ts`: `BreadcrumbParent` may now declare a parent of
 its own, so Admin › Imports › Reimbursement Report is that chain read outwards rather than a second
-way of writing a trail. `/admin/imports` keeps the `Import XML files` card's place with a short
-**Reimbursement Report** card that links here, and the Nayax sales upload and the sale timestamp
-repair are untouched.
+way of writing a trail. `/admin/imports` keeps the retired `Import XML files` card's place with a
+short **Reimbursement Report** card that links here, and the Nayax sales upload and the sale
+timestamp repair are untouched.
 
 **Composition.** Per [Page composition boundary](#page-composition-boundary-issue-191)
 `ReimbursementReportPageComponent` is the boundary: `ReimbursementReportUploadComponent` owns the
 chosen file, the in-flight upload and the refusal, and emits `(uploaded)` with the accepted job id;
 `ReimbursementImportJobsComponent` owns the list read, the refresh lifecycle, the per-row expansion
 and both reads' failures, and is told to read again through one `[reloadToken]`. The page itself keeps
-the support-session answer, that token, and the one-button pending-XML action that moved here
-unchanged — a single call with its own toast, which is not a workflow of its own.
+the support-session answer and that token. It also kept the one-button pending-XML action that moved
+here with it, until issue #1237 retired that import and the button with it; the upload is now the
+only way a reimbursement report enters the app.
 
 **What the page decides, which is nothing about an import.** Every state, count and reason on screen
 is the server's answer, counted there from its own per-file outcome rows;
@@ -14006,7 +14386,7 @@ before it makes the next one: the superseded request is cancelled outright, its 
 failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
 newest read.
 
-**Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
+**Support session.** The upload is withheld and the page says so; the two status reads are `GET`s a
 read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
 way — the page withholds the controls so no refusable request is sent.
 
@@ -14022,7 +14402,7 @@ row at 1440px, and that the longest file name stays inside its own row. Its capt
 end-to-end suite](#browser-level-end-to-end-suite-issue-46).
 
 **Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
-pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
+absent XML import button and the support session), `reimbursement-report-upload.component.spec.ts`
 (the picker and the note, the selection, the accepted upload and its emitted id, the server's `400`,
 a `ProblemDetails` body, the bodiless failure, the busy state and its second click, the withheld
 session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
@@ -14099,7 +14479,7 @@ nothing writes it (below): a transaction export declares neither.
   business-wide completeness for time nothing accounted for. The imported sales are reported in
   full and their period stays `Unverified` until a fully successful synchronization covers it.
   **Do not reintroduce a range derived from the instants a workbook happens to contain.**
-- `ImportPendingReimbursementXmlFiles` claims the periods the file **proves**, one coverage row per
+- `ImportReimbursementXmlFile` claims the periods the file **proves**, one coverage row per
   proven interval, immediately after that file's graph is committed. Each reimbursement row declares
   its own `[ReimbursementStartDate, the midnight after ReimbursementEndDate)` — the provider's own
   statement of what that row settles, never the payout date and never the import instant
@@ -14189,14 +14569,18 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report selects sales
-between business-day midnights; the others between plain calendar-date bounds. Its `Availability()`
-and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
+only be compared with the window the figures were measured over. The daily report, bookkeeping, the
+reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
+machine and product profitability still select between plain calendar-date bounds. Its
+`Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
 calls, including the bookkeeping one #730 introduced, so the reports cannot read coverage
 differently. It takes no machine predicate (coverage is about whether provider data was retrieved
-for the business at all) and no provider predicate (P5).
+for the business at all) and no provider predicate (P5). The bookkeeping facts carried that coverage
+as three loose fields, with the use case re-deriving the period from the request, until issue #1250
+moved them onto the same carrier: once that adapter selected its sales over business-day midnights,
+the requested calendar dates were no longer the window its figures had been measured over.
 
 **Two families or one, decided by what each report actually shows.** A figure is never labelled by
 evidence that does not feed it, so the contract differs by report on purpose:
@@ -15074,7 +15458,8 @@ than being read as the number inside it.
 
 The translation happens where Nayax data enters the application, so every persistence port
 downstream of it speaks local product ids only — `IMachineStockEventStore.GetStorageProductsAsync`
-changed from taking Nayax ids to taking local ones for exactly that reason. The six paths:
+changed from taking Nayax ids to taking local ones for exactly that reason. The eight paths (the
+last of them added by issue #1256, which found the transition preview still comparing the two ids):
 
 | Path | Where the id is resolved | What an unresolved Nayax id means |
 | --- | --- | --- |
@@ -15085,6 +15470,7 @@ changed from taking Nayax ids to taking local ones for exactly that reason. The 
 | Site summaries (`GetSiteSummaries`) | after the fan-out, before the completed-sales read | the stock fact carries no product id: it still counts toward the site's physical stock percentage, exactly as an unmapped selection always has, and raises no low/empty product alert |
 | Sync Restock (`SyncMachineStockFromNayax`) | after the machine-products read, before the storage read | the MDB position resolves to no local product, which is `NayaxMachineStockMatchPolicy`'s existing "no local product is mapped to Nayax product …" Needs Review branch, so no inventory ever moves for it |
 | Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
+| Inventory-cost transition preview and apply (`InventoryCostTransitionPreviewBuilder`, issue #1256) | after the fresh fleet and slot fan-out, before the legacy-replay read | the slot is an unknown product and is added to no product's opening machine stock; a *product* with no recorded id matches no slot at all, so its baseline is home stock alone and its preview says the machine stock could not be resolved (see [Historical inventory cost](#historical-inventory-cost)) |
 
 In every case an unresolved id is treated as an unknown product, never matched to the local product
 whose id happens to be the same number. That is the point of the change: since #735 a local key and
@@ -15144,6 +15530,12 @@ and left `NayaxProductId` holding only the provider's own id.
 
 The settlement (pending reimbursement XML) import carries no product or group identifier at all, so
 there is nothing in it to resolve.
+
+**The inventory-cost transition resolves the same way, and it is listed with the live readers rather
+than here (issue #1256).** It reads a machine's *live* selections through `INayaxLynxClient` rather
+than stored or uploaded Nayax data, so it belongs to the #733 table above: the row for
+`InventoryCostTransitionPreviewBuilder` records what it resolves and what an unresolved id means for
+an opening costing baseline.
 
 ### The sale's own product (issue #758)
 
@@ -15527,6 +15919,18 @@ rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a si
 transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
 persisted quantity whose ledger and costing position were never written — under a request the caller
 saw fail and would retry, which would otherwise create a second product beside the first.
+
+**And the movement is always costed, so the rebuild is always one the replay accepts** (issue
+#1238). The third write only exists because the second one does, and it can only succeed if the
+opening movement carries a unit cost: an uncosted positive `Restock` is a fatal `UnknownCost` to
+`WeightedAverageCostReplay`, which is why opening stock above zero now *requires* an initial unit
+cost rather than merely offering one. `ProductInitialCostPolicy` is that rule (`0` accepted,
+negative refused with its existing message, no opening stock leaving the cost optional), it is
+applied by `CreateProduct` before anything is saved and again by this adapter at the write, and a
+refusal is `400` with `ProductInitialCostPolicy.InitialUnitCostRequiredMessage` having written
+neither the product nor the movement. Before it, a create with stock and no cost produced a product
+whose every later stock write failed its rebuild. See [Product purchase and
+restock](#product-purchase-and-restock).
 
 **Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
 refusal points at, and a retired product is one the business has taken out of use: it must not be
@@ -19355,7 +19759,9 @@ files" as the historical record of that slice, not as a test to look for today.
        `IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` use cases (issue
        #296; formerly `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`)
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
-       transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
+       transaction shape - with the movement staged inside that transaction rather than before it
+       since issue #1241, so the stock its sufficiency check reads is read under the write lock - and
+       stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
        `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` mapped the Application record back
        onto the `StockAdjustment` entity shape `StockController`'s history/adjust
@@ -19688,13 +20094,14 @@ files" as the historical record of that slice, not as a test to look for today.
 
 10. **Imports slices done** (umbrella issue #151, three children; **this completes the #151 imports
     slice** - no import endpoint is served from `InventoryApi/Services` any more)
-    - **Pending reimbursement XML import done** (issue #299, child 1 of 3). `POST api/imports/pending-xml`
-      is now the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
+    - **Pending reimbursement XML import done** (issue #299, child 1 of 3; **the route itself was
+      retired by issue #1237** — a reimbursement report is uploaded on the Reimbursement Report page
+      and the server-folder import is gone, so everything below is history). `POST api/imports/pending-xml`
+      became the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
       `IPendingReimbursementXmlSource` discovery/parsing port and the narrow
-      `IImportedReimbursementStore` persistence port; see
+      `IImportedReimbursementStore` persistence port, which remains; see
       [Reimbursement import and reconciliation](#reimbursement-import-and-reconciliation) for the
-      full behaviour, including the preserved file-hash idempotency, parsing decisions and
-      imported/skipped/failed counting. Unlike every slice before it, its non-persistence adapter is a
+      file-hash idempotency and parsing decisions the upload route still follows. Unlike every slice before it, its non-persistence adapter was a
       real `Inventory.Infrastructure` resident (`Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource`,
       registered with `AddPendingReimbursementXmlSource()`) rather than a temporary API-owned one,
       because filesystem discovery and XML parsing need no `AppDbContext`; only
@@ -19948,7 +20355,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Hourly Nayax sales reconciliation — `Inventory.Application.NayaxReconciliation.ReconcileNayaxSalesWithProvider` | In-process, in a hosted loop: about five minutes after startup and then every 60 minutes it runs once for each business whose SQS sender is enabled and whose own lifecycle is active, one business at a time, in a service scope resolved to that business. Each run reuses `SyncLatestNayaxSales` with `force: true` under a shared per-business lock, then compares what `lastSales` returned with the sales SQS delivered and records the evidence | Implemented (#1104); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104) | No, for the queue reader's reasons exactly: it writes the `/home` SQLite file, so an out-of-process runner is outside the single-writer envelope, and it needs each business's own stored Nayax credentials, which the API already resolves per call. It is the **third** scheduled workload and the first that is scheduled *in-process* rather than by the WebJob of issue #333 — because unlike the backup and the connected-machine counts it has to serialise against request-driven synchronizations through an in-memory lock, which a separate process could not share. It is assessed explicitly under each criterion below. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
-| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files left in a folder on the server | Retired (#1237); the uploaded reimbursement report import below replaces it | No. |
 | Uploaded reimbursement report import — `Inventory.Application.Imports.ProcessReimbursementImportJob` | In-process, in a hosted loop: an operator uploads the ZIP Nayax emails and the endpoint stores it as a queued job; the worker takes the oldest job that is **due**, one at a time, in a service scope resolved to that job's own business, and commits each XML's rows, its coverage and its per-file outcome in one transaction | Implemented (#1149); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file for its whole duration, so an out-of-process importer is outside the single-writer envelope; it needs no credential at all; and it is **not scheduled** — it is work an operator started, moved off the request so a 1.3 MB archive is acknowledged in seconds and a database problem becomes a bounded retry instead of a failed upload. It is assessed explicitly under each criterion below. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |

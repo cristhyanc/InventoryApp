@@ -21,9 +21,9 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: agent-repair-pr-${{ github.event.issue.number }}
-  cancel-in-progress: true
+# No workflow-level concurrency: GitHub applies it before job conditions, so any other comment on the pull
+# request (a person, SonarCloud) would start a run whose jobs are all skipped and still cancel a running
+# repair. The repair job takes the group itself, so only a newer repair request supersedes it.
 
 jobs:
   isolation-gate:
@@ -75,6 +75,9 @@ jobs:
       startsWith(github.event.comment.body, '@claude repair') &&
       github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    concurrency:
+      group: agent-repair-pr-${{ github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 120
     permissions:
@@ -84,10 +87,13 @@ jobs:
       actions: read
       checks: read
       statuses: read
+    # Only values the runner computes or that steps before the agent wrote. Anything a step after the
+    # agent writes is untrusted, so the publish job reads the repair from its artifact instead.
     outputs:
-      dispatch_validation: ${{ steps.outcome.outputs.dispatch_validation }}
-      pr_number: ${{ steps.outcome.outputs.pr_number }}
-      head_sha: ${{ steps.outcome.outputs.head_sha }}
+      head_ref: ${{ steps.pr.outputs.head_ref }}
+      start_sha: ${{ steps.pr.outputs.start_sha }}
+      issue_number: ${{ steps.pr.outputs.issue_number }}
+      claude_outcome: ${{ steps.claude.outcome }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR_NUMBER: ${{ github.event.issue.number }}
@@ -143,8 +149,13 @@ jobs:
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
 
+          issue_number="${head_ref#agent/issue-}"
+          issue_number="${issue_number%%-*}"
+          [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || fail "Could not determine the issue number from head branch '$head_ref'."
+
           echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
           echo "start_sha=$start_sha" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
 
       - name: Check out pull request head branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -152,6 +163,19 @@ jobs:
           ref: ${{ steps.pr.outputs.head_ref }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Store trusted pull request context for the agent
+        # Anyone can comment on a public pull request, so the agent does not read comments itself. This step
+        # writes the pull request, its linked issue and only the owner's and the pipeline's automation comments
+        # and reviews to a file under .git (so it cannot be committed), using the script from this workflow's commit.
+        env:
+          AGENT_AUTOMATION_APP_BOT_LOGIN: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          ISSUE_NUMBER: ${{ steps.pr.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          context="$RUNNER_TEMP/agent-trusted-context.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-trusted-context.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$context"
+          node "$context" pr "$PR_NUMBER" "$ISSUE_NUMBER" .git/agent-pr-context.md
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -197,13 +221,13 @@ jobs:
             Follow CLAUDE.md, AGENTS.md and docs/automation.md exactly. Repair attempts are limited to two per pull request and are counted by humans; this run is one attempt. Do not start another one, and do not attempt anything the request or the review findings do not require.
 
             Procedure:
-            1. Read the pull request with its reviews and comments (`gh pr view ${{ github.event.issue.number }} --comments`), its diff (`gh pr diff ${{ github.event.issue.number }}`), the CI state (`gh pr checks ${{ github.event.issue.number }}`, `gh run view`, and the github_ci tools for failing job logs), and the linked issue (`gh issue view <n>`) so the repair stays inside the issue's acceptance criteria and exclusions.
+            1. Read the file `.git/agent-pr-context.md` with the Read tool. A trusted workflow step wrote it: it holds the pull request, its reviews and comments, and the linked issue, keeping only text from the repository owner and the pipeline's automation accounts. Do not try to read pull request or issue comments any other way. Then read the pull request's diff (`gh pr diff ${{ github.event.issue.number }}`), the CI state (`gh pr checks ${{ github.event.issue.number }}`, `gh run view`, and the github_ci tools for failing job logs). Keep the repair inside the linked issue's acceptance criteria and exclusions.
             2. Identify the concrete CI or review failures the request refers to. If a repair would require weakening, skipping, or deleting a test, changing an established rule in AGENTS.md or docs/architecture.md, or working outside the issue's scope, stop: post one comment with `gh pr comment` explaining exactly which human decision is needed, change nothing, and finish.
             3. Make the smallest coherent fix on the checked-out head branch. Add or adjust tests as AGENTS.md requires.
             3a. Keep documentation accurate: when the repair changes behaviour, contracts, architecture, configuration, automation, deployment, operations or user workflows, or when the review findings identify missing, inaccurate or incomplete documentation, update the affected documentation on the head branch in the same repair, consistent with the issue's Documentation impact decision. You cannot and must not edit the pull request description. If the pull request's "## Documentation impact" declaration (its `Decision:` or `Evidence:` line) is no longer accurate after your repair, state in your closing comment exactly what must be corrected, quoting the exact replacement text, so the human can edit the description; validation reruns when the description is edited.
             4. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, and record its exit code and actual result. Never use `&`, `nohup`, `run_in_background`, redirected background execution, or any mechanism that returns before validation completes; a started or still-running command is not validation evidence. Invoke it as that exact command with no redirection, pipe, prefix or suffix: the permission allowlist matches the literal command and refuses any variant, and the shell timeout (30 minutes) already covers a full run.
             5. Review the diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
-            6. Commit the repair locally with a focused message. Do not push, rebase, or rewrite history; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation.
+            6. Commit the repair locally with a focused message. If `bash scripts/validate.sh` regenerated a tracked file because of your change (for example `frontend/inventory-app/src/styles.css` after a new Tailwind class), review it and commit it with the repair: leave no tracked file modified, or the repair cannot be published. Do not push, rebase, or rewrite history; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation.
             7. Post one comment with `gh pr comment` describing what was changed and why, which findings it addresses, the exact validation command and its actual result, and anything you could not resolve. Do not claim the commit was pushed. Do not change labels, do not edit the PR description, do not merge.
 
             Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
@@ -215,33 +239,139 @@ jobs:
             --effort high
             --max-turns 200
             --allowedTools "Edit,MultiEdit,Write,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
-            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
+            "Read,Glob,Grep"
+            "Bash(gh pr diff ${{ github.event.issue.number }}),Bash(gh pr diff ${{ github.event.issue.number }} *),Bash(gh pr checks ${{ github.event.issue.number }}),Bash(gh pr checks ${{ github.event.issue.number }} *),Bash(gh pr comment ${{ github.event.issue.number }} *),Bash(gh run view *),Bash(gh run list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git add *),Bash(git commit *)"
-            "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
+            "Bash(bash scripts/validate.sh)"
+            "Bash(dotnet restore *),Bash(dotnet build *),Bash(dotnet test *),Bash(dotnet format *),Bash(dotnet ef migrations *)"
+            "Bash(npm --prefix frontend/inventory-app ci),Bash(npm --prefix frontend/inventory-app test),Bash(npm --prefix frontend/inventory-app test -- *),Bash(npm --prefix frontend/inventory-app run lint),Bash(npm --prefix frontend/inventory-app run build)"
             "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "WebFetch,WebSearch"
             "mcp__nayax__submit_feedback"
             "Monitor"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout *),Bash(git switch *),Bash(git merge *)"
+            "Bash(gh pr view *),Bash(gh issue view *),Bash(dotnet run *),Bash(dotnet exec *),Bash(dotnet msbuild *),Bash(npm --prefix frontend/inventory-app exec *)"
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *),Bash(gh label *)"
 
-      - name: Verify repair result
-        id: repair_result
-        if: steps.claude.outcome == 'success'
+      # Hand-off only: this job holds no GitHub App credential. Its result reaches the separate publish job as
+      # plain data (a git bundle and a few text files); nothing a step after the agent writes is trusted there.
+      - name: Package repair result for the publish job
+        id: package
+        if: always() && steps.pr.outcome == 'success' && steps.claude.outcome != 'skipped'
         env:
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}
           START_SHA: ${{ steps.pr.outputs.start_sha }}
         run: |
           set -euo pipefail
+          out="$RUNNER_TEMP/agent-result"
+          mkdir "$out"
+          branch="$(git branch --show-current)"
+          head_sha="$(git rev-parse HEAD)"
+          printf '%s\n' "$branch" > "$out/branch"
+          printf '%s\n' "$head_sha" > "$out/head_sha"
+          if git diff --quiet && git diff --cached --quiet; then echo clean > "$out/worktree"; else echo dirty > "$out/worktree"; fi
+          if [ "$head_sha" != "$START_SHA" ] && [ -n "$branch" ]; then
+            git bundle create "$out/result.bundle" "$START_SHA..refs/heads/$branch"
+          fi
+
+      - name: Upload repair result for the publish job
+        if: always() && steps.package.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-result
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    name: Publish repair from a separate trusted job
+    needs: repair
+    # A fresh runner that never ran agent code. It restores the repair from the artifact, re-verifies it,
+    # and only then mints the GitHub App token. It also records the outcome when the repair job failed.
+    if: always() && needs.repair.result != 'skipped' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      # Read-only: lets the restore step download this run's repair result artifact.
+      actions: read
+    outputs:
+      dispatch_validation: ${{ steps.outcome.outputs.dispatch_validation }}
+      pr_number: ${{ steps.outcome.outputs.pr_number }}
+      head_sha: ${{ steps.outcome.outputs.head_sha }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+
+      - name: Check out the pull request head the repair started from
+        if: needs.repair.outputs.start_sha != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.repair.outputs.start_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore the repair result
+        id: restore
+        if: needs.repair.outputs.start_sha != ''
+        env:
+          ARTIFACT_NAME: agent-result-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/agent-result-handoff.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-result-handoff.sh?ref=$GITHUB_WORKFLOW_SHA" > "$handoff"
+          bash "$handoff" restore "$ARTIFACT_NAME"
+
+      - name: Verify repair result
+        id: repair_result
+        if: needs.repair.outputs.claude_outcome == 'success' && steps.restore.outputs.restored == 'true'
+        env:
+          HEAD_REF: ${{ needs.repair.outputs.head_ref }}
+          START_SHA: ${{ needs.repair.outputs.start_sha }}
+          AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
+        run: |
+          set -euo pipefail
           [ "$(git branch --show-current)" = "$HEAD_REF" ] || { echo "::error::Repair agent changed branch"; exit 1; }
+          # The agent job reports its own working tree; this job restored only committed history.
+          [ "$AGENT_WORKTREE" = "clean" ] || { echo "::error::Tracked working-tree changes remain after repair"; exit 1; }
           git diff --quiet || { echo "::error::Tracked working-tree changes remain after repair"; exit 1; }
           git diff --cached --quiet || { echo "::error::Staged changes remain after repair"; exit 1; }
 
           head_sha="$(git rev-parse HEAD)"
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve repair HEAD"; exit 1; }
+          git merge-base --is-ancestor "$START_SHA" "$head_sha" || { echo "::error::Repair rewrote the pull request history"; exit 1; }
+          # Same rule as implementation persistence: check every repair commit, including reverted files and
+          # merge parents, and refuse any that touches control-plane or scratch files. The publisher re-checks
+          # this in a clean repository before it pushes.
+          while read -r commit; do
+            protected_bytes="$(git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff-tree --root -r -m --no-commit-id --name-only -z "$commit" -- .github '.agent-*' inventory.db | wc -c)"
+            [ "$protected_bytes" -eq 0 ] || { echo "::error::Repair commit $commit touches .github, .agent-* or inventory.db; nothing was pushed, human recovery required"; exit 1; }
+          done < <(git rev-list "$START_SHA..$head_sha")
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           if [ "$head_sha" = "$START_SHA" ]; then
             echo "push_required=false" >> "$GITHUB_OUTPUT"
@@ -256,31 +386,98 @@ jobs:
         with:
           client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          # Contents only: repair updates an existing branch and must never change a workflow file.
           permission-contents: write
-          permission-workflows: write
 
       - name: Push repaired head
         id: publish_repair
         if: steps.repair_result.outputs.push_required == 'true'
         env:
           GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}
-          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          HEAD_REF: ${{ needs.repair.outputs.head_ref }}
           HEAD_SHA: ${{ steps.repair_result.outputs.head_sha }}
+          START_SHA: ${{ needs.repair.outputs.start_sha }}
         run: |
           set -euo pipefail
           [ "$(git branch --show-current)" = "$HEAD_REF" ] || { echo "::error::Local branch changed before repair publish"; exit 1; }
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Local HEAD changed before repair publish"; exit 1; }
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$HEAD_REF"
+          # The App token is used only by the publisher from this workflow's own commit, which runs Git in a clean
+          # repository (no agent hooks or config) and re-checks the protected paths since START_SHA before pushing.
+          publisher="$RUNNER_TEMP/git-push-with-app-retry.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
+          AGENT_PUBLISH_BASE_SHA="$START_SHA" bash "$publisher" "https://github.com/${GITHUB_REPOSITORY}.git" "$HEAD_SHA:refs/heads/$HEAD_REF"
+
+      # Storage only (audit finding WF-09): committed repair work that was not pushed to the pull request is kept
+      # on a recovery branch, so a failed verification, a dirty working tree or a failed push never discards it.
+      - name: Create GitHub App token for repair recovery
+        id: recovery_app_token
+        if: always() && steps.restore.outputs.restored == 'true' && steps.restore.outputs.head_sha != needs.repair.outputs.start_sha && steps.publish_repair.outcome != 'success'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # GitHub checks a newly created branch's workflow files against the default branch (main), so a
+          # pull request carrying unreleased develop workflow changes is refused for a contents-only token.
+          # The handoff and the publisher both refuse any repair commit that touches .github, so this does not
+          # let the agent change a workflow.
+          permission-workflows: write
+
+      - name: Persist committed repair
+        id: persist_repair
+        if: always() && steps.recovery_app_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.recovery_app_token.outputs.token }}
+          START_SHA: ${{ needs.repair.outputs.start_sha }}
+          EXPECTED_HEAD: ${{ steps.restore.outputs.head_sha }}
+          ISSUE_NUMBER: ${{ needs.repair.outputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ && "$RUN_ID" =~ ^[1-9][0-9]*$ && "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || fail "Invalid recovery identity"
+          [[ "$START_SHA" =~ ^[0-9a-f]{40}$ && "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid expected SHA"
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" ] || fail "Unexpected HEAD before recovery"
+          [ "$EXPECTED_HEAD" != "$START_SHA" ] || exit 0
+          git merge-base --is-ancestor "$START_SHA" "$EXPECTED_HEAD" || fail "Repair is not ahead of the pull request head it started from"
+          # Check every commit, including reverted files and merge parents, not only the net diff.
+          while read -r commit; do
+            protected_bytes="$(git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff-tree --root -r -m --no-commit-id --name-only -z "$commit" -- .github '.agent-*' inventory.db | wc -c)"
+            [ "$protected_bytes" -eq 0 ] || fail "Protected control-plane or scratch files in repair history; human recovery required"
+          done < <(git rev-list "$START_SHA..$EXPECTED_HEAD")
+          saved_branch="agent/recovery-$ISSUE_NUMBER-$RUN_ID-$RUN_ATTEMPT"
+          publish_remote="${PUBLISH_REMOTE:-https://github.com/${GITHUB_REPOSITORY}.git}"
+          # The App token is used only by the publisher from this workflow's own commit, which runs Git in a clean
+          # repository and re-checks the protected paths there.
+          publisher="$RUNNER_TEMP/git-push-with-app-retry.sh"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/git-push-with-app-retry.sh?ref=$GITHUB_WORKFLOW_SHA" > "$publisher"
+          remote_head="$(bash "$publisher" --ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          if [ -n "$remote_head" ]; then
+            [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Existing recovery branch differs; refusing overwrite"
+          else
+            AGENT_PUBLISH_BASE_SHA="$START_SHA" bash "$publisher" "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
+          fi
+          remote_head="$(bash "$publisher" --ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Remote recovery verification failed"
+          echo "saved_branch=$saved_branch" >> "$GITHUB_OUTPUT"
+          echo "saved_sha=$EXPECTED_HEAD" >> "$GITHUB_OUTPUT"
+          echo "Repair work preserved at $saved_branch ($EXPECTED_HEAD). It was not pushed to the pull request." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record outcome on the pull request
         id: outcome
         if: always()
         env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_OUTCOME: ${{ needs.repair.outputs.claude_outcome }}
           REPAIR_RESULT_OUTCOME: ${{ steps.repair_result.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
+          RESTORED_HEAD: ${{ steps.restore.outputs.head_sha }}
+          SAVED_BRANCH: ${{ steps.persist_repair.outputs.saved_branch }}
+          PERSIST_OUTCOME: ${{ steps.persist_repair.outcome }}
           EXPECTED_SHA: ${{ steps.repair_result.outputs.head_sha }}
-          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
-          START_SHA: ${{ steps.pr.outputs.start_sha }}
+          HEAD_REF: ${{ needs.repair.outputs.head_ref }}
+          START_SHA: ${{ needs.repair.outputs.start_sha }}
         run: |
           set -euo pipefail
           {
@@ -296,6 +493,23 @@ jobs:
             end_sha="$(jq -r '.headRefOid // empty' <<<"$end_json" 2>/dev/null || true)"
           fi
           [[ "$end_sha" =~ ^[0-9a-f]{40}$ ]] || end_sha=""
+
+          # Committed repair work that did not reach the pull request: say where it is, or that it was lost.
+          # Recovery needs the agent job's hand-off artifact; without it no commit from the agent's runner survives.
+          recovery_line=""
+          if [ -n "$START_SHA" ] && [ "$RESTORE_OUTCOME" != "success" ]; then
+            recovery_line="The repair result could not be handed to this job (restore step: ${RESTORE_OUTCOME:-not run}), for example because the repair run was cancelled or lost its runner before uploading it. This run cannot tell whether the agent committed anything; any commit it made existed only on the agent's runner and was not saved."
+          fi
+          if [[ -n "$RESTORED_HEAD" && -n "$START_SHA" && "$RESTORED_HEAD" != "$START_SHA" && "$RESTORED_HEAD" != "$end_sha" ]]; then
+            if [ -n "$SAVED_BRANCH" ]; then
+              recovery_line="The repair's committed work ($RESTORED_HEAD) was not published to this pull request. It is saved on branch \`$SAVED_BRANCH\` for you to inspect."
+            else
+              recovery_line="The repair committed $RESTORED_HEAD, but it was not published to this pull request and could not be saved to a recovery branch (recovery step: ${PERSIST_OUTCOME:-not run}). See the run log."
+            fi
+            if [ "$AGENT_WORKTREE" = "dirty" ]; then
+              recovery_line="$recovery_line The agent left tracked files modified and uncommitted (often \`frontend/inventory-app/src/styles.css\`, which validation regenerates), so the repair was refused."
+            fi
+          fi
 
           case "$CLAUDE_OUTCOME" in
             cancelled) status_line="This repair run was cancelled (superseded by a newer repair request on this pull request)." ;;
@@ -330,7 +544,7 @@ jobs:
             body="$(cat <<EOF
           Repair run on branch $HEAD_REF finished. $status_line
 
-          No verified new commit was published by this repair run: the pull request head is still $end_sha. No exact-SHA validation or review was dispatched. Read the agent's comment above (if any) and the run log before deciding whether another repair attempt is warranted.
+          No verified new commit was published by this repair run: the pull request head is still $end_sha. No exact-SHA validation or review was dispatched. $recovery_line Read the agent's comment above (if any) and the run log before deciding whether another repair attempt is warranted.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
@@ -342,7 +556,7 @@ jobs:
             body="$(cat <<EOF
           Repair run on branch ${HEAD_REF:-unknown} finished. $status_line
 
-          This workflow could not verify whether the pull request head changed during the run (head SHA before: ${START_SHA:-unavailable}; after: ${end_sha:-unavailable}). It is not claiming that a push occurred and did not dispatch validation or review. Inspect the pull request's commits, checks, and run log.
+          This workflow could not verify whether the pull request head changed during the run (head SHA before: ${START_SHA:-unavailable}; after: ${end_sha:-unavailable}). It is not claiming that a push occurred and did not dispatch validation or review. $recovery_line Inspect the pull request's commits, checks, and run log.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
@@ -356,8 +570,8 @@ jobs:
 
   dispatch-validation:
     name: Dispatch exact-SHA validation
-    needs: repair
-    if: always() && needs.repair.outputs.dispatch_validation == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    needs: publish
+    if: always() && needs.publish.outputs.dispatch_validation == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
@@ -392,8 +606,8 @@ jobs:
       - name: Verify repaired head and dispatch trusted validation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ needs.repair.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.repair.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.publish.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.publish.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail

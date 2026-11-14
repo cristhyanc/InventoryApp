@@ -14,6 +14,12 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// by the bookkeeping/daily/reconciliation/profitability adapters through
 /// <see cref="EfReportingSharedQueries"/> rather than duplicating it.
 ///
+/// It reads no sale at all, by design: the GST accounting aid's sales and GST-on-sales figures come
+/// from the bookkeeping report its use case composes, so they follow that report's business-date
+/// sales window (issue #1250) without this adapter needing a calendar of its own. Everything it does
+/// read - imported reimbursement periods and purchases - is dated by date-only values, which that
+/// change deliberately left on plain calendar-date bounds.
+///
 /// Its purchase query (issue #432) projects the raw per-line and per-charge amounts and stored
 /// classifications and calculates nothing: the rounding and the taxable/GST-free/unknown rules stay
 /// in <see cref="PurchaseInputGstPolicy"/>/<c>PurchaseGstPolicy</c>. The date predicate is the same

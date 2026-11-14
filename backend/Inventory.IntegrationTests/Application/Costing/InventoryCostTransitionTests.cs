@@ -4,6 +4,7 @@ using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SalesSync;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -19,14 +20,28 @@ namespace InventoryApi.Tests.Application.Costing;
 /// <c>InventoryCostTransitionServiceTests</c> and run over the
 /// <c>EfInventoryCostTransitionStore</c> adapter exactly as production composes them, together with the
 /// live-sale costing behaviour that depends on a transition baseline.
+///
+/// <para><b>Every local product id here differs from its Nayax id</b> (issue #1256). These cases used
+/// to seed a product whose local key was also its <c>NayaxProductID</c>, which made a preview that
+/// matched machine slots against <c>Product.Id</c> indistinguishable from one that resolved them
+/// through the provider link - and that coincidence hid a baseline being recorded without the
+/// product's machine stock, or with another product's. The local keys stay 10 and 20, the Nayax ids
+/// are 5001 and 5002, and <see cref="FakeNayaxProductLinkStore"/> is the link between them.</para>
 /// </summary>
 public class InventoryCostTransitionTests
 {
+    private const long SnackNayaxId = 5001;
+    private const long DrinkNayaxId = 5002;
+
+    /// <summary>Local product 10 is Nayax 5001 and local product 20 is Nayax 5002.</summary>
+    private static INayaxProductLinkStore Links() =>
+        FakeNayaxProductLinkStore.Linking((SnackNayaxId, 10L), (DrinkNayaxId, 20L));
+
     [Fact]
     public async Task Preview_uses_home_plus_each_machine_and_reports_legacy_discrepancy()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        db.Products.Add(Snack(19, 1.25m));
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10,
@@ -35,8 +50,8 @@ public class InventoryCostTransitionTests
             EffectiveAt = DateTime.UtcNow.AddDays(-10)
         });
         await db.SaveChangesAsync();
-        var nayax = NayaxWithStock(10);
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object).Handle(new(
+        var nayax = NayaxWithStock(SnackNayaxId);
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object, Links()).Handle(new(
             10, 1.25m, DomainBaselineSource.ManualAuthoritative));
 
         Assert.Equal(19, preview.HomeStockQuantity);
@@ -51,6 +66,105 @@ public class InventoryCostTransitionTests
             stock => Assert.Equal(5, stock.StockQuantity));
     }
 
+    /// <summary>
+    /// Issue #1256, fixture A: the machine stock of a product whose local id and Nayax id differ.
+    /// Local product 10 is Nayax 5001, so the slot reported for 5001 is this product's - 10 PAR
+    /// less 4 missing, six units - and the opening baseline is 19 + 6 = 25 units at $1.25, $31.25.
+    /// A preview that matched the slot against <c>Product.Id</c> found no slot for 10 at all and
+    /// recorded a baseline of 19 units and $23.75.
+    /// </summary>
+    [Fact]
+    public async Task Preview_counts_the_machine_stock_of_the_slot_carrying_the_products_nayax_id()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(Snack(19, 1.25m));
+        await db.SaveChangesAsync();
+        var nayax = OneMachineStocking((SnackNayaxId, 10, 4));
+
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax, Links()).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
+
+        Assert.Equal(19, preview.HomeStockQuantity);
+        Assert.Equal(6, preview.MachineStockQuantity);
+        Assert.Equal(25, preview.OpeningCostingQuantity);
+        Assert.Equal(31.25m, preview.InventoryValue);
+        Assert.Equal(6, Assert.Single(preview.MachineStocks).StockQuantity);
+    }
+
+    /// <summary>
+    /// Issue #1256, fixture B: the slot of a *different* product whose Nayax id happens to equal
+    /// this product's local key is not this product's stock. The machine stocks both: Nayax 5001,
+    /// which is local product 10, and Nayax 10, which is local product 7. Product 10's machine stock
+    /// is the six units of its own slot - never the seven of the slot numbered 10, and not thirteen.
+    /// </summary>
+    [Fact]
+    public async Task Preview_does_not_count_the_slot_of_another_product_whose_nayax_id_equals_the_local_id()
+    {
+        await using var db = CreateDb();
+        db.Products.AddRange(
+            Snack(19, 1.25m),
+            new Product { Id = 7, Name = "Chips", ExternalProductId = "10", QuantityInStock = 2, AverageUnitCost = 1m });
+        await db.SaveChangesAsync();
+        var nayax = OneMachineStocking((SnackNayaxId, 10, 4), (NayaxProductId: 10, Par: 9, Missing: 2));
+        var links = FakeNayaxProductLinkStore.Linking((SnackNayaxId, 10L), (10L, 7L));
+
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax, links).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
+
+        Assert.Equal(6, preview.MachineStockQuantity);
+        Assert.Equal(25, preview.OpeningCostingQuantity);
+        Assert.Equal(31.25m, preview.InventoryValue);
+    }
+
+    /// <summary>
+    /// Issue #1256: a product the sales provider does not name has no machine stock to resolve, and
+    /// the preview says so rather than presenting an unmeasured zero as a measured one. Its opening
+    /// quantity is home stock alone, which is the honest answer for a product no slot can be matched
+    /// to.
+    /// </summary>
+    [Fact]
+    public async Task Preview_of_a_product_with_no_provider_link_notes_that_machine_stock_is_unresolved()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        await db.SaveChangesAsync();
+        var nayax = OneMachineStocking((SnackNayaxId, 10, 4));
+        // No link store resolves a product that records no provider id - both sides read the same
+        // column - so the product's own slot in the machine cannot be found at all.
+        var links = FakeNayaxProductLinkStore.Linking();
+
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax, links).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
+
+        Assert.Equal(0, preview.MachineStockQuantity);
+        Assert.Equal(19, preview.OpeningCostingQuantity);
+        Assert.Equal(23.75m, preview.InventoryValue);
+        Assert.StartsWith(
+            Inventory.Domain.Costing.InventoryCostTransitionPolicy.UnresolvedMachineStockNote,
+            preview.DataQualityNote,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #1256: a slot this business holds no link for is an unknown product and is counted for
+    /// nobody - never for the product whose local key happens to be that number.
+    /// </summary>
+    [Fact]
+    public async Task Preview_ignores_a_slot_whose_nayax_product_is_not_linked_to_any_local_product()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(Snack(19, 1.25m));
+        await db.SaveChangesAsync();
+        var nayax = OneMachineStocking((SnackNayaxId, 10, 4), (NayaxProductId: 10, Par: 9, Missing: 2));
+        var links = FakeNayaxProductLinkStore.Linking((SnackNayaxId, 10L));
+
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax, links).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
+
+        Assert.Equal(6, preview.MachineStockQuantity);
+        Assert.Equal(25, preview.OpeningCostingQuantity);
+    }
+
     // Issue #59: every deliberate check in these use cases is caller-facing validation, so it throws
     // the narrowly typed DomainValidationException the central handler is allowed to publish as a
     // 400. An ordinary InvalidOperationException would now become a generic logged 500 instead.
@@ -58,7 +172,7 @@ public class InventoryCostTransitionTests
     public async Task Preview_rejects_a_negative_opening_cost_with_a_domain_validation_exception()
     {
         await using var db = CreateDb();
-        var preview = TestCostingUseCases.PreviewTransition(db, NayaxWithStock(10).Object);
+        var preview = TestCostingUseCases.PreviewTransition(db, NayaxWithStock(SnackNayaxId).Object, Links());
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             preview.Handle(new(10, -1m, DomainBaselineSource.ManualAuthoritative)));
@@ -75,14 +189,17 @@ public class InventoryCostTransitionTests
     public async Task Preview_rejecting_incomplete_machine_stock_names_the_product()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        db.Products.Add(Snack(19, 1.25m));
         await db.SaveChangesAsync();
-        var nayax = NayaxWithStock(10);
+        var nayax = NayaxWithStock(SnackNayaxId);
         nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = null } });
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = SnackNayaxId, PAR = 10, MissingStockByMDB = null }
+            });
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.PreviewTransition(db, nayax.Object)
+            TestCostingUseCases.PreviewTransition(db, nayax.Object, Links())
                 .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative)));
 
         Assert.Equal(
@@ -94,7 +211,7 @@ public class InventoryCostTransitionTests
     public async Task Apply_without_confirmation_throws_a_domain_validation_exception()
     {
         await using var db = CreateDb();
-        var apply = TestCostingUseCases.ApplyTransition(db, NayaxWithStock(10).Object);
+        var apply = TestCostingUseCases.ApplyTransition(db, NayaxWithStock(SnackNayaxId).Object, Links());
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             apply.Handle(new(Guid.NewGuid(), false)));
@@ -106,7 +223,7 @@ public class InventoryCostTransitionTests
     public async Task Apply_preserves_legacy_history_and_rebuilds_only_after_cutoff()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        db.Products.Add(Snack(19, 1.25m));
         var legacyRestock = new StockAdjustment
         {
             ProductId = 10,
@@ -131,12 +248,13 @@ public class InventoryCostTransitionTests
         };
         db.AddRange(legacyRestock, historicalSale);
         await db.SaveChangesAsync();
-        var nayax = NayaxWithStock(10);
+        var nayax = NayaxWithStock(SnackNayaxId);
         var rebuild = TestCostingUseCases.Rebuild(db);
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object).Handle(new(
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object, Links()).Handle(new(
             10, 1.25m, DomainBaselineSource.ManualAuthoritative));
 
-        await TestCostingUseCases.ApplyTransition(db, nayax.Object, rebuild).Handle(new(preview.PreviewId, Confirmed: true));
+        await TestCostingUseCases.ApplyTransition(db, nayax.Object, Links(), rebuild)
+            .Handle(new(preview.PreviewId, Confirmed: true));
 
         var baseline = await db.InventoryCostTransitionBaselines
             .Include(x => x.MachineStocks)
@@ -297,19 +415,11 @@ public class InventoryCostTransitionTests
     {
         await using var db = CreateDb();
         db.Products.AddRange(
-            new Product { Id = 10, Name = "Snack", QuantityInStock = 4, AverageUnitCost = 1.50m },
-            new Product { Id = 20, Name = "Drink", QuantityInStock = 6, AverageUnitCost = 2.00m });
+            Snack(4, 1.50m),
+            new Product { Id = 20, Name = "Drink", ExternalProductId = "5002", QuantityInStock = 6, AverageUnitCost = 2.00m });
         await db.SaveChangesAsync();
-        var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
-        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<NayaxMachineProduct>
-            {
-                new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 },
-                new() { NayaxProductID = 20, PAR = 10, MissingStockByMDB = 2 }
-            });
-        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Object).Handle(
+        var nayax = OneMachineStocking((SnackNayaxId, 8, 3), (DrinkNayaxId, 10, 2));
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax, Links()).Handle(
             new(DomainBaselineSource.ManualAuthoritative));
 
         Assert.Equal(2, preview.ProductCount);
@@ -318,7 +428,7 @@ public class InventoryCostTransitionTests
         Assert.Equal(23, preview.OpeningCostingQuantity);
         Assert.Equal(41.50m, preview.InventoryValue);
 
-        await TestCostingUseCases.ApplyAllTransitions(db, nayax.Object).Handle(new(preview.PreviewId, Confirmed: true));
+        await TestCostingUseCases.ApplyAllTransitions(db, nayax, Links()).Handle(new(preview.PreviewId, Confirmed: true));
 
         Assert.Equal(2, await db.InventoryCostTransitionBaselines.CountAsync());
         var products = await db.Products.OrderBy(x => x.Id).ToListAsync();
@@ -405,7 +515,38 @@ public class InventoryCostTransitionTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static Mock<INayaxLynxClient> NayaxWithStock(long productId)
+    /// <summary>Local product 10, whose Nayax id is <see cref="SnackNayaxId"/>.</summary>
+    private static Product Snack(int quantityInStock, decimal averageUnitCost) => new()
+    {
+        Id = 10,
+        Name = "Snack",
+        ExternalProductId = "5001",
+        QuantityInStock = quantityInStock,
+        AverageUnitCost = averageUnitCost
+    };
+
+    /// <summary>
+    /// One Nayax machine stocking the given slots, each named by the <em>Nayax</em> product id it
+    /// reports rather than by any local key.
+    /// </summary>
+    private static INayaxLynxClient OneMachineStocking(params (long NayaxProductId, int Par, int Missing)[] slots)
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(slots
+                .Select(slot => new NayaxMachineProduct
+                {
+                    NayaxProductID = slot.NayaxProductId,
+                    PAR = slot.Par,
+                    MissingStockByMDB = slot.Missing
+                })
+                .ToList());
+        return nayax.Object;
+    }
+
+    private static Mock<INayaxLynxClient> NayaxWithStock(long nayaxProductId)
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
@@ -417,12 +558,12 @@ public class InventoryCostTransitionTests
         nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
-                new() { NayaxProductID = productId, PAR = 10, MissingStockByMDB = 4 }
+                new() { NayaxProductID = nayaxProductId, PAR = 10, MissingStockByMDB = 4 }
             });
         nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
-                new() { NayaxProductID = productId, PAR = 8, MissingStockByMDB = 3 }
+                new() { NayaxProductID = nayaxProductId, PAR = 8, MissingStockByMDB = 3 }
             });
         return nayax;
     }

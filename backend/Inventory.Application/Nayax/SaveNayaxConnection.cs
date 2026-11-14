@@ -54,9 +54,12 @@ public sealed record NayaxConnectionStatusSummary(
 /// complete puts the draft back instead of destroying a test result that was never accepted.</para>
 ///
 /// <para><strong>The status comes from that draft's own results</strong>, through the one Domain rule
-/// (<see cref="NayaxConnectionCheckOutcomePolicy"/>), and a run whose sign-in did not pass is
-/// refused rather than stored: a token that has never been shown to authenticate must not replace
-/// whatever the business is using today. Machine lines that were never checked do not hold
+/// (<see cref="NayaxConnectionCheckOutcomePolicy"/>), and a run whose machine list did not pass is
+/// refused rather than stored: a token that has never been shown to read this business's machines
+/// must not replace whatever the business is using today. That applies to a draft created before the
+/// machine list became the gate as much as to a fresh one (issue #1310): its retired sign-in line is
+/// ignored, so a pending draft cannot be promoted on the strength of a probe this application no
+/// longer makes. Machine lines that were never checked do not hold
 /// <see cref="NayaxConnectionStatus.Ready"/> back - a business with no machines yet has to be able to
 /// finish connecting - and the saved connection records that those checks are still pending so the
 /// Owner can be asked to re-test once machines exist.</para>
@@ -81,9 +84,9 @@ public sealed class SaveNayaxConnection
     /// Why a tested pair was not stored. It names no part of the submitted token and repeats no
     /// Nayax response: the test result the Owner is looking at already says which line failed.
     /// </summary>
-    public const string SignInDidNotPassMessage =
-        "The tested token did not sign in to Nayax, so it was not saved. Fix what the test reported "
-            + "and run the test again.";
+    public const string MachineListDidNotPassMessage =
+        "The tested token could not read this business's machine list from Nayax, so it was not "
+            + "saved. Fix what the test reported and run the test again.";
 
     private readonly INayaxConnectionTestDraftStore _drafts;
     private readonly INayaxConnectionStore _connections;
@@ -117,8 +120,8 @@ public sealed class SaveNayaxConnection
     /// There was no such draft to claim; see <see cref="DraftUnavailableMessage"/>.
     /// </exception>
     /// <exception cref="DomainValidationException">
-    /// The claimed draft's sign-in check did not pass, so the credentials were not stored; see
-    /// <see cref="SignInDidNotPassMessage"/>.
+    /// The claimed draft's machine-list check did not pass, so the credentials were not stored; see
+    /// <see cref="MachineListDidNotPassMessage"/>.
     /// </exception>
     /// <exception cref="BusinessAccessDeniedException">
     /// The caller has no resolvable business, or no identity a draft could be bound to.
@@ -159,7 +162,7 @@ public sealed class SaveNayaxConnection
         {
             // The transaction is left uncommitted, so the claim is undone: a refused save consumes
             // nothing, and the draft is still there until it expires or the next test replaces it.
-            throw new DomainValidationException(SignInDidNotPassMessage);
+            throw new DomainValidationException(MachineListDidNotPassMessage);
         }
 
         var saved = await _connections.SaveCredentialAsync(

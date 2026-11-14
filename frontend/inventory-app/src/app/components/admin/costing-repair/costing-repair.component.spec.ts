@@ -59,6 +59,7 @@ function preview(overrides: Partial<InventoryCostRepairPreview> = {}): Inventory
     projectedInventoryValue: 4,
     projectedAverageUnitCost: 2,
     remainingFatalIssues: [],
+    remainingUncostedSaleIssues: [],
     ledgerFingerprint: 'fingerprint-1',
     ...overrides
   };
@@ -197,6 +198,30 @@ describe('CostingRepairComponent (issue #361)', () => {
     fixture.detectChanges();
 
     expect(host.textContent).toContain('Completed Nayax sale 502 has no known cost.');
+  });
+
+  // Issue #1239: a sale the repair does not reach is not a refusal, so the operator is told it stays
+  // uncosted and Apply remains available.
+  it('shows the sales a partial repair would leave uncosted and keeps Apply enabled', async () => {
+    const previewFn = jest.fn(() => of(preview({
+      remainingUncostedSaleIssues: [{
+        code: 'UncostedSale',
+        message: 'Completed Nayax sale 502 for product Coke Zero (1) has no known cost at 2026-01-04T12:00:00.0000000Z and is left uncosted.'
+      }]
+    })));
+    const { component, fixture, host } = await createHarness(previewFn);
+    component.productId = 1;
+    component.quantity = 1;
+    component.unitCost = 2;
+    component.reason = 'Machine stock at the 2026 cutover was never costed.';
+
+    component.previewRepair();
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain('These completed sales would still have no known cost.');
+    expect(host.textContent).toContain('Completed Nayax sale 502 for product Coke Zero (1)');
+    const applyButton = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Apply repair'));
+    expect(applyButton?.disabled).toBe(false);
   });
 
   it('shows the API validation error and leaves Apply disabled when the preview call fails', async () => {

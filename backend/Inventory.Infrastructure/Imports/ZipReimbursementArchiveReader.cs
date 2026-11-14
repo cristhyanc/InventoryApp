@@ -26,8 +26,7 @@ namespace Inventory.Infrastructure.Imports;
 /// name may hold <c>../</c>, an absolute path, a drive letter or control characters, and this
 /// adapter never passes one to the filesystem at all. Every byte is read into memory, and a name is
 /// reduced by <see cref="ReimbursementArchivePolicy.SanitiseEntryName"/> to a label that is only
-/// recorded and displayed. The server's pending import folder is not touched: this import has
-/// nothing to do with it.</para>
+/// recorded and displayed. No folder on the server is read, written or deleted at all.</para>
 ///
 /// <para><strong>Every limit is enforced here and defined in the Domain.</strong>
 /// <see cref="ReimbursementArchivePolicy"/> holds the numbers and the refusal sentences; this
@@ -39,8 +38,7 @@ namespace Inventory.Infrastructure.Imports;
 /// <para><strong>Archive and XML failures are translated here and never cross the port.</strong> A
 /// file that is not a readable ZIP is a refusal; a single entry that is not a readable reimbursement
 /// report is answered as a parsed-as-<see langword="null"/> entry, which the job records as that
-/// one file's own failure, exactly as the pending folder's adapter answers <c>null</c> for an
-/// unreadable file. Nothing about either is thrown at the Application layer.</para>
+/// one file's own failure. Nothing about either is thrown at the Application layer.</para>
 /// </summary>
 public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
 {
@@ -268,9 +266,8 @@ public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
 
     /// <summary>
     /// Parses one XML entry, or answers <see langword="null"/> when it is not a readable
-    /// reimbursement report - the same translation the pending folder's adapter makes, for the same
-    /// reason: a file this application cannot read is one file's recorded failure, not an exception
-    /// the import loop has to understand.
+    /// reimbursement report: a file this application cannot read is one file's recorded failure, not
+    /// an exception the import loop has to understand.
     /// </summary>
     private PendingReimbursementXmlFile? Parse(string label, byte[] bytes)
     {

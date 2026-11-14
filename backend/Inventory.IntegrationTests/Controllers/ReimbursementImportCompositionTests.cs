@@ -134,9 +134,8 @@ public sealed class ReimbursementImportCompositionTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<ListReimbursementImportJobs>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<GetReimbursementImportJob>());
 
-        // And the per-file steps the pending-folder import shares with it.
+        // And the per-file steps the import itself is made of.
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<ImportReimbursementXmlFile>());
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<ImportPendingReimbursementXmlFiles>());
     }
 
     /// <summary>

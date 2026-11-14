@@ -214,17 +214,83 @@ public class WeightedAverageCostReplayTests
         Assert.Equal(10m, result.InventoryValue);
     }
 
+    /// <summary>
+    /// Issue #1239, precedence step 4 (AGENTS.md § Inventory and historical costing invariants): a
+    /// completed sale that steps 1 to 3 cannot cost is left uncosted and flagged as a **non-fatal**
+    /// issue. It consumes no costing quantity and no inventory value - the ledger never held the unit
+    /// it sold - and, because it is not fatal, it no longer blocks the product's later stock writes.
+    /// </summary>
     [Fact]
-    public void Sale_without_any_costed_acquisition_is_a_missing_opening_and_is_skipped()
+    public void Sale_without_any_known_cost_is_a_non_fatal_uncosted_sale_and_is_skipped()
     {
         var result = Replay([], [Sale(100, 0)]);
 
         var issue = Assert.Single(result.Issues);
-        Assert.Equal(CostDataQualityIssueCodes.MissingOpening, issue.Code);
-        Assert.Equal($"Completed Nayax sale 100 for product {ProductId} has no known opening cost at {T0:O}.", issue.Message);
-        Assert.True(issue.IsFatal);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code);
+        Assert.Equal(
+            $"Completed Nayax sale 100 for product {ProductId} has no known cost at {T0:O} and is left uncosted.",
+            issue.Message);
+        Assert.False(issue.IsFatal);
+        Assert.False(result.HasFatalIssue);
         Assert.Equal(0, result.CostingQuantity);
+        Assert.Equal(0m, result.InventoryValue);
         Assert.Empty(result.SaleCosts);
+        // Still reported as uncostable, which is what a costing repair is previewed and placed
+        // against (issue #359): non-fatal means it does not stop a rebuild, not that it is costed.
+        Assert.Equal([100L], result.UncostableSales.Select(x => x.TransactionId));
+    }
+
+    /// <summary>
+    /// Issue #1239's mixed-history regression: one product whose history holds all three cases at
+    /// once. The early sale with no known cost stays uncosted and flagged non-fatally, the later sale
+    /// past a costed purchase is costed from the ledger exactly as before, and a genuinely invalid
+    /// history in the same product - here an uncosted positive restock - is still fatal.
+    /// </summary>
+    [Fact]
+    public void An_uncosted_sale_does_not_make_a_later_sale_or_an_uncosted_restock_any_different()
+    {
+        var result = Replay(
+            [
+                Adjustment(1, 10, StockAdjustmentReason.Restock, 2, 2m),
+                Adjustment(2, 30, StockAdjustmentReason.Restock, 5, null),
+            ],
+            [Sale(100, 0), Sale(101, 20)],
+            product: Product(quantityInStock: 7));
+
+        Assert.Equal(
+            [
+                (CostDataQualityIssueCodes.UncostedSale, false),
+                (CostDataQualityIssueCodes.UnknownCost, true),
+            ],
+            result.Issues.Select(x => (x.Code, x.IsFatal)));
+        Assert.True(result.HasFatalIssue);
+        Assert.Equal([100L], result.UncostableSales.Select(x => x.TransactionId));
+        Assert.Equal(
+            [(101L, 2m, CostReplaySaleCostSource.Ledger)],
+            result.SaleCosts.Select(x => (x.Sale.TransactionId, x.UnitCost, x.Source)));
+        Assert.Equal(1, result.CostingQuantity);
+        Assert.Equal(2m, result.InventoryValue);
+    }
+
+    /// <summary>
+    /// The other invalid history of issue #1239's regression criterion: physical stock going
+    /// negative is still fatal, and an uncosted sale in the same history neither hides it nor is
+    /// promoted by it.
+    /// </summary>
+    [Fact]
+    public void An_uncosted_sale_does_not_mask_stock_going_physically_negative()
+    {
+        var result = Replay(
+            [Adjustment(1, 10, StockAdjustmentReason.MachineRefill, -1)],
+            [Sale(100, 0)]);
+
+        Assert.Equal(
+            [
+                (CostDataQualityIssueCodes.UncostedSale, false),
+                (CostDataQualityIssueCodes.NegativePhysicalStock, true),
+            ],
+            result.Issues.Select(x => (x.Code, x.IsFatal)));
+        Assert.True(result.HasFatalIssue);
     }
 
     [Fact]
@@ -277,28 +343,29 @@ public class WeightedAverageCostReplayTests
     }
 
     [Fact]
-    public void Sale_with_no_ledger_cost_no_purchase_and_no_valid_Nayax_cost_stays_a_fatal_missing_opening()
+    public void Sale_with_no_ledger_cost_no_purchase_and_no_valid_Nayax_cost_is_left_uncosted()
     {
         var result = Replay([], [new CostReplaySale(100, T0, NayaxProductCostPrice: -1m)]);
 
         var issue = Assert.Single(result.Issues);
-        Assert.Equal(CostDataQualityIssueCodes.MissingOpening, issue.Code);
-        Assert.True(issue.IsFatal);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code);
+        Assert.False(issue.IsFatal);
         Assert.Empty(result.SaleCosts);
         Assert.Single(result.UncostableSales);
     }
 
     [Fact]
-    public void Sale_after_stock_is_exhausted_is_an_unknown_cost()
+    public void Sale_after_stock_is_exhausted_is_left_uncosted()
     {
         // A costing repair is a costed acquisition but not a purchase, so once it is used up there is
-        // no latest purchase to fall back on; with no Nayax cost either, the sale stays uncostable.
-        // (Past a recorded purchase the sale takes that purchase's cost instead - see the fallback
-        // tests above.)
+        // no latest purchase to fall back on; with no Nayax cost either, the sale stays uncostable -
+        // and, since issue #1239, uncosted without being fatal. (Past a recorded purchase the sale
+        // takes that purchase's cost instead - see the fallback tests above.)
         var result = Replay([], [Sale(100, 1), Sale(101, 2)], repairs: [Repair(1, 0, 1, 2m)]);
 
         var issue = Assert.Single(result.Issues);
-        Assert.Equal(CostDataQualityIssueCodes.UnknownCost, issue.Code);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code);
+        Assert.False(result.HasFatalIssue);
         Assert.Single(result.SaleCosts);
     }
 
@@ -411,7 +478,11 @@ public class WeightedAverageCostReplayTests
     [Fact]
     public void Baseline_counts_as_a_costed_acquisition_for_issue_classification()
     {
-        var result = Replay([], [Sale(100, 1)], baseline: new CostReplayBaseline(T0, 0, 0, 0m));
+        // The baseline is an opening, even an empty one, so the correction it cannot cost is an
+        // UnknownCost rather than a MissingOpening.
+        var result = Replay(
+            [Adjustment(1, 1, StockAdjustmentReason.Correction, 1)],
+            baseline: new CostReplayBaseline(T0, 0, 0, 0m));
 
         Assert.Equal(CostDataQualityIssueCodes.UnknownCost, Assert.Single(result.Issues).Code);
     }
@@ -538,7 +609,7 @@ public class WeightedAverageCostReplayTests
         var withRepair = Replay([], [Sale(100, 5)], [Repair(1, 1, 1, 2m)]);
 
         Assert.Equal([100L], withoutRepair.UncostableSales.Select(x => x.TransactionId));
-        Assert.Equal(CostDataQualityIssueCodes.MissingOpening, Assert.Single(withoutRepair.Issues).Code);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, Assert.Single(withoutRepair.Issues).Code);
         Assert.Empty(withRepair.UncostableSales);
         Assert.Empty(withRepair.Issues);
         Assert.Equal(2m, withRepair.SaleCosts.Single().UnitCost);
@@ -552,7 +623,8 @@ public class WeightedAverageCostReplayTests
 
         Assert.Equal([100L], result.UncostableSales.Select(x => x.TransactionId));
         Assert.Equal([101L], result.SaleCosts.Select(x => x.Sale.TransactionId));
-        Assert.True(result.HasFatalIssue);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, Assert.Single(result.Issues).Code);
+        Assert.False(result.HasFatalIssue);
     }
 
     [Fact]
@@ -604,10 +676,15 @@ public class WeightedAverageCostReplayTests
     [Fact]
     public void A_repair_counts_as_a_costed_acquisition_for_issue_classification()
     {
-        var result = Replay([], [Sale(100, 1), Sale(101, 2)], [Repair(1, 0, 1, 2m)]);
+        // The repair is the only acquisition here and the sale uses it up, so the correction after it
+        // has no known average: UnknownCost rather than MissingOpening.
+        var result = Replay(
+            [Adjustment(1, 5, StockAdjustmentReason.Correction, 1)],
+            [Sale(100, 1)],
+            [Repair(1, 0, 1, 2m)]);
 
         Assert.Equal(CostDataQualityIssueCodes.UnknownCost, Assert.Single(result.Issues).Code);
-        Assert.Equal([101L], result.UncostableSales.Select(x => x.TransactionId));
+        Assert.Equal(2m, result.SaleCosts.Single().UnitCost);
     }
 
     [Fact]
@@ -657,7 +734,7 @@ public class WeightedAverageCostReplayTests
             $"Correction adjustment 1 for product Coke ({ProductId}) has no known cost.",
             Assert.Single(Replay([Adjustment(1, 0, StockAdjustmentReason.Correction, 2)], product: Product(name: "Coke")).Issues).Message);
         Assert.Equal(
-            $"Completed Nayax sale 100 for product Coke ({ProductId}) has no known opening cost at {T0:O}.",
+            $"Completed Nayax sale 100 for product Coke ({ProductId}) has no known cost at {T0:O} and is left uncosted.",
             Assert.Single(Replay([], [Sale(100, 0)], product: Product(name: "Coke")).Issues).Message);
     }
 
@@ -686,6 +763,7 @@ public class WeightedAverageCostReplayTests
     [InlineData("NegativePhysicalStock", true)]
     [InlineData("NegativeCostingStock", true)]
     [InlineData("LegacyUnlinkedCostedRestock", false)]
+    [InlineData("UncostedSale", false)]
     [InlineData("Other", false)]
     public void Fatal_classification_matches_the_established_split(string code, bool fatal)
     {

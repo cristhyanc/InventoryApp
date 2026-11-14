@@ -2,8 +2,6 @@ import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { ImportService } from '../../../../services/import.service';
-import { ToastService } from '../../../../services/toast.service';
 import { SupportSessionService } from '../../../../support-session/support-session.service';
 import { ReimbursementImportJobsComponent } from './reimbursement-import-jobs.component';
 import { ReimbursementReportUploadComponent } from './reimbursement-report-upload.component';
@@ -21,9 +19,13 @@ import { ReimbursementReportUploadComponent } from './reimbursement-report-uploa
  * <p>Per docs/architecture.md &sect; Page composition boundary this page is the composition
  * boundary: the upload (its own file, request and refusal) and the recent uploads list (its own
  * read, refresh lifecycle and per-row expansion) are each their own feature component, wired through
- * one `@Output` and one `@Input`. What the page itself owns is the support-session answer, the
- * reload token, and the one-button **Import XML files** action that moved here from Admin &rarr;
- * Imports unchanged - a single call with its own toast, which is not a workflow of its own.</p>
+ * one `@Output` and one `@Input`. What the page itself owns is the support-session answer and the
+ * reload token.</p>
+ *
+ * <p><strong>The upload is the only way in</strong> (issue #1237). The **Import XML files** button
+ * that stood here ran `POST api/imports/pending-xml`, which imported whatever XML somebody with
+ * server access had left in a folder under the API's web root; that import is retired, and the
+ * button with it.</p>
  *
  * <p>The route carries exactly the three guards `/admin/imports` carries
  * (`MsalGuard`, `accountStateGuard`, `requireCapability('Imports.Run')`), and no provider guard: the
@@ -59,21 +61,6 @@ import { ReimbursementReportUploadComponent } from './reimbursement-report-uploa
       <app-reimbursement-report-upload [disabled]="sessionActive" (uploaded)="onUploaded()" />
 
       <app-reimbursement-import-jobs [reloadToken]="reloadToken" />
-
-      <section class="card">
-        <div class="card-body">
-          <h2 class="card-title">Import XML files</h2>
-          <p class="mt-1 text-sm value-muted">Process pending reimbursement XML files.</p>
-          <button
-            type="button"
-            class="btn btn-primary mt-4"
-            [disabled]="xmlLoading || sessionActive"
-            (click)="importXml()"
-          >
-            Import XML files
-          </button>
-        </div>
-      </section>
     </div>
   `
 })
@@ -81,13 +68,10 @@ export class ReimbursementReportPageComponent implements OnDestroy {
   /**
    * Whether a support session is active (issue #661). A session grants `Imports.Run` - the
    * capability this page and its endpoints are gated on - and the backend refuses the write itself
-   * only by its read-only method rule, so both writes on this page are withheld. The job status
+   * only by its read-only method rule, so the upload on this page is withheld. The job status
    * reads are `GET`s a session may make, so the list is left exactly as it is.
    */
   sessionActive = false;
-
-  /** True while the pending-XML import is in flight. */
-  xmlLoading = false;
 
   /**
    * Changed whenever an upload is accepted, which is how the list is asked to read again without
@@ -97,11 +81,7 @@ export class ReimbursementReportPageComponent implements OnDestroy {
 
   private readonly sessionActiveSubscription: Subscription;
 
-  constructor(
-    private readonly imports: ImportService,
-    private readonly toast: ToastService,
-    supportSession: SupportSessionService
-  ) {
+  constructor(supportSession: SupportSessionService) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
 
@@ -112,26 +92,5 @@ export class ReimbursementReportPageComponent implements OnDestroy {
   /** An accepted upload is a new job, so the list reads again rather than waiting for a refresh. */
   onUploaded(): void {
     this.reloadToken++;
-  }
-
-  /**
-   * The pending-folder reimbursement XML import, moved here from Admin → Imports unchanged (issue
-   * #1152): same endpoint, same result sentence, same support-session guard.
-   */
-  importXml(): void {
-    if (this.sessionActive) return;
-    this.xmlLoading = true;
-    this.imports.importPendingXmlFiles().subscribe({
-      next: (result) => {
-        this.xmlLoading = false;
-        this.toast.success(
-          `Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s).`
-        );
-      },
-      error: (err) => {
-        this.xmlLoading = false;
-        this.toast.error(err?.error ?? 'The XML import could not be started.');
-      }
-    });
   }
 }

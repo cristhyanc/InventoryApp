@@ -7,6 +7,7 @@ import { Subject, catchError, of, takeUntil } from 'rxjs';
 import { BUSINESS_APPLICATION_ROUTE } from '../../access/account-state.guard';
 import { isExternalIdConfigured, loginRequest } from '../../auth-config';
 import { SIGN_IN_ROUTE } from '../../auth/intended-destination';
+import { BrandLogoComponent } from '../../components/shared/brand-logo.component';
 import { IconComponent } from '../../components/shared/icon.component';
 import {
   CORE_INVENTORY_POINTS,
@@ -52,6 +53,7 @@ import { LandingSupplierComparisonExampleComponent } from './landing-supplier-co
   selector: 'app-landing-page',
   standalone: true,
   imports: [
+    BrandLogoComponent,
     IconComponent,
     LandingHeaderComponent,
     LandingRefillExampleComponent,

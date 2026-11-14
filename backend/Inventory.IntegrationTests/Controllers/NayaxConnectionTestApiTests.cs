@@ -68,7 +68,7 @@ public sealed class NayaxConnectionTestApiTests : IClassFixture<NayaxConnectionT
         Assert.Equal(
             new[]
             {
-                "SignIn", "Machines", "Machine", "ProductCatalogue", "ProductGroups",
+                "Machines", "Machine", "ProductCatalogue", "ProductGroups",
                 "MachineProducts", "MachineLastSales", "MachineLastAlerts",
             },
             body.Checks.Select(check => check.Check).ToArray());
@@ -88,7 +88,7 @@ public sealed class NayaxConnectionTestApiTests : IClassFixture<NayaxConnectionT
         await _factory.ResetAsync();
         _factory.Runner.Report = new NayaxConnectionCheckReport(
             [
-                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
                 NayaxConnectionCheckLine.Failed(
                     NayaxConnectionCheck.ProductCatalogue,
                     NayaxConnectionCheckFailure.OperatorIdMismatch),
@@ -107,6 +107,42 @@ public sealed class NayaxConnectionTestApiTests : IClassFixture<NayaxConnectionT
                 .Single(check => check.Status == "Failed"));
         Assert.Contains(("MachineLastSales", "NotChecked", (string?)null), body.Checks
             .Select(check => (check.Check, check.Status, check.Failure)));
+    }
+
+    /// <summary>
+    /// The retired <c>GET devices</c> sign-in row is never published (issue #1310), even when a
+    /// report still carries it - which is what an outstanding draft written before it was retired
+    /// holds. The response names the seven declared checks and says nothing failed, so no client
+    /// renders a row for a permission this application no longer asks for or a failure summary
+    /// nobody can act on.
+    /// </summary>
+    [Fact]
+    public async Task A_retired_check_line_is_not_published_and_is_not_reported_as_a_failure()
+    {
+        await _factory.ResetAsync();
+        List<NayaxConnectionCheckLine> lines =
+        [
+            // Value 1 was SignIn (GET devices); the enum reserves it and declares it no longer.
+            NayaxConnectionCheckLine.Failed(
+                (NayaxConnectionCheck)1,
+                NayaxConnectionCheckFailure.PermissionNotGranted),
+            .. NayaxConnectionCheckPolicy.All.Select(NayaxConnectionCheckLine.Passed),
+        ];
+        _factory.Runner.Report = new NayaxConnectionCheckReport(lines, MachineCount: 1);
+
+        var response = await Post(ApiFactory.OwnerObjectId, OperatorId, Token);
+        var body = await response.Content.ReadFromJsonAsync<TestResponse>();
+
+        Assert.DoesNotContain("SignIn", body!.Checks.Select(check => check.Check));
+        Assert.DoesNotContain("1", body.Checks.Select(check => check.Check));
+        Assert.Equal(
+            new[]
+            {
+                "Machines", "Machine", "ProductCatalogue", "ProductGroups",
+                "MachineProducts", "MachineLastSales", "MachineLastAlerts",
+            },
+            body.Checks.Select(check => check.Check).ToArray());
+        Assert.True(body.NothingFailed);
     }
 
     [Fact]

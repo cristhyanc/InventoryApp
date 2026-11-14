@@ -64,10 +64,11 @@ public sealed record NayaxConnectionStatusResponse(string Status, bool MachineCh
 
 /// <summary>One check line of the test result (issue #536).</summary>
 /// <param name="Check">
-/// The published <see cref="NayaxConnectionCheck"/> name - <c>SignIn</c>, <c>Machines</c>,
-/// <c>Machine</c>, <c>ProductCatalogue</c>, <c>ProductGroups</c>, <c>MachineProducts</c>,
-/// <c>MachineLastSales</c> or <c>MachineLastAlerts</c> - rather than a number a client would have to
-/// map and a renumbering would silently change.
+/// The published <see cref="NayaxConnectionCheck"/> name - <c>Machines</c>, <c>Machine</c>,
+/// <c>ProductCatalogue</c>, <c>ProductGroups</c>, <c>MachineProducts</c>, <c>MachineLastSales</c> or
+/// <c>MachineLastAlerts</c> - rather than a number a client would have to map and a renumbering
+/// would silently change. The retired <c>SignIn</c> line of the <c>GET devices</c> probe is not
+/// published at all (issue #1310), including when a stored report still carries it.
 /// </param>
 /// <param name="Status">
 /// The published <see cref="NayaxConnectionCheckStatus"/> name: <c>Passed</c>, <c>Failed</c> or
@@ -125,7 +126,7 @@ public sealed record NayaxConnectionTestResponse(
             result.ExpiresAtUtc,
             result.Report.MachineCount,
             result.Report.NothingFailed,
-            [.. result.Report.Lines.Select(line => new NayaxConnectionCheckResponse(
+            [.. result.Report.DeclaredLines.Select(line => new NayaxConnectionCheckResponse(
                 line.Check.ToString(),
                 line.Status.ToString(),
                 line.Failure?.ToString()))]);
@@ -142,9 +143,9 @@ public sealed record NayaxConnectionTestResponse(
 /// </summary>
 /// <param name="Connection">The connection's state after the re-test.</param>
 /// <param name="StatusUpdated">
-/// Whether the re-test concluded anything and wrote it. <see langword="false"/> means Nayax never
-/// answered the sign-in - a <c>5xx</c>, a timeout - so the stored status is untouched and the caller
-/// should try again. The <c>SignIn</c> line's <c>NayaxUnavailable</c> cause says which.
+/// Whether the re-test concluded anything and wrote it. <see langword="false"/> means Nayax gave no
+/// verdict on the machine list - a <c>5xx</c>, a timeout - so the stored status is untouched and the
+/// caller should try again. The <c>Machines</c> line's <c>NayaxUnavailable</c> cause says which.
 /// </param>
 /// <param name="MachineCount">
 /// How many machines the machine list returned, or <see langword="null"/> when that check did not
@@ -169,7 +170,7 @@ public sealed record NayaxConnectionRetestResponse(
             result.StatusUpdated,
             result.Report.MachineCount,
             result.Report.NothingFailed,
-            [.. result.Report.Lines.Select(line => new NayaxConnectionCheckResponse(
+            [.. result.Report.DeclaredLines.Select(line => new NayaxConnectionCheckResponse(
                 line.Check.ToString(),
                 line.Status.ToString(),
                 line.Failure?.ToString()))]);

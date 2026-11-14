@@ -82,7 +82,7 @@ public sealed record NayaxConnectionTestOutcome
 public sealed class TestNayaxConnection
 {
     /// <summary>
-    /// How long a draft lives. Long enough for an Owner to read eight result lines and decide, short
+    /// How long a draft lives. Long enough for an Owner to read seven result lines and decide, short
     /// enough that an abandoned browser tab does not leave a decryptable token sitting in the
     /// database for the rest of the day.
     /// </summary>

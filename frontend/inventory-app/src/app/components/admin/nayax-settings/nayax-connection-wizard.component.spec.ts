@@ -12,14 +12,20 @@ import {
 } from '../../../services/nayax-connection.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { ModalDialogComponent } from '../../shared/modal-dialog/modal-dialog.component';
 import { NayaxConnectionChecklistComponent } from './nayax-connection-checklist.component';
-import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
+import {
+  NAYAX_OPERATOR_ID_GUIDE,
+  NAYAX_OPERATOR_SCREEN_GUIDE,
+  NAYAX_TOKEN_GUIDE,
+  NayaxConnectionWizardComponent
+} from './nayax-connection-wizard.component';
+import { NAYAX_CORE_URL } from './nayax-core-guide.component';
 
 const TOKEN = 'lynx-token-paste-value';
 
 function passingChecks(): NayaxConnectionTestResult['checks'] {
   return [
-    { check: 'SignIn', status: 'Passed', failure: null },
     { check: 'Machines', status: 'Passed', failure: null },
     { check: 'Machine', status: 'Passed', failure: null },
     { check: 'ProductCatalogue', status: 'Passed', failure: null },
@@ -102,9 +108,25 @@ async function render(
   const component = fixture.componentInstance;
   const host = fixture.nativeElement as HTMLElement;
 
+  /** Opens the Connect Nayax dialog from the card, the way the launcher's click does. */
+  const openDialog = (): void => {
+    component.openDialog();
+    fixture.detectChanges();
+  };
+
   /** Types the operator id the way the field's `ngModel` would, then settles the view. */
   const enterOperatorId = (operatorId: string): void => {
     component.operatorId = operatorId;
+    fixture.detectChanges();
+  };
+
+  /** Opens the dialog, enters the operator id and moves on to the Lynx token step. */
+  const toTokenStep = (operatorId = '7788'): void => {
+    if (!component.dialogOpen) {
+      openDialog();
+    }
+    enterOperatorId(operatorId);
+    component.next();
     fixture.detectChanges();
   };
 
@@ -118,36 +140,46 @@ async function render(
     return tokenInput;
   };
 
-  /** Walks to step 3, pastes the token, and runs the Test call. */
+  /** Walks to the Lynx token step, pastes the token, and runs the Test call. */
   const runTestWith = (token = TOKEN, operatorId = '7788'): HTMLInputElement => {
-    enterOperatorId(operatorId);
-    component.goTo(3);
-    fixture.detectChanges();
+    toTokenStep(operatorId);
     const field = pasteToken(token);
     component.runTest();
     fixture.detectChanges();
     return field;
   };
 
-  return { fixture, host, component, connections, toast, enterOperatorId, pasteToken, runTestWith };
+  const testId = (id: string): HTMLElement | null => host.querySelector(`[data-testid="${id}"]`);
+
+  return {
+    fixture,
+    host,
+    component,
+    connections,
+    toast,
+    openDialog,
+    enterOperatorId,
+    toTokenStep,
+    pasteToken,
+    runTestWith,
+    testId
+  };
 }
 
 /**
- * The wizard is the one screen where the connection changes, so it is the one screen that has to
+ * The card is the one screen where the connection changes, so it is the one screen that has to
  * refresh the application-wide availability signal (issue #728). Every other screen then reflects
  * the new connection without probing for it, and without a stale answer from earlier in the session.
  */
 describe('NayaxConnectionWizardComponent refreshes the shared provider signal (issue #728)', () => {
   it('publishes the state a save established, without reading the status again', async () => {
-    const { component, fixture, connections, runTestWith } = await render({ status: () => of(state()) });
+    const { component, connections, runTestWith } = await render({ status: () => of(state()) });
     const provider = TestBed.inject(ProviderAvailabilityService);
     const before = await firstValueFrom(provider.load());
     expect(before.status).toBe('NotConfigured');
     expect(before.connection).toBe('notConnected');
 
     runTestWith();
-    component.goTo(6);
-    fixture.detectChanges();
     component.saveConnection();
 
     expect(connections.save).toHaveBeenCalledTimes(1);
@@ -180,7 +212,6 @@ describe('NayaxConnectionWizardComponent refreshes the shared provider signal (i
           retestResult({
             nothingFailed: false,
             checks: [
-              { check: 'SignIn', status: 'Passed', failure: null },
               { check: 'Machines', status: 'Passed', failure: null },
               { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' },
               { check: 'MachineProducts', status: 'NotChecked', failure: null }
@@ -211,87 +242,186 @@ describe('NayaxConnectionWizardComponent refreshes the shared provider signal (i
 });
 
 /**
- * The Owner-only Nayax connection wizard (issue #538) over the endpoints of issues #536 and #537.
- * The whole specification of this screen is "show the server's findings and ask for exactly the
- * next step": no check, status, cause or eligibility rule is decided here.
+ * The Nayax connection card and its Connect Nayax dialog (issues #538 and #1311) over the endpoints
+ * of issues #536, #537 and #1310. The whole specification of this screen is "show the server's
+ * findings and ask for exactly the next step": no check, status, cause or eligibility rule is
+ * decided here.
  */
-describe('NayaxConnectionWizardComponent (issue #538)', () => {
-  describe('Step 1: the operator id', () => {
-    it('tells an Owner exactly where the operator id is in Nayax Core', async () => {
-      const { host } = await render();
+describe('NayaxConnectionWizardComponent (issues #538 and #1311)', () => {
+  describe('The card and its launcher', () => {
+    it('offers Connect Nayax when nothing is stored, and no inline wizard', async () => {
+      const { host, testId } = await render();
 
-      expect(host.textContent).toContain('Operator');
-      expect(host.textContent).toContain('Company Info');
-      expect(host.textContent).toContain('Operator Id');
+      expect(testId('open-connect')?.textContent).toContain('Connect Nayax');
+      expect(testId('connect-nayax-dialog')).toBeNull();
+      expect(host.querySelector('#nayax-operator-id')).toBeNull();
+      expect(host.querySelector('#nayax-token')).toBeNull();
+    });
+
+    it('offers Replace connection beside Re-test when a connection is stored', async () => {
+      const { component, fixture, testId } = await render({ status: () => of(state({ status: 'Ready' })) });
+
+      expect(testId('open-connect')?.textContent).toContain('Replace connection');
+      expect(testId('retest')).toBeTruthy();
+
+      (testId('open-connect') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.dialogOpen).toBe(true);
+      expect(testId('connect-nayax-dialog')?.textContent).toContain('Replace Nayax connection');
+    });
+
+    it('opens the dialog on the Operator ID step with an empty field', async () => {
+      const { component, fixture, host, testId } = await render();
+
+      (testId('open-connect') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(1);
+      expect(testId('connect-nayax-dialog')?.textContent).toContain('Connect Nayax');
+      expect(host.querySelector<HTMLInputElement>('#nayax-operator-id')?.value).toBe('');
+    });
+
+    it('shows three steps with the current one marked', async () => {
+      const { openDialog, testId, toTokenStep } = await render();
+
+      openDialog();
+      const progress = testId('step-progress');
+      expect(progress?.querySelectorAll('li')).toHaveLength(3);
+      expect(progress?.textContent).toContain('Operator ID');
+      expect(progress?.textContent).toContain('Lynx token');
+      expect(progress?.textContent).toContain('Review & save');
+      expect(testId('progress-1')?.getAttribute('aria-current')).toBe('step');
+
+      toTokenStep();
+      expect(testId('progress-1')?.getAttribute('aria-current')).toBeNull();
+      expect(testId('progress-2')?.getAttribute('aria-current')).toBe('step');
+    });
+
+    it('closes on the dialog close request, which is what Escape and the Close control send', async () => {
+      const { component, fixture, openDialog, testId } = await render();
+
+      openDialog();
+      const dialog = fixture.debugElement.query(By.directive(ModalDialogComponent))
+        .componentInstance as ModalDialogComponent;
+      dialog.requestClose();
+      fixture.detectChanges();
+
+      expect(component.dialogOpen).toBe(false);
+      expect(testId('connect-nayax-dialog')).toBeNull();
+    });
+  });
+
+  describe('Step 1: the operator id', () => {
+    it('puts Nayax Core instructions beside the field, with Open Nayax Core in a new tab', async () => {
+      const { host, openDialog, testId } = await render();
+
+      openDialog();
+
+      const step = testId('step-1');
+      expect(step?.textContent).toContain('In Nayax Core');
+      expect(step?.textContent).toContain('In Restockroo');
+      expect(step?.textContent).toContain('Operator');
+      expect(step?.textContent).toContain('Company Info');
+      expect(step?.textContent).toContain('Operator Id');
+      const open = host.querySelector<HTMLAnchorElement>('[data-testid="step-1"] [data-testid="open-nayax-core"]');
+      expect(open?.getAttribute('href')).toBe(NAYAX_CORE_URL);
+      expect(open?.getAttribute('target')).toBe('_blank');
+      expect(open?.getAttribute('rel')).toContain('noopener');
+    });
+
+    it('links the official Nayax guides for the operator screen and embeds no screenshot', async () => {
+      const { host, openDialog } = await render();
+
+      openDialog();
+
+      expect(host.querySelectorAll('[data-testid="step-1"] img')).toHaveLength(0);
+      const source = host.querySelector('[data-testid="step-1"] [data-testid="nayax-guide-source"]');
+      const links = Array.from(source?.querySelectorAll('a') ?? []);
+      expect(links.map((link) => link.getAttribute('href'))).toEqual([
+        NAYAX_OPERATOR_ID_GUIDE.url,
+        NAYAX_OPERATOR_SCREEN_GUIDE.url
+      ]);
+      for (const link of links) {
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toContain('noopener');
+      }
     });
 
     it('refuses to move on without an operator id, and spends no Nayax test', async () => {
-      const { component, connections, fixture, host } = await render();
+      const { component, connections, fixture, openDialog, testId } = await render();
 
+      openDialog();
       component.next();
       fixture.detectChanges();
 
       expect(component.step).toBe(1);
       expect(connections.test).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('Enter the operator id');
+      expect(testId('dialog-notice')?.textContent).toContain('Enter the operator ID');
     });
 
-    it('moves to the token instructions once an operator id is entered', async () => {
-      const { component, enterOperatorId } = await render();
+    it('moves to the Lynx token step once an operator id is entered', async () => {
+      const { component, toTokenStep } = await render();
 
-      enterOperatorId(' 7788 ');
-      component.next();
+      toTokenStep(' 7788 ');
 
       expect(component.step).toBe(2);
     });
   });
 
-  describe('Step 2: the token instructions', () => {
-    it('lists the numbered path to a Lynx token in Nayax Core', async () => {
-      const { component, fixture, host, enterOperatorId } = await render();
+  describe('Step 2: the Lynx token', () => {
+    it('lists the numbered path to a Lynx token in Nayax Core beside the field', async () => {
+      const { host, toTokenStep, testId } = await render();
 
-      enterOperatorId('7788');
-      component.goTo(2);
-      fixture.detectChanges();
+      toTokenStep();
 
-      const steps = host.querySelectorAll('[data-testid="token-instructions"] li');
-      expect(steps.length).toBeGreaterThanOrEqual(5);
-      const instructions = host.querySelector('[data-testid="token-instructions"]')?.textContent ?? '';
+      const steps = host.querySelectorAll('[data-testid="nayax-core-steps"] li');
+      expect(steps).toHaveLength(5);
+      const instructions = testId('token-instructions')?.textContent ?? '';
       expect(instructions).toContain('Account Settings');
       expect(instructions).toContain('Security and Login');
       expect(instructions).toContain('User Tokens');
       expect(instructions).toContain('Add Token');
       expect(instructions).toContain('Lynx Token');
       expect(instructions).toContain('Show Token');
+      expect(testId('step-2')?.textContent).toContain('In Restockroo');
+      expect(host.querySelector('[data-testid="step-2"] [data-testid="open-nayax-core"]')).toBeTruthy();
     });
 
-    it('hot-links no Nayax image, so no screenshot is fetched from their site', async () => {
-      const { component, fixture, host, enterOperatorId } = await render();
+    /**
+     * Every screenshot Nayax publishes for these screens shows its demo account's identifiers, which
+     * the issue excludes from what the page delivers, so the guide is linked instead (issue #1311).
+     */
+    it('embeds no Nayax screenshot and links the official token guide instead', async () => {
+      const { host, toTokenStep } = await render();
 
-      enterOperatorId('7788');
-      component.goTo(2);
-      fixture.detectChanges();
+      toTokenStep();
 
-      expect(host.querySelectorAll('img')).toHaveLength(0);
-      expect(host.innerHTML).not.toContain('nayax.com/');
+      expect(host.querySelectorAll('[data-testid="connect-nayax-dialog"] img')).toHaveLength(0);
+      expect(host.innerHTML).not.toContain('mintcdn.com');
+      const source = host.querySelector('[data-testid="step-2"] [data-testid="nayax-guide-source"]');
+      expect(source?.textContent).toContain("See each screen in Nayax's official guide");
+      const link = source?.querySelector('a');
+      expect(link?.getAttribute('href')).toBe(NAYAX_TOKEN_GUIDE.url);
+      expect(link?.getAttribute('target')).toBe('_blank');
     });
-  });
 
-  describe('Step 3: the write-only token field', () => {
-    it('offers a masked field that no component state is bound to', async () => {
-      const { component, fixture, host, enterOperatorId } = await render();
+    it('offers an empty masked field that no component state is bound to', async () => {
+      const { component, fixture, host, openDialog, enterOperatorId } = await render();
 
+      openDialog();
       enterOperatorId('7788');
       // The operator id is a two-way bound value and the token deliberately is not: an `ngModel`
       // on the token field would be a component property holding the secret.
       const operatorField = fixture.debugElement.query(By.css('#nayax-operator-id'));
       expect(operatorField.injector.get(NgModel, null)).not.toBeNull();
 
-      component.goTo(3);
+      component.next();
       fixture.detectChanges();
 
       const field = host.querySelector<HTMLInputElement>('#nayax-token');
       expect(field?.type).toBe('password');
+      expect(field?.value).toBe('');
       expect(field?.getAttribute('autocomplete')).toBe('off');
       expect(fixture.debugElement.query(By.css('#nayax-token')).injector.get(NgModel, null)).toBeNull();
     });
@@ -330,7 +460,7 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
 
       runTestWith();
 
-      expect(JSON.stringify(component)).not.toContain(TOKEN);
+      expect(JSON.stringify(component, safeJson())).not.toContain(TOKEN);
       expect(Object.values(component).some((value) => value === TOKEN)).toBe(false);
       expect(setLocal.mock.calls.flat().join(' ')).not.toContain(TOKEN);
       expect(setSession.mock.calls.flat().join(' ')).not.toContain(TOKEN);
@@ -339,20 +469,85 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
     });
 
     it('refuses to test an empty token field without calling the API', async () => {
-      const { component, connections, fixture, host, enterOperatorId } = await render();
+      const { component, connections, fixture, toTokenStep, testId } = await render();
 
-      enterOperatorId('7788');
-      component.goTo(3);
-      fixture.detectChanges();
+      toTokenStep();
       component.runTest();
       fixture.detectChanges();
 
       expect(connections.test).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('Paste the Lynx token');
+      expect(testId('dialog-notice')?.textContent).toContain('Paste the Lynx token');
+    });
+
+    it('shows the testing state while the test runs, and nothing is saved yet', async () => {
+      const pending = new Subject<NayaxConnectionTestResult>();
+      const { component, runTestWith, testId } = await render({ test: () => pending });
+
+      runTestWith();
+
+      expect(component.testing).toBe(true);
+      expect(testId('state-testing')?.textContent).toContain('Testing the connection');
+      expect((testId('run-test') as HTMLButtonElement).disabled).toBe(true);
+      expect((testId('back') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('keeps an Owner on an empty token field when Nayax refused the token', async () => {
+      const { component, host, runTestWith, testId } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              machineCount: null,
+              checks: [
+                { check: 'Machines', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machine', status: 'NotChecked', failure: null }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+
+      expect(component.step).toBe(2);
+      expect(component.result).toBeNull();
+      expect(testId('state-invalid-token')?.textContent).toContain('invalid or has expired');
+      expect(testId('state-timeout')).toBeNull();
+      expect(host.querySelector<HTMLInputElement>('#nayax-token')?.value).toBe('');
+    });
+
+    it('keeps an Owner on an empty token field, with different guidance, when Nayax did not answer', async () => {
+      const { component, host, runTestWith, testId } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              machineCount: null,
+              checks: [{ check: 'Machines', status: 'Failed', failure: 'NayaxUnavailable' }]
+            })
+          )
+      });
+
+      runTestWith();
+
+      expect(component.step).toBe(2);
+      expect(testId('state-timeout')?.textContent).toContain('did not answer in time');
+      expect(testId('state-invalid-token')).toBeNull();
+      expect(host.querySelector<HTMLInputElement>('#nayax-token')?.value).toBe('');
+    });
+
+    it('treats a gateway timeout on the test request as the timeout state', async () => {
+      const { component, runTestWith, testId } = await render({
+        test: () => throwError(() => ({ status: 504, error: null }))
+      });
+
+      runTestWith();
+
+      expect(component.step).toBe(2);
+      expect(testId('state-timeout')).toBeTruthy();
     });
 
     it('reports a rate-limited test with the allowance it shares with the re-test', async () => {
-      const { host, runTestWith } = await render({
+      const { runTestWith, testId } = await render({
         test: () =>
           throwError(() => ({
             status: 429,
@@ -362,167 +557,73 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
 
       runTestWith();
 
-      expect(host.textContent).toContain('too many times recently');
-      expect(host.textContent).toContain('Test and re-test share');
+      expect(testId('dialog-notice')?.textContent).toContain('too many times recently');
+      expect(testId('dialog-notice')?.textContent).toContain('Test and re-test share');
     });
 
     it('reports a refused operator id or token without claiming anything was stored', async () => {
-      const { component, host, runTestWith } = await render({
+      const { component, runTestWith, testId } = await render({
         test: () => throwError(() => ({ status: 400, error: { message: 'Enter the Nayax operator id.' } }))
       });
 
       runTestWith();
 
-      expect(host.textContent).toContain('Enter the Nayax operator id.');
-      expect(component.step).toBe(3);
+      expect(testId('dialog-notice')?.textContent).toContain('Enter the Nayax operator id.');
+      expect(component.step).toBe(2);
+    });
+
+    it('clears the token field when the Owner goes back to the operator id', async () => {
+      const { component, fixture, toTokenStep, pasteToken } = await render();
+
+      toTokenStep();
+      const field = pasteToken(TOKEN);
+      component.back();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(1);
+      expect(field.value).toBe('');
     });
   });
 
-  describe('Step 4: the checklist', () => {
-    it('shows the server checklist of the completed run and nothing of its own', async () => {
-      const { component, fixture, runTestWith } = await render();
-
-      runTestWith();
-
-      expect(component.step).toBe(4);
-      const checklist = fixture.debugElement.query(By.directive(NayaxConnectionChecklistComponent))
-        ?.componentInstance as NayaxConnectionChecklistComponent;
-      expect(checklist.checks).toHaveLength(8);
-      expect(checklist.machineCount).toBe(2);
-    });
-
-    it('passes an unchecked machine run through with its machine count of zero', async () => {
-      const { fixture, runTestWith } = await render({
-        test: () =>
-          of(
-            testResult({
-              machineCount: 0,
-              checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
-                { check: 'Machines', status: 'Passed', failure: null },
-                { check: 'Machine', status: 'NotChecked', failure: null }
-              ]
-            })
-          )
-      });
-
-      runTestWith();
-
-      const checklist = fixture.debugElement.query(By.directive(NayaxConnectionChecklistComponent))
-        ?.componentInstance as NayaxConnectionChecklistComponent;
-      expect(checklist.machineCount).toBe(0);
-      expect(fixture.nativeElement.textContent).toContain('no machines in this Nayax account yet');
-    });
-
-    it('skips the support step when nothing failed', async () => {
-      const { component, runTestWith } = await render();
-
-      runTestWith();
-      component.next();
-
-      expect(component.step).toBe(6);
-    });
-  });
-
-  describe('Step 5: asking Nayax for the missing permissions', () => {
-    const refused = () =>
+  describe('Step 3: review and save', () => {
+    const partial = () =>
       of(
         testResult({
           nothingFailed: false,
           machineCount: 1,
           checks: [
-            { check: 'SignIn', status: 'Passed', failure: null },
-            { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+            { check: 'Machines', status: 'Passed', failure: null },
+            { check: 'ProductGroups', status: 'Failed', failure: 'PermissionNotGranted' },
             { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' }
           ]
         })
       );
 
-    it('is reached from the checklist whenever any line failed', async () => {
-      const { component, runTestWith } = await render({ test: refused });
+    it('shows a clean run as passed, with Save connection and the server checklist', async () => {
+      const { component, fixture, runTestWith, testId } = await render();
 
       runTestWith();
-      component.next();
 
-      expect(component.step).toBe(5);
+      expect(component.step).toBe(3);
+      expect(testId('review-passed')?.textContent).toContain('Connection test passed.');
+      expect(testId('review-passed')?.textContent).not.toContain('Nayax connected');
+      const checklist = fixture.debugElement.query(By.directive(NayaxConnectionChecklistComponent))
+        ?.componentInstance as NayaxConnectionChecklistComponent;
+      expect(checklist.checks).toHaveLength(7);
+      expect(checklist.machineCount).toBe(2);
+      expect((testId('save-connection') as HTMLButtonElement).disabled).toBe(false);
+      expect(testId('permission-request')).toBeNull();
     });
 
-    it('composes a request naming the operator id and every missing area', async () => {
-      const { component, runTestWith } = await render({ test: refused });
-
-      runTestWith();
-      const request = component.supportRequest();
-
-      expect(request).toContain('7788');
-      expect(request).toContain('Machine list (GET machines)');
-      expect(request).toContain('Machine recent sales (GET machines/{id}/lastSales)');
-      expect(request).toContain('does not have permission');
-      expect(request).not.toContain('Signing in');
-      expect(request).not.toContain(TOKEN);
-    });
-
-    it('names the operator id that was tested, not one typed into the field afterwards', async () => {
-      const { component, fixture, host, enterOperatorId, runTestWith } = await render({ test: refused });
-
-      runTestWith(TOKEN, ' 7788 ');
-      component.goTo(1);
-      enterOperatorId('9999');
-      component.goTo(5);
-      fixture.detectChanges();
-
-      const request = component.supportRequest();
-      expect(request).toContain('Operator ID: 7788');
-      expect(request).not.toContain('9999');
-      expect(host.querySelector<HTMLTextAreaElement>('[data-testid="support-request"]')?.value).toContain(
-        'Operator ID: 7788'
-      );
-    });
-
-    it('asks Nayax only for areas refused for lack of a permission, with its own advice for the rest', async () => {
-      const { component, fixture, host, runTestWith } = await render({
+    it('shows an empty machine list as passed with no machines, and still offers Save connection', async () => {
+      const { component, connections, fixture, runTestWith, testId } = await render({
         test: () =>
           of(
             testResult({
-              nothingFailed: false,
+              machineCount: 0,
               checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
-                { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
-                { check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' },
-                { check: 'MachineLastSales', status: 'Failed', failure: 'NayaxUnavailable' }
-              ]
-            })
-          )
-      });
-
-      runTestWith();
-      component.next();
-      fixture.detectChanges();
-
-      const request = component.supportRequest();
-      expect(request).toContain('Machine list (GET machines)');
-      expect(request).not.toContain('Operator product catalogue');
-      expect(request).not.toContain('Machine recent sales');
-
-      const mismatch = host.querySelector('[data-testid="refusal-advice-OperatorIdMismatch"]');
-      expect(mismatch?.textContent).toContain('operator id 7788');
-      expect(mismatch?.textContent).toContain('Check the operator id');
-      expect(mismatch?.textContent).toContain('Operator product catalogue');
-      const unavailable = host.querySelector('[data-testid="refusal-advice-NayaxUnavailable"]');
-      expect(unavailable?.textContent).toContain('Try the test again');
-      expect(unavailable?.textContent).toContain('Machine recent sales');
-      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')).toBeNull();
-    });
-
-    it('sends an Owner whose token expired to generate a new one, not to ask for permissions', async () => {
-      const { component, fixture, host, runTestWith } = await render({
-        test: () =>
-          of(
-            testResult({
-              nothingFailed: false,
-              machineCount: null,
-              checks: [
-                { check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' },
-                { check: 'Machines', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machines', status: 'Passed', failure: null },
+                { check: 'ProductCatalogue', status: 'Passed', failure: null },
                 { check: 'Machine', status: 'NotChecked', failure: null }
               ]
             })
@@ -530,128 +631,48 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       });
 
       runTestWith();
-      component.next();
-      fixture.detectChanges();
 
-      expect(component.step).toBe(5);
-      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')?.textContent).toContain(
-        'Generate a new Lynx token'
-      );
-      expect(host.querySelector('[data-testid="support-request"]')).toBeNull();
-      expect(host.querySelector('[data-testid="no-permission-request"]')).toBeTruthy();
+      expect(testId('review-zero-machines')?.textContent).toContain('Connection test passed. No machines found yet.');
+      expect(fixture.nativeElement.textContent).toContain('no machines in this Nayax account yet');
+      const save = testId('save-connection') as HTMLButtonElement;
+      expect(save.disabled).toBe(false);
+
+      save.click();
+
+      expect(connections.save).toHaveBeenCalledTimes(1);
+      expect(component.saved).toBe(true);
     });
 
-    it('offers the Nayax support portal and the integration mailbox as the second contact', async () => {
-      const { component, fixture, host, runTestWith } = await render({ test: refused });
+    it('shows the machine list once and no retired sign-in row', async () => {
+      const { host, runTestWith } = await render();
 
       runTestWith();
-      component.next();
-      fixture.detectChanges();
 
-      const portal = host.querySelector<HTMLAnchorElement>('[data-testid="support-portal-link"]');
-      expect(portal?.getAttribute('href')).toBe('https://nayax.service-now.com/csm');
-      expect(portal?.getAttribute('rel')).toContain('noopener');
-      expect(host.querySelector('[data-testid="support-email-link"]')?.getAttribute('href')).toBe(
-        'mailto:integration-support@nayax.com'
-      );
-      expect(host.textContent).toContain('integration-support@nayax.com');
+      expect(host.querySelectorAll('[data-testid="check-Machines"]')).toHaveLength(1);
+      expect(host.textContent).not.toContain('Signing in');
+      expect(host.textContent).not.toContain('GET devices');
     });
 
-    it('shows the request in a field an Owner can copy, and copies it on request', async () => {
-      const writeText = jest.fn(() => Promise.resolve());
-      Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true });
-      const { component, fixture, host, toast, runTestWith } = await render({ test: refused });
+    it('keeps Save connection for a partial run and asks Nayax only for the refused permissions', async () => {
+      const { component, runTestWith, testId } = await render({ test: partial });
 
       runTestWith();
-      component.next();
-      fixture.detectChanges();
-      const field = host.querySelector<HTMLTextAreaElement>('[data-testid="support-request"]');
-      component.copySupportRequest();
-      await Promise.resolve();
 
-      expect(field?.readOnly).toBe(true);
-      expect(field?.value).toContain('7788');
-      expect(writeText).toHaveBeenCalledWith(component.supportRequest());
-      expect(toast.success).toHaveBeenCalled();
+      expect(testId('review-partial')?.textContent).toContain('some permissions refused');
+      expect((testId('save-connection') as HTMLButtonElement).disabled).toBe(false);
+      const request = component.supportRequest();
+      expect(request).toContain('7788');
+      expect(request).toContain('Operator product groups');
+      expect(request).toContain('Machine recent sales');
+      expect(request).not.toContain('Machine list');
+      expect(request).not.toContain('Signing in');
+      expect(request).not.toContain(TOKEN);
+      expect((testId('support-request') as HTMLTextAreaElement).value).toBe(request);
     });
 
-    it('leaves the request selectable when the browser offers no clipboard', async () => {
-      Object.defineProperty(window.navigator, 'clipboard', { value: undefined, configurable: true });
-      const { component, fixture, toast, runTestWith } = await render({ test: refused });
-
-      runTestWith();
-      component.next();
-      fixture.detectChanges();
-      component.copySupportRequest();
-
-      expect(toast.info).toHaveBeenCalled();
-    });
-  });
-
-  describe('Step 6: saving the tested connection', () => {
-    it('saves with the draft id alone and reports the status the server concluded', async () => {
-      const { component, connections, fixture, host, runTestWith } = await render({
-        save: () => of(state({ status: 'Ready' }))
-      });
-
-      runTestWith();
-      component.goTo(6);
-      component.saveConnection();
-      fixture.detectChanges();
-
-      expect(connections.save).toHaveBeenCalledWith('d1f0c2a4-0000-4000-8000-00000000000a');
-      expect(component.connection).toEqual(state({ status: 'Ready' }));
-      expect(host.textContent).toContain('Ready');
-    });
-
-    it('records the pending machine checks the save reported and asks for a re-test later', async () => {
-      const { component, fixture, host, runTestWith } = await render({
-        save: () => of(state({ status: 'Ready', machineChecksPending: true }))
-      });
-
-      runTestWith();
-      component.goTo(6);
-      component.saveConnection();
-      fixture.detectChanges();
-
-      expect(host.textContent).toContain('Re-test once your machines are set up');
-    });
-
-    it('does not offer to save a run whose sign-in failed, and issues no request', async () => {
-      const { component, connections, fixture, host, runTestWith } = await render({
-        test: () =>
-          of(
-            testResult({
-              nothingFailed: false,
-              machineCount: null,
-              checks: [{ check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' }]
-            })
-          )
-      });
-
-      runTestWith();
-      component.goTo(6);
-      fixture.detectChanges();
-      component.saveConnection();
-      fixture.detectChanges();
-
-      expect(connections.save).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('did not sign in to Nayax');
-    });
-
-    it('saves a run whose sign-in passed but whose permissions are incomplete', async () => {
+    it('saves a partial run, which the server records as permissions pending', async () => {
       const { component, connections, runTestWith } = await render({
-        test: () =>
-          of(
-            testResult({
-              nothingFailed: false,
-              machineCount: 1,
-              checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
-                { check: 'ProductGroups', status: 'Failed', failure: 'PermissionNotGranted' }
-              ]
-            })
-          ),
+        test: partial,
         save: () => of(state({ status: 'PendingPermissions' }))
       });
 
@@ -662,8 +683,152 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(component.connection?.status).toBe('PendingPermissions');
     });
 
-    it('asks for a fresh test instead of saving an expired draft', async () => {
-      const { component, connections, fixture, host, runTestWith } = await render({
+    it('names the operator id that was tested in the request', async () => {
+      const { component, runTestWith } = await render({ test: partial });
+
+      runTestWith(TOKEN, ' 7788 ');
+      component.operatorId = '9999';
+
+      const request = component.supportRequest();
+      expect(request).toContain('Operator ID: 7788');
+      expect(request).not.toContain('9999');
+    });
+
+    it('asks Nayax only for areas refused for lack of a permission, with its own advice for the rest', async () => {
+      const { component, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              checks: [
+                { check: 'Machines', status: 'Passed', failure: null },
+                { check: 'ProductGroups', status: 'Failed', failure: 'PermissionNotGranted' },
+                { check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' },
+                { check: 'MachineLastSales', status: 'Failed', failure: 'NayaxUnavailable' }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+
+      const request = component.supportRequest();
+      expect(request).toContain('Operator product groups');
+      expect(request).not.toContain('Operator product catalogue');
+      expect(request).not.toContain('Machine recent sales');
+
+      const mismatch = host.querySelector('[data-testid="refusal-advice-OperatorIdMismatch"]');
+      expect(mismatch?.textContent).toContain('operator ID 7788');
+      expect(mismatch?.textContent).toContain('Check the operator ID');
+      expect(mismatch?.textContent).toContain('Operator product catalogue');
+      const unavailable = host.querySelector('[data-testid="refusal-advice-NayaxUnavailable"]');
+      expect(unavailable?.textContent).toContain('Try the test again');
+      expect(unavailable?.textContent).toContain('Machine recent sales');
+      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')).toBeNull();
+    });
+
+    it('offers the Nayax support portal and the integration mailbox as the second contact', async () => {
+      const { host, runTestWith } = await render({ test: partial });
+
+      runTestWith();
+
+      const portal = host.querySelector<HTMLAnchorElement>('[data-testid="support-portal-link"]');
+      expect(portal?.getAttribute('href')).toBe('https://nayax.service-now.com/csm');
+      expect(portal?.getAttribute('rel')).toContain('noopener');
+      expect(host.querySelector('[data-testid="support-email-link"]')?.getAttribute('href')).toBe(
+        'mailto:integration-support@nayax.com'
+      );
+    });
+
+    it('copies the request on request', async () => {
+      const writeText = jest.fn(() => Promise.resolve());
+      Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true });
+      const { component, toast, runTestWith, testId } = await render({ test: partial });
+
+      runTestWith();
+      component.copySupportRequest();
+      await Promise.resolve();
+
+      expect((testId('support-request') as HTMLTextAreaElement).readOnly).toBe(true);
+      expect(writeText).toHaveBeenCalledWith(component.supportRequest());
+      expect(toast.success).toHaveBeenCalled();
+    });
+
+    it('leaves the request selectable when the browser offers no clipboard', async () => {
+      Object.defineProperty(window.navigator, 'clipboard', { value: undefined, configurable: true });
+      const { component, toast, runTestWith } = await render({ test: partial });
+
+      runTestWith();
+      component.copySupportRequest();
+
+      expect(toast.info).toHaveBeenCalled();
+    });
+
+    /**
+     * A machine list the token has no permission for, or one refused for its operator id, cannot be
+     * saved (issue #1310). The review says which, without spending a request the server would refuse.
+     */
+    it.each(['PermissionNotGranted', 'OperatorIdMismatch'] as const)(
+      'does not offer to save a run whose machine list failed with %s, and issues no request',
+      async (failure) => {
+        const { component, connections, fixture, runTestWith, testId } = await render({
+          test: () =>
+            of(
+              testResult({
+                nothingFailed: false,
+                machineCount: null,
+                checks: [{ check: 'Machines', status: 'Failed', failure }]
+              })
+            )
+        });
+
+        runTestWith();
+        component.saveConnection();
+        fixture.detectChanges();
+
+        expect(component.step).toBe(3);
+        expect(connections.save).not.toHaveBeenCalled();
+        expect(component.canSave).toBe(false);
+        expect(testId('machine-list-failed')?.textContent).toContain('could not read this business\'s machine list');
+        expect((testId('save-connection') as HTMLButtonElement).disabled).toBe(true);
+      }
+    );
+
+    /**
+     * A draft tested before the machine-list gate shipped, saved after it: the retired sign-in line
+     * decides nothing here either. A readable machine list is what offers the save, and the retired
+     * line's own refusal is not shown as a failed area (issue #1310).
+     */
+    it('saves a legacy run whose only refusal was the retired devices probe', async () => {
+      const { component, connections, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              checks: [
+                {
+                  check: 'SignIn',
+                  status: 'Failed',
+                  failure: 'PermissionNotGranted'
+                } as unknown as NayaxConnectionTestResult['checks'][number],
+                ...passingChecks()
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+
+      expect(component.anyFailed).toBe(false);
+      expect(component.canSave).toBe(true);
+      expect(host.textContent).not.toContain('Signing in');
+
+      component.saveConnection();
+
+      expect(connections.save).toHaveBeenCalled();
+    });
+
+    it('requires a fresh test for an expired draft and sends nothing', async () => {
+      const { component, connections, fixture, runTestWith, testId } = await render({
         test: () => of(testResult({ expiresAtUtc: new Date(Date.now() - 1000).toISOString() }))
       });
 
@@ -672,11 +837,74 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       fixture.detectChanges();
 
       expect(connections.save).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('expired');
+      expect(testId('review-expired')?.textContent).toContain('expired');
+      expect(testId('save-connection')).toBeNull();
+
+      (testId('test-again') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(2);
+      expect(component.result).toBeNull();
+    });
+
+    it('withdraws Save connection when the draft expires while the review is open', async () => {
+      jest.useFakeTimers();
+      try {
+        const { fixture, runTestWith, testId } = await render({
+          test: () => of(testResult({ expiresAtUtc: new Date(Date.now() + 60_000).toISOString() }))
+        });
+
+        runTestWith();
+        expect(testId('save-connection')).toBeTruthy();
+
+        jest.advanceTimersByTime(61_000);
+        fixture.detectChanges();
+
+        expect(testId('review-expired')).toBeTruthy();
+        expect(testId('save-connection')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('saves with the draft id alone and shows Nayax connected only after the save', async () => {
+      const { component, connections, fixture, host, runTestWith, testId } = await render({
+        save: () => of(state({ status: 'Ready' }))
+      });
+
+      runTestWith();
+      expect(host.textContent).not.toContain('Nayax connected');
+
+      (testId('save-connection') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(connections.save).toHaveBeenCalledWith('d1f0c2a4-0000-4000-8000-00000000000a');
+      expect(component.connection).toEqual(state({ status: 'Ready' }));
+      expect(testId('saved')?.textContent).toContain('Nayax connected');
+      expect(testId('back')).toBeNull();
+      expect(testId('stored-status')?.textContent).toContain('Ready');
+
+      (testId('done') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.dialogOpen).toBe(false);
+      expect(testId('open-connect')?.textContent).toContain('Replace connection');
+    });
+
+    it('records the pending machine checks the save reported and asks for a re-test later', async () => {
+      const { component, fixture, host, runTestWith } = await render({
+        save: () => of(state({ status: 'Ready', machineChecksPending: true }))
+      });
+
+      runTestWith();
+      component.saveConnection();
+      fixture.detectChanges();
+
+      expect(host.textContent).toContain('Re-test once your machines are set up');
     });
 
     it('withdraws a refused draft and shows the server refusal, so it is never saved twice', async () => {
-      const { component, fixture, host, runTestWith } = await render({
+      const { component, fixture, runTestWith, testId } = await render({
         save: () =>
           throwError(() => ({
             status: 409,
@@ -688,12 +916,92 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       component.saveConnection();
       fixture.detectChanges();
 
-      expect(host.textContent).toContain('already used or has expired');
+      expect(testId('dialog-notice')?.textContent).toContain('already used or has expired');
       expect(component.result).toBeNull();
+      expect(component.step).toBe(2);
+    });
+
+    it('cannot be closed while the save is in flight', async () => {
+      const pending = new Subject<NayaxConnectionState>();
+      const { component, fixture, runTestWith } = await render({ save: () => pending });
+
+      runTestWith();
+      component.saveConnection();
+      component.closeDialog();
+      fixture.detectChanges();
+
+      expect(component.dialogOpen).toBe(true);
+      const dialog = fixture.debugElement.query(By.directive(ModalDialogComponent))
+        .componentInstance as ModalDialogComponent;
+      expect(dialog.closeDisabled).toBe(true);
+    });
+
+    it('drops the result when the Owner goes back, so a fresh test is needed', async () => {
+      const { component, fixture, host, runTestWith } = await render();
+
+      runTestWith();
+      component.back();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(2);
+      expect(component.result).toBeNull();
+      expect(host.querySelector<HTMLInputElement>('#nayax-token')?.value).toBe('');
     });
   });
 
-  describe('The saved connection and its re-test', () => {
+  describe('Closing and reopening', () => {
+    it('clears the token field and keeps nothing of the attempt', async () => {
+      const { component, fixture, host, openDialog, toTokenStep, pasteToken } = await render();
+
+      toTokenStep();
+      const field = pasteToken(TOKEN);
+      component.closeDialog();
+      fixture.detectChanges();
+
+      expect(field.value).toBe('');
+      expect(host.querySelector('#nayax-token')).toBeNull();
+
+      openDialog();
+
+      expect(component.step).toBe(1);
+      expect(component.operatorId).toBe('');
+      expect(component.result).toBeNull();
+    });
+
+    it('ignores a test answer that arrives after the dialog was closed', async () => {
+      const pending = new Subject<NayaxConnectionTestResult>();
+      const { component, fixture, runTestWith, toast } = await render({ test: () => pending });
+
+      runTestWith();
+      component.closeDialog();
+      fixture.detectChanges();
+      pending.next(testResult());
+      fixture.detectChanges();
+
+      expect(component.dialogOpen).toBe(false);
+      expect(component.result).toBeNull();
+      expect(component.testing).toBe(false);
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it('drops an unsaved result on close and leaves the stored connection untouched', async () => {
+      const { component, connections, fixture, openDialog, runTestWith, testId } = await render({
+        status: () => of(state({ status: 'Ready' }))
+      });
+
+      runTestWith();
+      component.closeDialog();
+      fixture.detectChanges();
+      openDialog();
+
+      expect(component.result).toBeNull();
+      expect(component.step).toBe(1);
+      expect(connections.save).not.toHaveBeenCalled();
+      expect(testId('stored-status')?.textContent).toContain('Ready');
+    });
+  });
+
+  describe('The stored connection and its re-test', () => {
     it('reads the stored connection state on arrival', async () => {
       const { connections, host } = await render({ status: () => of(state({ status: 'Ready' })) });
 
@@ -702,10 +1010,10 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
     });
 
     it('stays usable when the stored state cannot be read', async () => {
-      const { host } = await render({ status: () => throwError(() => ({ status: 500 })) });
+      const { testId } = await render({ status: () => throwError(() => ({ status: 500 })) });
 
-      expect(host.textContent).toContain('could not be read');
-      expect(host.querySelector('#nayax-operator-id')).toBeTruthy();
+      expect(testId('status-unavailable')?.textContent).toContain('could not be read');
+      expect((testId('open-connect') as HTMLButtonElement).disabled).toBe(false);
     });
 
     it('prompts for a re-test while the machine checks are pending', async () => {
@@ -741,7 +1049,7 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
               statusUpdated: false,
               nothingFailed: false,
               machineCount: null,
-              checks: [{ check: 'SignIn', status: 'Failed', failure: 'NayaxUnavailable' }]
+              checks: [{ check: 'Machines', status: 'Failed', failure: 'NayaxUnavailable' }]
             })
           )
       });
@@ -750,7 +1058,43 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       fixture.detectChanges();
 
       expect(host.textContent).toContain('left exactly as it was');
+      expect(host.textContent).toContain('No usable answer came back from Nayax');
+      expect(host.textContent).not.toContain('machine list for this operator');
       expect(component.connection?.status).toBe('Ready');
+    });
+
+    /**
+     * A machine-list 403 on re-test leaves the stored status and timestamp alone, as a timeout does
+     * (issue #1310), but Nayax did answer: the guidance is a permission request, not "try later".
+     */
+    it('gives machine-list permission guidance when a re-test is refused the machine list', async () => {
+      const { component, fixture, host, testId } = await render({
+        status: () => of(state({ status: 'Ready' })),
+        retest: () =>
+          of(
+            retestResult({
+              connection: state({ status: 'Ready' }),
+              statusUpdated: false,
+              nothingFailed: false,
+              machineCount: null,
+              checks: [
+                { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+                { check: 'Machine', status: 'NotChecked', failure: null }
+              ]
+            })
+          )
+      });
+
+      component.retest();
+      fixture.detectChanges();
+
+      const notice = testId('notice')?.textContent ?? '';
+      expect(notice).toContain('refused this token access to the machine list');
+      expect(notice).toContain('read access to the machine list');
+      expect(notice).toContain('last-tested time are unchanged');
+      expect(notice).not.toContain('No usable answer');
+      expect(component.connection?.status).toBe('Ready');
+      expect(host.querySelector('[data-testid="check-Machines"]')?.textContent).toContain('does not have permission');
     });
 
     it('reports a connection replaced while the re-test ran', async () => {
@@ -818,16 +1162,19 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
   });
 
   describe('Owner only', () => {
-    it('renders no wizard and no action for a member without Integration.Manage', async () => {
-      const { component, connections, host } = await render({}, { canManage: false });
+    it('renders no launcher and no action for a member without Integration.Manage', async () => {
+      const { component, connections, fixture, host, testId } = await render({}, { canManage: false });
 
-      expect(host.querySelector('#nayax-operator-id')).toBeNull();
+      expect(testId('open-connect')).toBeNull();
       expect(host.textContent).toContain('Owner');
 
+      component.openDialog();
+      fixture.detectChanges();
       component.runTest();
       component.saveConnection();
       component.retest();
 
+      expect(component.dialogOpen).toBe(false);
       expect(connections.test).not.toHaveBeenCalled();
       expect(connections.save).not.toHaveBeenCalled();
       expect(connections.retest).not.toHaveBeenCalled();
@@ -840,17 +1187,15 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
    */
   describe('Support session', () => {
     it('disables Test connection while a session is active, and runTest() writes nothing', async () => {
-      const { component, connections, fixture, host, enterOperatorId, pasteToken } = await render(
+      const { component, connections, toTokenStep, pasteToken, testId } = await render(
         {},
         { sessionActive: of(true) }
       );
 
-      enterOperatorId('7788');
-      component.goTo(3);
-      fixture.detectChanges();
+      toTokenStep();
       pasteToken(TOKEN);
 
-      expect((host.querySelector('[data-testid="run-test"]') as HTMLButtonElement).disabled).toBe(true);
+      expect((testId('run-test') as HTMLButtonElement).disabled).toBe(true);
 
       component.runTest();
 
@@ -858,12 +1203,12 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
     });
 
     it('disables Re-test while a session is active, and retest() writes nothing', async () => {
-      const { component, connections, host } = await render(
+      const { component, connections, testId } = await render(
         { status: () => of(state({ status: 'Ready' })) },
         { sessionActive: of(true) }
       );
 
-      expect((host.querySelector('[data-testid="retest"]') as HTMLButtonElement).disabled).toBe(true);
+      expect((testId('retest') as HTMLButtonElement).disabled).toBe(true);
 
       component.retest();
 
@@ -873,18 +1218,16 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
     it('disables Save connection once a session starts after a passing test, and saveConnection() writes nothing', async () => {
       const sessionActive = new Subject<boolean>();
       sessionActive.next(false);
-      const { component, connections, fixture, host, runTestWith } = await render({}, { sessionActive });
+      const { component, connections, fixture, runTestWith, testId } = await render({}, { sessionActive });
 
       runTestWith();
-      component.goTo(6);
-      fixture.detectChanges();
       expect(component.canSave).toBe(true);
 
       sessionActive.next(true);
       fixture.detectChanges();
 
       expect(component.canSave).toBe(false);
-      expect((host.querySelector('[data-testid="save-connection"]') as HTMLButtonElement).disabled).toBe(true);
+      expect((testId('save-connection') as HTMLButtonElement).disabled).toBe(true);
 
       component.saveConnection();
 
@@ -892,3 +1235,17 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
     });
   });
 });
+
+/** Serialises a component without following the DOM and framework references it holds. */
+function safeJson(): (key: string, value: unknown) => unknown {
+  const seen = new WeakSet<object>();
+  return (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value) || value instanceof Node) {
+        return undefined;
+      }
+      seen.add(value);
+    }
+    return value;
+  };
+}

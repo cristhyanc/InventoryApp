@@ -1,6 +1,9 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { nayaxConnectionAreaLabel } from '../../../provider/nayax-read-areas';
+import {
+  nayaxConnectionAreaLabel,
+  withoutRetiredNayaxConnectionChecks
+} from '../../../provider/nayax-read-areas';
 import { NayaxConnectionCheckFailureName, NayaxConnectionCheckLine } from '../../../services/nayax-connection.service';
 
 /**
@@ -115,8 +118,13 @@ export class NayaxConnectionChecklistComponent {
    */
   @Input() machineCount: number | null = null;
 
+  /**
+   * One row per line the run reported, with a retired read's line dropped (issue #1310): the
+   * `GET devices` sign-in probe is a read this application no longer makes, so an older stored
+   * report that still carries it must not put a row - least of all a failing one - on screen.
+   */
   rows(): ChecklistRow[] {
-    return this.checks.map((line) => this.toRow(line));
+    return withoutRetiredNayaxConnectionChecks(this.checks).map((line) => this.toRow(line));
   }
 
   private toRow(line: NayaxConnectionCheckLine): ChecklistRow {

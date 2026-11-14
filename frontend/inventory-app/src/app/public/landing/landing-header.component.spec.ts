@@ -39,6 +39,19 @@ describe('LandingHeaderComponent (issue #954)', () => {
     TestBed.resetTestingModule();
   });
 
+  it('links the full Restockroo logo home, named once by its alt text (issue #1272)', async () => {
+    const { host } = await render();
+    const brand = host.querySelector<HTMLAnchorElement>('[data-testid="landing-brand"]')!;
+    const logos = brand.querySelectorAll('img');
+
+    expect(brand.getAttribute('href')).toBe('/home');
+    expect(logos).toHaveLength(1);
+    expect(logos[0].getAttribute('src')).toBe('assets/brand/restockroo-logo.png');
+    expect(logos[0].getAttribute('alt')).toBe('Restockroo');
+    expect(brand.textContent?.trim()).toBe('');
+    expect(Array.from(brand.classList)).toContain('min-h-11');
+  });
+
   it('offers a native menu button that names the panel it controls and starts collapsed', async () => {
     const { menuButton, menu } = await render();
 

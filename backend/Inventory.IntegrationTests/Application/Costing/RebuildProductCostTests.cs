@@ -209,8 +209,9 @@ public class RebuildProductCostTests
     /// <summary>
     /// Issue #359: the point of a costing repair. The product entered the cutover with an opening
     /// costing quantity of zero while stock was still in the machines, so its later completed sales
-    /// have no costed stock to consume and the replay reports <c>UnknownCost</c> for each of them.
-    /// A repair effective before the sales restores the costing history, and only then do they cost.
+    /// have no costed stock to consume and the replay reports the non-fatal <c>UncostedSale</c> for
+    /// each of them (issue #1239). A repair effective before the sales restores the costing history,
+    /// and only then do they cost.
     /// </summary>
     [Fact]
     public async Task Rebuild_costs_previously_uncostable_sales_from_a_costing_repair()
@@ -229,7 +230,7 @@ public class RebuildProductCostTests
         await db.SaveChangesAsync();
 
         Assert.Equal(2, before.Issues.Count);
-        Assert.All(before.Issues, issue => Assert.Equal(CostDataQualityIssueCodes.UnknownCost, issue.Code));
+        Assert.All(before.Issues, issue => Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code));
         Assert.Empty(after.Issues);
         Assert.Equal(2, after.RecostedSaleCount);
         var product = await db.Products.SingleAsync();
@@ -248,12 +249,13 @@ public class RebuildProductCostTests
     }
 
     /// <summary>
-    /// Issue #359: a repair that explains only part of the missing history leaves the fatal issue
-    /// in place, and a fatal issue still means the rebuild stages nothing at all (issue #362) - which
-    /// is what lets the apply use case roll back and persist no repair.
+    /// Issue #1239: a repair that explains only part of the missing history is no longer refused. The
+    /// sales the repair reaches are costed from the ledger, the sale it does not reach is left
+    /// uncosted and flagged non-fatally, and the rebuild commits the position that follows - rather
+    /// than refusing the product and freezing every later write to it.
     /// </summary>
     [Fact]
-    public async Task A_repair_that_covers_only_part_of_the_history_leaves_the_fatal_issue_and_stages_nothing()
+    public async Task A_repair_that_covers_only_part_of_the_history_leaves_the_rest_of_the_sales_uncosted()
     {
         await using var db = CreateDb();
         db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 10 });
@@ -262,14 +264,19 @@ public class RebuildProductCostTests
         db.InventoryCostRepairs.Add(Repair(1, quantity: 1, unitCost: 2m, Day(2)));
         await db.SaveChangesAsync();
 
-        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
-            () => TestCostingUseCases.Rebuild(db).RebuildAsync(1, Day(2)));
+        var result = await TestCostingUseCases.Rebuild(db).RebuildAsync(1, Day(2));
+        await db.SaveChangesAsync();
 
-        Assert.Contains("Completed Nayax sale 2", exception.Message, StringComparison.Ordinal);
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code);
+        Assert.Contains("Completed Nayax sale 2", issue.Message, StringComparison.Ordinal);
+        Assert.Equal(1, result.RecostedSaleCount);
         var product = await db.Products.SingleAsync();
-        Assert.Null(product.CostingQuantity);
-        Assert.Null(product.InventoryValue);
-        Assert.All(await db.NayaxSales.ToListAsync(), sale => Assert.Null(sale.UnitCostAtSale));
+        Assert.Equal(0, product.CostingQuantity);
+        Assert.Equal(0m, product.InventoryValue);
+        var sales = await db.NayaxSales.OrderBy(sale => sale.TransactionID).ToListAsync();
+        Assert.Equal((2m, SaleCostingStatus.Costed), (sales[0].UnitCostAtSale, sales[0].CostingStatus));
+        Assert.Equal((null, SaleCostingStatus.Pending), ((decimal?)sales[1].UnitCostAtSale, sales[1].CostingStatus));
     }
 
     /// <summary>
@@ -358,18 +365,21 @@ public class RebuildProductCostTests
     public async Task Fatal_data_quality_issue_stages_neither_the_replay_nor_the_product_position()
     {
         var store = new FakeLedgerStore(new InventoryCostLedger(
-            new CostReplayProduct(1, 0, null, null),
+            new CostReplayProduct(1, 8, null, null),
+            // The first restock costs the sale, so there is a sale cost and a movement outcome the
+            // rebuild would have staged; the second has no unit cost at all, which is fatal.
+            [
+                new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, 2m, true),
+                new CostReplayAdjustment(2, Day(4), DomainStock.StockAdjustmentReason.Restock, 3, null, true),
+            ],
+            [new CostReplaySale(9, Day(2))],
             [],
-            [new CostReplaySale(9, Day(2)), new CostReplaySale(10, Day(3))],
-            // A costing repair, not a purchase, so the sale past it has no latest purchase cost to
-            // fall back on, and no Nayax cost either: still a fatal history.
-            [new CostReplayRepair(1, Day(1), 1, 2m)],
             null));
 
         var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
             () => new RebuildProductCost(store).RebuildAsync(1, Day(1)));
 
-        Assert.Contains("has no known opening cost", exception.Message);
+        Assert.Contains("has no valid unit cost", exception.Message);
         Assert.False(store.ReplayStaged);
         Assert.Null(store.StagedPosition);
     }

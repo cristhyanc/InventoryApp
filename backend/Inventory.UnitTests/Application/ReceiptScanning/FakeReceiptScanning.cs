@@ -34,6 +34,14 @@ public sealed class FakeReceiptReader : IReceiptReader
     public static FakeReceiptReader Unavailable() =>
         new(_ => throw new ReceiptReaderUnavailableException());
 
+    /// <summary>
+    /// A reader that cannot be used and knows why (issue #1236) - the shape the real adapter reports
+    /// a refusal or a local failure in.
+    /// </summary>
+    public static FakeReceiptReader Unavailable(ReceiptReaderFailure failure) =>
+        new(_ => throw new ReceiptReaderUnavailableException(
+            "The receipt reader is unavailable.", failure));
+
     /// <inheritdoc />
     public Task<ReceiptReadResult> ReadAsync(
         ReceiptReadRequest request,
@@ -195,6 +203,9 @@ public sealed class RecordingReceiptScanLog : IReceiptScanLog
     /// <summary>Every line recorded, in order.</summary>
     public List<Entry> Entries { get; } = [];
 
+    /// <summary>Every reason recorded beside one of those lines, in order (issue #1236).</summary>
+    public List<Failure> Failures { get; } = [];
+
     /// <inheritdoc />
     public void Completed(
         int businessId,
@@ -205,6 +216,10 @@ public sealed class RecordingReceiptScanLog : IReceiptScanLog
         int? outputTokens) =>
         Entries.Add(new Entry(businessId, outcome, duration, pageCount, inputTokens, outputTokens));
 
+    /// <inheritdoc />
+    public void Unavailable(int businessId, ReceiptReaderFailure failure) =>
+        Failures.Add(new Failure(businessId, failure));
+
     /// <summary>One recorded line.</summary>
     public sealed record Entry(
         int BusinessId,
@@ -213,4 +228,7 @@ public sealed class RecordingReceiptScanLog : IReceiptScanLog
         int? PageCount,
         int? InputTokens,
         int? OutputTokens);
+
+    /// <summary>One recorded reason.</summary>
+    public sealed record Failure(int BusinessId, ReceiptReaderFailure Reason);
 }

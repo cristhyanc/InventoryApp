@@ -14,13 +14,22 @@ namespace Inventory.Domain.Nayax;
 /// Every check is a <c>GET</c>. The write call <c>POST machines/{id}/machineProducts</c> is
 /// deliberately absent and must stay absent: testing a connection must never change an operator's
 /// Nayax data.
+///
+/// <para><strong>The value <c>1</c> is retired and must never be reused</strong> (issue #1310). It
+/// was <c>SignIn</c>, a <c>GET devices</c> probe that existed only to prove the token authenticated,
+/// and it was removed because Nayax's device hardware inventory is a permission an owner has no
+/// reason to hold: a token refused there with a <c>403</c> made setup inconclusive even when
+/// <c>GET machines</c> answered perfectly. <see cref="Machines"/> is the credential gate now. A
+/// stored report from before that change still carries a line numbered <c>1</c>, so the value stays
+/// reserved and such a line is ignored rather than read as a check this build declares.</para>
 /// </summary>
 public enum NayaxConnectionCheck
 {
-    /// <summary>Signing in at all: <c>GET devices</c>.</summary>
-    SignIn = 1,
-
-    /// <summary>The machine list: <c>GET machines</c>. Also decides whether the machine checks run.</summary>
+    /// <summary>
+    /// The machine list: <c>GET machines</c>. It is the check the credentials are judged by - a
+    /// <c>401</c> here is Nayax's verdict on the token itself - and it also decides whether the
+    /// machine checks run and supplies the machine count the result reports.
+    /// </summary>
     Machines = 2,
 
     /// <summary>One machine's details: <c>GET machines/{id}</c>.</summary>

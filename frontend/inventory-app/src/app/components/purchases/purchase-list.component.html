@@ -47,14 +47,14 @@
                 <td class="table-cell">
                   <div class="flex min-w-56 items-start gap-3">
                     <!-- Only a purchase that has a document has one to open (issue #976); one with
-                         none shows a plain placeholder rather than a control that would 404. -->
+                         none shows a plain placeholder rather than a control that would 404. The
+                         control itself shows a lightweight icon from list metadata (issue #1234):
+                         the file is fetched only once the operator activates it. -->
                     @if (hasDocument(r)) {
                       <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
-                        @if (isImage(r) && thumbnailUrl(r)) {
-                          <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
-                        } @else {
-                          <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
-                        }
+                        <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-md-gray-600">
+                          <app-icon name="receipt" [size]="24" />
+                        </div>
                       </button>
                     } @else {
                       <div

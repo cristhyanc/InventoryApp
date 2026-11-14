@@ -245,16 +245,6 @@ builder.Services.AddDocumentStorage(
         WebRootPath = builder.Environment.WebRootPath,
     });
 
-// Pending reimbursement XML files (issue #299). Same arrangement as document storage above: the
-// composition root is the only place that knows the host's content and web roots, so the
-// Infrastructure adapter sees plain paths and the pending-XML import use case sees only the
-// IPendingReimbursementXmlSource port.
-builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOptions
-{
-    ContentRootPath = builder.Environment.ContentRootPath,
-    WebRootPath = builder.Environment.WebRootPath,
-});
-
 // Controlled RFC 7807 responses for Nayax upstream failures, and for the current business's own
 // Nayax connection being unusable (issue #520).
 builder.Services.AddProblemDetails();

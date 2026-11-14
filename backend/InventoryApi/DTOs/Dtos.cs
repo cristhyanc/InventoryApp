@@ -30,6 +30,15 @@ namespace InventoryApi.DTOs;
 /// submitted <c>unitPrice</c> is not bound and nothing is stored for it.
 /// <see cref="InitialUnitCost"/> is a cost, not a price, and is unaffected.</para>
 ///
+/// <para><strong><see cref="InitialUnitCost"/> is required whenever
+/// <see cref="QuantityInStock"/> is above zero</strong> (issue #1238). The property stays nullable
+/// because the wire contract is unchanged - a client may still omit <c>initialUnitCost</c> or send
+/// <c>null</c> - but opening stock above zero with no cost is refused with <c>400</c> and
+/// <c>Inventory.Domain.Products.ProductInitialCostPolicy.InitialUnitCostRequiredMessage</c>, and
+/// neither the product nor the opening stock movement is stored. <c>0</c> is a cost and is accepted;
+/// a negative one is refused with the existing message; and opening stock of zero keeps the cost
+/// optional, exactly as before.</para>
+///
 /// <para><strong><see cref="Unit"/> is required since issue #895.</strong> The property stays
 /// nullable because the wire contract is unchanged - a client may still omit <c>unit</c> or send
 /// <c>null</c> - but a null, empty or whitespace value is refused with <c>400</c> and

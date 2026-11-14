@@ -36,7 +36,6 @@ describe('providerPermissionsOfChecks (issue #728)', () => {
 
   it('tells a granted machine read apart from a refused sales read in one run', () => {
     const permissions = providerPermissionsOfChecks([
-      line('SignIn', 'Passed'),
       line('Machines', 'Passed'),
       line('MachineLastSales', 'Failed', 'PermissionNotGranted')
     ]);
@@ -66,12 +65,27 @@ describe('providerPermissionsOfChecks (issue #728)', () => {
 
   it('concludes nothing from a check no feature claims', () => {
     const permissions = providerPermissionsOfChecks([
-      line('SignIn', 'Passed'),
       line('Machine', 'Passed'),
       line('MachineLastAlerts', 'Failed', 'PermissionNotGranted')
     ]);
 
     expect(permissions).toEqual(UNKNOWN_PROVIDER_PERMISSIONS);
+  });
+
+  /**
+   * A retired read names no feature either (issue #1310), and that is what keeps a refusal of the
+   * old `GET devices` probe - which an older stored report still carries - from locking anything:
+   * the mapping is keyed by this build's own names, so a name it does not hold is evidence about
+   * nothing.
+   */
+  it('concludes nothing from a retired read, whichever way it answered', () => {
+    const retired = (status: NayaxConnectionCheckLine['status'], failure: NayaxConnectionCheckLine['failure']) =>
+      ({ check: 'SignIn', status, failure }) as unknown as NayaxConnectionCheckLine;
+
+    expect(providerPermissionsOfChecks([retired('Failed', 'PermissionNotGranted')])).toEqual(
+      UNKNOWN_PROVIDER_PERMISSIONS
+    );
+    expect(providerPermissionsOfChecks([retired('Passed', null)])).toEqual(UNKNOWN_PROVIDER_PERMISSIONS);
   });
 
   it('never states a permission for a feature that makes no live read', () => {

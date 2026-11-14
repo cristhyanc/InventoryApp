@@ -1,7 +1,22 @@
 namespace Inventory.Application.Costing;
 
-/// <summary>The product facts an inventory-cost transition preview is built from.</summary>
-public sealed record InventoryCostTransitionProduct(long Id, string Name, int QuantityInStock, decimal AverageUnitCost);
+/// <summary>
+/// The product facts an inventory-cost transition preview is built from.
+///
+/// <para><paramref name="ExternalProductId"/> is the product's recorded sales-provider id - the
+/// opaque text of <c>Product.ExternalProductId</c>, or <c>null</c> when the provider does not name
+/// this product (issue #1256). The preview reads it for one question only: whether this product has
+/// a provider link at all, which the slot-side lookup cannot answer, because a linked product that
+/// is in no machine and an unlinked product both match no slot. Which product a slot names is
+/// resolved through <c>INayaxProductLinkStore</c> and never by comparing this text with a local id.
+/// </para>
+/// </summary>
+public sealed record InventoryCostTransitionProduct(
+    long Id,
+    string Name,
+    int QuantityInStock,
+    decimal AverageUnitCost,
+    string? ExternalProductId);
 
 /// <summary>Whether a stored preview covers one product or every eligible product.</summary>
 public enum InventoryCostTransitionPreviewScope

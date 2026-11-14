@@ -8,7 +8,7 @@ namespace Inventory.Application.Costing;
 /// <param name="ProductName">The product's current name, or <see langword="null"/> when no product with that id is stored.</param>
 /// <param name="FailureCode">
 /// The short failure code the last attempt recorded: <c>data_quality</c> when the product's history
-/// has a fatal costing issue (for example a completed sale with no known opening cost), or
+/// has a fatal costing issue (for example a positive restock with no unit cost), or
 /// <c>product_missing</c> when the product could not be loaded.
 /// </param>
 /// <param name="AttemptCount">How many replays of this work have failed so far.</param>

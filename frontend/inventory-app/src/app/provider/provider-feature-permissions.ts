@@ -68,9 +68,10 @@ export type ProviderPermissionEvidence = Readonly<Record<ProviderFeature, Provid
 
 /**
  * The declared connection checks whose result is evidence about each feature. A check no feature
- * claims - `SignIn`, which is about the credentials rather than about a read, and `Machine` and
- * `MachineLastAlerts`, which no screen depends on yet - is evidence about nothing here, and is
- * never read as evidence about a feature that merely looks similar.
+ * claims - `Machine` and `MachineLastAlerts`, which no screen depends on yet - is evidence about
+ * nothing here, and is never read as evidence about a feature that merely looks similar. A line
+ * naming a *retired* read is evidence about nothing either, and cannot name a feature: the names
+ * below are this build's own (see `nayax-read-areas.ts`, issue #1310).
  */
 export const PROVIDER_FEATURE_CHECKS: Readonly<Record<ProviderFeature, readonly NayaxConnectionCheckName[]>> = {
   machineFleet: ['Machines'],

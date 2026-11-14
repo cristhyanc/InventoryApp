@@ -1,5 +1,6 @@
-import { Component } from '@angular/core';
+import { ChangeDetectorRef, Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { ModalDialogComponent } from './modal-dialog.component';
 
 /**
@@ -75,6 +76,18 @@ describe('ModalDialogComponent (issue #1174)', () => {
 
     const titleId = panel.getAttribute('aria-labelledby');
     expect(panel.querySelector(`#${titleId}`)?.textContent?.trim()).toBe('Edit supplier');
+  });
+
+  it('keeps the reviewed 600px width by default and widens only on request (issue #1311)', async () => {
+    const { fixture, panel } = await render();
+
+    expect(panel.classList.contains('app-dialog-wide')).toBe(false);
+
+    const shell = fixture.debugElement.query(By.directive(ModalDialogComponent));
+    (shell.componentInstance as ModalDialogComponent).size = 'wide';
+    shell.injector.get(ChangeDetectorRef).detectChanges();
+
+    expect(panel.classList.contains('app-dialog-wide')).toBe(true);
   });
 
   it('projects content into the scrollable body and the action row into the footer', async () => {

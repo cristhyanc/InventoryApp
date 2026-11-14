@@ -16,7 +16,8 @@ namespace InventoryApi.Tests.Application.Nayax;
 ///
 /// What this use case is responsible for is tested here rather than through HTTP: that the stored
 /// credentials are the draft's own, that the status comes from that draft's own results, that a run
-/// whose sign-in did not pass stores nothing, that a draft is consumed exactly once, and that the
+/// whose machine list did not pass stores nothing - including a draft written before the machine
+/// list became the gate (issue #1310) - that a draft is consumed exactly once, and that the
 /// claim and the write are inside one transaction that a refusal never commits. The relational
 /// proofs - the conditional delete, two concurrent saves, and a refused save leaving the draft in
 /// place - are in <c>Adapters/Persistence</c>.
@@ -64,15 +65,16 @@ public class SaveNayaxConnectionTests
     }
 
     /// <summary>
-    /// A token that signs in but lacks a permission is a real credential with a gap, so it is stored
-    /// and the status records the gap. Ordinary Nayax operations are still allowed in that state.
+    /// A token that reads the machine list but lacks another permission is a real credential with a
+    /// gap, so it is stored and the status records the gap. Ordinary Nayax operations are still
+    /// allowed in that state.
     /// </summary>
     [Fact]
-    public async Task A_draft_whose_sign_in_passed_beside_a_failure_is_saved_pending_permissions()
+    public async Task A_draft_whose_machine_list_passed_beside_a_failure_is_saved_pending_permissions()
     {
         var fixture = new Fixture();
         var draftId = fixture.StoreDraft(Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
             NayaxConnectionCheckLine.Failed(
                 NayaxConnectionCheck.MachineLastSales,
                 NayaxConnectionCheckFailure.PermissionNotGranted)));
@@ -93,7 +95,6 @@ public class SaveNayaxConnectionTests
     {
         var fixture = new Fixture();
         var draftId = fixture.StoreDraft(Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
             NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
             NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.ProductCatalogue),
             NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.ProductGroups),
@@ -109,17 +110,16 @@ public class SaveNayaxConnectionTests
     }
 
     /// <summary>
-    /// Machine lines left unchecked because the machine list itself was refused are not "no machines
-    /// yet" (issue #681): the business may have plenty, and the refusal is what needs fixing. The
-    /// save records the permission gap, not pending machine checks, so the wizard does not tell the
-    /// Owner to set up machines.
+    /// A machine list that was refused is not "no machines yet" (issue #681), and since issue #1310
+    /// it is not savable either: the machine list is the credential gate, so a token Nayax refused
+    /// it to has not been shown to serve this business at all. Nothing is stored, and the pending
+    /// machine checks are not recorded - the refusal is what needs fixing, not the machine setup.
     /// </summary>
     [Fact]
-    public async Task A_refused_machine_list_is_saved_pending_permissions_without_pending_machine_checks()
+    public async Task A_refused_machine_list_is_not_saved_at_all()
     {
         var fixture = new Fixture();
         var draftId = fixture.StoreDraft(Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
             NayaxConnectionCheckLine.Failed(
                 NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.PermissionNotGranted),
@@ -130,33 +130,35 @@ public class SaveNayaxConnectionTests
             NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineLastSales),
             NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineLastAlerts)));
 
-        var summary = await fixture.Save.Handle(draftId);
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(
+            () => fixture.Save.Handle(draftId));
 
-        Assert.Equal(
-            new NayaxConnectionStatusSummary(NayaxConnectionStatus.PendingPermissions, false),
-            summary);
-        Assert.False(fixture.Connections.Connection!.MachineChecksPending);
+        Assert.Equal(SaveNayaxConnection.MachineListDidNotPassMessage, exception.Message);
+        Assert.Null(fixture.Connections.Connection);
+        Assert.Empty(fixture.Connections.SavedTokens);
+        Assert.Equal(0, fixture.Transactions.Committed);
     }
 
     /// <summary>
-    /// A token that did not sign in has never been shown to work at all, so it is not stored - and
-    /// the transaction is not committed, which is what leaves the draft in place.
+    /// A token whose machine list did not pass has never been shown to serve this business, so it is
+    /// not stored - and the transaction is not committed, which is what leaves the draft in place.
     /// </summary>
     [Theory]
     [InlineData(NayaxConnectionCheckFailure.InvalidOrExpiredToken)]
     [InlineData(NayaxConnectionCheckFailure.NayaxUnavailable)]
     [InlineData(NayaxConnectionCheckFailure.UnexpectedResponse)]
-    public async Task A_draft_whose_sign_in_did_not_pass_is_refused_and_stores_nothing(
+    [InlineData(NayaxConnectionCheckFailure.PermissionNotGranted)]
+    public async Task A_draft_whose_machine_list_did_not_pass_is_refused_and_stores_nothing(
         NayaxConnectionCheckFailure failure)
     {
         var fixture = new Fixture();
         var draftId = fixture.StoreDraft(Report(
-            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.SignIn, failure)));
+            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.Machines, failure)));
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(
             () => fixture.Save.Handle(draftId));
 
-        Assert.Equal(SaveNayaxConnection.SignInDidNotPassMessage, exception.Message);
+        Assert.Equal(SaveNayaxConnection.MachineListDidNotPassMessage, exception.Message);
         Assert.Null(fixture.Connections.Connection);
         Assert.Empty(fixture.Connections.SavedTokens);
         Assert.Equal(1, fixture.Transactions.Begun);
@@ -253,7 +255,7 @@ public class SaveNayaxConnectionTests
 
         var second = fixture.StoreDraft(
             Report(
-                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
                 NayaxConnectionCheckLine.Failed(
                     NayaxConnectionCheck.ProductCatalogue,
                     NayaxConnectionCheckFailure.PermissionNotGranted)),
@@ -297,20 +299,73 @@ public class SaveNayaxConnectionTests
     }
 
     /// <summary>
-    /// A report with no sign-in line at all - which the runner never produces, but a stored string
-    /// could hold - concludes nothing and is refused rather than saved on a guess.
+    /// A report with no machine-list line at all - which the runner never produces, but a stored
+    /// string could hold - concludes nothing and is refused rather than saved on a guess.
     /// </summary>
     [Fact]
-    public async Task A_draft_whose_results_report_no_sign_in_is_refused()
+    public async Task A_draft_whose_results_report_no_machine_list_is_refused()
     {
         var fixture = new Fixture();
         var draftId = fixture.StoreDraft(Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines)));
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.ProductCatalogue)));
 
         await Assert.ThrowsAsync<DomainValidationException>(() => fixture.Save.Handle(draftId));
 
         Assert.Null(fixture.Connections.Connection);
     }
+
+    /// <summary>
+    /// A draft still outstanding from before the machine list became the credential gate (issue
+    /// #1310) is judged by the new rule. Its retired sign-in line - value <c>1</c>, the
+    /// <c>GET devices</c> probe - is ignored: a passed one cannot promote a token whose machine list
+    /// was refused, and a failed one cannot hold back a token whose machine list was read.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_draft_cannot_be_saved_on_a_retired_sign_in_line()
+    {
+        var fixture = new Fixture();
+        var draftId = fixture.StoreDraft(Report(
+            NayaxConnectionCheckLine.Passed(RetiredSignIn),
+            NayaxConnectionCheckLine.Failed(
+                NayaxConnectionCheck.Machines,
+                NayaxConnectionCheckFailure.PermissionNotGranted)));
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(
+            () => fixture.Save.Handle(draftId));
+
+        Assert.Equal(SaveNayaxConnection.MachineListDidNotPassMessage, exception.Message);
+        Assert.Null(fixture.Connections.Connection);
+    }
+
+    /// <summary>
+    /// The other half of the same rule, and the outcome the issue exists for: a legacy draft whose
+    /// <c>GET devices</c> probe was refused for lack of the device-inventory permission, and whose
+    /// machine list and every other declared check passed, saves as <c>Ready</c>. The retired line
+    /// is not a failure to report, so it does not even record permissions as pending.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_draft_refused_only_the_retired_devices_probe_is_saved_ready()
+    {
+        var fixture = new Fixture();
+        var lines = new List<NayaxConnectionCheckLine>
+        {
+            NayaxConnectionCheckLine.Failed(RetiredSignIn, NayaxConnectionCheckFailure.PermissionNotGranted),
+        };
+        lines.AddRange(NayaxConnectionCheckPolicy.All.Select(NayaxConnectionCheckLine.Passed));
+
+        var draftId = fixture.StoreDraft(new NayaxConnectionCheckReport(lines, MachineCount: 1));
+
+        var summary = await fixture.Save.Handle(draftId);
+
+        Assert.Equal(new NayaxConnectionStatusSummary(NayaxConnectionStatus.Ready, false), summary);
+        Assert.Equal(NayaxConnectionStatus.Ready, fixture.Connections.Connection!.Status);
+    }
+
+    /// <summary>
+    /// The retired <c>SignIn</c> check, as a stored report still names it: the number the enum
+    /// reserved and no longer declares.
+    /// </summary>
+    private const NayaxConnectionCheck RetiredSignIn = (NayaxConnectionCheck)1;
 
     /// <summary>
     /// A report of exactly these lines. The machine count is irrelevant to a save - what decides is

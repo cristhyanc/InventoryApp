@@ -1,11 +1,9 @@
 using Inventory.Application.Imports;
-using Inventory.Application.Time;
 using Inventory.Domain.Imports;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Imports;
-using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Infrastructure.Imports;
 using InventoryApi.Tests.Swagger;
@@ -290,12 +288,6 @@ public class ImportsControllerReimbursementReportTests
                 Mock.Of<Inventory.Application.Costing.ICostSale>(),
                 Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
-            new ImportPendingReimbursementXmlFiles(
-                Mock.Of<IPendingReimbursementXmlSource>(),
-                new ImportReimbursementXmlFile(
-                    Mock.Of<IImportedReimbursementStore>(),
-                    Mock.Of<IClock>(),
-                    new FakeProviderDataCoverageStore())),
             new UploadReimbursementReportArchive(
                 new Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader(
                     NullLogger<Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader>.Instance),

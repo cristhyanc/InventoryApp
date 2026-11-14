@@ -1,7 +1,7 @@
 namespace Inventory.Application.Imports;
 
 /// <summary>
-/// The narrow persistence port the pending-XML import needs (issue #299): the file-hash
+/// The narrow persistence port the reimbursement report import needs (issue #299): the file-hash
 /// idempotency question, and one atomic write of a file with its reimbursement graph.
 /// </summary>
 public interface IImportedReimbursementStore

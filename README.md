@@ -910,7 +910,7 @@ The application stores almost no personal data. It holds a vending business's ow
 - **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
 - **An invite's note is free text an Owner typed** (issue #531), so it may well name the person being invited. It is stored on the invite row, shown back to that business's own Owners on the invite list, and nothing else: it decides nothing, nothing looks an invite up by it, and it is deliberately absent from the invite audit event. An invite stores no name and no email address of the person it is for — only the role it grants and the Entra pair of the Owner who created it.
 - **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
-- **A scanned receipt is sent to Anthropic to be read, and this application stores none of it** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **Nothing is stored by this application as a result**: not the file, not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it and forgotten. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. Since issue #1164 the business's own [monthly scan count](#100-scans-a-month-issue-1164) is stored too, and it is a count in the same sense — a business, a month and a number, with no column that could hold a file name, a supplier, a product, an amount or any part of a draft. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)), and no other feature sends anything to Anthropic. **Businesses must be told this before the feature is launched**, which belongs with the terms and privacy text the Scan receipt screen (issue #1166) is released behind.
+- **A scanned receipt is sent to Anthropic to be read, and this application stores none of it** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **Nothing is stored by this application as a result**: not the file, not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it and forgotten. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. A scan that ended as unavailable also records why (issue #1236): the status the reading service answered, its own error type and message — its message capped at 200 characters on one line, and withheld entirely when it can be seen to quote what the request carried (a product or supplier name of the business, of any length, a piece of the file, part of the key, or a distinctive piece of the instructions sent with it) — and the request id. That message is the one piece of free text any scan log holds; it is the service's own words rather than the receipt's, and what the check cannot recognise — an excerpt too short to tell apart from the service's own wording — is recorded in [docs/architecture.md § Receipt scanning](docs/architecture.md#receipt-scanning-issue-975) rather than claimed away. The error body itself is never logged, because an error body can quote the request back. Since issue #1164 the business's own [monthly scan count](#100-scans-a-month-issue-1164) is stored too, and it is a count in the same sense — a business, a month and a number, with no column that could hold a file name, a supplier, a product, an amount or any part of a draft. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)), and no other feature sends anything to Anthropic. **Businesses must be told this before the feature is launched**, which belongs with the terms and privacy text the Scan receipt screen (issue #1166) is released behind.
 - **A platform administrator may be granted a time-limited, audited, read-only look at a business's data** (issues #550 and #551). A [support session](#super-admin-support-sessions) records which business, which administrator, why they needed to look, and when the session ran and ended; it lasts 60 minutes, only one may be open at a time, and the record cannot be edited or deleted by the surface that creates it. A request made inside one reads that business and can change nothing — not a row, not a document — and never uses the business's Nayax credentials; it cannot see the members page at all, so members' names and email addresses stay private. Every such request is audited with the endpoint it reached, never with what it read. **Businesses must be told this is possible**, which v1 does in the terms and privacy text; notifying a business's Owners in the app is a documented follow-up. The reason the administrator typed is stored and logged on purpose: it is what makes such access reviewable afterwards.
 
 See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.
@@ -1307,7 +1307,7 @@ Super Admin menu switch as Imports — switching `admin.imports` off hides both 
 [Super Admin menu visibility](#super-admin-menu-visibility)). Its address still opens if you go to it
 directly, and every endpoint behind it checks the same access itself.
 
-The page has three things on it:
+The page has two things on it:
 
 - **Upload the reimbursement report.** Choose the ZIP and press **Upload**. Upload it **exactly as
   Nayax emails it** — do not unzip it, rename it or take files out of it. An accepted upload says so
@@ -1319,12 +1319,13 @@ The page has three things on it:
   failed file and the short reason recorded for it. While an upload is `Queued` or `Processing` the
   list refreshes itself; once nothing is running it stops, and leaving the page and coming back shows
   the current state. Nothing financial is on the page: no figure, no payment detail and no XML.
-- **Import XML files.** The older pending-folder import, moved here unchanged from Admin → Imports:
-  it processes reimbursement XML files already on the server and reports how many files and
-  reimbursements it imported.
 
-Both uploads and the pending-XML import are unavailable during a read-only support session, which the
-page says; the recent uploads are still shown, because reading them changes nothing.
+Uploading is the only way a reimbursement report enters the app (issue #1237). The older **Import XML
+files** button, which imported reimbursement XML files somebody had put on the server, is gone; if a
+report has not been imported yet, upload it here.
+
+Uploading is unavailable during a read-only support session, which the page says; the recent uploads
+are still shown, because reading them changes nothing.
 
 ### What you upload, and what is refused
 
@@ -2303,8 +2304,9 @@ other form page in the application behaves.
 The Purchases list shows **10 purchases per page** by default, newest first, with a per-page choice of 5, 10,
 20, 50 or 100 and **Previous** / **Next** below the table (issue #1209). Every visit starts on page 1. After a
 Delete or an Add document the list stays on the page you were on, or moves to the last page if that page no
-longer exists. Document thumbnails are downloaded only for the purchases on the page shown, so a long purchase
-history no longer slows the page down.
+longer exists. The list itself never downloads a receipt (issue #1234): a row with a document shows a
+lightweight attachment icon built from the list's own metadata, whatever the page size or page shown, and the
+file is fetched only when you open it, exactly as it always has been.
 
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
 both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue
@@ -2418,6 +2420,28 @@ and record it through Add Purchase as usual, which is still where a purchase is 
   just an edit away. The line always keeps the text the receipt printed.
 - **If the receipt cannot be read** you are told so and nothing else happens: enter the purchase manually.
   There is no automatic retry, because a retry is a second charge.
+- **When a scan answers "Receipt scanning is temporarily unavailable", the reason is in the App Service
+  log** (issue #1236). Open the log stream for the API and search **`Receipt scan for business`**: the scan's
+  own line says it ended as `Unavailable`, and the warning beside it says why — the HTTP status the reading
+  service answered, the error type and message it gave (its message cut to the first 200 characters, on one
+  line), and the `request id`, which is what identifies the failed call to the service. If the service's
+  message quotes anything that was sent — one of your product or supplier names, even a two-letter one, whatever
+  case it is quoted in; a piece of the file; part of the key; or one of the app's own field names, such as
+  `unitsPerPack` — the message is left
+  out and the warning says `message withheld: True`; the status, error type and request id are still there, so
+  the service can still be asked about the call. That choice errs towards leaving the message out: a service
+  message that happens to name a field the app's own instructions use is left out as well, while a plain
+  sentence that shares only ordinary words with them ("Schema is too complex") is kept.
+  When nothing was
+  answered at all the warning names that instead — a network failure, an answer that was not readable, or an
+  answer with nothing in it — and records no status, because none was given. You still see only
+  "Receipt scanning is temporarily unavailable": the service's own wording is for the log. **Nothing of the
+  receipt is in either line** — no file, no file name, no product or supplier name and no line of the receipt;
+  the only words from outside are the reading service's own error message, and that message is left out
+  whenever it can be seen to quote what was sent. What cannot be told apart from the service's own wording —
+  a quote too short to recognise — is written down in
+  [docs/architecture.md § Receipt scanning](docs/architecture.md#receipt-scanning-issue-975) rather than
+  promised away.
 
 Receipt scanning is off until a key is configured — see
 [`ReceiptScanning__ApiKey`](#configuration-and-secrets).
@@ -2681,6 +2705,15 @@ does not manage.
   fields, values, defaults, labels and validation, the same category picker, the same
   support-session restriction, and the same two writes described next. **Editing** a product keeps
   its existing layout, because a provider-managed name and category are locked there.
+- **A new product with opening stock needs its Initial Unit Cost** (issue #1238). In **Opening
+  inventory**, as soon as **Opening Stock** is above zero, **Initial Unit Cost** is required: the
+  field is marked with a `*`, **Create product** stays unavailable until it is filled, and the server
+  refuses the create with the same sentence. Enter **0** if the stock cost nothing — zero is an
+  answer, and it is accepted. Leave **Opening Stock** at zero and the cost stays optional, exactly as
+  before. The reason is that opening stock is recorded as a costed stock movement: a movement with no
+  cost cannot be replayed, so a product created that way could not afterwards be refilled, adjusted,
+  counted or purchased at all. Nothing about **Editing** a product changes — the Opening inventory
+  section only appears while creating one.
 - **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
   offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
   with the same meanings and the same help. The rule is its own resource, so creating a product with
@@ -3292,7 +3325,7 @@ price** (`machinePrice`, from Nayax) and the machine pages' suggested prices, a 
 unit cost**, a **supplier order line's agreed price**, the amount on a **recorded sale**, and a
 product's `averageUnitCost`, costing quantity and inventory value are all exactly as they were.
 Purchases, supplier orders, their suppliers, quantities, totals, GST and receipt attachments are
-untouched, the initial unit **cost** you may give a new product still records its opening stock
+untouched, the initial unit **cost** you give a new product still records its opening stock
 movement, and no cost, average cost, inventory value, COGS, recorded sale or reorder figure is
 recalculated or backfilled.
 
@@ -3570,52 +3603,85 @@ costing value that was never recorded in the first place.
 ## Connecting Nayax (Admin page)
 
 **Admin → Integrations** (called Nayax Settings until issue #729) is where an Owner connects this
-business's own Nayax account. Only an
-Owner can reach it, and the connection wizard at the top of the page walks through six steps; the
-estimated processing fee rate is configured further down the same page and is unrelated to the
-connection.
+business's own Nayax account. Only an Owner can reach it. The **Nayax connection** card at the top
+of the page shows the stored connection and its status, **Re-test this connection**, and one button
+that starts setup: **Connect Nayax** when nothing is stored, **Replace connection** when something
+is. Setup opens as a **Connect Nayax** dialog over the page (issue #1311): centred on a desktop and a
+full-height panel on a phone, closed with Escape or its Close control, which returns focus to the
+button that opened it. The estimated processing fee rate is configured further down the same page
+and is unrelated to the connection.
 
-1. **Operator ID.** In Nayax Core: open **Operator** in the left sidebar, select your operator and
-   search; the numeric id is listed under **Company Info** as **Operator Id**. It is not a secret and
-   is stored with the connection.
-2. **Create a Lynx token.** In Nayax Core, click your username in the top right corner, then
-   **Account Settings** › **Security and Login** (the second tab) › **User Tokens** (below Your
-   Trusted Devices) › **Add Token**, and choose the **Lynx Token** type. If a Lynx token is already
-   listed, use **Show Token** next to it and copy that instead.
-3. **Paste the token and press Test connection.** The token field is write-only: it is sent once
-   with the test and cleared as soon as the test comes back, and it is never kept in the browser —
-   no local storage, no session storage, no URL. Testing stores nothing yet, changes no Nayax data,
-   and leaves any connection you already have exactly as it is, so testing a bad token cannot break
-   a working one.
-4. **Read the checklist.** The server calls each Nayax endpoint this application reads and reports
-   every one on its own line: a tick for granted, a cross with the cause for refused, and **Not
-   checked** for the machine-scoped lines when the account has no machines yet (or when the machine
-   list itself could not be read — the two are shown differently, because they need different
-   actions). An untested permission is never shown as a granted one. The restock write call is
-   deliberately not tested: a connection test must not change your Nayax data, so it is checked the
-   first time a refill is actually pushed.
-5. **Ask Nayax for anything refused.** Nayax grants a token's permissions, so when a line is
-   refused for lack of a permission the wizard composes a ready-to-copy request naming the operator
-   id you tested and every such area with its cause (never the token itself). Raise it in the Nayax
-   support portal, <https://nayax.service-now.com/csm>; if that gets no answer,
-   <integration-support@nayax.com> is the secondary contact. A line refused for another reason gets
-   its own advice instead of a permission request: an invalid or expired token needs a new token, an
-   operator id Nayax does not match needs checking, and an unavailable Nayax needs another try. This
-   step is skipped when nothing failed.
-6. **Save the connection.** Saving stores the operator id and the token the server just tested — the
-   page sends back only the server's reference to that test, never the token again. A token that did
-   not sign in to Nayax cannot be saved, and a test result older than fifteen minutes has to be run
-   again first. Saving with some areas still refused records the connection as **Permissions
-   pending**: the features that need those areas keep saying so until Nayax grants them and a
-   re-test confirms it.
+The dialog has three steps. The two input steps put **In Nayax Core** (Nayax's own instructions, a
+link to the official Nayax guide that shows each screen, and an **Open Nayax Core** link — all
+opening in a new tab) beside **In Restockroo** (the
+field); on a phone the guidance is stacked above the field, and Back and the current action stay in
+a fixed row at the bottom.
 
-**Re-testing.** The stored connection is shown above the wizard with its status — Ready, Permissions
+1. **Operator ID.** In Nayax Core: go to **Operator** in the left sidebar, select your operator and
+   click **Search**; the numeric id is listed under **Company Info** as **Operator Id**. It is not a
+   secret and is stored with the connection.
+2. **Lynx token.** In Nayax Core, click your username in the top right corner, then **Account
+   Settings** › **Security and Login** (next to Account) › **User Tokens** (below Your Trusted
+   Devices). If a Lynx token is listed, use **Show Token** next to it and copy it; if not, choose
+   **Add Token** and select **Lynx Token**. Paste it and press **Test connection**. The token field
+   is write-only: it is sent once with the test and cleared as soon as the test comes back, and also
+   when you go Back or close the dialog; it is never kept in the browser — no local storage, no
+   session storage, no URL. Testing stores nothing, changes no Nayax data, and leaves any connection
+   you already have exactly as it is. Two outcomes keep you on this step with an empty field to paste
+   again: **Nayax refused this token** (it is invalid or has expired, so copy or add a token again)
+   and **Nayax did not answer in time** (nothing was learned, so try again in a few minutes).
+3. **Review & save.** The server calls each Nayax endpoint this application reads — seven of them,
+   starting with the machine list — and reports every one on its own line: a tick for granted, a
+   cross with the cause for refused, and **Not checked** for the machine-scoped lines when the
+   account has no machines yet (or when the machine list itself could not be read — the two are shown
+   differently, because they need different actions). An untested permission is never shown as a
+   granted one. Nothing asks for access to Nayax's **device hardware inventory**: the machine list is
+   what decides whether the token can be used. The restock write call is deliberately not tested: a
+   connection test must not change your Nayax data, so it is checked the first time a refill is
+   actually pushed. Above the checklist the review says one of:
+   - **Connection test passed.** Save it.
+   - **Connection test passed. No machines found yet.** Save it, and re-test once your machines are
+     set up in Nayax.
+   - **Connection test passed, with some permissions refused.** You can still save; the connection
+     is recorded as **Permissions pending** and the features that need those areas keep saying so
+     until Nayax grants them and a re-test confirms it. Below the checklist is a ready-to-copy
+     request naming the operator id you tested and only the areas refused for lack of a permission
+     (never the token). Raise it in the Nayax support portal, <https://nayax.service-now.com/csm>;
+     if that gets no answer, <integration-support@nayax.com> is the secondary contact. A line
+     refused for another reason gets its own advice instead: an operator id Nayax does not match
+     needs checking, and an unavailable Nayax needs another try.
+   - **This token cannot be saved.** Its machine list could not be read; the checklist says why.
+     Nothing is stored or changed — the connection you already have keeps its status.
+   - **This test result has expired.** A tested token is kept for fifteen minutes; **Test again**
+     takes you back to paste it again.
+
+   **Save connection** stores the operator id and the token the server just tested — the page sends
+   back only the server's reference to that test, never the token again. **Nayax connected** is shown
+   only once the save succeeded. Closing the dialog before saving stores nothing and keeps nothing of
+   the attempt; a test still running when you close is abandoned and its answer ignored.
+
+The steps are Nayax's own, from its developer portal guides — [How to find your Operator ID in
+Nayax Core](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/request-access#how-to-find-your-operator-id-in-nayax-core),
+[Create an operator: verify creation](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/operator/create-operator#verify-creation)
+and [Lynx API security: access token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token)
+— and each guide is linked beside its step as the place to see the screens. The dialog embeds **no
+Nayax screenshot**: every screenshot Nayax publishes for these screens is from its demo account and
+shows an account identifier (a user's name, an operator name or an operator id, and on the Show
+Token pop-up a token and its QR code), Nayax's portal states no terms that would allow a redacted
+copy, and so the written steps carry the instructions on their own.
+
+**Re-testing.** The stored connection is shown on the card with its status — Ready, Permissions
 pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
 same read-only checks against the token already stored. Re-test works in every status, including
 Needs attention, which is the state it exists to recover from. When the connection was saved before
 any machine existed in the Nayax account, the page asks you to **re-test once your machines are set
-up**, because those permissions were never verified. If Nayax cannot be reached, the stored status is
-left exactly as it was and the page says so rather than concluding anything. If the token was
+up**, because those permissions were never verified. A re-test moves the stored status only when it
+learns something about the token: the machine list answering normally, or Nayax rejecting the token
+itself. If Nayax cannot be reached, if it answers something unrecognised, or if it refuses the
+machine list for lack of a permission, the stored status and its last-tested time are left exactly as
+they were and the page says so. A refused machine list gets its own guidance — Nayax answered, so it
+asks you to request read access to the machine list from Nayax and re-test — while the other two
+ask you to try again in a few minutes. If the token was
 replaced while a re-test was running, the result is discarded and the page asks you to run the test
 again, so the status always describes the token actually stored.
 

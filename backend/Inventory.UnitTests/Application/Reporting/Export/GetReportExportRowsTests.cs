@@ -3,6 +3,7 @@ using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
+using InventoryApi.Tests.Application.Reporting.Shared;
 using InventoryApi.Tests.Application.Reporting.Transactions;
 using Xunit;
 
@@ -245,9 +246,7 @@ public class GetReportExportRowsTests
         FakeBookkeepingReportFactsProvider.Complete(
             sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0) with
         {
-            SalesCoverage = [],
-            SettlementCoverage = [],
-            ContainsSalesRows = false,
+            Coverage = TestReportCoverage.Missing(),
             ImportedContainsRows = false,
             ImportedHasNetSettlement = false,
             ImportedNetSettlement = 0m,

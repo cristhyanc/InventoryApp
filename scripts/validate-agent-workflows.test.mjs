@@ -7,6 +7,11 @@ import './agent-architecture-handoff.test.mjs';
 import './agent-pr-guard.test.mjs';
 import './agent-outcomes.test.mjs';
 import './agent-branch-cleanup.test.mjs';
+import './agent-trusted-context.test.mjs';
+import './agent-publish-hardening.test.mjs';
+import './agent-result-handoff.test.mjs';
+import './workflow-structure.test.mjs';
+import './agent-workflow-reliability.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -100,10 +105,15 @@ describe('agent branch cleanup', () => {
 
   it('rejects running the cleanup helper from the agent-edited tree', () => {
     const implement = readRepositoryFile(implementPath).replace(
-      'git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"\n          bash "$cleanup"',
-      'bash scripts/agent-branch-cleanup.sh',
+      'bash "$cleanup" "https://github.com',
+      'bash scripts/agent-branch-cleanup.sh "https://github.com',
     );
     assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [implementPath]: implement })), /storage cleanup/);
+    const fromAgentRepository = readRepositoryFile(implementPath).replace(
+      'gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-branch-cleanup.sh?ref=$GITHUB_WORKFLOW_SHA" > "$cleanup"',
+      'git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"',
+    );
+    assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [implementPath]: fromAgentRepository })), /storage cleanup/);
   });
 
   it('rejects a closed-PR cleanup that checks out pull request code', () => {
@@ -336,7 +346,7 @@ describe('preserved guards', () => {
 
   it('has architecture finalization label the PR and dispatch exact-SHA validation only after success', () => {
     const finalize = architectureWorkflow.slice(architectureWorkflow.indexOf('  finalize:\n'));
-    assert.ok(finalize.includes('ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}'));
+    assert.ok(finalize.includes("ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result != 'success' && needs.architecture.result || needs.architecture-publish.result }}"));
     assert.ok(finalize.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
     assert.ok(finalize.includes('gh workflow run validate.yml'));
     assert.ok(finalize.includes('-f dispatch_review=true'));
@@ -559,7 +569,7 @@ describe('documentation-impact gate: review and repair workflows', () => {
     }
     assertGateRejects({ [repairPath]: removeAll(repairWorkflow, 'Bash(gh pr edit *),') }, /disallowed tools: missing required text: Bash\(gh pr edit \*\)/);
     assertGateRejects(
-      { [repairPath]: replaceOnce(repairWorkflow, '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *)', '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh pr edit *)') },
+      { [repairPath]: replaceOnce(repairWorkflow, 'Bash(gh run view *),Bash(gh run list *)"', 'Bash(gh run view *),Bash(gh run list *),Bash(gh pr edit *)"') },
       /allowed tools: contains forbidden text: gh pr edit/,
     );
   });
@@ -621,7 +631,7 @@ describe('architecture pass contract', () => {
   });
 
   it('requires bounded retry for transient GitHub App Git authorization denials', () => {
-    for (const required of ['delays=(0 2 5 10)', 'sleep "$delay"', "grep -Eqi '403|Permission to .* denied'", 'core.hooksPath=/dev/null', 'push "$remote" "$refspec"']) {
+    for (const required of ['delays=(0 2 5 10)', 'sleep "$delay"', "grep -Eqi '403|Permission to .* denied'", 'core.hooksPath=/dev/null', '"$remote" "$source_sha:$destination"']) {
       const weakened = replaceOnce(appPushRetryScript, required, '# removed retry contract');
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [appPushRetryPath]: weakened }) }), /git-push-with-app-retry\.sh: missing required text/);
     }
@@ -662,7 +672,7 @@ describe('architecture pass contract', () => {
     for (const required of [
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
       '[ -z "$(git ls-files -- .agent-run-status)" ]',
-      '[ "$(cat .agent-run-status)" = "blocked" ]',
+      '[ "$(cat "$AGENT_METADATA/run-status")" = "blocked" ]',
       'echo "blocked=true"', '.agent-pr-title', '.agent-pr-body.md', 'echo "ready=true"',
       'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}', '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {
@@ -685,7 +695,7 @@ describe('architecture pass contract', () => {
   });
 
   it('rejects an architect allowed to edit the PR description', () => {
-    const unsafe = replaceOnce(architectureWorkflow, 'Bash(gh pr list *),Bash(gh pr comment *)', 'Bash(gh pr list *),Bash(gh pr comment *),Bash(gh pr edit *)');
+    const unsafe = replaceOnce(architectureWorkflow, 'Bash(gh pr comment ${{ needs.context.outputs.pr_number }} *)"', 'Bash(gh pr comment ${{ needs.context.outputs.pr_number }} *),Bash(gh pr edit *)"');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: unsafe }) }), /agent-architecture.yml architect allowed tools/);
   });
 });

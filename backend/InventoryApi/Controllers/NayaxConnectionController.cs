@@ -116,8 +116,8 @@ public sealed class NayaxConnectionController : ControllerBase
     /// </summary>
     /// <response code="200">The credentials were stored; the body reports the resulting state.</response>
     /// <response code="400">
-    /// No draft id was submitted, or the tested token did not sign in to Nayax, so nothing was
-    /// stored.
+    /// No draft id was submitted, or the tested token could not read this business's machine list
+    /// from Nayax, so nothing was stored.
     /// </response>
     /// <response code="409">
     /// There was no such draft to claim: it was already saved, has expired, or belongs to another
