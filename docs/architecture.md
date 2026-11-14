@@ -9076,6 +9076,11 @@ Physical storage stock and costing inventory answer different questions:
 - `QuantityInStock`: stock physically held in storage/home and available to refill machines.
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
+- `CostingVersion`: the version of those three values, not a value of its own (issue #1245). Every cost
+  rebuild moves it on by one in the same transaction as the position it writes, so a writer that rebuilt
+  a product's cost while a sales drain was replaying it can be told apart from one that did not. It
+  holds no quantity, cost or value and is read by nothing but that comparison (see
+  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)).
 
 A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Sales that dispensed a unit and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
 
@@ -9103,9 +9108,12 @@ its cost replay is a longer step afterwards, so the same transaction that stores
 `PendingInventoryCostRebuilds` row for every product it affected — one row per
 `(BusinessId, ProductId)`, whose `FromInstantUtc` only ever moves *earlier* — and the replay removes
 each row in the same transaction as the costs it rebuilt, and only while that row still holds the
-`Revision` it replayed: the replay itself runs outside the write lock, so a sale another writer
-recorded meanwhile — at *any* instant, which is why the comparison is a revision and not the instant —
-is replayed by the next drain instead of being cleared by this one (see
+`Revision` it replayed *and* the product still holds the `CostingVersion` it replayed over: the replay
+itself runs outside the write lock, so a sale another writer recorded meanwhile — at *any* instant,
+which is why the comparison is a revision and not the instant — is replayed by the next drain instead
+of being cleared by this one, and a stock write, purchase edit or purchase delete committed meanwhile
+is not overwritten by it, because every cost rebuild moves `Products.CostingVersion` in the same
+transaction as the position it writes (issue #1245; see
 [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). A replay that fails keeps its
 row with its attempt count and a short failure code and is retried by the next run of either sales
 path. That
@@ -18988,21 +18996,23 @@ that product's costing position stayed stale until its next sale. A queue reader
 - The row is written in the **same transaction as the sale**, and removed in the **same transaction as
   the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
   disagree.
-- **A drain acknowledges only the work it actually replayed.** The replay runs *outside* the write
-  lock on purpose (step 8 above), so another writer — the other sales path, or a second drain, since
-  both drain every pending row of the business — can record another sale for the same product and
-  commit while it is running, *after* the replay has already read the costing inputs it is computing
-  from. The drain therefore reads the row again *inside* the write-locked transaction that removes it,
-  where no other writer can commit between the read and the removal, and removes it only while it
-  still holds the `Revision` that was replayed. When it does not, the transaction commits nothing at
-  all: the costs that replay staged were computed before the newer sale existed, so they are discarded
-  rather than written over what the next drain will write, the product is reported as still pending —
-  which it is — and the row stays as the standing record of what has to be replayed. Removing it by
-  key instead would have thrown the newly arrived work away for good, which is the one failure this
-  table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings against a real database
-  **file** with two connections: an earlier sale, a sale at or after the replayed instant, and two
-  drains of one row.
-- **`Revision` is the comparison, and the instant cannot be.** Recording a pending rebuild only ever
+- **A drain acknowledges only the work it actually replayed, over the history it replayed.** The
+  replay runs *outside* the write lock on purpose (step 8 above), so another writer — the other sales
+  path, a second drain (both drain every pending row of the business), or any writer that changes the
+  product's stock or purchases — can commit while it is running, *after* the replay has already read
+  the costing inputs it is computing from. The drain therefore reads both facts again *inside* the
+  write-locked transaction that removes the row, where no other writer can commit between the read and
+  the removal, and removes it only while the row still holds the `Revision` that was replayed **and**
+  the product still holds the `CostingVersion` that was replayed over. When either has moved, the
+  transaction commits nothing at all: the costs that replay staged were computed before the newer work
+  existed, so they are discarded rather than written over what the next drain will write, the product
+  is reported as still pending — which it is — and the row stays as the standing record of what has to
+  be replayed. Removing it by key instead would have thrown the newly arrived work away for good, which
+  is the one failure this table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings
+  against a real database **file** with two connections: an earlier sale, a sale at or after the
+  replayed instant, two drains of one row, a purchase, a purchase *edit*, and two drains of one
+  scope with a purchase edit committed between them.
+- **`Revision` is the comparison for another sale, and the instant cannot be.** Recording a pending rebuild only ever
   moves `FromInstantUtc` earlier, so a sale at or after the instant the row already holds adds work
   without changing any other column — an acknowledgement that compared the instant would succeed,
   write costs computed without that sale in them and delete the work recorded for it, leaving the newer
@@ -19013,6 +19023,44 @@ that product's costing position stayed stale until its next sale. A queue reader
   a *failed attempt* deliberately moves neither the instant nor the revision: an attempt is evidence
   about a replay, not new work, and invalidating another drain's claim for it would discard a replay
   that is still correct.
+- **`Revision` answers only for another sale, and `Product.CostingVersion` answers for everything
+  else** (issue #1245, finding INV-08 of audit #1222). Only a sale enqueues a pending rebuild, so a
+  stock write, a purchase edit, a purchase delete, a Take Inventory count or a refill changes the very
+  history a running replay computed from while leaving that row at the revision the claim holds. The
+  drain would then write a costing position with the newer write left out of it — 21 units worth $54
+  overwritten by the 9 units worth $18 the replay had computed before the purchase existed — and
+  nothing would be left to say so until the product's next rebuild. `Products.CostingVersion` is
+  therefore a counter the product carries, starting at `0` and moved on by one in the **same
+  transaction** as every rebuilt costing position: `EfInventoryCostLedgerStore.StageProductPosition`
+  is the one place that writes either, every cost rebuild ends in a call to it, and a dry run stages
+  neither. The drain records the version when it claims the product and the acknowledgement compares
+  it in the database's own `WHERE` clause, untracked — the drain's context holds its own staged
+  position, whose version is one ahead of the stored one by construction. A product that no longer
+  exists is not a changed version, so a row naming one is still cleared. A latest-movement id could
+  not do this job: a purchase edit rewrites a movement's quantity, cost or instant *in place* and adds
+  no new one. The column records no quantity, cost or value, needs no backfill (`0` is right for every
+  existing product, because what is compared is whether the value changed and never what it is), and
+  is deliberately off the published `Product` payload. Forced backfill tools and the repair fingerprint
+  are a separate task (issue #1261).
+- **Each claim's replay starts from the stored costing inputs, which is what makes that comparison
+  mean anything on the second drain of one scope** (issue #1245). A drain runs more than once in one
+  scope — the hourly reconciliation drains before the synchronization and again after the comparison,
+  and the synchronization drains as well — and a successful acknowledgement saves the replay and
+  leaves its product, its stock movements and its sales *tracked*. EF Core answers a later tracking
+  query for a row it already tracks with the instance it holds and does not refresh that instance's
+  values, so the drain detaches those three before every claim (`ForgetTrackedCostingInputs`, the
+  costing counterpart of the pending row's own `ForgetTracked`). Without it, the second drain replayed
+  a purchase edit's product over the unit cost from *before* the correction and staged the version the
+  first drain had written — which is the value its own fresh claim already held, so the comparison
+  passed, the row was removed with a position computed from superseded inputs, EF's partial-column
+  update left the stored value and average disagreeing with each other, and the persisted version
+  repeated instead of advancing, hiding the whole thing from the next claim too. Reading the inputs
+  fresh makes the staged version the stored one plus one, so **a committed rebuild always leaves the
+  version ahead of the claim it committed against** and anything that moved it in between fails the
+  comparison and is discarded. The detaching belongs to the drain and not to
+  `EfInventoryCostLedgerStore`: a purchase create rebuilds the cost over movements it has staged and
+  not yet saved, and that replay must see them. `NayaxSqsConcurrencyTests` covers two drains on one
+  context with a purchase edit and the next sale committed through another context between them.
 - A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
   the earlier instant covers the later one, and the other way round would silently skip a sale's effect
   on cost.

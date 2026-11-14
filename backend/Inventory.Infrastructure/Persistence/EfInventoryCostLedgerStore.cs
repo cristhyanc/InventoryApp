@@ -139,6 +139,24 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         }
     }
 
+    /// <summary>
+    /// Stages the rebuilt position on the product, and moves its
+    /// <see cref="Product.CostingVersion"/> on by one with it (issue #1245).
+    ///
+    /// <para><strong>Why the version is moved here and nowhere else.</strong> This is the one method
+    /// that writes a product's costing position, and every cost rebuild - a stock write, a purchase
+    /// create, a purchase edit, a purchase delete, a Take Inventory count, a refill, an inventory-cost
+    /// transition and a costing repair - ends in a call to it. Moving the version here therefore makes
+    /// "this product's cost was rebuilt" and "the version says so" one fact in one
+    /// <c>SaveChanges</c>, rather than a rule each of those writers has to remember separately. A dry
+    /// run stages no position (issue #362) and so moves nothing, which is right: the version says a
+    /// rebuild was <em>written</em>, and invalidating a drain's claim for a preview would discard a
+    /// replay that is still correct.</para>
+    ///
+    /// <para>It is incremented from the loaded row rather than assigned, so the value is only ever
+    /// different from the one the caller's own ledger read saw - which is the whole of what
+    /// <c>EfLatestNayaxSalesStore.AcknowledgeAsync</c> compares. Nothing reads it as a count.</para>
+    /// </summary>
     public void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position)
     {
         ArgumentNullException.ThrowIfNull(position);
@@ -151,6 +169,7 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         product.CostingQuantity = position.CostingQuantity;
         product.InventoryValue = position.InventoryValue;
         product.AverageUnitCost = position.AverageUnitCost;
+        product.CostingVersion++;
         product.UpdatedAt = DateTime.UtcNow;
     }
 

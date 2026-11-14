@@ -393,31 +393,30 @@ public class DropProviderIdentityLinkTablesMigrationTests
         {
             db.Categories.Add(new Category { Id = 55, Name = "Snacks", ExternalCategoryId = "10" });
             db.Categories.Add(new Category { Id = 56, Name = "Local only" });
-            db.Products.Add(new Product
-            {
-                Id = 5001,
-                Name = "Chips",
-                CategoryId = 55,
-                ExternalProductId = "100",
-            });
-            db.Products.Add(new Product { Id = 5002, Name = "Locally created", CategoryId = 56 });
         });
 
         await SaveAsAsync(options, BusinessB, db =>
         {
             db.Categories.Add(new Category { Id = 11, Name = "Drinks", ExternalCategoryId = "10" });
-            db.Products.Add(new Product
-            {
-                Id = 200,
-                Name = "Cola",
-                CategoryId = 11,
-                ExternalProductId = "100",
-            });
         });
 
+        // The products are seeded with SQL rather than through the EF model, for the reason the sale
+        // below is: this test stops at an older schema, and a column a later additive migration adds
+        // to Products (issue #1245's CostingVersion) is in the model and not here. Their owning
+        // business is therefore stated rather than stamped, and each one is inserted after its own
+        // business's category.
         await ExecuteAsync(
             connection,
             """
+            INSERT INTO Products (Id, BusinessId, Name, CategoryId, ExternalProductId, AverageUnitCost,
+                                  QuantityInStock, LowStockThreshold, RestockTo, IsActive, GstRule,
+                                  CreatedAt, UpdatedAt)
+                VALUES (5001, 1, 'Chips', 55, '100', 0, 0, 0, 0, 1, 0,
+                        '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+                       (5002, 1, 'Locally created', 56, NULL, 0, 0, 0, 0, 1, 0,
+                        '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+                       (200, 2, 'Cola', 11, '100', 0, 0, 0, 0, 1, 0,
+                        '2026-01-01 00:00:00', '2026-01-01 00:00:00');
             INSERT INTO NayaxSales (BusinessId, TransactionID, MachineID, SettlementValue,
                                     MachineAuthorizationTime, CostSource, CostingStatus, Provider,
                                     ProviderProductIdIsRaw, ProductId)
