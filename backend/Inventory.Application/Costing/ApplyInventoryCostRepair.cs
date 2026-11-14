@@ -21,8 +21,10 @@ namespace Inventory.Application.Costing;
 /// ordering rather than a timestamp comparison (see <see cref="CostingRepairPolicy"/>). And the
 /// rebuild has to come out clean: <see cref="IRebuildProductCost.RebuildCostingOnlyAsync"/> recosts
 /// the completed sales from the repair's effective time, but refuses a history that still has a
-/// fatal data-quality issue, and stages nothing when it does, so a repair that only partly explains
-/// the missing history fails and persists nothing rather than half-costing the product.
+/// fatal data-quality issue, and stages nothing when it does, so a repair that leaves one fails and
+/// persists nothing rather than half-costing the product. A completed sale the repair does not reach
+/// is not one of those issues since issue #1239: the repair is recorded and that sale stays uncosted
+/// and flagged, which the preview reported as its <c>RemainingUncostedSaleIssues</c>.
 ///
 /// What it never touches: physical home stock, machine quantities, stock adjustments, machine
 /// refills, and the transition baseline. That is why it rebuilds costing-only rather than through
