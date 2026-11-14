@@ -146,7 +146,7 @@ test.describe('brand logo visual evidence (issue #1272)', () => {
    * 1024px breakpoint, so the app shows the More sheet exactly as Chrome would.
    */
   for (const zoom of ZOOM_LEVELS) {
-    test(`public header and app navigation at ${zoom * 100}% zoom`, async ({ browser }) => {
+    test(`every logo placement at ${zoom * 100}% zoom`, async ({ browser }) => {
       const width = Math.round(1440 / zoom);
       const height = Math.round(900 / zoom);
       const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: zoom });
@@ -159,13 +159,42 @@ test.describe('brand logo visual evidence (issue #1272)', () => {
         await expectNoSidewaysScroll(page);
         await header.screenshot({ path: join(screenshotDirectory, `landing-header-${label}.png`) });
 
+        const footerBrand = page.locator('[data-testid="landing-footer-brand"]');
+        await footerBrand.scrollIntoViewIfNeeded();
+        await expectLogosIntact(footerBrand);
+        await footerBrand.screenshot({ path: join(screenshotDirectory, `landing-footer-brand-${label}.png`) });
+
+        for (const [path, name] of [
+          ['/privacy-policy', 'legal-header'],
+          ['/sign-in', 'sign-in-header']
+        ] as const) {
+          await page.goto(path);
+          await calmAnimations(page);
+          const pageHeader = page.locator('header').first();
+          await expectLogosIntact(pageHeader);
+          await expectNoSidewaysScroll(page);
+          await pageHeader.screenshot({ path: join(screenshotDirectory, `${name}-${label}.png`) });
+        }
+
         await page.goto(FIXTURE_PATH);
         await calmAnimations(page);
         const navigation = page.locator('nav[aria-label="Primary"]');
         if (width >= WIDE_LAYOUT_WIDTH) {
-          await expectLogosIntact(navigation);
-          await navigation.screenshot({ path: join(screenshotDirectory, `sidebar-expanded-${label}.png`) });
+          // Header rows, not the whole panel: the panel is taller than a zoomed viewport, and an
+          // element capture taller than the viewport is stitched and can show a stale frame.
+          const sidebarHeader = navigation.locator('[data-testid="sidebar-brand"]').locator('..');
+          await expectLogosIntact(sidebarHeader);
+          await sidebarHeader.screenshot({ path: join(screenshotDirectory, `sidebar-expanded-${label}.png`) });
+
+          await navigation.getByRole('button', { name: 'Collapse navigation' }).click();
+          await expect(navigation.getByRole('button', { name: 'Expand navigation' })).toBeVisible();
+          const railHeader = navigation.locator('[data-testid="sidebar-brand"]').locator('..');
+          await expect(railHeader.locator('img[src="assets/brand/restockroo-symbol.png"]')).toBeVisible();
+          await expectLogosIntact(railHeader);
+          await railHeader.screenshot({ path: join(screenshotDirectory, `sidebar-collapsed-${label}.png`) });
         } else {
+          // From 150% the CSS width is under the breakpoint: there is no sidebar or rail to collapse,
+          // only the More sheet, exactly as in Chrome.
           await page.getByRole('button', { name: 'Open navigation menu' }).click();
           const sheetHeader = navigation.locator('[data-testid="sidebar-brand"]').locator('..');
           await expectLogosIntact(sheetHeader);
