@@ -1,6 +1,7 @@
 import { DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { Component, Inject, Input } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { BrandLogoComponent } from '../../components/shared/brand-logo.component';
 import { IconComponent } from '../../components/shared/icon.component';
 import {
   LEGAL_CONTACT,
@@ -27,7 +28,7 @@ import { PUBLIC_HOME_ROUTE } from '../landing/landing-routes';
 @Component({
   selector: 'app-legal-page',
   standalone: true,
-  imports: [IconComponent, NgTemplateOutlet, RouterLink],
+  imports: [BrandLogoComponent, IconComponent, NgTemplateOutlet, RouterLink],
   templateUrl: './legal-page.component.html'
 })
 export class LegalPageComponent {

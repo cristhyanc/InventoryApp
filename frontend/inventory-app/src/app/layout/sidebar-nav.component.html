@@ -30,9 +30,10 @@
   [ngClass]="panelClasses"
 >
   <!--
-    The header row owns the app name and, on a wide layout, the collapse control that used to
-    float above the menu in the shell's top bar (issue #456). Collapsed to the rail there is no
-    name to sit beside, so the row holds the expand control alone and centres it: the panel's
+    The header row owns the Restockroo logo (issue #1272) and, on a wide layout, the collapse
+    control that used to float above the menu in the shell's top bar (issue #456). Collapsed to
+    the rail there is no room for the full logo, so the row stacks the kangaroo symbol above the
+    expand control and centres both: the panel's
     `w-16` rail leaves a 40px content box inside its `p-3`, narrower than the 44x44 CSS-pixel
     minimum touch target, and `-mx-2` widens the row to 56px inside the panel's 64px padding box
     so the control reaches that size without overflowing the panel or overlapping anything.
@@ -49,6 +50,8 @@
     [class.px-1]="!drawer && expanded"
     [class.-mx-2]="!drawer && !expanded"
     [class.justify-center]="!drawer && !expanded"
+    [class.flex-col]="!drawer && !expanded"
+    [class.gap-1]="!drawer && !expanded"
     [class.sticky]="drawer"
     [class.top-0]="drawer"
     [class.z-10]="drawer"
@@ -57,11 +60,13 @@
     [class.py-3]="drawer"
   >
     @if (drawer || expanded) {
-      <div class="flex min-w-0 flex-1 items-center gap-2 truncate">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
-          <app-icon name="inventory_2" variant="outlined" [size]="18" />
-        </span>
-        <span class="truncate text-base font-bold text-rr-navy">Restockroo</span>
+      <div class="flex min-w-0 flex-1 items-center truncate" data-testid="sidebar-brand">
+        <app-brand-logo variant="full" [height]="32" />
+      </div>
+    } @else {
+      <!-- Collapsed to the rail (issue #1272): the kangaroo symbol alone, centred above the expand control. -->
+      <div class="flex justify-center" data-testid="sidebar-brand">
+        <app-brand-logo variant="symbol" [height]="32" />
       </div>
     }
     @if (drawer) {
