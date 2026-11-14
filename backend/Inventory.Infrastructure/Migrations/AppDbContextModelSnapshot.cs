@@ -2328,6 +2328,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int?>("CostingQuantity")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long>("CostingVersion")
+                        .HasColumnType("INTEGER");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 

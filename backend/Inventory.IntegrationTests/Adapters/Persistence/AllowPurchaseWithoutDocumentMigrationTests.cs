@@ -116,7 +116,18 @@ public class AllowPurchaseWithoutDocumentMigrationTests
             Assert.Equal((purchase.Id, 1L, 12m, 1.10m), (item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost));
             var movement = await after.StockAdjustments.AsNoTracking().SingleAsync();
             Assert.Equal((item.Id, 12, 1.10m, 13.20m), (movement.ReceiptItemId, movement.QuantityChange, movement.UnitCost, movement.TotalCost));
-            var product = await after.Products.AsNoTracking().SingleAsync();
+            // Projected rather than materialised: this test stops at an older schema, and a column a
+            // later additive migration adds to Products (issue #1245's CostingVersion) is in the
+            // model and not here.
+            var product = await after.Products.AsNoTracking()
+                .Select(row => new
+                {
+                    row.QuantityInStock,
+                    row.CostingQuantity,
+                    row.InventoryValue,
+                    row.AverageUnitCost,
+                })
+                .SingleAsync();
             Assert.Equal((12, 12, 13.20m, 1.10m),
                 (product.QuantityInStock, product.CostingQuantity, product.InventoryValue, product.AverageUnitCost));
 
