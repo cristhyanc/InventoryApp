@@ -66,6 +66,11 @@ const DIALOG_TAB_STOPS = [
         outline: none;
       }
 
+      /* The wider panel a two-column dialog needs (issue #1311's Connect Nayax): 1024px. */
+      .app-dialog.app-dialog-wide {
+        max-width: 64rem;
+      }
+
       .app-dialog::backdrop {
         background: rgba(38, 38, 38, 0.5);
       }
@@ -176,6 +181,12 @@ export class ModalDialogComponent implements OnDestroy {
 
   /** Holds the Close control still, for an owner that is in the middle of a write. */
   @Input() closeDisabled = false;
+
+  /**
+   * The desktop width. `default` is the reviewed 600px form width; `wide` is 1024px for a dialog that
+   * puts guidance beside its fields (issue #1311). Both become the same full-screen sheet on a phone.
+   */
+  @Input() size: 'default' | 'wide' = 'default';
 
   /** An optional `data-testid` on the panel, so a page's own tests can find one of several dialogs. */
   @Input() testId: string | null = null;

@@ -4416,8 +4416,11 @@ endpoints' capability rows.
 ### The Nayax connection wizard (issue #538)
 
 Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
-six-step wizard on Admin → Integrations (called Nayax Settings until issue #729), beside the
-processing-fee editor it did not replace. It is
+connection card and setup flow on Admin → Integrations (called Nayax Settings until issue #729),
+beside the processing-fee editor it did not replace. Issue #538 built it as a six-step wizard inline
+on the page; since issue #1311 setup is the three-step **Connect Nayax** dialog described in
+[The Connect Nayax dialog](#the-connect-nayax-dialog-issue-1311), and what this section says about the
+token, the checklist, the support request and save/re-test holds for that dialog unchanged. It is
 **frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
 
 `NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
@@ -4452,7 +4455,7 @@ device-hardware permission this application no longer uses. A line naming a chec
 does not *recognise* is still rendered under its raw name, because that is a read the application may
 yet depend on.
 
-**Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
+**The support request exists because the fix is usually Nayax's to make.** When any line was refused for lack of a permission, the review
 composes a ready-to-copy request naming the operator id that was tested — captured with the result,
 not read from the field an Owner may have edited since — and every area refused for lack of a
 permission (`PermissionNotGranted`) with its cause, links the Nayax support portal
@@ -4461,8 +4464,7 @@ contact. The request names no token. A line refused for any other cause is not a
 could grant, so it is left out of the request and gets its own advice instead (issue #681): an
 invalid or expired token asks for a new token, an operator id mismatch asks the Owner to check the
 operator id, an unavailable Nayax asks for another try, and an answer nobody interpreted asks for a
-re-test before anyone is asked about it. Step 5 is skipped entirely when the server reported nothing
-failed.
+re-test before anyone is asked about it. Neither appears when the server reported nothing failed.
 
 **Save and re-test say what the server said.** Save is not offered for a run whose machine list did
 not pass, or whose draft has expired — the server refuses both, and this only avoids spending a
@@ -4482,6 +4484,86 @@ starts granted, so an unanswered read leaves the wizard as it was before roles w
 
 **What is deliberately not here.** The connection banners on other screens (#539) and any backend
 change.
+
+### The Connect Nayax dialog (issue #1311)
+
+Issue #1311 moved setup off the page and into a dialog. The Integrations page keeps one **Nayax
+connection** card — the stored connection, its status badge, **Re-test this connection** and the
+re-test checklist — and one launcher: **Connect Nayax** when nothing is stored, **Replace
+connection** when something is. The launcher opens the shared `ModalDialogComponent`
+(`components/shared/modal-dialog/`, issue #1174) in its new `size="wide"` (1024px) variant, so the
+dialog inherits that shell's native modal `<dialog>`, Escape and Close as close requests, the Tab
+cycle that never leaves the panel, focus returned to the launcher, and the full-height sheet below
+640px. The default 600px width is unchanged for every other dialog. Because a save swaps **Connect
+Nayax** for **Replace connection**, the opener can be gone when the dialog closes; the card then
+focuses whichever launcher it now shows.
+
+**Three steps, with a progress indicator: Operator ID, Lynx token, Review & save.** The two input
+steps put **In Nayax Core** — numbered text instructions, Nayax's own screenshots and an **Open
+Nayax Core** link (`https://my.nayax.com/core/LoginPage.aspx`, the address Nayax's guide links) that
+opens a new tab — beside **In Restockroo**, the field; below `lg` they stack, guidance first. The
+guidance is `NayaxCoreGuideComponent`, which is presentational: its steps, screenshots and sources
+are constants in `nayax-connection-wizard.component.ts`. The token step combines the instructions,
+the write-only field and **Test connection**, which sits in the dialog's fixed action row beside
+Back so it is reachable without scrolling on a phone. The review shows the server's checklist (the
+machine list once, and never the retired *Signing in (GET devices)* row), the outcome above it, the
+copyable support request only when a permission was refused, and **Save connection**.
+
+**Every test outcome has its own state.** On the token step: *testing*; *Nayax refused this token*
+(the machine-list line failed with `InvalidOrExpiredToken`); and *Nayax did not answer in time* (the
+machine-list line failed with `NayaxUnavailable`, or the test request itself came back `408`/`504`).
+The last two have different guidance and both keep the Owner on the token step with the field empty
+and focused, because there is nothing to review. Every other completed run goes to the review, which
+decides its message in this order: an **expired** draft (Save withdrawn, **Test again** returns to
+the token step — a timer set to the draft's `expiresAtUtc` re-renders the review when it lapses, so
+Save does not stay clickable on a draft the server has dropped); a machine list that did not pass
+(**This token cannot be saved**, for a permission refusal or an operator id mismatch); a
+save-eligible **partial** run (Save offered, the support request below); an empty account
+(**Connection test passed. No machines found yet.**, Save offered); and a clean pass. **Nayax
+connected** appears only after the save succeeded, with **Done** in place of Back.
+
+**Nothing of an abandoned attempt survives.** Back from the token step clears the field and retires
+the test sequence; Back from the review drops the result, so returning there needs a fresh test.
+Closing the dialog — Escape, the backdrop, Close or Done — clears the field, unsubscribes a test in
+flight, retires its sequence so a late answer can neither fill a step nor reopen the dialog, and
+drops the unsaved result; reopening starts again at an empty Operator ID. Close is refused, and the
+Close control disabled, only while a save is in flight, because that answer decides what is stored.
+A failed save returns to the token step with the server's sentence, since the draft is single-use.
+The stored connection is untouched until a save succeeds.
+
+**The screenshots are Nayax's, shown from where Nayax publishes them.** The Operator ID step shows
+the operator screen from Nayax's *Create an operator — verify creation* guide beside the text of its
+*How to find your Operator ID in Nayax Core* instructions; the token step shows the first three
+screenshots of the *Lynx API security — access token* guide (the username menu with Account
+Settings, the Security and Login tab, and User Tokens with Add Token and Show Token). Nayax's
+developer portal states no terms that permit copying its images, so — as the issue directs when
+reuse cannot be verified — none is bundled, cropped or edited: each is an `<img>` of the portal's own
+published address (`mintcdn.com/nayax-44d6e37b/…`), requested with `referrerpolicy="no-referrer"`,
+credited to and linked with its guide under the images. The guide's fourth screenshot, the Show
+Token pop-up, displays a token string and its QR code, so it is not shown; the text and the linked
+guide cover that step. The images are Nayax's demo account, which shows a demo user name and operator
+id; no customer session was captured. Each image is a link that opens it full size in a new tab, which
+is how a phone enlarges it, carries alt text naming the control it shows and a short caption, and is
+replaced by a sentence pointing at the guide if it fails to load — the numbered text is complete on
+its own. If Nayax moves an image, only that sentence changes on screen.
+
+**What proves it.** `nayax-connection-wizard.component.spec.ts` covers the launcher in both states,
+the three-step progress, each step's guidance, screenshots, sources, new-tab links and image-failure
+fallback, the empty masked field at launch and after every failed test, the token in no component
+state or storage, every test state, each review state including the expiry timer, Save for a
+partial and an empty-account run, **Nayax connected** only after a save, Back clearing the field and
+dropping the result, close and reopen, a late test answer after close, close refused during a save,
+and the existing Owner-only and support-session rules. `nayax-settings.component.spec.ts` pins the
+page as the single page behind the dialog with no inline steps, and `modal-dialog.component.spec.ts`
+the `wide` size. In the browser, `e2e/visual/nayax-connect-dialog.visual.ts` captures all three steps,
+the saved state, the partial, zero-machine and expired reviews and the invalid-token and timeout
+states at 1440px and 390px into `docs/screenshots/issue-1311/`, and measures what jsdom cannot: no
+sideways scroll of the page, panel or body, the guide beside the field at 1440px and above it at
+390px, the body scrolling vertically at 390px with the action row inside the viewport, screenshots
+that open full size, the Tab cycle staying inside the dialog, and Escape closing it with the token
+field gone and focus back on the launcher. Like every visual run it answers `/api/` in the browser
+with synthetic data, so no Nayax account is called and nothing is stored, and it is not part of
+`scripts/validate.sh`.
 
 ### Nayax connection status banners (issue #539)
 

@@ -3581,52 +3581,72 @@ costing value that was never recorded in the first place.
 ## Connecting Nayax (Admin page)
 
 **Admin → Integrations** (called Nayax Settings until issue #729) is where an Owner connects this
-business's own Nayax account. Only an
-Owner can reach it, and the connection wizard at the top of the page walks through six steps; the
-estimated processing fee rate is configured further down the same page and is unrelated to the
-connection.
+business's own Nayax account. Only an Owner can reach it. The **Nayax connection** card at the top
+of the page shows the stored connection and its status, **Re-test this connection**, and one button
+that starts setup: **Connect Nayax** when nothing is stored, **Replace connection** when something
+is. Setup opens as a **Connect Nayax** dialog over the page (issue #1311): centred on a desktop and a
+full-height panel on a phone, closed with Escape or its Close control, which returns focus to the
+button that opened it. The estimated processing fee rate is configured further down the same page
+and is unrelated to the connection.
 
-1. **Operator ID.** In Nayax Core: open **Operator** in the left sidebar, select your operator and
-   search; the numeric id is listed under **Company Info** as **Operator Id**. It is not a secret and
-   is stored with the connection.
-2. **Create a Lynx token.** In Nayax Core, click your username in the top right corner, then
-   **Account Settings** › **Security and Login** (the second tab) › **User Tokens** (below Your
-   Trusted Devices) › **Add Token**, and choose the **Lynx Token** type. If a Lynx token is already
-   listed, use **Show Token** next to it and copy that instead.
-3. **Paste the token and press Test connection.** The token field is write-only: it is sent once
-   with the test and cleared as soon as the test comes back, and it is never kept in the browser —
-   no local storage, no session storage, no URL. Testing stores nothing yet, changes no Nayax data,
-   and leaves any connection you already have exactly as it is, so testing a bad token cannot break
-   a working one.
-4. **Read the checklist.** The server calls each Nayax endpoint this application reads — seven of
-   them, starting with the machine list — and reports every one on its own line: a tick for granted,
-   a cross with the cause for refused, and **Not checked** for the machine-scoped lines when the
+The dialog has three steps. The two input steps put **In Nayax Core** (Nayax's own instructions and
+screenshots, with an **Open Nayax Core** link that opens a new tab) beside **In Restockroo** (the
+field); on a phone the guidance is stacked above the field, and Back and the current action stay in
+a fixed row at the bottom.
+
+1. **Operator ID.** In Nayax Core: go to **Operator** in the left sidebar, select your operator and
+   click **Search**; the numeric id is listed under **Company Info** as **Operator Id**. It is not a
+   secret and is stored with the connection.
+2. **Lynx token.** In Nayax Core, click your username in the top right corner, then **Account
+   Settings** › **Security and Login** (next to Account) › **User Tokens** (below Your Trusted
+   Devices). If a Lynx token is listed, use **Show Token** next to it and copy it; if not, choose
+   **Add Token** and select **Lynx Token**. Paste it and press **Test connection**. The token field
+   is write-only: it is sent once with the test and cleared as soon as the test comes back, and also
+   when you go Back or close the dialog; it is never kept in the browser — no local storage, no
+   session storage, no URL. Testing stores nothing, changes no Nayax data, and leaves any connection
+   you already have exactly as it is. Two outcomes keep you on this step with an empty field to paste
+   again: **Nayax refused this token** (it is invalid or has expired, so copy or add a token again)
+   and **Nayax did not answer in time** (nothing was learned, so try again in a few minutes).
+3. **Review & save.** The server calls each Nayax endpoint this application reads — seven of them,
+   starting with the machine list — and reports every one on its own line: a tick for granted, a
+   cross with the cause for refused, and **Not checked** for the machine-scoped lines when the
    account has no machines yet (or when the machine list itself could not be read — the two are shown
    differently, because they need different actions). An untested permission is never shown as a
-   granted one. Nothing asks for access to Nayax's **device hardware inventory**: the checks are the
-   reads this application actually makes, and the machine list is what decides whether the token can
-   be used, so a token that cannot list devices is not a problem to solve. The restock write call is
-   deliberately not tested: a connection test must not change your Nayax data, so it is checked the
-   first time a refill is actually pushed.
-5. **Ask Nayax for anything refused.** Nayax grants a token's permissions, so when a line is
-   refused for lack of a permission the wizard composes a ready-to-copy request naming the operator
-   id you tested and every such area with its cause (never the token itself). Raise it in the Nayax
-   support portal, <https://nayax.service-now.com/csm>; if that gets no answer,
-   <integration-support@nayax.com> is the secondary contact. A line refused for another reason gets
-   its own advice instead of a permission request: an invalid or expired token needs a new token, an
-   operator id Nayax does not match needs checking, and an unavailable Nayax needs another try. This
-   step is skipped when nothing failed.
-6. **Save the connection.** Saving stores the operator id and the token the server just tested — the
-   page sends back only the server's reference to that test, never the token again. A token whose
-   **machine list** could not be read cannot be saved, and a test result older than fifteen minutes
-   has to be run again first. That one line is the condition, and the checklist says which refusal it
-   was: *the token is invalid or has expired* means a new Lynx token, while *this token does not have
-   permission for this area* means asking Nayax for read access to the machine list. Nothing is
-   stored or changed in either case — the connection you already have keeps its status. Saving with
-   some **other** areas still refused records the connection as **Permissions pending**: the features
-   that need those areas keep saying so until Nayax grants them and a re-test confirms it.
+   granted one. Nothing asks for access to Nayax's **device hardware inventory**: the machine list is
+   what decides whether the token can be used. The restock write call is deliberately not tested: a
+   connection test must not change your Nayax data, so it is checked the first time a refill is
+   actually pushed. Above the checklist the review says one of:
+   - **Connection test passed.** Save it.
+   - **Connection test passed. No machines found yet.** Save it, and re-test once your machines are
+     set up in Nayax.
+   - **Connection test passed, with some permissions refused.** You can still save; the connection
+     is recorded as **Permissions pending** and the features that need those areas keep saying so
+     until Nayax grants them and a re-test confirms it. Below the checklist is a ready-to-copy
+     request naming the operator id you tested and only the areas refused for lack of a permission
+     (never the token). Raise it in the Nayax support portal, <https://nayax.service-now.com/csm>;
+     if that gets no answer, <integration-support@nayax.com> is the secondary contact. A line
+     refused for another reason gets its own advice instead: an operator id Nayax does not match
+     needs checking, and an unavailable Nayax needs another try.
+   - **This token cannot be saved.** Its machine list could not be read; the checklist says why.
+     Nothing is stored or changed — the connection you already have keeps its status.
+   - **This test result has expired.** A tested token is kept for fifteen minutes; **Test again**
+     takes you back to paste it again.
 
-**Re-testing.** The stored connection is shown above the wizard with its status — Ready, Permissions
+   **Save connection** stores the operator id and the token the server just tested — the page sends
+   back only the server's reference to that test, never the token again. **Nayax connected** is shown
+   only once the save succeeded. Closing the dialog before saving stores nothing and keeps nothing of
+   the attempt; a test still running when you close is abandoned and its answer ignored.
+
+The screenshots are Nayax's own, from its developer portal guides — [How to find your Operator ID in
+Nayax Core](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/request-access#how-to-find-your-operator-id-in-nayax-core),
+[Create an operator: verify creation](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/operator/create-operator#verify-creation)
+and [Lynx API security: access token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token)
+— shown from where Nayax publishes them and credited to those guides; each opens full size in a new
+tab. Nayax's portal states no terms permitting their reuse, so none is copied into this repository,
+and the guide's Show Token pop-up (which displays a token and its QR code) is not shown at all. If a
+screenshot cannot load, the written steps are complete without it.
+
+**Re-testing.** The stored connection is shown on the card with its status — Ready, Permissions
 pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
 same read-only checks against the token already stored. Re-test works in every status, including
 Needs attention, which is the state it exists to recover from. When the connection was saved before
