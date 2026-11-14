@@ -106,8 +106,29 @@ public class RemoveProductSupplierMigrationTests
 
         await using var after = TestAppDbContext.Unrestricted(options);
 
-        // Every other product field, the costing ones above all.
-        var product = await after.Products.SingleAsync();
+        // Every other product field, the costing ones above all. Projected rather than materialised,
+        // for the reason the suppliers below are: this test stops at an older schema, and a column a
+        // later additive migration adds to Products (issue #1245's CostingVersion) is in the model
+        // and not here.
+        var product = await after.Products
+            .Select(row => new
+            {
+                row.Id,
+                row.Name,
+                row.Sku,
+                row.Description,
+                row.AverageUnitCost,
+                row.CostingQuantity,
+                row.InventoryValue,
+                row.QuantityInStock,
+                row.LowStockThreshold,
+                row.RestockTo,
+                row.Unit,
+                row.IsActive,
+                row.CategoryId,
+                row.ExternalProductId,
+            })
+            .SingleAsync();
         Assert.Equal(
             (7L, "Chips", "CHIP-1", "A bag", 1.10m, 12, 13.20m),
             (product.Id, product.Name, product.Sku, product.Description,
@@ -184,7 +205,9 @@ public class RemoveProductSupplierMigrationTests
         Assert.Equal(0L, Convert.ToInt64(await command.ExecuteScalarAsync()));
 
         await using var after = TestAppDbContext.Unrestricted(options);
-        var product = await after.Products.SingleAsync();
+        var product = await after.Products
+            .Select(row => new { row.Id, row.Name, row.AverageUnitCost, row.CategoryId })
+            .SingleAsync();
         Assert.Equal((7L, "Chips", 1.10m, 3L), (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
         // Projected for the reason above: the current model's Receipts carries a column this schema
         // does not (issue #1162's InvoiceNumber).
