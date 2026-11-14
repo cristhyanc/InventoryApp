@@ -1814,10 +1814,6 @@ video {
   height: calc(4.5rem + env(safe-area-inset-bottom));
 }
 
-.h-auto {
-  height: auto;
-}
-
 .h-full {
   height: 100%;
 }
@@ -2535,10 +2531,6 @@ video {
 
 .border-t {
   border-top-width: 1px;
-}
-
-.border-dashed {
-  border-style: dashed;
 }
 
 .border-md-danger {

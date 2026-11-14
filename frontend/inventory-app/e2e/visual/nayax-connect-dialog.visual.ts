@@ -10,20 +10,19 @@ import {
 
 /**
  * The browser-level evidence for issue #1311: the Connect Nayax dialog on Admin → Integrations at
- * 1440px and 390px - the three steps with Nayax's official screenshots, every distinct test state,
+ * 1440px and 390px - the three steps with Nayax's official guides linked, every distinct test state,
  * and the review of a clean, an empty-account, a partial-permission and an expired test.
  *
  * jsdom computes no layout and has no `<dialog>` top layer, so `nayax-connection-wizard.component.spec.ts`
  * proves the behaviour but not what this measures in Chromium: no sideways scroll of the page, the
  * panel or its body; a body that scrolls vertically at 390px while Back and the primary action stay
- * inside the viewport; screenshots that open full size; Escape closing the dialog and focus going
- * back to the launcher.
+ * inside the viewport; no embedded Nayax image, with the official guides linked in a new tab; Escape
+ * closing the dialog and focus going back to the launcher.
  *
  * It starts no API and no database. Every `/api/` request is answered in the browser with synthetic
  * data: the test and save calls are answered here and reach no server, so no Nayax account is
- * contacted and nothing is stored. The pasted token is a placeholder, typed into the field only.
- * The screenshots themselves are loaded from Nayax's developer portal, where Nayax publishes them -
- * the same place the page loads them from. It is human-invoked and is not part of `scripts/validate.sh`.
+ * contacted and nothing is stored. The pasted token is a placeholder, typed into the field only, and
+ * no Nayax image is on the page, so none can appear in a capture. It is human-invoked and is not part of `scripts/validate.sh`.
  */
 const screenshotDirectory = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-1311');
 mkdirSync(screenshotDirectory, { recursive: true });
@@ -140,16 +139,17 @@ async function openIntegrations(page: Page, width: number, height: number, scena
   await expect(page.locator('[data-testid="open-connect"]')).toHaveText(/Connect Nayax/);
 }
 
-/** Waits until every screenshot on the current step has loaded, so a capture never shows a half image. */
-async function screenshotsLoaded(page: Page): Promise<void> {
-  await page.waitForFunction(
-    (selector) =>
-      Array.from(document.querySelectorAll<HTMLImageElement>(`${selector} img`)).every(
-        (image) => image.complete && image.naturalWidth > 0
-      ),
-    dialog,
-    { timeout: 30_000 }
-  );
+/** Nayax's screenshots are linked, never embedded: they show its demo account's identifiers (issue #1311). */
+async function expectNoEmbeddedScreenshots(page: Page): Promise<void> {
+  await expect(page.locator(`${dialog} img`)).toHaveCount(0);
+  const links = page.locator(`${dialog} [data-testid="nayax-guide-source"] a`);
+  expect(await links.count()).toBeGreaterThan(0);
+  for (const href of await links.evaluateAll((elements) => elements.map((element) => element.getAttribute('href')))) {
+    expect(href).toMatch(/^https:\/\/devzone\.nayax\.com\/docs\//);
+  }
+  for (const target of await links.evaluateAll((elements) => elements.map((element) => element.getAttribute('target')))) {
+    expect(target).toBe('_blank');
+  }
 }
 
 /** Nothing scrolls sideways - neither the page, nor the panel, nor its body - and the panel stays inside the viewport. */
@@ -223,7 +223,7 @@ test.describe('The Connect Nayax dialog (issue #1311)', () => {
       await expect(page.locator(`${dialog} [data-testid="step-1"]`)).toContainText('In Nayax Core');
       await expect(page.locator(`${dialog} [data-testid="step-1"]`)).toContainText('In Restockroo');
       await expect(page.locator(`${dialog} [data-testid="open-nayax-core"]`)).toHaveAttribute('target', '_blank');
-      await screenshotsLoaded(page);
+      await expectNoEmbeddedScreenshots(page);
       await capture(page, width, height, 'step-1-operator-id');
       if (width === 390) {
         await captureBody(page, width, 'step-1-operator-id');
@@ -233,23 +233,9 @@ test.describe('The Connect Nayax dialog (issue #1311)', () => {
       await page.locator('[data-testid="next"]').click();
       await expect(page.locator('#nayax-token')).toHaveValue('');
       await expect(page.locator('#nayax-token')).toHaveAttribute('type', 'password');
-      await screenshotsLoaded(page);
-
-      // Every screenshot opens full size in a new tab, which is how a phone enlarges it.
-      const enlarge = page.locator(`${dialog} [data-testid="step-2"] [data-testid="enlarge-screenshot"]`);
-      await expect(enlarge).toHaveCount(3);
-      await Promise.all((await enlarge.all()).map((link) => expect(link).toHaveAttribute('target', '_blank')));
-      const shrunk = await page.locator(`${dialog} [data-testid="step-2"] img`).first().evaluate(
-        (image: HTMLImageElement) => image.naturalWidth > image.getBoundingClientRect().width
-      );
-      expect(shrunk, 'a screenshot is shown smaller than its full size, so enlarging it helps').toBe(true);
+      await expectNoEmbeddedScreenshots(page);
 
       if (width === 390) {
-        // The body is the one thing that scrolls on a phone, vertically, with the action row fixed.
-        const body = page.locator(`${dialog} .app-dialog-body`);
-        await expect(body).toHaveCSS('overflow-y', 'auto');
-        const scrolls = await body.evaluate((element) => element.scrollHeight > element.clientHeight);
-        expect(scrolls, 'the token step scrolls vertically at 390px').toBe(true);
         // The guide is stacked above the field, not beside it.
         const guide = (await page.locator(`${dialog} [data-testid="token-instructions"]`).boundingBox())!;
         const field = (await page.locator('#nayax-token').boundingBox())!;
@@ -295,6 +281,13 @@ test.describe('The Connect Nayax dialog (issue #1311)', () => {
       expect(request).toContain('Machine recent sales');
       expect(request).not.toContain('Machine list');
       expect(request).not.toContain(PLACEHOLDER_TOKEN);
+      if (width === 390) {
+        // The body is the one thing that scrolls on a phone, vertically, with the action row fixed.
+        const body = page.locator(`${dialog} .app-dialog-body`);
+        await expect(body).toHaveCSS('overflow-y', 'auto');
+        const scrolls = await body.evaluate((element) => element.scrollHeight > element.clientHeight);
+        expect(scrolls, 'the partial review scrolls vertically at 390px').toBe(true);
+      }
       await capture(page, width, height, 'step-3-review-partial');
       await captureBody(page, width, 'step-3-review-partial');
     });
@@ -330,7 +323,6 @@ test.describe('The Connect Nayax dialog (issue #1311)', () => {
         await expect(page.locator(`${dialog} [data-testid="state-${scenario}"]`)).toBeVisible();
         await expect(page.locator('#nayax-token')).toHaveValue('');
         await expect(page.locator('#nayax-token')).toBeFocused();
-        await screenshotsLoaded(page);
         if (width === 390) {
           await page.locator(`${dialog} [data-testid="state-${scenario}"]`).scrollIntoViewIfNeeded();
         }

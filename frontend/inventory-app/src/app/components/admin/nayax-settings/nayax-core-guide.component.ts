@@ -4,34 +4,22 @@ import { CommonModule } from '@angular/common';
 /** Nayax Core's own sign-in page, as Nayax's Lynx token guide links it. */
 export const NAYAX_CORE_URL = 'https://my.nayax.com/core/LoginPage.aspx';
 
-/** One screenshot from Nayax's official documentation, shown where it is published. */
-export interface NayaxCoreScreenshot {
-  /** The image exactly as Nayax's developer portal publishes it. */
-  readonly src: string;
-  readonly alt: string;
-  readonly caption: string;
-}
-
-/** The official guide a step's instructions and screenshots come from. */
+/** An official Nayax guide a step's instructions come from, and where its screenshots are. */
 export interface NayaxCoreGuideSource {
   readonly title: string;
   readonly url: string;
 }
 
 /**
- * The **In Nayax Core** half of a Connect Nayax step (issue #1311): numbered text instructions, the
- * official Nayax screenshots that show them, an **Open Nayax Core** link and the source guide.
+ * The **In Nayax Core** half of a Connect Nayax step (issue #1311): numbered text instructions, an
+ * **Open Nayax Core** link, and the official Nayax guides they come from.
  *
- * **The text is the instruction; a screenshot only illustrates it.** Every step is written out, so
- * a screenshot that fails to load is replaced by a sentence pointing at the guide and nothing an
- * Owner needs goes with it.
- *
- * **The screenshots are Nayax's, shown from where Nayax publishes them.** Nayax's developer portal
- * states no terms that permit copying its images, so none is bundled or edited here: each is
- * displayed from the portal's own image address, credited to and linked with the guide it belongs
- * to, and requested with no referrer. Each one opens full size in a new tab, which is how a phone
- * enlarges it. Which screenshots are used, and why the token-revealing one is not, is the wizard's
- * choice; see docs/architecture.md § The Connect Nayax dialog.
+ * **No Nayax screenshot is embedded.** Every screenshot Nayax publishes for these screens is taken in
+ * its demo account and shows an account identifier - a user's name, an operator name or an operator
+ * id - and the issue excludes account identifiers from what this page delivers. Nayax's portal also
+ * states no terms that would allow a redacted copy. So, as the issue directs for that case, the
+ * written steps carry the instruction on their own and each guide is linked, opening in a new tab,
+ * as the place to see the screens. See docs/architecture.md § The Connect Nayax dialog.
  */
 @Component({
   selector: 'app-nayax-core-guide',
@@ -56,42 +44,18 @@ export interface NayaxCoreGuideSource {
         }
       </ol>
 
-      @for (shot of screenshots; track shot.src) {
-        <figure class="m-0 min-w-0" data-testid="nayax-screenshot">
-          @if (!failed.has(shot.src)) {
-            <a
-              class="block overflow-hidden rounded-lg border border-md-gray-200"
-              target="_blank"
-              rel="noopener noreferrer"
-              [href]="shot.src"
-              [attr.aria-label]="'Enlarge screenshot: ' + shot.caption + ' (opens in a new tab)'"
-              data-testid="enlarge-screenshot"
-            >
-              <img
-                class="block h-auto w-full"
-                loading="lazy"
-                referrerpolicy="no-referrer"
-                [src]="shot.src"
-                [alt]="shot.alt"
-                (error)="failed.add(shot.src)"
-              />
-            </a>
-          } @else {
-            <p class="rounded-lg border border-dashed border-md-gray-200 p-3 text-sm value-muted" data-testid="screenshot-unavailable">
-              The screenshot could not be loaded. The steps above are complete, and the Nayax guide
-              below shows the same screen.
-            </p>
+      <div class="rounded-lg border border-md-gray-200 p-3" data-testid="nayax-guide-source">
+        <p class="text-sm text-md-gray-800">See each screen in Nayax's official guide:</p>
+        <ul class="mt-1 space-y-1 text-sm">
+          @for (source of sources; track source.url) {
+            <li>
+              <a class="btn-link" target="_blank" rel="noopener noreferrer" [href]="source.url">
+                {{ source.title }}<span class="sr-only"> (opens in a new tab)</span> <span aria-hidden="true">&#8599;</span>
+              </a>
+            </li>
           }
-          <figcaption class="mt-1 text-xs value-muted">{{ shot.caption }}</figcaption>
-        </figure>
-      }
-
-      <p class="text-xs value-muted" data-testid="nayax-guide-source">
-        Screenshots and steps from Nayax's official documentation:
-        @for (source of sources; track source.url; let last = $last) {
-          <a class="btn-link" target="_blank" rel="noopener noreferrer" [href]="source.url">{{ source.title }}</a>{{ last ? '.' : ',' }}
-        }
-      </p>
+        </ul>
+      </div>
     </section>
   `
 })
@@ -107,11 +71,6 @@ export class NayaxCoreGuideComponent {
    */
   @Input({ required: true }) steps: readonly string[] = [];
 
-  @Input() screenshots: readonly NayaxCoreScreenshot[] = [];
-
-  /** The official guides the steps and screenshots come from, credited and linked under them. */
+  /** The official guides the steps come from, linked so an Owner can see each screen there. */
   @Input({ required: true }) sources: readonly NayaxCoreGuideSource[] = [];
-
-  /** The screenshots that failed to load, replaced by a sentence rather than a broken image. */
-  readonly failed = new Set<string>();
 }

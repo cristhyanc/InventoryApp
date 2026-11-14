@@ -21,11 +21,7 @@ import {
   nayaxConnectionAreaLabel,
   nayaxConnectionFailureSentence
 } from './nayax-connection-checklist.component';
-import {
-  NayaxCoreGuideComponent,
-  NayaxCoreGuideSource,
-  NayaxCoreScreenshot
-} from './nayax-core-guide.component';
+import { NayaxCoreGuideComponent, NayaxCoreGuideSource } from './nayax-core-guide.component';
 
 /** One outcome of the last action an Owner took, with what to do about it. */
 export interface NayaxConnectionNotice {
@@ -87,10 +83,12 @@ const STATUS_PRESENTATION: Record<NayaxConnectionStatusName, { label: string; ba
 export const NAYAX_CONNECT_STEP_LABELS: readonly string[] = ['Operator ID', 'Lynx token', 'Review & save'];
 
 /**
- * Nayax's official guides. The Operator ID path is the "How to find your Operator ID in Nayax Core"
- * section of the access request guide; the operator screen that shows the field is the "Verify
- * creation" screenshot of the create-operator guide; the token path and its screenshots are the
- * "Access token" section of the Lynx security guide.
+ * Nayax's official guides, linked beside each step as the place to see its screens (issue #1311).
+ * The Operator ID path is the "How to find your Operator ID in Nayax Core" section of the access
+ * request guide, and the operator screen showing the field is in the create-operator guide's
+ * "Verify creation" section; the token path is the "Access token" section of the Lynx security
+ * guide. Their screenshots are not embedded: each shows a demo account's identifiers (see
+ * `NayaxCoreGuideComponent`).
  */
 export const NAYAX_OPERATOR_ID_GUIDE: NayaxCoreGuideSource = {
   title: 'How to find your Operator ID in Nayax Core',
@@ -104,56 +102,6 @@ export const NAYAX_TOKEN_GUIDE: NayaxCoreGuideSource = {
   title: 'Lynx API security: access token',
   url: 'https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token'
 };
-
-/** The image host of Nayax's developer portal; every screenshot below is one it publishes. */
-const NAYAX_DOCS_IMAGES = 'https://mintcdn.com/nayax-44d6e37b';
-
-/**
- * The Operator ID step's screenshot: Nayax's own Operator screen from its demo account, with the
- * search bar and the operator list marked, and Operator Id under Company.
- */
-export const NAYAX_OPERATOR_SCREENSHOTS: readonly NayaxCoreScreenshot[] = [
-  {
-    src:
-      `${NAYAX_DOCS_IMAGES}/1pW0jXOF4OhjjY4f/images/docs/create-operator/image2.png` +
-      '?w=1100&fit=max&auto=format&n=1pW0jXOF4OhjjY4f&q=85&s=b96bebf204b0de0520e1bf325fe1bcf4',
-    alt:
-      'Nayax Core Operator screen: the search bar across the top is marked 1, the selected operator ' +
-      'in the list on the left is marked 2, and Operator Id is the first line under Company.',
-    caption: 'Search (1), select your operator (2), then read Operator Id under Company.'
-  }
-];
-
-/**
- * The Lynx token step's screenshots, three of the four Nayax's guide publishes. The fourth, the
- * Show Token pop-up, displays a token value and its QR code, so it is not shown here: the step's
- * text and the linked guide cover it.
- */
-export const NAYAX_TOKEN_SCREENSHOTS: readonly NayaxCoreScreenshot[] = [
-  {
-    src:
-      `${NAYAX_DOCS_IMAGES}/LLJLt0SRF0ia-V8n/images/docs/security/image1.png` +
-      '?w=1100&fit=max&auto=format&n=LLJLt0SRF0ia-V8n&q=85&s=6d345d5ded51b70eabca8e8983f39792',
-    alt: 'Nayax Core with the username menu open in the top right corner and Account Settings highlighted.',
-    caption: 'Your username, top right, then Account Settings.'
-  },
-  {
-    src:
-      `${NAYAX_DOCS_IMAGES}/LLJLt0SRF0ia-V8n/images/docs/security/image2.png` +
-      '?w=1100&fit=max&auto=format&n=LLJLt0SRF0ia-V8n&q=85&s=ba84fc30033d1d4adc01a384852b95bf',
-    alt: 'Nayax Core Account Settings with the Security and Login tab highlighted, next to Account.',
-    caption: 'The Security and Login tab.'
-  },
-  {
-    src:
-      `${NAYAX_DOCS_IMAGES}/LLJLt0SRF0ia-V8n/images/docs/security/image3.png` +
-      '?w=1100&fit=max&auto=format&n=LLJLt0SRF0ia-V8n&q=85&s=73862b126f726f14358b69e5c5d1e083',
-    alt:
-      'The User Tokens section of Security and Login, with Add Token at its top right and Show ' +
-      'Token highlighted on a listed Lynx token.',
-    caption: 'User Tokens: Add Token for a new one, or Show Token on an existing Lynx token.'
-  }
-];
 
 /** Where the Operator ID is, as Nayax's own guide words it. Static markup: control names in bold. */
 export const NAYAX_OPERATOR_ID_STEPS: readonly string[] = [
@@ -179,7 +127,7 @@ export const NAYAX_TOKEN_STEPS: readonly string[] = [
  * **The card stays on the page; setup is a dialog.** The card shows the stored connection, its
  * status and Re-test, and a single launcher: **Connect Nayax** when nothing is stored, **Replace
  * connection** when something is. The dialog has three steps - Operator ID, Lynx token, Review &
- * save - each guide step putting Nayax's own instructions and screenshots (**In Nayax Core**) beside
+ * save - each guide step putting Nayax's own instructions and guide links (**In Nayax Core**) beside
  * the field (**In Restockroo**). Nothing in the dialog touches the stored connection until **Save
  * connection** succeeds.
  *
@@ -365,7 +313,6 @@ export const NAYAX_TOKEN_STEPS: readonly string[] = [
             <app-nayax-core-guide
               class="block min-w-0 lg:col-span-7"
               [steps]="operatorIdSteps"
-              [screenshots]="operatorScreenshots"
               [sources]="operatorSources"
             ></app-nayax-core-guide>
             <section class="min-w-0 lg:col-span-5" aria-labelledby="nayax-step-1-heading">
@@ -396,7 +343,6 @@ export const NAYAX_TOKEN_STEPS: readonly string[] = [
             <app-nayax-core-guide
               class="block min-w-0 lg:col-span-7"
               [steps]="tokenSteps"
-              [screenshots]="tokenScreenshots"
               [sources]="tokenSources"
               data-testid="token-instructions"
             ></app-nayax-core-guide>
@@ -634,10 +580,8 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   readonly supportPortalUrl = NAYAX_SUPPORT_PORTAL_URL;
   readonly supportEmail = NAYAX_SUPPORT_EMAIL;
   readonly operatorIdSteps = NAYAX_OPERATOR_ID_STEPS;
-  readonly operatorScreenshots = NAYAX_OPERATOR_SCREENSHOTS;
   readonly operatorSources = [NAYAX_OPERATOR_ID_GUIDE, NAYAX_OPERATOR_SCREEN_GUIDE];
   readonly tokenSteps = NAYAX_TOKEN_STEPS;
-  readonly tokenScreenshots = NAYAX_TOKEN_SCREENSHOTS;
   readonly tokenSources = [NAYAX_TOKEN_GUIDE];
 
   /** Whether the Connect Nayax dialog is on screen. */
@@ -1059,10 +1003,21 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         this.retesting = false;
         this.retestResult = result;
         this.acceptConnection(result.connection, result.checks);
+        if (!result.statusUpdated && this.machineListRefused(result)) {
+          this.notice = {
+            tone: 'warning',
+            title: 'Nayax refused this token access to the machine list.',
+            detail:
+              'Nayax answered, but this token does not have permission to read the machine list ' +
+              '(GET machines). The stored connection and its last-tested time are unchanged. Ask ' +
+              'Nayax for read access to the machine list for this operator, then re-test.'
+          };
+          return;
+        }
         if (!result.statusUpdated) {
           this.notice = {
             tone: 'warning',
-            title: 'Nayax never answered, so nothing was concluded.',
+            title: 'No usable answer came back from Nayax, so nothing was concluded.',
             detail:
               'The stored status is left exactly as it was - nothing about the credentials was ' +
               'learned. Try the re-test again in a few minutes.'
@@ -1216,6 +1171,17 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       default:
         return 'Other';
     }
+  }
+
+  /**
+   * Whether a re-test's machine list was refused for lack of a permission. The server leaves the
+   * stored status and last-tested time untouched for that answer just as it does when Nayax never
+   * answered (issue #1310), but Nayax did answer, so the two need different guidance.
+   */
+  private machineListRefused(result: NayaxConnectionRetestResult): boolean {
+    return result.checks.some(
+      (line) => line.check === 'Machines' && line.status !== 'Passed' && line.failure === 'PermissionNotGranted'
+    );
   }
 
   /** Forgets everything of the current attempt: the token, a test in flight, its result and notices. */

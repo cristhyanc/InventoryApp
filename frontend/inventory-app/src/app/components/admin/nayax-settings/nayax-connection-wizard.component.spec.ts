@@ -16,10 +16,8 @@ import { ModalDialogComponent } from '../../shared/modal-dialog/modal-dialog.com
 import { NayaxConnectionChecklistComponent } from './nayax-connection-checklist.component';
 import {
   NAYAX_OPERATOR_ID_GUIDE,
-  NAYAX_OPERATOR_SCREENSHOTS,
   NAYAX_OPERATOR_SCREEN_GUIDE,
   NAYAX_TOKEN_GUIDE,
-  NAYAX_TOKEN_SCREENSHOTS,
   NayaxConnectionWizardComponent
 } from './nayax-connection-wizard.component';
 import { NAYAX_CORE_URL } from './nayax-core-guide.component';
@@ -332,18 +330,22 @@ describe('NayaxConnectionWizardComponent (issues #538 and #1311)', () => {
       expect(open?.getAttribute('rel')).toContain('noopener');
     });
 
-    it('shows the official operator screen and links the official guides it comes from', async () => {
+    it('links the official Nayax guides for the operator screen and embeds no screenshot', async () => {
       const { host, openDialog } = await render();
 
       openDialog();
 
-      const images = host.querySelectorAll<HTMLImageElement>('[data-testid="step-1"] img');
-      expect(images).toHaveLength(NAYAX_OPERATOR_SCREENSHOTS.length);
-      expect(images[0].getAttribute('src')).toBe(NAYAX_OPERATOR_SCREENSHOTS[0].src);
-      expect(images[0].alt).toContain('Operator Id');
+      expect(host.querySelectorAll('[data-testid="step-1"] img')).toHaveLength(0);
       const source = host.querySelector('[data-testid="step-1"] [data-testid="nayax-guide-source"]');
-      const links = Array.from(source?.querySelectorAll('a') ?? []).map((link) => link.getAttribute('href'));
-      expect(links).toEqual([NAYAX_OPERATOR_ID_GUIDE.url, NAYAX_OPERATOR_SCREEN_GUIDE.url]);
+      const links = Array.from(source?.querySelectorAll('a') ?? []);
+      expect(links.map((link) => link.getAttribute('href'))).toEqual([
+        NAYAX_OPERATOR_ID_GUIDE.url,
+        NAYAX_OPERATOR_SCREEN_GUIDE.url
+      ]);
+      for (const link of links) {
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toContain('noopener');
+      }
     });
 
     it('refuses to move on without an operator id, and spends no Nayax test', async () => {
@@ -386,50 +388,22 @@ describe('NayaxConnectionWizardComponent (issues #538 and #1311)', () => {
       expect(host.querySelector('[data-testid="step-2"] [data-testid="open-nayax-core"]')).toBeTruthy();
     });
 
-    it('shows the official token screenshots, credits the guide and never the token-revealing one', async () => {
+    /**
+     * Every screenshot Nayax publishes for these screens shows its demo account's identifiers, which
+     * the issue excludes from what the page delivers, so the guide is linked instead (issue #1311).
+     */
+    it('embeds no Nayax screenshot and links the official token guide instead', async () => {
       const { host, toTokenStep } = await render();
 
       toTokenStep();
 
-      const images = Array.from(host.querySelectorAll<HTMLImageElement>('[data-testid="step-2"] img'));
-      expect(images.map((image) => image.getAttribute('src'))).toEqual(NAYAX_TOKEN_SCREENSHOTS.map((shot) => shot.src));
-      expect(images.map((image) => image.alt)).toEqual([
-        expect.stringContaining('Account Settings'),
-        expect.stringContaining('Security and Login'),
-        expect.stringContaining('User Tokens')
-      ]);
-      // The guide's fourth screenshot is the Show Token pop-up, which displays a token and its QR code.
-      expect(host.innerHTML).not.toContain('security/image4');
-      for (const image of images) {
-        expect(image.getAttribute('referrerpolicy')).toBe('no-referrer');
-      }
-      const source = host.querySelector('[data-testid="step-2"] [data-testid="nayax-guide-source"] a');
-      expect(source?.getAttribute('href')).toBe(NAYAX_TOKEN_GUIDE.url);
-    });
-
-    it('lets each screenshot be opened full size in a new tab', async () => {
-      const { host, toTokenStep } = await render();
-
-      toTokenStep();
-
-      const enlarge = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-testid="step-2"] [data-testid="enlarge-screenshot"]'));
-      expect(enlarge.map((link) => link.getAttribute('href'))).toEqual(NAYAX_TOKEN_SCREENSHOTS.map((shot) => shot.src));
-      for (const link of enlarge) {
-        expect(link.getAttribute('target')).toBe('_blank');
-        expect(link.getAttribute('aria-label')).toContain('Enlarge screenshot');
-      }
-    });
-
-    it('keeps the written steps and says so when a screenshot fails to load', async () => {
-      const { fixture, host, toTokenStep } = await render();
-
-      toTokenStep();
-      host.querySelector('[data-testid="step-2"] img')?.dispatchEvent(new Event('error'));
-      fixture.detectChanges();
-
-      expect(host.querySelectorAll('[data-testid="step-2"] img')).toHaveLength(NAYAX_TOKEN_SCREENSHOTS.length - 1);
-      expect(host.querySelector('[data-testid="screenshot-unavailable"]')?.textContent).toContain('steps above are complete');
-      expect(host.querySelectorAll('[data-testid="nayax-core-steps"] li')).toHaveLength(5);
+      expect(host.querySelectorAll('[data-testid="connect-nayax-dialog"] img')).toHaveLength(0);
+      expect(host.innerHTML).not.toContain('mintcdn.com');
+      const source = host.querySelector('[data-testid="step-2"] [data-testid="nayax-guide-source"]');
+      expect(source?.textContent).toContain("See each screen in Nayax's official guide");
+      const link = source?.querySelector('a');
+      expect(link?.getAttribute('href')).toBe(NAYAX_TOKEN_GUIDE.url);
+      expect(link?.getAttribute('target')).toBe('_blank');
     });
 
     it('offers an empty masked field that no component state is bound to', async () => {
@@ -1084,7 +1058,43 @@ describe('NayaxConnectionWizardComponent (issues #538 and #1311)', () => {
       fixture.detectChanges();
 
       expect(host.textContent).toContain('left exactly as it was');
+      expect(host.textContent).toContain('No usable answer came back from Nayax');
+      expect(host.textContent).not.toContain('machine list for this operator');
       expect(component.connection?.status).toBe('Ready');
+    });
+
+    /**
+     * A machine-list 403 on re-test leaves the stored status and timestamp alone, as a timeout does
+     * (issue #1310), but Nayax did answer: the guidance is a permission request, not "try later".
+     */
+    it('gives machine-list permission guidance when a re-test is refused the machine list', async () => {
+      const { component, fixture, host, testId } = await render({
+        status: () => of(state({ status: 'Ready' })),
+        retest: () =>
+          of(
+            retestResult({
+              connection: state({ status: 'Ready' }),
+              statusUpdated: false,
+              nothingFailed: false,
+              machineCount: null,
+              checks: [
+                { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+                { check: 'Machine', status: 'NotChecked', failure: null }
+              ]
+            })
+          )
+      });
+
+      component.retest();
+      fixture.detectChanges();
+
+      const notice = testId('notice')?.textContent ?? '';
+      expect(notice).toContain('refused this token access to the machine list');
+      expect(notice).toContain('read access to the machine list');
+      expect(notice).toContain('last-tested time are unchanged');
+      expect(notice).not.toContain('No usable answer');
+      expect(component.connection?.status).toBe('Ready');
+      expect(host.querySelector('[data-testid="check-Machines"]')?.textContent).toContain('does not have permission');
     });
 
     it('reports a connection replaced while the re-test ran', async () => {

@@ -3589,8 +3589,9 @@ full-height panel on a phone, closed with Escape or its Close control, which ret
 button that opened it. The estimated processing fee rate is configured further down the same page
 and is unrelated to the connection.
 
-The dialog has three steps. The two input steps put **In Nayax Core** (Nayax's own instructions and
-screenshots, with an **Open Nayax Core** link that opens a new tab) beside **In Restockroo** (the
+The dialog has three steps. The two input steps put **In Nayax Core** (Nayax's own instructions, a
+link to the official Nayax guide that shows each screen, and an **Open Nayax Core** link — all
+opening in a new tab) beside **In Restockroo** (the
 field); on a phone the guidance is stacked above the field, and Back and the current action stay in
 a fixed row at the bottom.
 
@@ -3637,14 +3638,15 @@ a fixed row at the bottom.
    only once the save succeeded. Closing the dialog before saving stores nothing and keeps nothing of
    the attempt; a test still running when you close is abandoned and its answer ignored.
 
-The screenshots are Nayax's own, from its developer portal guides — [How to find your Operator ID in
+The steps are Nayax's own, from its developer portal guides — [How to find your Operator ID in
 Nayax Core](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/request-access#how-to-find-your-operator-id-in-nayax-core),
 [Create an operator: verify creation](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/operator/create-operator#verify-creation)
 and [Lynx API security: access token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token)
-— shown from where Nayax publishes them and credited to those guides; each opens full size in a new
-tab. Nayax's portal states no terms permitting their reuse, so none is bundled with the application
-(only the page captures under `docs/screenshots/issue-1311/` show them, as rendered), and the guide's Show Token pop-up (which displays a token and its QR code) is not shown at all. If a
-screenshot cannot load, the written steps are complete without it.
+— and each guide is linked beside its step as the place to see the screens. The dialog embeds **no
+Nayax screenshot**: every screenshot Nayax publishes for these screens is from its demo account and
+shows an account identifier (a user's name, an operator name or an operator id, and on the Show
+Token pop-up a token and its QR code), Nayax's portal states no terms that would allow a redacted
+copy, and so the written steps carry the instructions on their own.
 
 **Re-testing.** The stored connection is shown on the card with its status — Ready, Permissions
 pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
@@ -3655,7 +3657,9 @@ up**, because those permissions were never verified. A re-test moves the stored 
 learns something about the token: the machine list answering normally, or Nayax rejecting the token
 itself. If Nayax cannot be reached, if it answers something unrecognised, or if it refuses the
 machine list for lack of a permission, the stored status and its last-tested time are left exactly as
-they were and the page says so rather than concluding anything. If the token was
+they were and the page says so. A refused machine list gets its own guidance — Nayax answered, so it
+asks you to request read access to the machine list from Nayax and re-test — while the other two
+ask you to try again in a few minutes. If the token was
 replaced while a re-test was running, the result is discarded and the page asks you to run the test
 again, so the status always describes the token actually stored.
 
