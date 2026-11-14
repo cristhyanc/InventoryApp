@@ -486,7 +486,7 @@ public class MoneyReportSydneyBusinessDayTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = MachineId, CustomerID = SiteId } });
-        return new GetSiteCommissionReport(nayax.Object, new EfSiteCommissionStore(db), new SiteNameResolver(), Sydney);
+        return new GetSiteCommissionReport(nayax.Object, new EfSiteCommissionStore(db), new SiteNameResolver());
     }
 
     private static GetBookkeepingReport Bookkeeping(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>

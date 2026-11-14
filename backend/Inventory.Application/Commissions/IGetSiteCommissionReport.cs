@@ -10,7 +10,7 @@ namespace Inventory.Application.Commissions;
 /// business-day midnights, which fall in the middle of a UTC day, so asking for the whole UTC dates
 /// they touch would charge a period commission on sales its own revenue excludes - and omit the
 /// commission on the sales it does count. The two business dates stay part of the period because an
-/// agreement, a recorded payment and a payment due date are effective-dated, not instants.
+/// agreement is effective-dated, not an instant.
 /// </summary>
 public readonly record struct SiteCommissionBusinessPeriod(
     DateTime StartUtc,

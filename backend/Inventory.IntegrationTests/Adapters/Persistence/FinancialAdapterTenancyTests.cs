@@ -8,7 +8,6 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using Agreement = Inventory.Domain.FinancialConfiguration.CommissionAgreement;
-using Payment = Inventory.Domain.FinancialConfiguration.CommissionPayment;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 
@@ -40,15 +39,6 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
                 EffectiveTo = Day,
                 CommissionRate = businessId / 10m,
                 Basis = CommissionBasis.GrossSales
-            });
-            seed.CommissionPayments.Add(new Inventory.Infrastructure.Models.CommissionPayment
-            {
-                BusinessId = businessId,
-                SiteId = SiteId,
-                PeriodStart = Day,
-                PeriodEnd = Day,
-                PaymentDate = Day,
-                Amount = businessId
             });
             seed.ImportedFiles.Add(new ImportedFile
             {
@@ -140,14 +130,11 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
         {
             Assert.Equal(businessId / 10m,
                 Assert.Single(await store.GetAgreementsAsync(siteId, CancellationToken.None)).CommissionRate);
-            Assert.Equal((decimal)businessId,
-                Assert.Single(await store.GetPaymentsAsync(siteId, Day, Day, CancellationToken.None)).Amount);
         }
         var sales = await store.GetCompletedSalesAsync([MachineId], Day, Day.AddDays(1), CancellationToken.None);
         Assert.Equal((decimal)businessId, Assert.Single(sales).SettlementValue);
         Assert.True(await store.HasOverlappingAgreementAsync(SiteId, Day, Day, CancellationToken.None));
         Assert.Empty(await store.GetAgreementsAsync(999, CancellationToken.None));
-        Assert.Empty(await store.GetPaymentsAsync(SiteId, Day.AddDays(1), Day.AddDays(1), CancellationToken.None));
     }
 
     [Theory]
@@ -182,20 +169,14 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
         var agreement = await store.AddAgreementAsync(
             new Agreement(0, SiteId, Day.AddDays(1), null, .3m, CommissionFrequency.None,
                 CommissionBasis.GrossSales, null, default, default), CancellationToken.None);
-        var payment = await store.AddPaymentAsync(
-            new Payment(0, SiteId, Day, Day, Day, 3m, "synthetic", default, default), CancellationToken.None);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(businessId,
             (await verify.SiteCommissionAgreements.SingleAsync(row => row.Id == agreement.Id)).BusinessId);
-        Assert.Equal(businessId,
-            (await verify.CommissionPayments.SingleAsync(row => row.Id == payment.Id)).BusinessId);
         using var other = TestAppDbContext.For(_options, otherBusinessId);
         var otherStore = new EfSiteCommissionStore(other);
         Assert.Equal(otherBusinessId / 10m,
             Assert.Single(await otherStore.GetAgreementsAsync(SiteId, CancellationToken.None)).CommissionRate);
-        Assert.Equal((decimal)otherBusinessId,
-            Assert.Single(await otherStore.GetPaymentsAsync(SiteId, Day, Day, CancellationToken.None)).Amount);
     }
 
     [Fact]
@@ -209,7 +190,6 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
             Assert.Empty(facts.CompletedSales);
             var store = new EfSiteCommissionStore(db);
             Assert.Empty(await store.GetAgreementsAsync(null, CancellationToken.None));
-            Assert.Empty(await store.GetPaymentsAsync(null, Day, Day, CancellationToken.None));
             Assert.Empty(await store.GetCompletedSalesAsync([MachineId], Day, Day.AddDays(1), CancellationToken.None));
             Assert.False(await store.HasOverlappingAgreementAsync(SiteId, Day, null, CancellationToken.None));
         }
@@ -219,13 +199,7 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
                 .AddAgreementAsync(new Agreement(0, SiteId, Day, null, .3m, CommissionFrequency.None,
                     CommissionBasis.GrossSales, null, default, default), CancellationToken.None));
         }
-        using (var db = TestAppDbContext.Denied(_options))
-        {
-            await Assert.ThrowsAsync<CrossBusinessAccessException>(() => new EfSiteCommissionStore(db)
-                .AddPaymentAsync(new Payment(0, SiteId, Day, Day, Day, 3m, null, default, default), CancellationToken.None));
-        }
         using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(2, await verify.SiteCommissionAgreements.CountAsync());
-        Assert.Equal(2, await verify.CommissionPayments.CountAsync());
     }
 }

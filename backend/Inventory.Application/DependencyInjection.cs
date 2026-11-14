@@ -334,7 +334,6 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetSiteCommissionReport>(sp => sp.GetRequiredService<GetSiteCommissionReport>());
         services.AddScoped<GetSiteCommissionAgreements>();
         services.AddScoped<SaveSiteCommissionAgreement>();
-        services.AddScoped<RecordSiteCommissionPayment>();
         services.AddScoped<ListCategories>();
         services.AddScoped<GetCategory>();
         services.AddScoped<CreateCategory>();

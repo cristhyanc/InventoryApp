@@ -2,7 +2,6 @@ using Inventory.Application.Commissions;
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
 using Inventory.Application.SupportSessions;
-using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Subscriptions;
@@ -55,7 +54,7 @@ public class GetSiteCommissionReportProviderOptionalTests
     /// <summary>
     /// Issue #967: a business whose plan does not include the sales provider gets the same
     /// unavailable report under its own reason, and the period it asked about is still reported.
-    /// Nothing stored is touched: the agreements and payments are exactly as they were.
+    /// Nothing stored is touched: the agreements are exactly as they were.
     /// </summary>
     [Fact]
     public async Task A_plan_without_the_provider_is_unavailable_with_its_own_reason()
@@ -181,17 +180,11 @@ public class GetSiteCommissionReportProviderOptionalTests
             .ReturnsAsync(sale is null ? [] : [sale]);
         store.Setup(x => x.GetAgreementsAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(agreement is null ? [] : [agreement]);
-        store.Setup(x => x.GetPaymentsAsync(
-                It.IsAny<long?>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
 
         var names = new Mock<ISiteNameResolver>();
         names.Setup(x => x.Resolve(It.IsAny<IReadOnlyList<NayaxMachine>>(), It.IsAny<long>())).Returns("Site 50");
 
-        var calendar = new Mock<IBusinessCalendar>();
-        calendar.SetupGet(x => x.Today).Returns(To);
-
-        return new GetSiteCommissionReport(fleet.Object, store.Object, names.Object, calendar.Object)
+        return new GetSiteCommissionReport(fleet.Object, store.Object, names.Object)
             .Handle(From, To, null, CancellationToken.None);
     }
 

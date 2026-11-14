@@ -341,7 +341,6 @@ public class EndpointPlanRequirementTests
         // when a plan stops including it.
         new("SiteCommissionsController.Agreements", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions/agreements
         new("SiteCommissionsController.Get", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions
-        new("SiteCommissionsController.RecordPayment", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/{siteId:long}/payments
         new("SiteCommissionsController.SaveAgreement", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/agreements
 
         // A site is known only from the provider's fleet read, so all three site reads are behind
@@ -593,7 +592,6 @@ public class EndpointPlanRequirementTests
     [InlineData("SiteCommissionsController.Get", SubscriptionPlan.Pro)]
     [InlineData("SiteCommissionsController.Agreements", SubscriptionPlan.Pro)]
     [InlineData("SiteCommissionsController.SaveAgreement", SubscriptionPlan.Pro)]
-    [InlineData("SiteCommissionsController.RecordPayment", SubscriptionPlan.Pro)]
     [InlineData("ImportsController.ImportNayaxSales", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Test", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Save", SubscriptionPlan.Pro)]

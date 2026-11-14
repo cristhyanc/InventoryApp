@@ -33,11 +33,9 @@ internal static class TestFinancialUseCases
 
     public static GetSiteCommissionReport SiteCommissions(
         AppDbContext db,
-        INayaxLynxClient nayax,
-        IBusinessCalendar businessCalendar) =>
+        INayaxLynxClient nayax) =>
         new(
             nayax,
             new EfSiteCommissionStore(db),
-            new SiteNameResolver(),
-            businessCalendar);
+            new SiteNameResolver());
 }

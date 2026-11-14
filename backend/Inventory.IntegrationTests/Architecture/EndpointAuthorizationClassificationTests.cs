@@ -495,7 +495,6 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "POST", Capability.SiteCommissionsManage)]
-    [InlineData("api/site-commissions/{siteId:long}/payments", "POST", Capability.SiteCommissionsManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "GET", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
     [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]

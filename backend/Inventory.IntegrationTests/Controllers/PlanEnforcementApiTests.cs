@@ -168,7 +168,7 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
     }
 
     /// <summary>
-    /// Site Commissions is Pro throughout - the report, the agreements and the payments - and
+    /// Site Commissions is Pro throughout - the report and the agreements - and
     /// nothing it has stored is removed by the refusal: the agreement seeded here is still there
     /// afterwards and is readable again on Pro.
     /// </summary>
@@ -190,18 +190,16 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
     }
 
     /// <summary>
-    /// The commission <em>writes</em> are refused on the same plan as the read, before anything is
+    /// The commission <em>write</em> is refused on the same plan as the read, before anything is
     /// stored.
     /// </summary>
     [Fact]
-    public async Task The_commission_writes_are_refused_on_a_plan_without_pro()
+    public async Task The_commission_write_is_refused_on_a_plan_without_pro()
     {
         await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Starter);
 
         await AssertPlanRefusalAsync(
             await Owner().PostAsync("/api/site-commissions/agreements", Json("{}")));
-        await AssertPlanRefusalAsync(
-            await Owner().PostAsync("/api/site-commissions/1/payments", Json("{}")));
 
         Assert.Equal(0, await _factory.CommissionAgreementCountAsync());
     }

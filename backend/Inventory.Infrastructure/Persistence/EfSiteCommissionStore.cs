@@ -43,22 +43,6 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
         .Select(ToDomain)
         .ToList();
 
-    public async Task<IReadOnlyList<CommissionPayment>> GetPaymentsAsync(
-        long? siteId,
-        DateTime periodStart,
-        DateTime periodEnd,
-        CancellationToken cancellationToken) =>
-        (await _db.CommissionPayments.AsNoTracking()
-            .Where(payment =>
-                (!siteId.HasValue || payment.SiteId == siteId.Value) &&
-                payment.PeriodStart == periodStart &&
-                payment.PeriodEnd == periodEnd)
-            .OrderBy(payment => payment.PaymentDate)
-            .ThenBy(payment => payment.Id)
-            .ToListAsync(cancellationToken))
-        .Select(ToDomain)
-        .ToList();
-
     public Task<bool> HasOverlappingAgreementAsync(
         long siteId,
         DateTime effectiveFrom,
@@ -89,24 +73,6 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
         return ToDomain(entity);
     }
 
-    public async Task<CommissionPayment> AddPaymentAsync(
-        CommissionPayment payment,
-        CancellationToken cancellationToken)
-    {
-        var entity = new Inventory.Infrastructure.Models.CommissionPayment
-        {
-            SiteId = payment.SiteId,
-            PeriodStart = payment.PeriodStart,
-            PeriodEnd = payment.PeriodEnd,
-            PaymentDate = payment.PaymentDate,
-            Amount = payment.Amount,
-            Notes = payment.Notes
-        };
-        _db.CommissionPayments.Add(entity);
-        await _db.SaveChangesAsync(cancellationToken);
-        return ToDomain(entity);
-    }
-
     private static CommissionAgreement ToDomain(SiteCommissionAgreementEntity entity) =>
         new(
             entity.Id,
@@ -117,18 +83,6 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
             entity.Frequency,
             entity.Basis,
             entity.PaymentDueDaysAfterPeriodEnd,
-            entity.CreatedAt,
-            entity.UpdatedAt);
-
-    private static CommissionPayment ToDomain(Inventory.Infrastructure.Models.CommissionPayment entity) =>
-        new(
-            entity.Id,
-            entity.SiteId,
-            entity.PeriodStart,
-            entity.PeriodEnd,
-            entity.PaymentDate,
-            entity.Amount,
-            entity.Notes,
             entity.CreatedAt,
             entity.UpdatedAt);
 }
