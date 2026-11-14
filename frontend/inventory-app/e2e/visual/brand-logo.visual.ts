@@ -6,7 +6,7 @@ import { openSignedOutLanding } from './support/landing-page';
 /**
  * Visual evidence for issue #1272: the approved Restockroo logo in every place the app shows its
  * brand - the landing header and footer, a legal page, the sign-in page, the expanded and collapsed
- * sidebar and the narrow-layout More sheet - at 1440px, 768px, 390px and 360px.
+ * sidebar and the narrow-layout More sheet - at 1440px, 768px, 390px and 360px, and at 125%, 150%, 200% and 400% browser zoom.
  *
  * Like the other visual runs it starts the Angular dev server alone, with no API and no database.
  * The public pages make no request, and the shell is opened on the development-only design-system
@@ -20,6 +20,9 @@ import { openSignedOutLanding } from './support/landing-page';
  * project and skips itself on `mobile-390`, which would otherwise capture the same images twice.
  */
 const WIDTHS = [1440, 768, 390, 360] as const;
+
+/** Browser zoom levels checked on a 1440 x 900 window (issue #1272 review). */
+const ZOOM_LEVELS = [1.25, 1.5, 2, 4] as const;
 
 /** The `lg` breakpoint the shell reads: below it the sidebar is the More sheet, not a rail. */
 const WIDE_LAYOUT_WIDTH = 1024;
@@ -42,9 +45,9 @@ async function calmAnimations(page: Page): Promise<void> {
 async function expectLogosIntact(scope: Locator): Promise<void> {
   const logos = scope.locator('img[alt="Restockroo"]');
   expect(await logos.count()).toBeGreaterThan(0);
-  for (const logo of await logos.all()) {
-    await expect(logo).toBeVisible();
-    const facts = await logo.evaluate((image: HTMLImageElement) => {
+  await expect(logos.first()).toBeVisible();
+  const all = await logos.evaluateAll((images) =>
+    (images as HTMLImageElement[]).map((image) => {
       const box = image.getBoundingClientRect();
       return {
         src: image.getAttribute('src'),
@@ -54,7 +57,10 @@ async function expectLogosIntact(scope: Locator): Promise<void> {
         width: box.width,
         height: box.height
       };
-    });
+    })
+  );
+  for (const facts of all) {
+    expect(facts.height).toBeGreaterThan(0);
     expect(facts.src).toMatch(/^assets\/brand\/restockroo-(logo|symbol)\.png$/);
     expect(facts.complete).toBe(true);
     expect(facts.naturalWidth).toBeGreaterThan(0);
@@ -130,6 +136,45 @@ test.describe('brand logo visual evidence (issue #1272)', () => {
         await capture(sheetHeader, 'more-sheet-header', width);
       }
       await expectNoSidewaysScroll(page);
+    });
+  }
+
+  /**
+   * Browser zoom on a 1440 x 900 window. Zooming to N% divides the CSS viewport by N/100 and
+   * multiplies the device pixel ratio by the same factor, which is what a new context with that
+   * viewport and `deviceScaleFactor` reproduces. From 150% the CSS width falls below the shell's
+   * 1024px breakpoint, so the app shows the More sheet exactly as Chrome would.
+   */
+  for (const zoom of ZOOM_LEVELS) {
+    test(`public header and app navigation at ${zoom * 100}% zoom`, async ({ browser }) => {
+      const width = Math.round(1440 / zoom);
+      const height = Math.round(900 / zoom);
+      const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: zoom });
+      const page = await context.newPage();
+      const label = `zoom-${zoom * 100}pct`;
+      try {
+        await openSignedOutLanding(page, width, height);
+        const header = page.locator('app-landing-header header');
+        await expectLogosIntact(header);
+        await expectNoSidewaysScroll(page);
+        await header.screenshot({ path: join(screenshotDirectory, `landing-header-${label}.png`) });
+
+        await page.goto(FIXTURE_PATH);
+        await calmAnimations(page);
+        const navigation = page.locator('nav[aria-label="Primary"]');
+        if (width >= WIDE_LAYOUT_WIDTH) {
+          await expectLogosIntact(navigation);
+          await navigation.screenshot({ path: join(screenshotDirectory, `sidebar-expanded-${label}.png`) });
+        } else {
+          await page.getByRole('button', { name: 'Open navigation menu' }).click();
+          const sheetHeader = navigation.locator('[data-testid="sidebar-brand"]').locator('..');
+          await expectLogosIntact(sheetHeader);
+          await sheetHeader.screenshot({ path: join(screenshotDirectory, `more-sheet-header-${label}.png`) });
+        }
+        await expectNoSidewaysScroll(page);
+      } finally {
+        await context.close();
+      }
     });
   }
 });
