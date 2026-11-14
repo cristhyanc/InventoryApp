@@ -10831,12 +10831,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Reports keep the calendar-date `Handle` overload with their own date filters unchanged: `FeeDate` is null there, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
 
 What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks in the report facts adapters.
-- The Transaction Sales report filters its requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter.
+- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
+- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -11015,7 +11015,8 @@ changed.
 
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
-([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
+([the dashboard rule above](#time)), the money reports select their sales between the same kind of
+boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -11027,19 +11028,64 @@ its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays
 row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
 business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
 status counts and fee estimate all describe the same business day. Imported reimbursement coverage
-dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
-shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
-them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
+dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted.
+Before issue #380 the daily report bucketed and
 filtered by the UTC date of the instant, so a sale in the first 10–11 hours of a Sydney day landed on
 the previous day's row; the owner decided on PR #392 that this belongs to #380's acceptance
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
+**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
+(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
+business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
+`Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
+in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
+COGS, fees and GST on sales disagreed between reports for the same dates. The conversion is now made
+once, by `EfReportingSharedQueries.SalesWindow`, into a `BusinessDateSalesWindow` - the two requested
+business dates and the UTC instants of business-day midnight at the start of the first and at the
+start of the day after the last - and every shared helper that selects *sales* takes that window:
+the completed-sale and all-status queries, the cost projection, the commission calculation and total,
+and the provider-coverage query. Four things follow it:
+
+- The **fee rates and imported fee days** come from the same window (`HandleBusinessPeriod` over
+  `BusinessDateSalesWindow.FeePeriod`), so a sale is charged a fee, and estimated at the rate
+  effective, on the business date whose revenue counted it.
+- **Recorded provider coverage is judged over those instants**, not the calendar range: the
+  bookkeeping facts now carry the one `ReportCoverageFacts` record every other sales-based report
+  already carried (issue #730/#731), and `GetBookkeepingReport` decides both availability states from
+  it instead of re-deriving the period from the request. A coverage range may only be compared with
+  the window the figures were measured over.
+- **Reconciliation attributes a sale to the reimbursement period covering its business date**
+  (`ToBusinessDate`), not the UTC date of its instant.
+- The **site commission these reports subtract is calculated over the same window**
+  (`IGetSiteCommissionReport.HandleBusinessPeriod` over `BusinessDateSalesWindow.CommissionPeriod`).
+  The first fix moved only the window the commission was *gated* on — which machines had a completed
+  sale — and left the dollar `CommissionDue` coming from the calendar-date `Handle`, so bookkeeping
+  counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
+  net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
+  separates the two questions the calculation asks: its two UTC instants select the completed sales,
+  and its two business dates resolve the effective-dated agreement, the recorded payments and the
+  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
+  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+
+Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
+and purchase dates keep their plain calendar-date bounds in these reports too.
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
+daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
+date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
+on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
+the standalone Commission report still answering $0.35 for the 4th. Figures for past
+ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
+anyone who has exported or lodged figures from these reports.
+
 Transaction Sales still filters its `from`/`to` by the UTC date of the instant
 (`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
 on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
 outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and is an open follow-up.
+inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -14323,14 +14369,18 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report selects sales
-between business-day midnights; the others between plain calendar-date bounds. Its `Availability()`
-and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
+only be compared with the window the figures were measured over. The daily report, bookkeeping, the
+reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
+machine and product profitability still select between plain calendar-date bounds. Its
+`Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
 calls, including the bookkeeping one #730 introduced, so the reports cannot read coverage
 differently. It takes no machine predicate (coverage is about whether provider data was retrieved
-for the business at all) and no provider predicate (P5).
+for the business at all) and no provider predicate (P5). The bookkeeping facts carried that coverage
+as three loose fields, with the use case re-deriving the period from the request, until issue #1250
+moved them onto the same carrier: once that adapter selected its sales over business-day midnights,
+the requested calendar dates were no longer the window its figures had been measured over.
 
 **Two families or one, decided by what each report actually shows.** A figure is never labelled by
 evidence that does not feed it, so the contract differs by report on purpose:

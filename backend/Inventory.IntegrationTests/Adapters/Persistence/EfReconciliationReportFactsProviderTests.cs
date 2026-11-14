@@ -40,7 +40,7 @@ public class EfReconciliationReportFactsProviderTests
             MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -75,7 +75,7 @@ public class EfReconciliationReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -108,7 +108,7 @@ public class EfReconciliationReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -156,7 +156,7 @@ public class EfReconciliationReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 12), new DateTime(2025, 8, 12), 1216029552, CancellationToken.None);
 
@@ -206,7 +206,7 @@ public class EfReconciliationReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 12), new DateTime(2025, 8, 12), null, CancellationToken.None);
 
@@ -233,7 +233,7 @@ public class EfReconciliationReportFactsProviderTests
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = 21 },
             new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = null });
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -279,7 +279,7 @@ public class EfReconciliationReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -319,7 +319,7 @@ public class EfReconciliationReportFactsProviderTests
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 6), TransactionStatusId = NayaxTransactionStatusIds.CancelledOrDeclined31 },
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 7), TransactionStatusId = null });
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -355,7 +355,7 @@ public class EfReconciliationReportFactsProviderTests
         }
 
         await db.SaveChangesAsync();
-        var provider = new EfReconciliationReportFactsProvider(db);
+        var provider = new EfReconciliationReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 

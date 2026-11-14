@@ -1,5 +1,6 @@
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Commissions;
+using Inventory.Application.Time;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -27,18 +28,25 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
 {
     private readonly AppDbContext _db;
     private readonly IGetSiteCommissionReport _siteCommissions;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public EfDashboardReportFactsProvider(AppDbContext db, IGetSiteCommissionReport siteCommissions)
+    public EfDashboardReportFactsProvider(
+        AppDbContext db, IGetSiteCommissionReport siteCommissions, IBusinessCalendar businessCalendar)
     {
         _db = db;
         _siteCommissions = siteCommissions;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<DashboardReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
-        var endExclusive = to.Date.AddDays(1);
+        // The requested dates are business dates, so the sales they select are the ones between the
+        // business-day midnights those dates cover (issue #1250) - the same window the bookkeeping
+        // report this summary composes selects its own figures over, so the machine and product
+        // counts describe exactly the sales the amounts beside them are summed from.
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
 
-        var summary = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
+        var summary = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -51,7 +59,7 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             .SingleOrDefaultAsync(cancellationToken);
 
         var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(
-            _db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
+            _db, _siteCommissions, window, machineId, cancellationToken);
 
         return new DashboardReportFacts(
             MachineCount: summary?.Machines ?? 0,

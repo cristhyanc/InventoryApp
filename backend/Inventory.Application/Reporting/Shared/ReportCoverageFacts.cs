@@ -6,12 +6,13 @@ namespace Inventory.Application.Reporting.Shared;
 /// The coverage evidence one report period rests on, as a facts provider reports it (issue #730 for
 /// the GST and bookkeeping reports, issue #731 for every other sales-based report and export).
 ///
-/// <para>It exists so the six remaining reports do not each carry four loose fields and repeat the
-/// same two <see cref="ReportAvailabilityPolicy.Decide"/> calls. The period instants travel with the
+/// <para>It exists so the reports do not each carry four loose fields and repeat the same two
+/// <see cref="ReportAvailabilityPolicy.Decide"/> calls. The period instants travel with the
 /// coverage deliberately: the adapter that queried the rows is the only thing that knows which
-/// window it filtered them by - the daily report selects sales between business-day midnights, the
-/// others between plain calendar-date bounds - and a coverage range may only be compared with the
-/// window the figures were actually measured over.</para>
+/// window it filtered them by - the daily report, bookkeeping, the reports dashboard and
+/// reconciliation select sales between business-day midnights (issue #1250), machine and product
+/// profitability between plain calendar-date bounds - and a coverage range may only be compared with
+/// the window the figures were actually measured over.</para>
 /// </summary>
 public sealed record ReportCoverageFacts
 {
