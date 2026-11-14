@@ -84,15 +84,17 @@ public class ReportingRegressionTests
                 new SiteCommissionReport(from, to, []));
         var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
         var siteCommissions = siteCommissionService ?? commissions!.Object;
-        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
+            db, nayaxFees, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
-        var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
+        var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(
+            db, TestFinancialUseCases.TrivialCalendar));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
             new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
-            new EfDashboardReportFactsProvider(db, siteCommissions));
+            new EfDashboardReportFactsProvider(db, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
         return new ReportingHarness(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,

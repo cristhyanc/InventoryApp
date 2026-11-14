@@ -116,13 +116,13 @@ public class ProviderDataCoverageStoreTests
 
         await using var other = TestAppDbContext.For(options, BusinessB);
         var facts = await new EfBookkeepingReportFactsProvider(
-                other, TestFinancialUseCases.ProcessingFees(other), EmptyCommissions())
+                other, TestFinancialUseCases.ProcessingFees(other), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar)
             .GetFactsAsync(PeriodFrom, PeriodTo, null, CancellationToken.None);
 
-        Assert.Empty(facts.SalesCoverage);
+        Assert.Empty(facts.Coverage.SalesCoverage);
         Assert.Equal(
             ReportAvailabilityState.Missing,
-            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.SalesCoverage, facts.ContainsSalesRows).State);
+            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.Coverage.SalesCoverage, facts.Coverage.ContainsSalesRows).State);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class ProviderDataCoverageStoreTests
 
         await using var db2 = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfBookkeepingReportFactsProvider(
-                db2, TestFinancialUseCases.ProcessingFees(db2), EmptyCommissions())
+                db2, TestFinancialUseCases.ProcessingFees(db2), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar)
             .GetFactsAsync(PeriodFrom, PeriodTo, null, CancellationToken.None);
 
         // The two sales-family rows together span the period with no gap, so sales are complete;
@@ -155,13 +155,13 @@ public class ProviderDataCoverageStoreTests
         // The SalesFileImport row is written straight to the store here to exercise the read's
         // grouping: nothing in the application writes that source today, because a transaction
         // export proves no interval (issue #730, see ImportNayaxSalesCoverageTests).
-        Assert.Equal(2, facts.SalesCoverage.Count);
+        Assert.Equal(2, facts.Coverage.SalesCoverage.Count);
         Assert.Equal(
             ReportAvailabilityState.Complete,
-            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.SalesCoverage, facts.ContainsSalesRows).State);
+            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.Coverage.SalesCoverage, facts.Coverage.ContainsSalesRows).State);
 
         var settlement = ReportAvailabilityPolicy.Decide(
-            PeriodFrom, PeriodTo.AddDays(1), facts.SettlementCoverage, facts.ImportedContainsRows);
+            PeriodFrom, PeriodTo.AddDays(1), facts.Coverage.SettlementCoverage, facts.ImportedContainsRows);
         Assert.Equal(ReportAvailabilityState.Stale, settlement.State);
         Assert.Equal(new DateTime(2026, 7, 11), settlement.AsOfUtc);
     }
@@ -191,14 +191,14 @@ public class ProviderDataCoverageStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfBookkeepingReportFactsProvider(
-                db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions())
+                db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar)
             .GetFactsAsync(PeriodFrom, PeriodTo, null, CancellationToken.None);
 
         Assert.Equal(0m, facts.GrossSales);
-        Assert.True(facts.ContainsSalesRows);
+        Assert.True(facts.Coverage.ContainsSalesRows);
         Assert.Equal(
             ReportAvailabilityState.Unverified,
-            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.SalesCoverage, facts.ContainsSalesRows).State);
+            ReportAvailabilityPolicy.Decide(PeriodFrom, PeriodTo.AddDays(1), facts.Coverage.SalesCoverage, facts.Coverage.ContainsSalesRows).State);
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class ProviderDataCoverageStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var report = await new Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport(
-                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()))
+                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar))
             .Handle(new ReportingFilterDto(PeriodFrom, PeriodTo), CancellationToken.None);
 
         Assert.Equal(nameof(ReportAvailabilityState.Complete), report.ProviderAvailability.Sales.State);

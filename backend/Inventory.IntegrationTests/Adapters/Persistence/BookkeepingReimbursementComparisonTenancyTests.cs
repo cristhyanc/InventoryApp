@@ -103,7 +103,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
     {
         await using var db = TestAppDbContext.For(_options, businessId);
         var useCase = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
-            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()));
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar));
         return await useCase.Handle(new ReportingFilterDto(Day, Day, MachineId: machineId), CancellationToken.None);
     }
 
@@ -136,7 +136,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
     {
         await using var db = TestAppDbContext.Denied(_options);
         var useCase = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
-            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()));
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar));
 
         var report = await useCase.Handle(new ReportingFilterDto(Day, Day), CancellationToken.None);
 
@@ -155,7 +155,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
     {
         await using var db = TestAppDbContext.For(_options, 1);
         var useCase = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
-            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()));
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar));
 
         var report = await useCase.Handle(
             new ReportingFilterDto(Day.AddMonths(1), Day.AddMonths(1)), CancellationToken.None);

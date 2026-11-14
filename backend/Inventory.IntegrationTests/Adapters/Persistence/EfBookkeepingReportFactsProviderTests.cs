@@ -65,7 +65,7 @@ public class EfBookkeepingReportFactsProviderTests
                 CostOfGoodsSold = null
             });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -91,7 +91,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 2, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 8m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 3, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 2), null, CancellationToken.None);
 
@@ -107,7 +107,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -123,7 +123,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 99m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, CostOfGoodsSold = null });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -146,7 +146,7 @@ public class EfBookkeepingReportFactsProviderTests
             Sale(7, 9999, 50m),
             Sale(8, null, 60m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -171,7 +171,7 @@ public class EfBookkeepingReportFactsProviderTests
             Sale(3, null, 10m, machineId: 10, authorizationTime: new DateTime(2025, 8, 2)),
             Sale(4, 9999, 10m, machineId: 20));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -188,7 +188,7 @@ public class EfBookkeepingReportFactsProviderTests
             Sale(1, NayaxTransactionStatusIds.Completed, 10m, costOfGoodsSold: 4m),
             Sale(2, NayaxTransactionStatusIds.Completed, 5m, costOfGoodsSold: 2m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -222,7 +222,7 @@ public class EfBookkeepingReportFactsProviderTests
             Sale(7, 9999, 99m),
             Sale(8, null, 99m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -244,7 +244,7 @@ public class EfBookkeepingReportFactsProviderTests
             Sale(3, NayaxTransactionStatusIds.Completed, 10m, machineId: 20),
             Sale(4, NayaxTransactionStatusIds.Completed, 10m, machineId: 10, authorizationTime: new DateTime(2025, 8, 2)));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -259,7 +259,7 @@ public class EfBookkeepingReportFactsProviderTests
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(Sale(1, NayaxTransactionStatusIds.PendingSettlementNotFinal, 99m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -296,7 +296,7 @@ public class EfBookkeepingReportFactsProviderTests
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), 94m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -317,7 +317,7 @@ public class EfBookkeepingReportFactsProviderTests
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 9, 1), new DateTime(2025, 9, 30), 94m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -337,7 +337,7 @@ public class EfBookkeepingReportFactsProviderTests
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), 0m));
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
 
@@ -362,7 +362,7 @@ public class EfBookkeepingReportFactsProviderTests
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -405,7 +405,7 @@ public class EfBookkeepingReportFactsProviderTests
             new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine11.Id, TotalAmount = 22m, GstAmount = 2m },
             new OperatingExpense { BusinessId = 1, ExpenseDate = date, TotalAmount = 3m, GstAmount = 0m });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var wholeBusiness = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
         var machineTen = await provider.GetFactsAsync(date, date, 10, CancellationToken.None);
@@ -442,7 +442,7 @@ public class EfBookkeepingReportFactsProviderTests
         db.OperatingExpenses.Add(
             new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 11m, GstAmount = 1m });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(date, date, 99, CancellationToken.None);
 

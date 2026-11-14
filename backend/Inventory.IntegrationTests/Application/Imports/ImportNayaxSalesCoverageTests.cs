@@ -86,7 +86,7 @@ public class ImportNayaxSalesCoverageTests
 
     private static Task<BookkeepingReportDto> ReportAsync(AppDbContext db) =>
         new GetBookkeepingReport(
-                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()))
+                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar))
             .Handle(new ReportingFilterDto(PeriodFrom, PeriodTo), CancellationToken.None);
 
     [Fact]

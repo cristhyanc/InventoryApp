@@ -47,7 +47,7 @@ public class EfDashboardReportFactsProviderTests
             // Unresolved: counted as a machine, and as no product at all.
             new NayaxSales { TransactionID = 3, MachineID = 20, ProductId = null, NayaxProductId = null, SettlementValue = 7m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
+        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -64,7 +64,7 @@ public class EfDashboardReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal });
         await db.SaveChangesAsync();
-        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
+        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -80,7 +80,7 @@ public class EfDashboardReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
+        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -92,7 +92,7 @@ public class EfDashboardReportFactsProviderTests
     {
         await using var connection = await CreateSqliteAsync();
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
-        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
+        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 

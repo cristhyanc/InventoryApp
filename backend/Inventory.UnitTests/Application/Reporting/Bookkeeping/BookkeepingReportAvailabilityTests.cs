@@ -1,6 +1,7 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting.Availability;
+using InventoryApi.Tests.Application.Reporting.Shared;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Reporting.Bookkeeping;
@@ -23,6 +24,31 @@ public class BookkeepingReportAvailabilityTests
 
     private static string Notes(BookkeepingReportDto report) => string.Join(" ", report.DataQuality.Notes!);
 
+    /// <summary>
+    /// The coverage record for the requested period itself. The availability policy compares a
+    /// period with the coverage recorded for it, and the facts provider is what carries the window
+    /// it measured its figures over (issue #1250), so a test about coverage states that window here
+    /// rather than inheriting the deliberately wide default.
+    /// </summary>
+    private static BookkeepingReportFacts Coverage(
+        BookkeepingReportFacts facts,
+        IReadOnlyList<ReportCoverageRange>? sales = null,
+        IReadOnlyList<ReportCoverageRange>? settlement = null,
+        bool? containsSettlementRows = null) => facts with
+        {
+            // Whether the period holds an imported settlement row is one fact, so the report's own
+            // flag and the coverage record's move together.
+            ImportedContainsRows = containsSettlementRows ?? facts.ImportedContainsRows,
+            Coverage = facts.Coverage with
+            {
+                PeriodStartUtc = From,
+                PeriodEndExclusiveUtc = EndExclusive,
+                SalesCoverage = sales ?? facts.Coverage.SalesCoverage,
+                SettlementCoverage = settlement ?? facts.Coverage.SettlementCoverage,
+                ContainsSettlementRows = containsSettlementRows ?? facts.Coverage.ContainsSettlementRows,
+            },
+        };
+
     private static BookkeepingReportFacts NoProviderData(BookkeepingReportFacts facts) => facts with
     {
         GrossSales = 0m,
@@ -36,9 +62,11 @@ public class BookkeepingReportAvailabilityTests
         ImportedNetSettlement = 0m,
         ImportedContainsRows = false,
         ProcessingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null),
-        SalesCoverage = [],
-        SettlementCoverage = [],
-        ContainsSalesRows = false,
+        Coverage = TestReportCoverage.Missing() with
+        {
+            PeriodStartUtc = From,
+            PeriodEndExclusiveUtc = EndExclusive,
+        },
     };
 
     [Fact]
@@ -55,11 +83,9 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task A_fully_covered_period_with_no_sales_stays_complete_so_its_zero_is_a_real_zero()
     {
-        var facts = NoProviderData(FakeBookkeepingReportFactsProvider.Complete()) with
-        {
-            SalesCoverage = [new ReportCoverageRange(From.AddDays(-10), EndExclusive.AddDays(2))],
-            SettlementCoverage = [new ReportCoverageRange(From.AddDays(-10), EndExclusive.AddDays(2))],
-        };
+        var covered = new ReportCoverageRange(From.AddDays(-10), EndExclusive.AddDays(2));
+        var facts = Coverage(NoProviderData(FakeBookkeepingReportFactsProvider.Complete()),
+            sales: [covered], settlement: [covered]);
 
         var report = await Report(facts);
 
@@ -83,10 +109,8 @@ public class BookkeepingReportAvailabilityTests
     {
         // Previously imported sales after a provider is disconnected: still reported, labelled.
         var lastCovered = new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc);
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with
-        {
-            SalesCoverage = [new ReportCoverageRange(From.AddDays(-30), lastCovered)],
-        };
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(),
+            sales: [new ReportCoverageRange(From.AddDays(-30), lastCovered)]);
 
         var report = await Report(facts);
 
@@ -99,7 +123,7 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task Sales_stored_before_coverage_recording_began_are_unverified_not_complete_and_not_zero()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with { SalesCoverage = [] };
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(), sales: []);
 
         var report = await Report(facts);
 
@@ -111,14 +135,12 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task A_gap_left_by_a_failed_run_makes_the_period_unverified()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with
-        {
-            SalesCoverage =
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(),
+            sales:
             [
                 new ReportCoverageRange(From.AddDays(-1), new DateTime(2026, 7, 10, 0, 0, 0, DateTimeKind.Utc)),
                 new ReportCoverageRange(new DateTime(2026, 7, 16, 0, 0, 0, DateTimeKind.Utc), EndExclusive),
-            ],
-        };
+            ]);
 
         var report = await Report(facts);
 
@@ -128,11 +150,8 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task Settlement_coverage_is_decided_separately_from_sales_coverage()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with
-        {
-            SettlementCoverage = [],
-            ImportedContainsRows = false,
-        };
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(),
+            settlement: [], containsSettlementRows: false);
 
         var report = await Report(facts);
 
@@ -164,10 +183,8 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task Partially_covered_sales_keep_the_counted_transaction_count_and_average_sale()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 100m, transactionCount: 10) with
-        {
-            SalesCoverage = [new ReportCoverageRange(From.AddDays(-30), new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc))],
-        };
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(sales: 100m, transactionCount: 10),
+            sales: [new ReportCoverageRange(From.AddDays(-30), new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc))]);
 
         var report = await Report(facts);
 
@@ -185,13 +202,13 @@ public class BookkeepingReportAvailabilityTests
     [Fact]
     public async Task The_fee_note_names_the_actual_reimbursement_and_the_reconciliation_when_no_settlement_covered_the_period()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with
-        {
-            SettlementCoverage = [],
-            ImportedContainsRows = false,
-            ImportedHasNetSettlement = false,
-            ImportedNetSettlement = 0m,
-        };
+        var facts = Coverage(
+            FakeBookkeepingReportFactsProvider.Complete() with
+            {
+                ImportedHasNetSettlement = false,
+                ImportedNetSettlement = 0m,
+            },
+            settlement: [], containsSettlementRows: false);
 
         var report = await Report(facts);
 
@@ -212,10 +229,8 @@ public class BookkeepingReportAvailabilityTests
     public async Task Partially_covered_settlement_keeps_the_imported_actual_reimbursement_it_read()
     {
         var lastCovered = new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc);
-        var facts = FakeBookkeepingReportFactsProvider.Complete() with
-        {
-            SettlementCoverage = [new ReportCoverageRange(From.AddDays(-30), lastCovered)],
-        };
+        var facts = Coverage(FakeBookkeepingReportFactsProvider.Complete(),
+            settlement: [new ReportCoverageRange(From.AddDays(-30), lastCovered)]);
 
         var report = await Report(facts);
 

@@ -90,7 +90,7 @@ public class EfReportCoverageFactsTests
             .GetFactsAsync(From, To, null, CancellationToken.None);
         var transactions = await new EfTransactionSalesReportFactsProvider(db)
             .GetFactsAsync(From, To, null, CancellationToken.None);
-        var reconciliation = await new EfReconciliationReportFactsProvider(db)
+        var reconciliation = await new EfReconciliationReportFactsProvider(db, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
         var products = await new EfProductProfitabilityReportFactsProvider(db)
             .GetFactsAsync(From, To, null, CancellationToken.None);
