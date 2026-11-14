@@ -10,6 +10,8 @@ import './agent-branch-cleanup.test.mjs';
 import './agent-trusted-context.test.mjs';
 import './agent-publish-hardening.test.mjs';
 import './agent-result-handoff.test.mjs';
+import './workflow-structure.test.mjs';
+import './agent-workflow-reliability.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';

@@ -48,6 +48,7 @@ scripts/agent-branch-cleanup.sh       Deletes an issue's checkpoint/recovery bra
 scripts/agent-review-transport.mjs    Artifact packaging and verification of review results (agent-review.yml) and architecture findings (agent-architecture.yml) (with .test.mjs)
 scripts/validate-deployment-workflows.mjs  Production and testing deployment workflow contract checks (with .test.mjs)
 scripts/validate-runner-placement.mjs  Every workflow job selects its runner only through the INVENTORY_AGENT_SELF_HOSTED_ALL switch, with the conditional isolation gate (with .test.mjs)
+scripts/workflow-structure.mjs        Structural checks over every workflow: actions pinned to commit SHAs, explicit Claude models, no App token in a job that runs Claude, job-level repair concurrency (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
