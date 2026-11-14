@@ -241,7 +241,7 @@ public class TestNayaxConnectionTests
     {
         var report = new NayaxConnectionCheckReport(
             [
-                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
                 NayaxConnectionCheckLine.Failed(
                     NayaxConnectionCheck.ProductCatalogue,
                     NayaxConnectionCheckFailure.PermissionNotGranted),

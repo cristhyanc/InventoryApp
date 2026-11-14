@@ -681,6 +681,11 @@ public static class InfrastructureServiceCollectionExtensions
         // authenticates each check with the pair the Owner submitted, which is why it cannot share
         // the typed client above. Same base URL and same timeout/retry/circuit-breaker policy on
         // purpose - "Nayax is unavailable" has to mean the same thing on a test as on a sync.
+        //
+        // The one request that opts out of retrying is the gate's machine-list read, and it opts out
+        // per request rather than here (NayaxResilienceHandler.SingleAttemptOnly, issue #1310): the
+        // other six probes this same client sends keep the ordinary retry budget, so the policy
+        // attached here is still the production one.
         services.AddHttpClient<INayaxConnectionCheckRunner, NayaxConnectionCheckRunner>(
                 http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();

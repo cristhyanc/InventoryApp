@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
 using Microsoft.Extensions.Logging;
@@ -55,6 +56,75 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
             .ConfigureAwait(false);
 
         return new NayaxFleetReadResult(machines, credential.AccountSeries);
+    }
+
+    /// <summary>
+    /// The machine list as the connection check reads it (issue #1310), which is not quite how every
+    /// other consumer reads it, because here it is the credential gate rather than a list of
+    /// machines.
+    ///
+    /// <para><strong>One live request.</strong> The request is marked
+    /// <see cref="NayaxResilienceHandler.SingleAttemptOnly"/>, so a transient answer is returned to
+    /// this method instead of being retried underneath it: a check run promises the Owner one live
+    /// <c>GET /v1/machines</c> call, and a machine list that did not pass concludes nothing whether
+    /// it failed once or four times.</para>
+    ///
+    /// <para><strong>A documented array of usable machines, or nothing.</strong> Nayax documents this
+    /// endpoint's <c>200</c> as a JSON array of machine objects
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info), so an empty
+    /// array is a verified answer - a business with no machines yet - while a <c>null</c> body is not
+    /// an answer at all. Everywhere else an absent body coalesces to an empty collection, which is
+    /// harmless for a list of products; here it would let an uninterpretable response pass as a
+    /// verified empty fleet and permit a candidate token to replace a working one. It is reported as
+    /// the unexpected response it is instead.</para>
+    ///
+    /// <para>The entries are held to the same rule, because the gate reads two things out of them
+    /// that the Owner then acts on: how many machines the token listed, and which machine the four
+    /// machine-scoped probes are run against. The documented array holds machine
+    /// <em>objects</em>, and the documented <c>MachineID</c> is an <c>int64</c> that the same
+    /// contract allows to be <c>null</c> - so a JSON <c>null</c> in the array, or a machine with no
+    /// usable identifier, is a shape this gate cannot act on: counting it would report a machine that
+    /// cannot be named, and probing it would address <c>machines/0/</c>, which is not the business's
+    /// machine. The whole answer is refused rather than filtered, for the same reason a <c>null</c>
+    /// body is: a list that cannot be read is not a verified fleet, and reporting a smaller fleet
+    /// than Nayax sent would be an answer nobody gave.</para>
+    /// </summary>
+    /// <exception cref="JsonException">
+    /// Nayax answered successfully with something that is not an array of usable machines.
+    /// </exception>
+    public async Task<List<NayaxMachine>> ReadMachineListForConnectionGateAsync(CancellationToken ct = default)
+    {
+        var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
+
+        var machines = await SendForBodyAsync<List<NayaxMachine>>(
+                nameof(GetMachinesAsync),
+                HttpMethod.Get,
+                _ => "machines",
+                credential,
+                ct,
+                singleAttemptOnly: true)
+            .ConfigureAwait(false);
+
+        // Every message below names the shape and nothing else: an upstream body is never read or
+        // logged, and these reach the check report's "unexpected response" line through the runner.
+        if (machines is null)
+        {
+            throw new JsonException("Nayax answered the machine list with no JSON array.");
+        }
+
+        if (machines.Any(machine => machine is null))
+        {
+            throw new JsonException(
+                "Nayax answered the machine list with an entry that is not a machine object.");
+        }
+
+        if (machines.Any(machine => machine.MachineID <= 0))
+        {
+            throw new JsonException(
+                "Nayax answered the machine list with a machine that carries no usable MachineID.");
+        }
+
+        return machines;
     }
 
     /// <inheritdoc />
@@ -185,7 +255,7 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
         Func<string, string> endpoint,
         CancellationToken ct,
         Func<HttpContent>? content = null)
-        where TResponse : new()
+        where TResponse : class, new()
     {
         var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
 
@@ -193,8 +263,8 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
             .ConfigureAwait(false);
     }
 
-    // The single place a Nayax request is authenticated, sent and accepted or rejected, for every
-    // operation and whoever resolved its credential.
+    // One Nayax operation whose credential the caller has already resolved, answered as every
+    // ordinary consumer expects: the deserialized body, or an empty one when Nayax sent none.
     //
     // It is separate from the resolution above so the one caller that has already resolved and gated a
     // credential of its own - the machine-list cache's decorator, through ReadMachinesAsync - sends
@@ -209,7 +279,28 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
         NayaxRequestCredential credential,
         CancellationToken ct,
         Func<HttpContent>? content = null)
-        where TResponse : new()
+        where TResponse : class, new() =>
+        await SendForBodyAsync<TResponse>(operation, method, endpoint, credential, ct, content)
+            .ConfigureAwait(false)
+        // An absent body is the empty collection for every ordinary read: a Nayax account with no
+        // products has no products, and a caller that asked for a list gets one. The connection
+        // gate's machine-list read is the one place that distinction matters, so it is the one
+        // caller that goes to SendForBodyAsync itself (issue #1310).
+        ?? new();
+
+    // The single place a Nayax request is authenticated, sent and accepted or rejected, for every
+    // operation and whoever resolved its credential - and the body exactly as Nayax sent it, a
+    // deserialized null included, because the connection gate's machine-list read is the one caller
+    // for which "no body" and "an empty array" are different answers (issue #1310).
+    private async Task<TResponse?> SendForBodyAsync<TResponse>(
+        string operation,
+        HttpMethod method,
+        Func<string, string> endpoint,
+        NayaxRequestCredential credential,
+        CancellationToken ct,
+        Func<HttpContent>? content = null,
+        bool singleAttemptOnly = false)
+        where TResponse : class
     {
         // The operator id is escaped before it becomes part of a path (issue #681). The value is
         // validated as digits where it enters the application (Inventory.Domain.Nayax.NayaxOperatorId,
@@ -224,6 +315,11 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
         using var request = new HttpRequestMessage(method, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+        if (singleAttemptOnly)
+        {
+            request.Options.Set(NayaxResilienceHandler.SingleAttemptOnly, true);
+        }
+
         if (content is not null)
         {
             request.Content = content();
@@ -234,7 +330,7 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenance
 
         return await response.Content
             .ReadFromJsonAsync<TResponse>(cancellationToken: ct)
-            .ConfigureAwait(false) ?? new();
+            .ConfigureAwait(false);
     }
 
     // Single place where a Nayax response is accepted or rejected. Successful responses pass

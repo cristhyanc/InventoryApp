@@ -4003,14 +4003,69 @@ collapsing two endpoints into one line would hide which of them was refused:
 
 | Check | Endpoint | Scope |
 | --- | --- | --- |
-| `SignIn` | `GET devices` | Proves the token authenticates at all |
-| `Machines` | `GET machines` | Also decides whether the machine checks run |
+| `Machines` | `GET machines` | The credential gate; also decides whether the machine checks run |
 | `Machine` | `GET machines/{id}` | Machine-scoped |
 | `ProductCatalogue` | `GET operators/{operatorId}/products` | Operator-scoped |
 | `ProductGroups` | `GET operators/{operatorId}/productGroups` | Operator-scoped |
 | `MachineProducts` | `GET machines/{id}/machineProducts` | Machine-scoped |
 | `MachineLastSales` | `GET machines/{id}/lastSales` | Machine-scoped |
 | `MachineLastAlerts` | `GET machines/{id}/lastAlerts` | Machine-scoped |
+
+**There is no sign-in probe, and `GET devices` is never called** (issue #1310). The list above used to
+open with a `SignIn` check whose only purpose was to prove the token authenticated, and it was
+retired: Nayax's device *hardware* inventory is a permission an owner has no reason to hold, so a
+`403` there made setup inconclusive — and could stop an Owner saving a token — even when
+`GET machines` answered perfectly. The machine list is the read this application cannot work without
+and the one every owner's token is meant to cover, so judging the credentials by it asks for nothing
+extra, and a run that reads it has already proved the token authenticates. Each run therefore makes
+exactly **one** `GET machines` call and **zero** `GET devices` calls, which
+`NayaxConnectionCheckRunnerTests.No_check_ever_calls_the_devices_endpoint` asserts over the wire for
+a success, a `401`, a `403` and a `5xx`.
+
+**One is one *live request*, not one method call.** The runner's `HttpClient` carries the production
+`NayaxResilienceHandler`, which retries a transient `GET` up to three more times, so calling
+`GetMachinesAsync` once would still have sent the gate's probe up to four times. The gate therefore
+has its own read, `NayaxLynxClient.ReadMachineListForConnectionGateAsync`, which marks the request
+`NayaxResilienceHandler.SingleAttemptOnly` — see
+[HTTP resilience policy](#http-resilience-policy). The other six probes keep the ordinary retry
+budget, so a momentary `5xx` on the product catalogue is still not reported to an owner as a missing
+permission. `NayaxConnectionCheckRunnerResilienceTests` asserts both over the **production
+composition** (the runner resolved from `AddNayaxLynxClient` with only its transport substituted),
+because a count taken above the handler — as the rest of `NayaxConnectionCheckRunnerTests` is — counts
+method calls rather than requests.
+
+**A `200` that is not an array is not a verified empty fleet.** Nayax documents this endpoint's
+success as a JSON array of machine objects ([Get All Machine Basic
+Info](https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info)), and every
+ordinary read in `NayaxLynxClient` coalesces an absent body into an empty collection — harmless for a
+list of products. Since the machine list became the credential gate, that coalescing would read a
+`200 null` as "this token listed your machines and you have none" and let an untested candidate
+replace a working connection, so the gate's read refuses a `null` or otherwise non-array body as
+`UnexpectedResponse`, which concludes `Inconclusive` and may not be saved. An empty array `[]` is
+unchanged: it is a real answer, concludes `Ready` and may be saved. No other consumer's behaviour
+changed.
+
+**Nor is an array of entries the gate cannot act on.** The same reference documents the array as
+holding machine *objects* whose `MachineID` is an `int64` that the contract itself allows to be
+`null`, and the gate reads two things out of those entries that an Owner then acts on: how many
+machines the token listed, and which machine the four machine-scoped probes are run against. So
+`[null]` deserializes to a one-element list holding nothing and `[{}]` to a machine whose id defaults
+to `0`; unchecked, the first would be saveable while reporting one machine that cannot be named and
+running no machine-scoped check, and the second would be saveable while probing `machines/0/`, which
+is not the business's machine. `ReadMachineListForConnectionGateAsync` therefore refuses a `null`
+entry or a machine with no usable `MachineID` as `UnexpectedResponse`, before the runner reports the
+line as `Passed` or reads a count or a machine id out of it. The **whole** answer is refused rather
+than filtered, for the same reason a `null` body is: a list that cannot be read is not a verified
+fleet, and reporting a smaller fleet than Nayax sent would be an answer nobody gave. The rule is the
+gate's alone — the ordinary reads still hand the fleet, the machine-list cache and the sync exactly
+what Nayax sent — and it costs no extra request: it is applied to the one answer already received.
+`NayaxConnectionCheckRunnerTests.A_machine_list_entry_that_is_not_a_usable_machine_concludes_nothing_and_cannot_be_saved`
+pins it over the runner, including that no machine endpoint is called and that the gate still sends
+exactly one `machines` request.
+
+The enum **reserves the retired value `1`** rather than
+reusing it, because a report serialized before the change still names that check by number — see
+[Reports that name a retired check](#reports-that-name-a-retired-check-issue-1310) below.
 
 **`POST machines/{id}/machineProducts` is never called**, and it is absent from the vocabulary rather
 than merely unused: testing a connection must not change an operator's Nayax data.
@@ -4047,6 +4102,33 @@ wrong one ends up on somebody's screen. The mapping is Nayax's own documented vo
   check that carries no operator id, or a body that is not the documented shape. An answer nobody
   has interpreted is never presented as one that has been.
 
+#### Reports that name a retired check (issue #1310)
+
+A completed report is **stored**: serialized into the business's test draft, read back by the save,
+and — for a draft an Owner left outstanding across a deployment — read back by a build that no longer
+declares every check it names. Enum values are serialized as numbers, so the retired `SignIn` line
+survives in storage as `1` long after the check itself stopped existing. One rule covers it:
+
+- **`NayaxConnectionCheckPolicy.IsDeclared` decides what counts**, and
+  `NayaxConnectionCheckReport.DeclaredLines` is every line that passes it. `NothingFailed`,
+  `MachineChecksPending` and `Outcome` are all derived from that, and both response projections
+  publish it, so **the retired row is never published and never decides anything**. `Lines` itself is
+  left exactly as stored, because it is the record of what that run did.
+- **An undeclared line is evidence about nothing**, in both directions, and that is the whole point.
+  A refusal of a permission this application no longer asks for must not decide a stored status, hold
+  `NothingFailed` back, or put a failing row on an Owner's screen. A *pass* of a probe this
+  application no longer makes must not vouch for a token either: a pending legacy draft is judged by
+  the machine list like any other, so one whose machine list was refused cannot be promoted on the
+  strength of its sign-in line, while one refused **only** the device-inventory probe saves as
+  `Ready`.
+- **The frontend drops the same line by name** (`isRetiredNayaxConnectionCheck` /
+  `withoutRetiredNayaxConnectionChecks` in `provider/nayax-read-areas.ts`), because a response from an
+  instance that has not been deployed yet can still carry it. A retired name is dropped rather than
+  rendered raw — which is what an *unrecognised* name gets — because the two are opposites: a check a
+  newer deployment reports is something this application may yet depend on, while a retired one is
+  something it has stopped depending on, and naming it would ask an Owner to chase a permission
+  nothing needs.
+
 **The checks go through `NayaxLynxClient`, with the one thing that differs swapped.** That client is
 the single place a Nayax request is built, authenticated, sent and then accepted or rejected, and the
 runner needs exactly that — the same relative endpoints, the same `Authorization: Bearer` header, the
@@ -4061,7 +4143,9 @@ been stored, so there is no revision it belongs to and no row it may touch. **A 
 therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
 operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
 same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
-the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+the same thing on a test as on a sync — the one request that opts out of retrying is the gate's
+machine-list read, and it opts out per request rather than in that registration. This is **not** the
+gate-free re-test read of
 [issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
 all.
 
@@ -4091,7 +4175,7 @@ connection is issue #537's separate, reviewed step.
   delete and the insert are one transaction, so a failed replacement leaves the previous draft in
   place rather than leaving the business with none.
 - **It expires after fifteen minutes** (`TestNayaxConnection.DraftLifetime`) — long enough to read
-  eight result lines and decide, short enough that an abandoned browser tab does not leave a
+  seven result lines and decide, short enough that an abandoned browser tab does not leave a
   decryptable token in the database for the rest of the day. Expiry is a **read** rule, not a sweep:
   past the instant the draft stops existing for every caller, and the row goes when the next test
   replaces it.
@@ -4109,7 +4193,7 @@ draft, and a cached `GET` response would hand a caller a verdict about credentia
 
 **The rate limit is per business, and spent before anything is sent.**
 `Inventory.Application.Nayax.NayaxConnectionTestRateLimiter` allows five runs per business per rolling
-ten minutes. The bucket is the **business**, not the actor: one run is eight calls against somebody
+ten minutes. The bucket is the **business**, not the actor: one run is seven calls against somebody
 else's API, a Test button is trivially clickable in a loop, and rate-limiting the actor would let a
 second Owner start again from zero against the same operator account. The window **slides**, because
 a fixed ten-minute bucket would allow five runs at the end of one and five at the start of the next.
@@ -4150,8 +4234,13 @@ immediately below, and the Owner-facing wizard over all of it with issue #538 �
 [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
-documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
-so a check, status or cause added later has to make a decision there.
+documented status on every check, the two `404` readings, no answer at all, the vocabulary itself,
+so a check, status or cause added later has to make a decision there, and every declared check being
+declared while the retired `1` is not.
+`Inventory.UnitTests/Application/Nayax/NayaxConnectionCheckReportTests` — a retired line's refusal
+not being a failure and still concluding `Ready`, a retired line that passed not standing in for the
+machine list, the pending machine checks unchanged by one, the whole rule holding across the JSON
+round trip a stored report actually takes, and a report with no machine-list line concluding nothing.
 `Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
 and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
 reopening a slot, one business not spending another's allowance, and, above the tracking threshold
@@ -4162,9 +4251,11 @@ against clearing out granting the five runs exactly once.
 a blank field refused before any call or allowance, no token in the result or the stored results,
 the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
 calling Nayax not at all. `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxConnectionCheckRunnerTests`
-— the eight endpoints called once each with the submitted bearer token, no write call ever, each
-status mapping over a fake handler, zero machines, the first machine only, a transport failure, an
-unreadable body, caller cancellation, and the token/body log sweep.
+— the seven endpoints called once each with the submitted bearer token, one `GET machines` call and
+no `GET devices` call whatever Nayax answers, no write call ever, each
+status mapping over a fake handler, a refused machine list concluding nothing, zero machines, the
+first machine only, a transport failure, an unreadable machine list, caller cancellation, and the
+token/body log sweep.
 `Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — relational SQLite with two businesses:
 ciphertext at rest and no plaintext in any column, replacement, expiry, actor binding, cross-business
 isolation in both directions, an unscoped write refused, and a protector that cannot encrypt leaving
@@ -4172,9 +4263,10 @@ the previous draft alone. `Adapters/Persistence/AddNayaxConnectionTestDraftsMigr
 table and its unique index arrive, a second draft per business is refused by SQLite, the stored
 connection is byte-for-byte unchanged, and nothing is backfilled.
 `Controllers/NayaxConnectionTestApiTests` — the published response shape through the real pipeline and
-the real migration history, the token never echoed, the draft encrypted and bound, a second test
-replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
-its `Retry-After`. `CapabilityAuthorizationApiTests` and
+the real migration history (the seven declared names, with a retired line in the report published
+neither as a row nor as a failure), the token never echoed, the draft encrypted and bound, a second
+test replacing the first, the stored connection untouched, `400` for a missing field, and the `429`
+with its `Retry-After`. `CapabilityAuthorizationApiTests` and
 `EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
 
 ### Saving a tested connection and re-testing it (issue #537)
@@ -4227,36 +4319,45 @@ Inside it:
   another business's, another member's, and one a previous save already claimed, because
   distinguishing them would tell a caller that somebody else's draft exists.
 - **A refusal commits nothing.** The transaction is simply not committed, so a save refused for a
-  failed sign-in, or one whose credential write fails, puts the claimed draft back rather than
+  failed machine list, or one whose credential write fails, puts the claimed draft back rather than
   destroying a tested token the Owner can no longer save.
 
 **The status comes from that draft's own results, through one Domain rule.**
 `Inventory.Domain.Nayax.NayaxConnectionCheckOutcomePolicy` is the only place a completed run is
 interpreted, beside `NayaxConnectionCheckPolicy` and `NayaxConnectionStatusGate` and for the same
 reason: "this token works", "this token is missing a permission" and "this token is dead" need
-completely different actions from an operator. It takes the three facts it needs — the sign-in line's
-status, its failure cause, and whether any other executed check failed — so the Domain keeps no
+completely different actions from an operator. It takes the three facts it needs — the machine-list
+line's status, its failure cause, and whether any other executed check failed — so the Domain keeps no
 dependency on the Application layer's report type; the projection lives on
 `NayaxConnectionCheckReport.Outcome`.
+
+**The machine list is the credential gate** (issue #1310). It was a `GET devices` sign-in probe until
+that issue retired it, for the reason given above — see
+[Nayax connection checks and the Test endpoint](#nayax-connection-checks-and-the-test-endpoint-issue-536)
+— and every row below moved with it, including which runs may be saved.
 
 | Run | Outcome | Status it concludes | May be saved |
 | --- | --- | --- | --- |
 | Every executed check passed | `Ready` | `Ready` | ✔ |
-| Sign-in passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
-| Sign-in refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
-| Sign-in did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
+| Machine list passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
+| Machine list refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
+| Machine list did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
 
 **Only a `401` is a verdict on the token.** That is Nayax's own documented meaning — "the token is
 invalid or has expired", against a `403`'s "Insufficient permissions to perform this action", a
 verdict on one endpoint's scope
 ([App tokens](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens), confirmed
-for this change). Every other way a sign-in can fail to pass — Nayax unavailable, an answer nobody
-has interpreted, the sign-in endpoint itself refused for lack of a scope, a line never checked —
-concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the fail-closed
-reading of the rest, because concluding anything from an answer nobody interpreted would either break
-a working connection or bless a dead one. A save is refused whenever the sign-in did not pass (`400`,
-*"The tested token did not sign in to Nayax, so it was not saved…"*): a token that has never been
-shown to authenticate must not replace what the business is using today.
+again for issue #1310). Every other way the machine list can fail to pass — Nayax unavailable, an
+answer nobody has interpreted, the machine list itself refused for lack of a scope, a line never
+checked — concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the
+fail-closed reading of the rest, because concluding anything from an answer nobody interpreted would
+either break a working connection or bless a dead one. A save is refused whenever the machine list did
+not pass (`400`, *"The tested token could not read this business's machine list from Nayax, so it was
+not saved…"*): a token that has never been shown to read this business's machines must not replace
+what it is using today. A machine-list `403` is therefore refused as well, and refused **as a
+permission refusal**: the stored status, its last-tested instant and the stored credentials are all
+left exactly as they were, and the checklist names the machine list rather than telling an Owner their
+token expired.
 
 **"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
 business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
@@ -4265,9 +4366,9 @@ against, which is a fact about the account and not a fault of the credentials. T
 and a machine-scoped line was still never checked" — which checks need a machine stays
 `NayaxConnectionCheckPolicy.RequiresMachine`'s answer. A machine list that was itself refused or
 never checked leaves the flag unset (issue #681): those lines are unchecked for want of the list,
-not of a machine, the refused line already records `PendingPermissions` (or the sign-in's own
-verdict), and "re-test once your machines are set up" would send an Owner who has machines to the
-wrong fix. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+not of a machine, that run concludes nothing and is not saved at all since issue #1310, and "re-test
+once your machines are set up" would send an Owner who has machines to the wrong fix. A later re-test
+that reaches them clears it. `false` is therefore both "the machine checks
 passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
 their machines are set up, so the additive migration backfills nothing and the connection the
 human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
@@ -4280,7 +4381,7 @@ which deliberately ignores `NayaxConnectionStatusGate` — a connection in `Need
 the one an operator has to recover, and the gate that refuses ordinary calls in that state would make
 recovery impossible. It is listed in `NayaxRetestCredentialBoundaryTests`' allow-list as the reviewed
 exception that boundary always anticipated, and nothing else may join it. It runs the same read-only
-checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
+checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same seven
 `GET`s and no write.
 
 **Every result is bound to the revision it tested — whatever it concluded — and a run that learned
@@ -4292,7 +4393,7 @@ replacement token while a re-test is in flight therefore keeps the replacement's
 cases: the older run describes credentials that no longer exist, so its result is discarded — never
 returned beside the replacement's summary — and the caller gets `409` with the fixed sentence *"The
 connection changed while testing. Run the test again."* A connection that has been removed by then is
-the same answer as a replaced one. When the sign-in produced no verdict at all — a `5xx`, a timeout,
+the same answer as a replaced one. When the machine list produced no verdict at all — a `5xx`, a timeout,
 an open circuit — **nothing is written** either way, not even a last-tested instant that would claim
 the current credentials had been checked: at the tested revision the response is `200` with
 `statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
@@ -4303,7 +4404,7 @@ comparison and the summary returned with it come from **one** read of the row
 reads could pair the old run's report with the new credentials' state. A business with no stored
 credentials has nothing to re-test and gets the stable `nayax_not_connected` `409`.
 
-**Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
+**Test and re-test share one per-business allowance.** A re-test is the same seven calls against the
 same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
 runner, and the two count together: five runs per business per rolling ten minutes in any mix, then
 `429` with a `Retry-After` and no Nayax call at all.
@@ -4319,13 +4420,15 @@ controller: a controller-level `Integration.Manage` would mean this read require
 Owner-only (issues #525 and #526).
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckOutcomePolicyTests` — every
-row of the table above, each unstated sign-in failure concluding nothing, a failed sign-in deciding
-the outcome whatever else failed, and an undeclared status or outcome refused rather than defaulted.
+row of the table above, each unstated machine-list failure concluding nothing — the permission refusal
+among them — a failed machine list deciding the outcome whatever else failed, and an undeclared status
+or outcome refused rather than defaulted.
 `Inventory.UnitTests/Application/Nayax/SaveNayaxConnectionTests` — the status from the draft's own
 results, the stored credentials being the tested ones, unchecked machine lines saved `Ready` with the
-flag set, a failed sign-in refused with nothing stored and nothing committed, a draft saved only once
-with the revision increased once, expiry and actor binding refused identically, and a missing draft id
-refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
+flag set, each machine-list failure refused with nothing stored and nothing committed, a legacy draft
+neither promoted by a passed retired sign-in line nor held back by a refused one (issue #1310), a
+draft saved only once with the revision increased once, expiry and actor binding refused identically,
+and a missing draft id refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
 `Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
 byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
 cleared, a replacement saved mid-run keeping its own status for a concluded *and* for an inconclusive
@@ -4346,7 +4449,9 @@ result that states it, and cleared by a credential save.
 other column or index changes, the existing connection is byte-for-byte unchanged and reads "not
 pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
 through the real pipeline and the real migration history: test then save, the token as ciphertext and
-never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
+never echoed, every refusal's status and sentence — including a machine-list `401` and a machine-list
+`403` each refusing the save with the draft left in place (issue #1310) — the re-test outcomes
+including the recovery from
 `NeedsAttention` and both the concluded and the inconclusive re-test overtaken by a save — the `409`,
 its exact sentence and the replacement's row byte-for-byte unchanged — the shared `429`, the status
 read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
@@ -4385,7 +4490,12 @@ failure, and it says *why* from the machine count: zero machines reads "no machi
 account yet", while no count at all reads "the machine list could not be read" — a business that has
 machines must not be sent to set them up. The checklist also states that the restock write call is
 never tested and is checked on first real use, because a connection test must not change an
-operator's Nayax data.
+operator's Nayax data. The one line it drops is a **retired** read's (issue #1310): the checklist,
+the refusal advice and the support request all filter it, so an older stored report cannot put a
+"Signing in (GET devices)" row on screen, count towards the failure summary, or ask Nayax for the
+device-hardware permission this application no longer uses. A line naming a check this build merely
+does not *recognise* is still rendered under its raw name, because that is a read the application may
+yet depend on.
 
 **Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
 composes a ready-to-copy request naming the operator id that was tested — captured with the result,
@@ -4399,9 +4509,10 @@ operator id, an unavailable Nayax asks for another try, and an answer nobody int
 re-test before anyone is asked about it. Step 5 is skipped entirely when the server reported nothing
 failed.
 
-**Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
-pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
-on a known refusal. A consumed or refused draft is withdrawn from the screen, so a second save is
+**Save and re-test say what the server said.** Save is not offered for a run whose machine list did
+not pass, or whose draft has expired — the server refuses both, and this only avoids spending a
+request on a known refusal. The sentence it shows names the machine list and points at the checklist
+for which refusal it was, rather than claiming the token did not authenticate. A consumed or refused draft is withdrawn from the screen, so a second save is
 impossible here as well as refused. The stored-connection panel reads `GET …/status` on arrival,
 shows the status, prompts "Re-test once your machines are set up" while the machine checks are
 pending, and offers Re-test in every status including `NeedsAttention`. A re-test that concluded
@@ -4643,6 +4754,8 @@ Issue #165 made that log entry explicit at the HTTP boundary: an unreachable or 
 #### HTTP resilience policy
 
 `Inventory.Infrastructure.Nayax.NayaxResilienceHandler` (issue #48) is a `DelegatingHandler` registered by `AddNayaxLynxClient` (`.AddHttpMessageHandler<NayaxResilienceHandler>()`), so every call `NayaxLynxClient` makes through its `HttpClient` passes through it first. It sits entirely below `NayaxLynxClient`, which is unchanged: `NayaxLynxClient` still inspects the final `HttpResponseMessage` exactly as before and has no knowledge that some calls were retried underneath it, and retry/timeout/circuit-breaker types (`Polly.*`) never appear in `INayaxLynxClient` or any other Application-facing contract.
+
+**One request may opt out of retrying, and it says so on the request** (issue #1310). `NayaxResilienceHandler.SingleAttemptOnly` is an `HttpRequestOptionsKey<bool>`; a request carrying it is never retried, however retryable the answer is, while the per-attempt timeout and the circuit breaker still apply to it exactly as to everything else. The connection check's machine-list read is the only caller, because it is the credential gate: "each check run makes one live `GET /v1/machines` call" is part of what a connection test promises an owner, and a machine list that did not pass concludes nothing whether it failed once or four times — see [Nayax connection checks and the Test endpoint](#nayax-connection-checks-and-the-test-endpoint-issue-536). It is stated per request rather than configured per client because the check runner sends its other six probes through the same `HttpClient` and they keep the ordinary budget; `SendAsync` sets the flag from the request on every call, because the Polly context is pooled, and `NayaxResilienceHandlerTests` pins both that a marked request is not retried and that the marker does not outlive it.
 
 It composes three bounded Polly v8 strategies, built once per handler instance (`NayaxResilienceOptions` holds the tunables - fixed engineering constants, not environment configuration, so there is nothing here for `appsettings.json`/README to document):
 
@@ -6931,9 +7044,10 @@ not of pages, taken from the reads this application already declares in
 | `providerRecords` | what only needs Nayax to be *part of* this business and makes no live read at all: the "Nayax Sync Restock" source of an already-recorded movement, the "Nayax monthly fee" expense category | none - no permission can be granted or refused for it |
 
 `PROVIDER_FEATURE_CHECKS` is that mapping, and it is the feature-to-permission mapping issue #729
-(E2) reads for a locked menu item. A check no feature claims - `SignIn`, which is about the
-credentials rather than about a read, and `Machine` and `MachineLastAlerts`, which no screen depends
-on - is evidence about nothing here rather than about the feature it most resembles.
+(E2) reads for a locked menu item. A check no feature claims - `Machine` and `MachineLastAlerts`,
+which no screen depends on - is evidence about nothing here rather than about the feature it most
+resembles, and a line naming a **retired** read (issue #1310) names no feature at all, so a refusal
+of the old `GET devices` probe locks nothing.
 
 Every feature then carries one `ProviderFeatureAvailability`, and the four states are answers rather
 than labels on each other:

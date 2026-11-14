@@ -3598,11 +3598,14 @@ connection.
    no local storage, no session storage, no URL. Testing stores nothing yet, changes no Nayax data,
    and leaves any connection you already have exactly as it is, so testing a bad token cannot break
    a working one.
-4. **Read the checklist.** The server calls each Nayax endpoint this application reads and reports
-   every one on its own line: a tick for granted, a cross with the cause for refused, and **Not
-   checked** for the machine-scoped lines when the account has no machines yet (or when the machine
-   list itself could not be read — the two are shown differently, because they need different
-   actions). An untested permission is never shown as a granted one. The restock write call is
+4. **Read the checklist.** The server calls each Nayax endpoint this application reads — seven of
+   them, starting with the machine list — and reports every one on its own line: a tick for granted,
+   a cross with the cause for refused, and **Not checked** for the machine-scoped lines when the
+   account has no machines yet (or when the machine list itself could not be read — the two are shown
+   differently, because they need different actions). An untested permission is never shown as a
+   granted one. Nothing asks for access to Nayax's **device hardware inventory**: the checks are the
+   reads this application actually makes, and the machine list is what decides whether the token can
+   be used, so a token that cannot list devices is not a problem to solve. The restock write call is
    deliberately not tested: a connection test must not change your Nayax data, so it is checked the
    first time a refill is actually pushed.
 5. **Ask Nayax for anything refused.** Nayax grants a token's permissions, so when a line is
@@ -3614,19 +3617,25 @@ connection.
    operator id Nayax does not match needs checking, and an unavailable Nayax needs another try. This
    step is skipped when nothing failed.
 6. **Save the connection.** Saving stores the operator id and the token the server just tested — the
-   page sends back only the server's reference to that test, never the token again. A token that did
-   not sign in to Nayax cannot be saved, and a test result older than fifteen minutes has to be run
-   again first. Saving with some areas still refused records the connection as **Permissions
-   pending**: the features that need those areas keep saying so until Nayax grants them and a
-   re-test confirms it.
+   page sends back only the server's reference to that test, never the token again. A token whose
+   **machine list** could not be read cannot be saved, and a test result older than fifteen minutes
+   has to be run again first. That one line is the condition, and the checklist says which refusal it
+   was: *the token is invalid or has expired* means a new Lynx token, while *this token does not have
+   permission for this area* means asking Nayax for read access to the machine list. Nothing is
+   stored or changed in either case — the connection you already have keeps its status. Saving with
+   some **other** areas still refused records the connection as **Permissions pending**: the features
+   that need those areas keep saying so until Nayax grants them and a re-test confirms it.
 
 **Re-testing.** The stored connection is shown above the wizard with its status — Ready, Permissions
 pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
 same read-only checks against the token already stored. Re-test works in every status, including
 Needs attention, which is the state it exists to recover from. When the connection was saved before
 any machine existed in the Nayax account, the page asks you to **re-test once your machines are set
-up**, because those permissions were never verified. If Nayax cannot be reached, the stored status is
-left exactly as it was and the page says so rather than concluding anything. If the token was
+up**, because those permissions were never verified. A re-test moves the stored status only when it
+learns something about the token: the machine list answering normally, or Nayax rejecting the token
+itself. If Nayax cannot be reached, if it answers something unrecognised, or if it refuses the
+machine list for lack of a permission, the stored status and its last-tested time are left exactly as
+they were and the page says so rather than concluding anything. If the token was
 replaced while a re-test was running, the result is discarded and the page asks you to run the test
 again, so the status always describes the token actually stored.
 

@@ -228,7 +228,6 @@ describe('ProviderAvailabilityService (issue #728)', () => {
     const { service } = createHarness(() => of(state('Ready')));
 
     service.accept(state('PendingPermissions'), [
-      passed('SignIn'),
       passed('Machines'),
       refused('MachineLastSales'),
       { check: 'MachineProducts', status: 'NotChecked', failure: null }
@@ -248,7 +247,7 @@ describe('ProviderAvailabilityService (issue #728)', () => {
     service.noteRefusal(permissionNotGranted(), 'machineSales');
     expect(await firstValueFrom(service.featureAvailability('machineSales'))).toBe('permissionNotGranted');
 
-    service.accept(state('Ready'), [passed('SignIn'), passed('MachineLastSales')]);
+    service.accept(state('Ready'), [passed('Machines'), passed('MachineLastSales')]);
 
     expect(await firstValueFrom(service.featureAvailability('machineSales'))).toBe('available');
   });

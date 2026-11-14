@@ -19,7 +19,6 @@ const TOKEN = 'lynx-token-paste-value';
 
 function passingChecks(): NayaxConnectionTestResult['checks'] {
   return [
-    { check: 'SignIn', status: 'Passed', failure: null },
     { check: 'Machines', status: 'Passed', failure: null },
     { check: 'Machine', status: 'Passed', failure: null },
     { check: 'ProductCatalogue', status: 'Passed', failure: null },
@@ -180,7 +179,6 @@ describe('NayaxConnectionWizardComponent refreshes the shared provider signal (i
           retestResult({
             nothingFailed: false,
             checks: [
-              { check: 'SignIn', status: 'Passed', failure: null },
               { check: 'Machines', status: 'Passed', failure: null },
               { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' },
               { check: 'MachineProducts', status: 'NotChecked', failure: null }
@@ -387,7 +385,7 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(component.step).toBe(4);
       const checklist = fixture.debugElement.query(By.directive(NayaxConnectionChecklistComponent))
         ?.componentInstance as NayaxConnectionChecklistComponent;
-      expect(checklist.checks).toHaveLength(8);
+      expect(checklist.checks).toHaveLength(7);
       expect(checklist.machineCount).toBe(2);
     });
 
@@ -398,7 +396,6 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
             testResult({
               machineCount: 0,
               checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
                 { check: 'Machines', status: 'Passed', failure: null },
                 { check: 'Machine', status: 'NotChecked', failure: null }
               ]
@@ -431,7 +428,6 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
           nothingFailed: false,
           machineCount: 1,
           checks: [
-            { check: 'SignIn', status: 'Passed', failure: null },
             { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
             { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' }
           ]
@@ -485,7 +481,6 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
             testResult({
               nothingFailed: false,
               checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
                 { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
                 { check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' },
                 { check: 'MachineLastSales', status: 'Failed', failure: 'NayaxUnavailable' }
@@ -521,7 +516,6 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
               nothingFailed: false,
               machineCount: null,
               checks: [
-                { check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' },
                 { check: 'Machines', status: 'Failed', failure: 'InvalidOrExpiredToken' },
                 { check: 'Machine', status: 'NotChecked', failure: null }
               ]
@@ -617,29 +611,42 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(host.textContent).toContain('Re-test once your machines are set up');
     });
 
-    it('does not offer to save a run whose sign-in failed, and issues no request', async () => {
-      const { component, connections, fixture, host, runTestWith } = await render({
-        test: () =>
-          of(
-            testResult({
-              nothingFailed: false,
-              machineCount: null,
-              checks: [{ check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' }]
-            })
-          )
-      });
+    /**
+     * Both machine-list refusals are refused here (issue #1310): an expired token and a machine
+     * list the token has no permission for. Neither may replace what the business is using, and the
+     * screen says which without spending a request the server would refuse anyway.
+     */
+    it.each(['InvalidOrExpiredToken', 'PermissionNotGranted'] as const)(
+      'does not offer to save a run whose machine list failed with %s, and issues no request',
+      async (failure) => {
+        const { component, connections, fixture, host, runTestWith } = await render({
+          test: () =>
+            of(
+              testResult({
+                nothingFailed: false,
+                machineCount: null,
+                checks: [{ check: 'Machines', status: 'Failed', failure }]
+              })
+            )
+        });
 
-      runTestWith();
-      component.goTo(6);
-      fixture.detectChanges();
-      component.saveConnection();
-      fixture.detectChanges();
+        runTestWith();
+        component.goTo(6);
+        fixture.detectChanges();
+        component.saveConnection();
+        fixture.detectChanges();
 
-      expect(connections.save).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('did not sign in to Nayax');
-    });
+        expect(connections.save).not.toHaveBeenCalled();
+        expect(component.canSave).toBe(false);
+        expect(host.textContent).toContain('could not read this business\'s machine list');
+      }
+    );
 
-    it('saves a run whose sign-in passed but whose permissions are incomplete', async () => {
+    /**
+     * The outcome the issue exists for: a token whose machine list is readable saves even though the
+     * device-inventory permission it used to be judged by is nowhere in the result any more.
+     */
+    it('saves a run whose machine list passed but whose other permissions are incomplete', async () => {
       const { component, connections, runTestWith } = await render({
         test: () =>
           of(
@@ -647,7 +654,7 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
               nothingFailed: false,
               machineCount: 1,
               checks: [
-                { check: 'SignIn', status: 'Passed', failure: null },
+                { check: 'Machines', status: 'Passed', failure: null },
                 { check: 'ProductGroups', status: 'Failed', failure: 'PermissionNotGranted' }
               ]
             })
@@ -660,6 +667,39 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
 
       expect(connections.save).toHaveBeenCalled();
       expect(component.connection?.status).toBe('PendingPermissions');
+    });
+
+    /**
+     * A draft tested before the machine-list gate shipped, saved after it: the retired sign-in line
+     * decides nothing here either. A readable machine list is what offers the save, and the retired
+     * line's own refusal is not shown as a failed area (issue #1310).
+     */
+    it('saves a legacy run whose only refusal was the retired devices probe', async () => {
+      const { component, connections, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              checks: [
+                {
+                  check: 'SignIn',
+                  status: 'Failed',
+                  failure: 'PermissionNotGranted'
+                } as unknown as NayaxConnectionTestResult['checks'][number],
+                ...passingChecks()
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+
+      expect(component.anyFailed).toBe(false);
+      expect(component.canSave).toBe(true);
+      expect(host.textContent).not.toContain('Signing in');
+
+      component.saveConnection();
+
+      expect(connections.save).toHaveBeenCalled();
     });
 
     it('asks for a fresh test instead of saving an expired draft', async () => {
@@ -741,7 +781,7 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
               statusUpdated: false,
               nothingFailed: false,
               machineCount: null,
-              checks: [{ check: 'SignIn', status: 'Failed', failure: 'NayaxUnavailable' }]
+              checks: [{ check: 'Machines', status: 'Failed', failure: 'NayaxUnavailable' }]
             })
           )
       });

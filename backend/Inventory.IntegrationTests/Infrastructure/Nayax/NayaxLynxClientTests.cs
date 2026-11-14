@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Net;
+using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Nayax;
 using Microsoft.Extensions.Logging;
@@ -144,6 +145,127 @@ public class NayaxLynxClientTests
         Assert.Equal(8, machines[1].MachineID);
         Assert.Null(machines[1].CustomerID);
         Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// The connection gate's own machine-list read (issue #1310). Two things differ from
+    /// <c>GetMachinesAsync</c>, and both are because this read decides whether a candidate token may
+    /// replace a business's stored credentials.
+    ///
+    /// <para>Nayax documents a <c>200</c> here as a JSON array of machine objects
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info), so a
+    /// <c>null</c> body is refused rather than coalesced into an empty list: coalesced, it would read
+    /// as a verified fleet of none and permit the replacement. And the request is marked
+    /// single-attempt, so the resilience handler returns a transient answer instead of sending the
+    /// gate's probe again.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    public async Task The_connection_gate_s_machine_list_read_refuses_a_200_that_is_not_an_array(string body)
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, body);
+
+        await Assert.ThrowsAsync<JsonException>(
+            () => client.ReadMachineListForConnectionGateAsync(CancellationToken.None));
+
+        Assert.True(handler.LastRequest!.Options.TryGetValue(
+            NayaxResilienceHandler.SingleAttemptOnly, out var singleAttempt));
+        Assert.True(singleAttempt);
+    }
+
+    /// <summary>
+    /// And an array of things that are not usable machines is refused the same way (issue #1310). The
+    /// documented array holds machine <em>objects</em> whose <c>MachineID</c> is an <c>int64</c> the
+    /// same contract allows to be <c>null</c>
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info), so
+    /// <c>[null]</c> deserializes to a one-element list holding nothing and <c>[{}]</c> to a machine
+    /// whose id defaults to <c>0</c> - neither of which the gate can count for an Owner or probe, and
+    /// neither of which may decide that a candidate token replaces a working connection. A usable
+    /// first entry does not excuse a later one: the answer as a whole is what was not read.
+    /// </summary>
+    [Theory]
+    [InlineData("[null]")]
+    [InlineData("[{}]")]
+    [InlineData("[{\"MachineID\":0}]")]
+    [InlineData("[{\"MachineID\":null}]")]
+    [InlineData("[{\"MachineID\":-1}]")]
+    [InlineData("[{\"MachineID\":7},null]")]
+    [InlineData("[{\"MachineID\":7},{}]")]
+    public async Task The_connection_gate_s_machine_list_read_refuses_an_entry_that_is_not_a_usable_machine(
+        string body)
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, body);
+
+        await Assert.ThrowsAsync<JsonException>(
+            () => client.ReadMachineListForConnectionGateAsync(CancellationToken.None));
+
+        Assert.True(handler.LastRequest!.Options.TryGetValue(
+            NayaxResilienceHandler.SingleAttemptOnly, out var singleAttempt));
+        Assert.True(singleAttempt);
+    }
+
+    /// <summary>
+    /// An empty array is a real answer and stays one: a business with no machines yet has a verified
+    /// connection. The refusal above is about <c>null</c>, not about emptiness.
+    /// </summary>
+    [Fact]
+    public async Task The_connection_gate_s_machine_list_read_accepts_an_empty_array()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.OK, "[]");
+
+        Assert.Empty(await client.ReadMachineListForConnectionGateAsync(CancellationToken.None));
+        Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// A list of real machines is accepted unchanged, and this is what the gate's extra rule is
+    /// <em>not</em>: it refuses entries it cannot act on, not entries with fields missing. A machine
+    /// that carries an id and nothing else is a usable machine.
+    /// </summary>
+    [Fact]
+    public async Task The_connection_gate_s_machine_list_read_accepts_machines_that_carry_an_id()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.OK, "[{\"MachineID\":7},{\"MachineID\":8}]");
+
+        var machines = await client.ReadMachineListForConnectionGateAsync(CancellationToken.None);
+
+        Assert.Equal(2, machines.Count);
+        Assert.Equal(7, machines[0].MachineID);
+        Assert.Equal(8, machines[1].MachineID);
+        Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// And the fleet consumers are untouched by that rule, deliberately. The ordinary read hands back
+    /// exactly what Nayax sent - a machine with the default id included - because it is a list of
+    /// machines rather than a verdict on a credential, and nothing about this repair changed what the
+    /// fleet, the cache or the sync see.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_machine_list_read_still_returns_an_entry_the_connection_gate_refuses()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.OK, "[{}]");
+
+        var machines = await client.GetMachinesAsync(CancellationToken.None);
+
+        Assert.Equal(0, Assert.Single(machines).MachineID);
+        Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// And every other consumer is untouched. An absent body is still the empty collection it has
+    /// always been - harmless for a list of machines nobody is judging a credential by - and the
+    /// request carries no single-attempt marker, so the ordinary retry policy still applies to it.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_read_still_coalesces_an_absent_body_and_is_not_marked_single_attempt()
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, "null");
+
+        Assert.Empty(await client.GetMachinesAsync(CancellationToken.None));
+        Assert.False(handler.LastRequest!.Options.TryGetValue(
+            NayaxResilienceHandler.SingleAttemptOnly, out _));
     }
 
     [Fact]

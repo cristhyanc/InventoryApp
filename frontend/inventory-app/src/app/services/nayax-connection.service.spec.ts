@@ -18,7 +18,7 @@ const testResult: NayaxConnectionTestResult = {
   expiresAtUtc: '2026-10-12T09:15:00Z',
   machineCount: 3,
   nothingFailed: true,
-  checks: [{ check: 'SignIn', status: 'Passed', failure: null }]
+  checks: [{ check: 'Machines', status: 'Passed', failure: null }]
 };
 
 const connected: NayaxConnectionState = { status: 'Ready', machineChecksPending: false };
@@ -28,7 +28,7 @@ const retestResult: NayaxConnectionRetestResult = {
   statusUpdated: true,
   machineCount: 3,
   nothingFailed: true,
-  checks: [{ check: 'SignIn', status: 'Passed', failure: null }]
+  checks: [{ check: 'Machines', status: 'Passed', failure: null }]
 };
 
 function createService(
