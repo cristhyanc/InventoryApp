@@ -75,8 +75,11 @@ public sealed class NayaxConnectionCheckRunner : INayaxConnectionCheckRunner
         // changes two things about the same request. It is sent exactly once - the resilience
         // handler's retries would make one run several live machine-list calls, and a transient
         // answer concludes nothing whether it arrives once or four times - and only a documented
-        // array counts as having read the list, so a 200 with no body is the unexpected response it
-        // is rather than a verified empty fleet that could replace a working connection.
+        // array of usable machines counts as having read the list, so a 200 with no body, a null
+        // entry or a machine with no usable MachineID is the unexpected response it is rather than a
+        // verified fleet that could replace a working connection. The check line below is Passed only
+        // if that read returned, so an unusable answer never reports a pass, a machine count or a
+        // machine to probe.
         var machines = await RunCheckAsync(
             NayaxConnectionCheck.Machines,
             () => client.ReadMachineListForConnectionGateAsync(cancellationToken),

@@ -334,6 +334,54 @@ public class NayaxConnectionCheckRunnerTests
     }
 
     /// <summary>
+    /// An array is not enough: the gate also reads the entries, because what it reads out of them is
+    /// what the Owner is then shown and what the machine-scoped probes are run against (issue #1310).
+    /// Nayax documents the <c>200</c> as an array of machine <em>objects</em> whose <c>MachineID</c>
+    /// is an <c>int64</c> the same contract allows to be <c>null</c>
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info).
+    ///
+    /// <para>So <c>[null]</c> deserializes to a one-element list with nothing in it, and <c>[{}]</c>
+    /// to a machine whose id defaults to <c>0</c>. Left alone, the first would have been saveable
+    /// while reporting one machine the Owner cannot be shown and running no machine-scoped check, and
+    /// the second would have been saveable while probing <c>machines/0/</c> - not the business's
+    /// machine. Each is refused as a whole instead: the line fails as
+    /// <see cref="NayaxConnectionCheckFailure.UnexpectedResponse"/>, there is no machine count, no
+    /// machine endpoint is called, and nothing may be saved.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("[null]")]
+    [InlineData("[{}]")]
+    [InlineData("[{\"MachineID\":0}]")]
+    [InlineData("[{\"MachineID\":null}]")]
+    [InlineData("[{\"MachineID\":-1}]")]
+    // A usable first machine does not excuse the rest: the answer as a whole is what was not read.
+    [InlineData("[{\"MachineID\":4242},null]")]
+    [InlineData("[{\"MachineID\":4242},{}]")]
+    public async Task A_machine_list_entry_that_is_not_a_usable_machine_concludes_nothing_and_cannot_be_saved(
+        string body)
+    {
+        var handler = ScriptedHandler.AllOk().Override("machines", HttpStatusCode.OK, body);
+
+        var report = await Run(handler);
+
+        AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.UnexpectedResponse);
+        Assert.Null(report.MachineCount);
+        AssertNotChecked(report, NayaxConnectionCheck.Machine);
+        AssertNotChecked(report, NayaxConnectionCheck.MachineProducts);
+        AssertNotChecked(report, NayaxConnectionCheck.MachineLastSales);
+        AssertNotChecked(report, NayaxConnectionCheck.MachineLastAlerts);
+        Assert.DoesNotContain(handler.Paths, path => path.StartsWith("machines/", StringComparison.Ordinal));
+        Assert.False(report.NothingFailed);
+        Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, report.Outcome);
+        Assert.False(NayaxConnectionCheckOutcomePolicy.MayBeSaved(report.Outcome));
+        Assert.Null(NayaxConnectionCheckOutcomePolicy.ConcludedStatus(report.Outcome));
+
+        // The gate is still one live request: the entry rule is applied to the answer, not by asking
+        // Nayax again.
+        Assert.Equal(1, handler.Paths.Count(path => path == "machines"));
+    }
+
+    /// <summary>
     /// The empty array is the other half of the test above, and it is unchanged: an owner whose
     /// token really did list a fleet of none has a verified connection, so the run is
     /// <see cref="NayaxConnectionCheckOutcome.Ready"/> and may be saved. The distinction being

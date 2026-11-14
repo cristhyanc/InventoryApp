@@ -4045,6 +4045,24 @@ replace a working connection, so the gate's read refuses a `null` or otherwise n
 unchanged: it is a real answer, concludes `Ready` and may be saved. No other consumer's behaviour
 changed.
 
+**Nor is an array of entries the gate cannot act on.** The same reference documents the array as
+holding machine *objects* whose `MachineID` is an `int64` that the contract itself allows to be
+`null`, and the gate reads two things out of those entries that an Owner then acts on: how many
+machines the token listed, and which machine the four machine-scoped probes are run against. So
+`[null]` deserializes to a one-element list holding nothing and `[{}]` to a machine whose id defaults
+to `0`; unchecked, the first would be saveable while reporting one machine that cannot be named and
+running no machine-scoped check, and the second would be saveable while probing `machines/0/`, which
+is not the business's machine. `ReadMachineListForConnectionGateAsync` therefore refuses a `null`
+entry or a machine with no usable `MachineID` as `UnexpectedResponse`, before the runner reports the
+line as `Passed` or reads a count or a machine id out of it. The **whole** answer is refused rather
+than filtered, for the same reason a `null` body is: a list that cannot be read is not a verified
+fleet, and reporting a smaller fleet than Nayax sent would be an answer nobody gave. The rule is the
+gate's alone — the ordinary reads still hand the fleet, the machine-list cache and the sync exactly
+what Nayax sent — and it costs no extra request: it is applied to the one answer already received.
+`NayaxConnectionCheckRunnerTests.A_machine_list_entry_that_is_not_a_usable_machine_concludes_nothing_and_cannot_be_saved`
+pins it over the runner, including that no machine endpoint is called and that the gate still sends
+exactly one `machines` request.
+
 The enum **reserves the retired value `1`** rather than
 reusing it, because a report serialized before the change still names that check by number — see
 [Reports that name a retired check](#reports-that-name-a-retired-check-issue-1310) below.
