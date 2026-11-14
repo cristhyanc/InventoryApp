@@ -18946,7 +18946,8 @@ that product's costing position stayed stale until its next sale. A queue reader
   be replayed. Removing it by key instead would have thrown the newly arrived work away for good, which
   is the one failure this table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings
   against a real database **file** with two connections: an earlier sale, a sale at or after the
-  replayed instant, two drains of one row, a purchase, and a purchase *edit*.
+  replayed instant, two drains of one row, a purchase, a purchase *edit*, and two drains of one
+  scope with a purchase edit committed between them.
 - **`Revision` is the comparison for another sale, and the instant cannot be.** Recording a pending rebuild only ever
   moves `FromInstantUtc` earlier, so a sale at or after the instant the row already holds adds work
   without changing any other column — an acknowledgement that compared the instant would succeed,
@@ -18977,6 +18978,25 @@ that product's costing position stayed stale until its next sale. A queue reader
   existing product, because what is compared is whether the value changed and never what it is), and
   is deliberately off the published `Product` payload. Forced backfill tools and the repair fingerprint
   are a separate task (issue #1261).
+- **Each claim's replay starts from the stored costing inputs, which is what makes that comparison
+  mean anything on the second drain of one scope** (issue #1245). A drain runs more than once in one
+  scope — the hourly reconciliation drains before the synchronization and again after the comparison,
+  and the synchronization drains as well — and a successful acknowledgement saves the replay and
+  leaves its product, its stock movements and its sales *tracked*. EF Core answers a later tracking
+  query for a row it already tracks with the instance it holds and does not refresh that instance's
+  values, so the drain detaches those three before every claim (`ForgetTrackedCostingInputs`, the
+  costing counterpart of the pending row's own `ForgetTracked`). Without it, the second drain replayed
+  a purchase edit's product over the unit cost from *before* the correction and staged the version the
+  first drain had written — which is the value its own fresh claim already held, so the comparison
+  passed, the row was removed with a position computed from superseded inputs, EF's partial-column
+  update left the stored value and average disagreeing with each other, and the persisted version
+  repeated instead of advancing, hiding the whole thing from the next claim too. Reading the inputs
+  fresh makes the staged version the stored one plus one, so **a committed rebuild always leaves the
+  version ahead of the claim it committed against** and anything that moved it in between fails the
+  comparison and is discarded. The detaching belongs to the drain and not to
+  `EfInventoryCostLedgerStore`: a purchase create rebuilds the cost over movements it has staged and
+  not yet saved, and that replay must see them. `NayaxSqsConcurrencyTests` covers two drains on one
+  context with a purchase edit and the next sale committed through another context between them.
 - A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
   the earlier instant covers the later one, and the other way round would silently skip a sale's effect
   on cost.

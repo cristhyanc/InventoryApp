@@ -603,6 +603,130 @@ public class NayaxSqsConcurrencyTests
 
     #endregion
 
+    #region Two drains in one scope
+
+    /// <summary>
+    /// <strong>The second drain of one scope replays over a purchase edit committed between the two,
+    /// and its commit advances the stored costing version.</strong>
+    ///
+    /// <para>A drain runs more than once in one scope: <c>ReconcileNayaxSalesWithProvider</c> drains
+    /// before the synchronization and again after the comparison, and the synchronization itself
+    /// drains. A successful acknowledgement saves the replay and leaves its product, its movements and
+    /// its sales <em>tracked</em>, and EF Core answers a later tracking query for a row it already
+    /// tracks with the instance it holds rather than refreshing that instance from the database. So
+    /// the second drain's replay used to be handed the first drain's costing inputs: the purchase
+    /// edit's corrected unit cost was invisible to it, and the version it staged was one on from the
+    /// version the <em>first</em> drain had written - which is the value the fresh claim already held,
+    /// so the acknowledgement's comparison passed, the pending row was removed with a costing position
+    /// computed from superseded inputs, and the persisted version repeated instead of advancing.</para>
+    ///
+    /// <para>The interleaving here is the ordinary one and needs no seam at all: two drains on one
+    /// context, with another context's purchase edit and the sale that enqueues the second rebuild
+    /// committed between them. The figures are what separate the two outcomes: the edited $6 history
+    /// leaves 18 units worth $72 at $4, and the tracked $4 history computed 18 units worth $54 at $3 -
+    /// of which only the quantity and the value reached the database, because EF Core writes the
+    /// columns that differ from the stale instance's own original values and the average happened to
+    /// match, so the stored position was left disagreeing with itself. The version is asserted to have
+    /// moved as well, which is what lets the <em>next</em> claim tell this rebuild from the one before
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_second_drain_in_one_scope_replays_over_a_purchase_edit_committed_between_them()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+
+        // A purchase the product's cost was already rebuilt over, and then the sale the first drain
+        // replays.
+        int purchaseId;
+        await using (var seed = fixture.Context())
+        {
+            purchaseId = (await RecordPurchaseAsync(seed, unitCost: 4m)).Id;
+        }
+
+        await using (var seed = fixture.Context())
+        {
+            await NayaxSqsSaleFixture.Store(seed).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(NayaxTransactionStatusIds.Completed),
+                CancellationToken.None);
+        }
+
+        // The one scope - one AppDbContext - both drains run on, as a reconciliation's scope is.
+        await using var scope = fixture.Context();
+        await using var otherWriter = fixture.SecondWriter();
+
+        var first = await NayaxSqsSaleFixture.Store(scope)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        Assert.Empty(first.StillPendingProductIds);
+        Assert.Empty(first.Failures);
+
+        long versionAfterFirstDrain;
+        await using (var read = fixture.Context())
+        {
+            Assert.Empty(await read.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+
+            // The first drain's own figures, over the $4 the purchase then carried: the baseline's 10
+            // units at $2, plus 10 at $4, less the unit the sale consumed at the $3 average.
+            Assert.Equal((19, 57m, 3m), await CostingPositionAsync(read));
+            versionAfterFirstDrain = await CostingVersionAsync(read);
+        }
+
+        // Between the drains, in another context: the purchase line's unit cost is corrected in place
+        // - so the movement is rewritten and none is added - which rebuilds the product's cost and
+        // moves its version, and then a second sale enqueues the rebuild the next drain claims.
+        await EditPurchaseAsync(otherWriter, purchaseId, unitCost: 6m);
+
+        await using (var enqueue = fixture.SecondWriter())
+        {
+            await NayaxSqsSaleFixture.Store(enqueue).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(
+                    NayaxTransactionStatusIds.Completed,
+                    messageId: "message-2",
+                    transactionId: NayaxSqsSaleFixture.TransactionId + 1,
+                    saleInstant: NayaxSqsSaleFixture.SaleInstant.AddHours(2)),
+                CancellationToken.None);
+        }
+
+        long versionBeforeSecondDrain;
+        await using (var read = fixture.Context())
+        {
+            versionBeforeSecondDrain = await CostingVersionAsync(read);
+            Assert.True(
+                versionBeforeSecondDrain > versionAfterFirstDrain,
+                $"The purchase edit left the costing version at {versionBeforeSecondDrain}.");
+        }
+
+        // The second drain, on the same context as the first.
+        var second = await NayaxSqsSaleFixture.Store(scope)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        Assert.Empty(second.StillPendingProductIds);
+        Assert.Empty(second.Failures);
+
+        await using var final = fixture.Context();
+        Assert.Empty(await final.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+
+        // The edit changed the line in place, so there is still exactly one purchase movement, and it
+        // carries the corrected cost the second replay had to read again.
+        Assert.Equal(6m, (await final.StockAdjustments.AsNoTracking().SingleAsync()).UnitCost);
+
+        // 10 units at $2 plus 10 at the corrected $6, less the two units the sales consumed at the $4
+        // average that leaves. The replay over the tracked $4 history computed 18 units worth $54 at
+        // $3 - the same quantity, from the cost before the correction - and stored (18, $54, $4),
+        // because the average it staged matched the stale instance's own original value and was
+        // therefore left out of the update.
+        Assert.Equal((18, 72m, 4m), await CostingPositionAsync(final));
+
+        // And this rebuild moved the stored version, rather than writing back the version its own
+        // claim held: a later claim can tell it from the rebuild before it.
+        var versionAfterSecondDrain = await CostingVersionAsync(final);
+        Assert.True(
+            versionAfterSecondDrain > versionBeforeSecondDrain,
+            $"The second drain's committed rebuild left the costing version at {versionAfterSecondDrain}.");
+    }
+
+    #endregion
+
     /// <summary>The purchase date the cases above buy on: after the baseline cutoff, before the sale.</summary>
     private static readonly DateTime PurchaseDate = new(2026, 11, 3, 0, 0, 0, DateTimeKind.Utc);
 
@@ -640,6 +764,16 @@ public class NayaxSqsConcurrencyTests
             .SingleAsync(row => row.Id == NayaxSqsSaleFixture.ProductA);
         return (product.CostingQuantity, product.InventoryValue, product.AverageUnitCost);
     }
+
+    /// <summary>
+    /// The product's stored costing version, read untracked so the answer is the database's and not a
+    /// value <paramref name="db"/> happens to be holding.
+    /// </summary>
+    private static Task<long> CostingVersionAsync(AppDbContext db) =>
+        db.Products.AsNoTracking()
+            .Where(row => row.Id == NayaxSqsSaleFixture.ProductA)
+            .Select(row => row.CostingVersion)
+            .SingleAsync();
 
     /// <summary>
     /// The <strong>real</strong> replay - the real ledger read, the real weighted-average replay and

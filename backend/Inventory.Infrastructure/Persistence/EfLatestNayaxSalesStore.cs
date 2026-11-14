@@ -226,6 +226,15 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 
         foreach (var claim in claims)
         {
+            // Every claim's replay starts from the stored costing inputs and from nothing this
+            // context read earlier (issue #1245). A drain is called more than once in one scope -
+            // ReconcileNayaxSalesWithProvider drains before the synchronization and again after the
+            // comparison, and the synchronization drains too - and a successful acknowledgement
+            // leaves the product and its movements tracked, so without this the second drain's
+            // replay would be handed those instances again instead of the rows another writer has
+            // committed over them in the meantime.
+            ForgetTrackedCostingInputs();
+
             if (!baselines.TryGetValue(claim.ProductId, out var cutoff) || claim.FromInstantUtc <= cutoff)
             {
                 // Nothing to replay: there is no transition baseline for this product, or the
@@ -341,6 +350,15 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// exists "not a changed version": such a row has nothing to replay, and requiring a match would
     /// leave it standing for ever.</para>
     ///
+    /// <para><strong>A committed rebuild always leaves the version ahead of the claim.</strong> That is
+    /// what makes the comparison mean anything on the second and later drain of one scope, and it
+    /// follows from the replay reading its costing inputs from the database rather than from this
+    /// context (see <see cref="ForgetTrackedCostingInputs"/>): the staged version is the stored one
+    /// plus one, and the comparison here has just established that the stored one is still the
+    /// claimed one. A replay over inputs this context had tracked since an earlier drain would instead
+    /// stage the version its claim already holds, and this comparison - which asks only whether the
+    /// stored version has moved - would pass it.</para>
+    ///
     /// <para><strong>A claim that has gone stale commits nothing at all.</strong> The costs the replay
     /// staged were computed before the newer work existed, so saving them would let a superseded
     /// replay overwrite what the next drain writes. The staged changes are therefore discarded rather
@@ -399,6 +417,48 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// </summary>
     private void ForgetTrackedPendingRebuilds() =>
         PendingInventoryCostRebuildRecorder.ForgetTracked(_db);
+
+    /// <summary>
+    /// Detaches every costing input this context is tracking - the products, the stock movements and
+    /// the sales a replay reads <em>for update</em> - so the replay that follows is given the stored
+    /// rows rather than instances this context read before another writer committed over them.
+    ///
+    /// <para><strong>Why a drain needs this at all.</strong> A drain runs more than once in one scope:
+    /// <c>ReconcileNayaxSalesWithProvider</c> drains before the synchronization and again after the
+    /// comparison, and the synchronization itself drains. A successful
+    /// <see cref="AcknowledgeAsync"/> saves the replay and leaves its product, movements and sales
+    /// tracked, and EF Core answers a later tracking query for a row it already tracks with the
+    /// instance it holds - it does not refresh that instance's values from the database. So the second
+    /// drain's replay would be handed the first one's figures: a purchase edit committed in between
+    /// rewrites a movement's unit cost in place, and the replay would compute from the cost before the
+    /// correction, over a <see cref="Product.CostingVersion"/> one behind the stored one.</para>
+    ///
+    /// <para><strong>What that cost, before this.</strong> The version read at claim is untracked and
+    /// therefore fresh, so a stale replay staged <c>stale + 1</c> - the value the fresh claim already
+    /// held - and the acknowledgement's comparison, which asks only whether the stored version still
+    /// equals the claim, passed. The pending row was removed with a costing position computed from
+    /// superseded inputs, and the persisted version repeated instead of advancing, so the next claim
+    /// could not tell either. With the inputs read fresh, the replay stages the stored version plus
+    /// one: a commit therefore always leaves the version <em>ahead</em> of the claim it committed
+    /// against, and anything that moved it in between fails the comparison and is discarded.</para>
+    ///
+    /// <para>Nothing is lost by it. A drain is always called after its caller's own write has
+    /// committed (<c>ProcessNayaxSqsSale</c>, <c>SyncLatestNayaxSales</c>,
+    /// <c>ReviewNayaxSales</c> and the reconciliation all replay <em>after</em> the commit, never
+    /// inside it), and within the drain each claim ends in a save, a discard or a recorded failure, so
+    /// at this point the context holds no unsaved costing change of its own. It is deliberately
+    /// narrower than a <c>ChangeTracker.Clear()</c> and deliberately <em>not</em> done inside
+    /// <see cref="EfInventoryCostLedgerStore"/>: a purchase create rebuilds the cost over movements it
+    /// has staged and not yet saved, and that replay must see them.</para>
+    /// </summary>
+    private void ForgetTrackedCostingInputs()
+    {
+        foreach (var tracked in _db.ChangeTracker.Entries().ToList())
+        {
+            if (tracked.Entity is Product or StockAdjustment or NayaxSales)
+                tracked.State = EntityState.Detached;
+        }
+    }
 
     /// <summary>
     /// Records one failed attempt on the row a claim was read from: the attempt count, the instant and
