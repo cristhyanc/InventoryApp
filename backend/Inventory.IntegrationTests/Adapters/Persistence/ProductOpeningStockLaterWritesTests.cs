@@ -29,8 +29,9 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// data-quality fault, so from then on <em>every</em> write that rebuilds that product's cost - a
 /// pick-list refill, a manual adjustment, a Take Inventory apply, a new purchase - failed with
 /// <c>InventoryCostDataQualityException</c>, and no ordinary screen could repair it. The create now
-/// requires the cost, and this test walks the four writes that used to be frozen over one product
-/// created the way the form creates it.</para>
+/// requires the cost, and this test walks the four writes that used to be frozen over a product
+/// created the way the form creates it - at each cost the create accepts beside opening stock, the
+/// free <c>0</c> as well as an ordinary <c>2.50</c>.</para>
 ///
 /// <para>Relational (SQLite) rather than InMemory, deliberately: what it asserts is that four real
 /// write transactions each commit with their cost rebuild, which is the thing the replay refused.
@@ -42,7 +43,6 @@ public sealed class ProductOpeningStockLaterWritesTests : IDisposable
 {
     private const int BusinessA = 1;
     private const long MachineA = 40;
-    private const decimal OpeningUnitCost = 2.50m;
     private const int OpeningStock = 20;
 
     private readonly SqliteConnection _connection;
@@ -64,11 +64,21 @@ public sealed class ProductOpeningStockLaterWritesTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    [Fact]
-    public async Task A_product_created_with_opening_stock_and_a_cost_accepts_a_refill_an_adjustment_a_count_and_a_purchase()
+    /// <summary>
+    /// Both accepted costs, because the acceptance criterion names them both: <c>0</c> - opening
+    /// stock that cost nothing, the case the rule exists to keep accepting - and an ordinary
+    /// <c>2.50</c>. Zero is the one worth walking the four writes with: it is a cost, so the replay
+    /// must take it exactly as it takes 2.50, and the suggestion Take Inventory costs its difference
+    /// from is zero too.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2.50)]
+    public async Task A_product_created_with_opening_stock_and_a_cost_accepts_a_refill_an_adjustment_a_count_and_a_purchase(
+        decimal openingUnitCost)
     {
         await SeedMachineAsync();
-        var productId = await CreateProductWithOpeningStockAsync(OpeningUnitCost);
+        var productId = await CreateProductWithOpeningStockAsync(openingUnitCost);
 
         // The opening movement carries the cost, which is what makes the four writes below
         // replayable at all.
@@ -76,10 +86,10 @@ public sealed class ProductOpeningStockLaterWritesTests : IDisposable
         {
             var opening = await verify.StockAdjustments.SingleAsync(x => x.ProductId == productId);
             Assert.Equal(StockAdjustmentReason.Restock, opening.Reason);
-            Assert.Equal(OpeningUnitCost, opening.UnitCost);
+            Assert.Equal(openingUnitCost, opening.UnitCost);
             var product = await verify.Products.SingleAsync(p => p.Id == productId);
             Assert.Equal(OpeningStock, product.CostingQuantity);
-            Assert.Equal(OpeningStock * OpeningUnitCost, product.InventoryValue);
+            Assert.Equal(OpeningStock * openingUnitCost, product.InventoryValue);
         }
 
         // 1. A pick-list refill: five units out of storage into the machine, costing-neutral.
