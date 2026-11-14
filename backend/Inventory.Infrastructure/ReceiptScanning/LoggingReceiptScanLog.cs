@@ -19,9 +19,10 @@ namespace Inventory.Infrastructure.ReceiptScanning;
 /// for business", which is the one search that finds them together. The warning's fields are
 /// structured names rather than interpolation, so they are queryable in Azure Monitor and no
 /// formatted string can be assembled from anything wider than the failure itself - which can hold
-/// only a status, the provider's error type, the provider's message capped on one line and the
-/// provider's request id. <strong>The upstream error body is never logged</strong>: it can quote the
-/// request, and the request held a receipt.</para>
+/// only a status, the provider's error type, the provider's message capped on one line (or, when
+/// that message quoted the request, the fact that it was withheld) and the provider's request id.
+/// <strong>The upstream error body is never logged</strong>: it can quote the request, and the
+/// request held a receipt.</para>
 /// </summary>
 public sealed class LoggingReceiptScanLog : IReceiptScanLog
 {
@@ -59,11 +60,12 @@ public sealed class LoggingReceiptScanLog : IReceiptScanLog
             _logger.LogWarning(
                 "Receipt scan for business {BusinessId} was refused by the receipt reader with "
                     + "status {StatusCode} (error type: {ErrorType}, error message: {ErrorMessage}, "
-                    + "request id: {RequestId}).",
+                    + "message withheld: {MessageWithheld}, request id: {RequestId}).",
                 businessId,
                 statusCode,
                 failure.ErrorType,
                 failure.ErrorMessage,
+                failure.MessageWithheld,
                 failure.RequestId);
 
             return;

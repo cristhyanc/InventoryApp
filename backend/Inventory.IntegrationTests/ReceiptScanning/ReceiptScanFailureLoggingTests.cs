@@ -59,6 +59,7 @@ public class ReceiptScanFailureLoggingTests
         Assert.Equal("invalid_request_error", entry.Properties["ErrorType"]);
         Assert.Equal("Schema is too complex", entry.Properties["ErrorMessage"]);
         Assert.Equal("req_011CTM9fictional", entry.Properties["RequestId"]);
+        Assert.Equal("False", entry.Properties["MessageWithheld"]);
 
         // Both lines of one scan are found by the one search the owner is told to make.
         Assert.StartsWith("Receipt scan for business 42", entry.Message, StringComparison.Ordinal);
@@ -211,6 +212,77 @@ public class ReceiptScanFailureLoggingTests
         {
             Assert.Contains("Your request could not be read.", lines, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The owner's decision of 14 November 2026: a provider message that quotes what the request
+    /// carried - a product or supplier name of this business, in any case, or a piece of the file -
+    /// is withheld rather than capped. The status, the error type and the request id are still
+    /// logged, and the line says the message was withheld rather than that none was stated.
+    /// </summary>
+    [Theory]
+    [InlineData("product")]
+    [InlineData("supplier")]
+    [InlineData("file")]
+    public async Task A_message_that_quotes_the_request_is_withheld_and_the_rest_is_logged(string quoted)
+    {
+        var fragment = Convert.ToBase64String(Content).Substring(5, 20);
+        var stated = quoted switch
+        {
+            "product" => $"messages.0.content.1.text: unexpected product '{ProductName.ToUpperInvariant()}'",
+            "supplier" => $"Supplier {SupplierName} is not a valid value",
+            _ => $"messages.0.content.0.source.base64.data: invalid image data near '{fragment}'",
+        };
+
+        var logger = await LogOfAsync(Error(
+            HttpStatusCode.BadRequest,
+            Document("invalid_request_error", stated),
+            requestId: "req_011CTM9withheld"));
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal("400", entry.Properties["StatusCode"]);
+        Assert.Equal("invalid_request_error", entry.Properties["ErrorType"]);
+        Assert.Equal("req_011CTM9withheld", entry.Properties["RequestId"]);
+        Assert.Null(entry.Properties["ErrorMessage"]);
+        Assert.Equal("True", entry.Properties["MessageWithheld"]);
+
+        var line = $"{entry.Message} {string.Join(' ', entry.Properties.Select(property => $"{property.Key}={property.Value}"))}";
+        foreach (var value in new[] { ProductName, SupplierName, fragment, "unexpected product", "invalid image data" })
+        {
+            Assert.DoesNotContain(value, line, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// The withholding rule is not a blanket one: a message that quotes nothing the request carried
+    /// is logged as stated, and a catalogue name too short to mean anything on its own (under three
+    /// characters) does not withhold every message that happens to contain those letters.
+    /// </summary>
+    [Fact]
+    public async Task A_message_that_quotes_nothing_of_the_request_is_logged_as_stated()
+    {
+        var configuration = ReceiptScanningConfiguration.From(new ReceiptScanningOptions
+        {
+            ApiKey = ApiKey,
+            Model = "a-configured-model",
+            TimeoutSeconds = 60,
+        });
+        var http = new HttpClient(new AnsweringHandler(() => Error(
+            HttpStatusCode.BadRequest,
+            Document("invalid_request_error", "Schema is too complex"))))
+        {
+            BaseAddress = configuration.BaseAddress,
+        };
+        var request = new ReceiptReadRequest(
+            new ReceiptScanFile("image/jpeg", ReceiptScanMediaKind.Image, Content, null),
+            [new ReceiptScanProduct(91, "co"), new ReceiptScanProduct(92, ProductName)],
+            [new ReceiptScanSupplier(7, " ")]);
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => new ClaudeReceiptReader(http, configuration).ReadAsync(request, CancellationToken.None));
+
+        Assert.Equal("Schema is too complex", exception.Failure!.ErrorMessage);
+        Assert.False(exception.Failure.MessageWithheld);
     }
 
     /// <summary>

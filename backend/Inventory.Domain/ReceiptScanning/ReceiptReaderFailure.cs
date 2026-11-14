@@ -35,7 +35,7 @@ public enum ReceiptReaderFailureKind
 /// receipt, so an upstream error body - which can quote the request - is never logged, stored or
 /// echoed. What a failure may carry is the upstream HTTP status, the provider's own error
 /// <c>type</c>, the provider's own error <c>message</c> capped at <see cref="MaxTextLength"/>
-/// characters on one line, the provider's request id, and which local failure it was when there was
+/// characters on one line - unless that message quoted the request, when it is withheld - the provider's request id, and which local failure it was when there was
 /// no answer to read. Nothing here can carry the file, a file name, a product or supplier name, a
 /// line of the receipt, the prompt or the key: there is no member for one.</para>
 ///
@@ -56,13 +56,15 @@ public sealed record ReceiptReaderFailure
         int? statusCode,
         string? errorType,
         string? errorMessage,
-        string? requestId)
+        string? requestId,
+        bool messageWithheld)
     {
         Kind = kind;
         StatusCode = statusCode;
         ErrorType = errorType;
         ErrorMessage = errorMessage;
         RequestId = requestId;
+        MessageWithheld = messageWithheld;
     }
 
     /// <summary>Which failure it was.</summary>
@@ -88,6 +90,14 @@ public sealed record ReceiptReaderFailure
     public string? ErrorMessage { get; }
 
     /// <summary>
+    /// Whether the provider stated a message and it was not recorded because it quoted what the
+    /// request carried (the owner's decision of 14 November 2026): a product or supplier name of the
+    /// business, or a piece of the file. <see cref="ErrorMessage"/> is then <see langword="null"/>,
+    /// and the log says the message was withheld rather than that none was stated.
+    /// </summary>
+    public bool MessageWithheld { get; }
+
+    /// <summary>
     /// The provider's request id, when the response carried one, so a failure can be traced with the
     /// provider.
     /// </summary>
@@ -101,17 +111,23 @@ public sealed record ReceiptReaderFailure
     /// <param name="errorType">The error body's <c>error.type</c>, or <see langword="null"/>.</param>
     /// <param name="errorMessage">The error body's <c>error.message</c>, or <see langword="null"/>.</param>
     /// <param name="requestId">The response's request id, or <see langword="null"/>.</param>
+    /// <param name="messageWithheld">
+    /// <see langword="true"/> when the provider stated a message that quoted the request, so it is
+    /// not recorded: <paramref name="errorMessage"/> is then ignored.
+    /// </param>
     public static ReceiptReaderFailure Refused(
         int statusCode,
         string? errorType = null,
         string? errorMessage = null,
-        string? requestId = null) =>
+        string? requestId = null,
+        bool messageWithheld = false) =>
         new(
             ReceiptReaderFailureKind.Refused,
             statusCode,
             Clean(errorType),
-            Clean(errorMessage),
-            Clean(requestId));
+            messageWithheld ? null : Clean(errorMessage),
+            Clean(requestId),
+            messageWithheld);
 
     /// <summary>
     /// A failure with no answer to take a status from: which one it was, and nothing else at all.
@@ -128,7 +144,7 @@ public sealed record ReceiptReaderFailure
                 nameof(kind), kind, "A refusal carries the status the reader answered.");
         }
 
-        return new ReceiptReaderFailure(kind, statusCode: null, errorType: null, errorMessage: null, requestId: null);
+        return new ReceiptReaderFailure(kind, statusCode: null, errorType: null, errorMessage: null, requestId: null, messageWithheld: false);
     }
 
     /// <summary>

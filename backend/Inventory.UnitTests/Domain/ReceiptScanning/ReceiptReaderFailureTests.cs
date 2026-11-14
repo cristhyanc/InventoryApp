@@ -125,4 +125,29 @@ public class ReceiptReaderFailureTests
     public void A_refusal_cannot_be_recorded_as_a_local_failure() =>
         Assert.Throws<ArgumentOutOfRangeException>(
             () => ReceiptReaderFailure.Local(ReceiptReaderFailureKind.Refused));
+
+    /// <summary>
+    /// A withheld message is recorded as withheld and never as a value, whatever was passed in
+    /// (the owner's decision of 14 November 2026); everything else the refusal stated stands.
+    /// </summary>
+    [Fact]
+    public void A_withheld_message_is_recorded_as_withheld_and_not_as_text()
+    {
+        var failure = ReceiptReaderFailure.Refused(
+            400, "invalid_request_error", "quotes Cola 375mL", "req_1", messageWithheld: true);
+
+        Assert.Null(failure.ErrorMessage);
+        Assert.True(failure.MessageWithheld);
+        Assert.Equal(400, failure.StatusCode);
+        Assert.Equal("invalid_request_error", failure.ErrorType);
+        Assert.Equal("req_1", failure.RequestId);
+    }
+
+    /// <summary>A message that was not withheld says so, as does every local failure.</summary>
+    [Fact]
+    public void A_message_is_not_withheld_unless_the_reader_says_so()
+    {
+        Assert.False(ReceiptReaderFailure.Refused(400, errorMessage: "Overloaded").MessageWithheld);
+        Assert.False(ReceiptReaderFailure.Local(ReceiptReaderFailureKind.NetworkError).MessageWithheld);
+    }
 }
