@@ -8870,11 +8870,18 @@ A machine refill is an internal location transfer: it changes physical storage b
 
 Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
-Historical sale cost precedence is:
+Historical sale cost precedence is four steps, not three (`AGENTS.md` § Inventory and historical
+costing invariants holds the authoritative wording):
 
 1. persisted internal AVCO/ledger cost when reliable;
-2. transaction-level Nayax Product Cost Price captured on that sale;
-3. uncosted/unknown.
+2. in the cost replay, when the ledger has no known cost before the sale, the unit cost of the latest
+   costed purchase (restock) replayed before it, stored as `Costed` with `CostSource = Estimated`;
+3. the transaction-level Nayax Product Cost Price captured on that sale;
+4. otherwise the sale is left uncosted, which the replay reports as the **non-fatal**
+   `UncostedSale` issue (issue #1239).
+
+The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -8907,10 +8914,26 @@ sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` is
 as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
 it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
 fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
-before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
-earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+before the sale makes the next replay cost it from the ledger again.
 A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
 purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
+
+**A sale with no known cost at all is left uncosted, and that does not block a stock write**
+(repository owner's decision of 13 November 2026, issue #1239). A completed sale that steps 1 to 3
+cannot cost - no ledger cost, no earlier costed purchase and no valid Nayax cost, which is the state a
+business that connects Nayax with machines already stocked starts in - is reported as the non-fatal
+`UncostedSale` issue, consumes no costing quantity or value, and stages no sale cost. Because it is not
+fatal, `RebuildProductCost` no longer throws for it: a purchase dated *after* such a sale, a pick-list
+refill, a manual adjustment and a Take Inventory apply all commit, where every one of them used to be
+rolled back with `InventoryCostDataQualityException` and the only way out was to backdate a purchase
+before the sale (`UncostedSaleLaterStockWritesTests` walks those four writes). The sale stays uncosted
+and keeps being reported - in the `InventoryCostRebuildResult` issues and in the costing-repair
+preview's `remainingUncostedSaleIssues`, each naming the product, the transaction and the sale time -
+until a purchase or a costing repair before it is recorded, which is what makes the next replay cost it
+from the ledger. The sale is still listed in the replay's `UncostableSales`, so a costing repair is
+still previewed and placed against it. Everything else the replay calls fatal stays fatal: an uncosted
+positive `Restock`, a correction or write-off with no known cost, physically or cost-negative stock, and
+the end-of-replay opening reconciliation.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -8921,7 +8944,7 @@ source ID - and returns the physical/costing quantity, inventory value, unrounde
 the cost assigned to each movement and sale, the position each repair landed on, the completed sales
 it could not cost, and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
 (`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
-`LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
+`CostFallback`, `UncostedSale` and `LegacyUnlinkedCostedRestock` are not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
 quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
 physical stock with `InsufficientStockException`. Neither takes an
@@ -9052,9 +9075,11 @@ releases exactly the one unit of costing inventory it consumed.
 
 A costing repair is the one supported way to restore costing history that was never recorded. It
 exists for a single situation: physical stock the business genuinely held was never valued in the
-ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` reports
-`UnknownCost`/`MissingOpening` for the completed sales that depend on it, and every later write to
-that product (purchase, count, refill apply, sales sync) fails on the same fatal issue. Restock,
+ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` cannot cost the
+completed sales that depend on it and reports each of them as the non-fatal `UncostedSale` (since
+issue #1239; before that they were fatal and every later write to the product - purchase, count,
+refill apply, sales sync - failed on the same issue, which is why a repair was the only way to unblock
+the product rather than only the way to value its history). Restock,
 Correction, Damaged, Expired and MachineRefill are physical movements and keep their meanings, so
 none of them can express "the costing history was incomplete" without misstating physical stock; a
 repair is the explicit, auditable, costing-only alternative. It is never inferred - not from
@@ -9105,8 +9130,12 @@ and it never substitutes for a real purchase, correction or write-off.
   It replays the ledger twice through the shared `InventoryCostRepairProjection` - as it stands, and
   with the proposed repair - and reports the costing quantity/value immediately before the repair,
   the quantity/value it adds, the resulting average unit cost, the first completed sale the ledger
-  cannot cost today, whether the repair replays before it, the projected costing quantity/value, and
-  the fatal issues a partial repair would leave behind.
+  cannot cost today, whether the repair replays before it, the projected costing quantity/value,
+  the fatal issues a partial repair would leave behind, and - since issue #1239 - the completed sales
+  a partial repair would leave **uncosted** (`remainingUncostedSaleIssues`, each naming the product,
+  the transaction and the sale time). The second list does not block the apply: a repair too small to
+  reach those sales is recorded and they stay uncosted and flagged, so the operator has to be able to
+  see which ones before approving it.
 - **`ApplyInventoryCostRepair`** runs in one transaction, and in one order deliberately: the
   authoritative ledger read, the expected-state comparison and the write are a single operation.
   Because the preview stores nothing, the stale-preview model of
@@ -9117,8 +9146,11 @@ and it never substitutes for a real purchase, correction or write-off.
   the apply recomputes and requires to match. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
-  fatal data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a
-  product.
+  fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
+  with no known cost - fails and persists nothing at all. A completed sale the repair does not reach
+  is no longer such an issue (issue #1239): that repair is recorded, the sales it does reach are
+  costed from the ledger, and the ones it does not stay uncosted and flagged, which the preview
+  reported before it was approved.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by
   `Inventory.Infrastructure.Persistence.EfInventoryCostRepairStore`; it moved to
@@ -9132,7 +9164,7 @@ and it never substitutes for a real purchase, correction or write-off.
 
   | Endpoint | Request | Success response |
   | --- | --- | --- |
-  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues`, `remainingUncostedSaleIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
   | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
   | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
 
