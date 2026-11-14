@@ -11365,11 +11365,29 @@ which offer both of the line's prices as linked inputs: type the amount paid for
 it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
+**A create with opening stock has an initial unit cost, and that is now a rule rather than a
+description (issue #1238).** `POST api/products` records opening stock above zero as a costed
+opening `Restock` movement, and `WeightedAverageCostReplay` treats a positive `Restock` with no unit
+cost as a fatal data-quality fault (`UnknownCost`). While the cost was optional, a create that left
+it empty produced a product whose *every* later stock write — a pick-list refill, a manual
+adjustment, a Take Inventory apply, a new purchase — ended in a rebuild that refused the opening
+movement with "Restock adjustment … has no valid unit cost", and no ordinary screen could repair it.
+So `Inventory.Domain.Products.ProductInitialCostPolicy` is a rule about two fields: **opening stock
+above zero requires an initial unit cost**, refused with
+`ProductInitialCostPolicy.InitialUnitCostRequiredMessage` as `400`. `0` is a cost — stock that was
+free — and is accepted; a negative one is still refused with the existing message; and opening stock
+of zero or absent records no movement and keeps the cost optional, exactly as before. `CreateProduct`
+applies it before anything is saved and `EfProductStore.CreateAsync` applies it again at the write,
+the same way the name and unit-label rules are applied twice, so neither the product nor the opening
+movement is written. Making an uncosted `Restock` non-fatal in the replay, and repairing products
+created before this rule, are deliberately *not* part of it.
+
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
 (`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
 their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
 create/update/delete (`EfPurchaseStore`, whose purchase-linked restock movements still come from
-`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`)
+`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`,
+whose initial stock carries a cost because issue #1238 requires one)
 write their movements as before. All five then rebuild the affected product's cost through
 `Inventory.Application.Costing.IRebuildProductCost` inside the same transaction as before (issue
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
@@ -15511,6 +15529,18 @@ rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a si
 transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
 persisted quantity whose ledger and costing position were never written — under a request the caller
 saw fail and would retry, which would otherwise create a second product beside the first.
+
+**And the movement is always costed, so the rebuild is always one the replay accepts** (issue
+#1238). The third write only exists because the second one does, and it can only succeed if the
+opening movement carries a unit cost: an uncosted positive `Restock` is a fatal `UnknownCost` to
+`WeightedAverageCostReplay`, which is why opening stock above zero now *requires* an initial unit
+cost rather than merely offering one. `ProductInitialCostPolicy` is that rule (`0` accepted,
+negative refused with its existing message, no opening stock leaving the cost optional), it is
+applied by `CreateProduct` before anything is saved and again by this adapter at the write, and a
+refusal is `400` with `ProductInitialCostPolicy.InitialUnitCostRequiredMessage` having written
+neither the product nor the movement. Before it, a create with stock and no cost produced a product
+whose every later stock write failed its rebuild. See [Product purchase and
+restock](#product-purchase-and-restock).
 
 **Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
 refusal points at, and a retired product is one the business has taken out of use: it must not be

@@ -139,6 +139,9 @@ public class EfProductCatalogueWriteTests : IDisposable
     /// A product created with opening stock keeps the initial restock movement the create has always
     /// recorded - the create path is unchanged by this issue, and that movement is immediately
     /// history the delete is refused over.
+    ///
+    /// <para>The opening stock carries a unit cost since issue #1238, which is the only thing that
+    /// changed here: the movement itself is the same one.</para>
     /// </summary>
     [Fact]
     public async Task A_created_product_with_opening_stock_records_its_initial_movement()
@@ -146,7 +149,7 @@ public class EfProductCatalogueWriteTests : IDisposable
         await using var db = TestAppDbContext.For(_options, BusinessA);
 
         var created = await StoreFor(db).CreateAsync(
-            CreateFields(quantityInStock: 6), CancellationToken.None);
+            CreateFields(quantityInStock: 6, initialUnitCost: 1.5m), CancellationToken.None);
 
         Assert.Equal(ProductWriteOutcome.Succeeded, created.Outcome);
         var movement = await db.StockAdjustments.AsNoTracking()

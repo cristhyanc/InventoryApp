@@ -263,8 +263,18 @@
               <span class="text-xs text-rr-muted">Units on hand in the warehouse now.</span>
             </label>
 
+            <!-- Required while Opening Stock is above zero (issue #1238): that stock is recorded as
+                 a costed opening movement, and one with no cost made every later stock write of the
+                 product fail its cost rebuild. Zero is a cost and is accepted. -->
             <label class="field">
-              <span class="field-label">Initial Unit Cost ($) <span class="font-normal text-rr-caption">(optional)</span></span>
+              <span class="field-label">
+                Initial Unit Cost ($)
+                @if (initialUnitCostRequired) {
+                  *
+                } @else {
+                  <span class="font-normal text-rr-caption">(optional)</span>
+                }
+              </span>
               <input
                 class="min-h-11"
                 [(ngModel)]="form.initialUnitCost"
@@ -272,9 +282,21 @@
                 type="number"
                 min="0"
                 step="0.01"
-                placeholder="Optional"
+                [required]="initialUnitCostRequired"
+                [attr.aria-invalid]="initialUnitCostMissing"
+                [placeholder]="initialUnitCostRequired ? 'Required' : 'Optional'"
+                aria-describedby="product-initial-unit-cost-hint"
               />
-              <span class="text-xs text-rr-muted">In AUD. Sets the starting average cost of the opening stock.</span>
+              <span id="product-initial-unit-cost-hint" class="text-xs text-rr-muted">
+                @if (initialUnitCostRequired) {
+                  In AUD. Sets the starting average cost of the opening stock. Enter 0 if it cost nothing.
+                } @else {
+                  In AUD. Sets the starting average cost of the opening stock.
+                }
+              </span>
+              @if (initialUnitCostMissing) {
+                <span class="field-error">Initial Unit Cost is required when Opening Stock is above zero.</span>
+              }
             </label>
           </div>
         </section>
