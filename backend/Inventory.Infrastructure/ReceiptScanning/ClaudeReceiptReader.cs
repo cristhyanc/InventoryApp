@@ -178,9 +178,11 @@ public sealed class ClaudeReceiptReader : IReceiptReader
         var (errorType, errorMessage) = await ErrorAsync(response.Content, cancellationToken)
             .ConfigureAwait(false);
 
-        // A message that quotes the request - a product or supplier name, a piece of the file, the
-        // prompt, the schema, the catalogue text or the key - is withheld, not capped (the owner's
-        // decision of 14 November 2026): a cap keeps whatever the quote's first 200 characters hold.
+        // A message that quotes the request - a product or supplier name of any length, a piece of
+        // the file, the prompt, the schema, the catalogue text or the key - is withheld, not capped
+        // (the owner's decision of 14 November 2026): a cap keeps whatever the quote's first 200
+        // characters hold. The key is checked by a rule of its own, because a credential is random
+        // and so a far shorter run of it than of prose is already a quote of it.
         var withheld = errorMessage is not null
             && ReceiptRequestEcho.Quotes(
                 errorMessage,
@@ -189,8 +191,8 @@ public sealed class ClaudeReceiptReader : IReceiptReader
                     ReceiptReadPrompt.System,
                     ReceiptReadPrompt.Schema().ToJsonString(),
                     ReceiptReadPrompt.Catalogue(request.Products, request.Suppliers),
-                    apiKey,
-                ]);
+                ],
+                apiKey);
 
         return ReceiptReaderFailure.Refused(
             (int)response.StatusCode,

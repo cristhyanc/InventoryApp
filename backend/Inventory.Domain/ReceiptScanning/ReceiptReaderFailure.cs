@@ -36,8 +36,11 @@ public enum ReceiptReaderFailureKind
 /// echoed. What a failure may carry is the upstream HTTP status, the provider's own error
 /// <c>type</c>, the provider's own error <c>message</c> capped at <see cref="MaxTextLength"/>
 /// characters on one line - unless that message quoted the request, when it is withheld - the provider's request id, and which local failure it was when there was
-/// no answer to read. Nothing here can carry the file, a file name, a product or supplier name, a
-/// line of the receipt, the prompt or the key: there is no member for one.</para>
+/// no answer to read. <strong>No member of this type is for the file, a file name, a product or
+/// supplier name, a line of the receipt, the prompt or the key</strong>: the provider's message is
+/// the only free text any of them could arrive in, and the adapter withholds it when it is seen to
+/// quote one (<c>ReceiptRequestEcho</c>, whose own summary records what that recognition cannot
+/// catch).</para>
 ///
 /// <para><strong>The cap is the type's own, not its caller's.</strong> Every upstream string is put
 /// through <see cref="Clean"/> by the factory methods below, the constructor is private and the
