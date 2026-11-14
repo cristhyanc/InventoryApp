@@ -54,6 +54,52 @@ public class NayaxResilienceHandlerTests
         Assert.Equal(options.MaxRetryAttempts + 1, inner.RequestCount);
     }
 
+    /// <summary>
+    /// The opt-out of issue #1310: a caller whose contract is "one live request" rather than "an
+    /// answer" marks the request, and the retryable answer is handed back to it instead of being
+    /// retried. The connection check's machine-list read is the one such caller, because the machine
+    /// list is the credential gate and a run that could not read it concludes nothing - however many
+    /// times it is asked.
+    /// </summary>
+    [Fact]
+    public async Task A_single_attempt_request_is_not_retried_however_retryable_the_answer_is()
+    {
+        var inner = new ScriptedHandler((attempt, _, _) => Respond(
+            attempt < 3 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK));
+        using var client = CreateClient(inner, FastRetryOptions());
+        using var request = new HttpRequestMessage(HttpMethod.Get, "machines");
+        request.Options.Set(NayaxResilienceHandler.SingleAttemptOnly, true);
+
+        var response = await client.SendAsync(request);
+
+        // The very next attempt would have succeeded, and was not made.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(1, inner.RequestCount);
+    }
+
+    /// <summary>
+    /// And it belongs to the request that carried it, not to the client or to the pooled resilience
+    /// context the previous request borrowed. The connection check sends six ordinary probes through
+    /// the same <c>HttpClient</c> as its one marked machine-list read, so a marker that leaked would
+    /// quietly remove retrying from every Nayax call that followed one.
+    /// </summary>
+    [Fact]
+    public async Task The_single_attempt_marker_does_not_outlive_the_request_that_carried_it()
+    {
+        var inner = new ScriptedHandler((attempt, _, _) => Respond(
+            attempt == 1 || attempt == 2 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK));
+        using var client = CreateClient(inner, FastRetryOptions());
+        using var marked = new HttpRequestMessage(HttpMethod.Get, "machines");
+        marked.Options.Set(NayaxResilienceHandler.SingleAttemptOnly, true);
+
+        await client.SendAsync(marked);
+        var response = await client.GetAsync("devices");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // One attempt for the marked request, then the unmarked one's 503 retried into its 200.
+        Assert.Equal(3, inner.RequestCount);
+    }
+
     [Fact]
     public async Task TooManyRequests_429_on_a_GET_is_treated_as_transient_and_retried()
     {

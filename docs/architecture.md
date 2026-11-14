@@ -4020,7 +4020,32 @@ and the one every owner's token is meant to cover, so judging the credentials by
 extra, and a run that reads it has already proved the token authenticates. Each run therefore makes
 exactly **one** `GET machines` call and **zero** `GET devices` calls, which
 `NayaxConnectionCheckRunnerTests.No_check_ever_calls_the_devices_endpoint` asserts over the wire for
-a success, a `401`, a `403` and a `5xx`. The enum **reserves the retired value `1`** rather than
+a success, a `401`, a `403` and a `5xx`.
+
+**One is one *live request*, not one method call.** The runner's `HttpClient` carries the production
+`NayaxResilienceHandler`, which retries a transient `GET` up to three more times, so calling
+`GetMachinesAsync` once would still have sent the gate's probe up to four times. The gate therefore
+has its own read, `NayaxLynxClient.ReadMachineListForConnectionGateAsync`, which marks the request
+`NayaxResilienceHandler.SingleAttemptOnly` — see
+[HTTP resilience policy](#http-resilience-policy). The other six probes keep the ordinary retry
+budget, so a momentary `5xx` on the product catalogue is still not reported to an owner as a missing
+permission. `NayaxConnectionCheckRunnerResilienceTests` asserts both over the **production
+composition** (the runner resolved from `AddNayaxLynxClient` with only its transport substituted),
+because a count taken above the handler — as the rest of `NayaxConnectionCheckRunnerTests` is — counts
+method calls rather than requests.
+
+**A `200` that is not an array is not a verified empty fleet.** Nayax documents this endpoint's
+success as a JSON array of machine objects ([Get All Machine Basic
+Info](https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info)), and every
+ordinary read in `NayaxLynxClient` coalesces an absent body into an empty collection — harmless for a
+list of products. Since the machine list became the credential gate, that coalescing would read a
+`200 null` as "this token listed your machines and you have none" and let an untested candidate
+replace a working connection, so the gate's read refuses a `null` or otherwise non-array body as
+`UnexpectedResponse`, which concludes `Inconclusive` and may not be saved. An empty array `[]` is
+unchanged: it is a real answer, concludes `Ready` and may be saved. No other consumer's behaviour
+changed.
+
+The enum **reserves the retired value `1`** rather than
 reusing it, because a report serialized before the change still names that check by number — see
 [Reports that name a retired check](#reports-that-name-a-retired-check-issue-1310) below.
 
@@ -4100,7 +4125,9 @@ been stored, so there is no revision it belongs to and no row it may touch. **A 
 therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
 operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
 same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
-the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+the same thing on a test as on a sync — the one request that opts out of retrying is the gate's
+machine-list read, and it opts out per request rather than in that registration. This is **not** the
+gate-free re-test read of
 [issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
 all.
 
@@ -4709,6 +4736,8 @@ Issue #165 made that log entry explicit at the HTTP boundary: an unreachable or 
 #### HTTP resilience policy
 
 `Inventory.Infrastructure.Nayax.NayaxResilienceHandler` (issue #48) is a `DelegatingHandler` registered by `AddNayaxLynxClient` (`.AddHttpMessageHandler<NayaxResilienceHandler>()`), so every call `NayaxLynxClient` makes through its `HttpClient` passes through it first. It sits entirely below `NayaxLynxClient`, which is unchanged: `NayaxLynxClient` still inspects the final `HttpResponseMessage` exactly as before and has no knowledge that some calls were retried underneath it, and retry/timeout/circuit-breaker types (`Polly.*`) never appear in `INayaxLynxClient` or any other Application-facing contract.
+
+**One request may opt out of retrying, and it says so on the request** (issue #1310). `NayaxResilienceHandler.SingleAttemptOnly` is an `HttpRequestOptionsKey<bool>`; a request carrying it is never retried, however retryable the answer is, while the per-attempt timeout and the circuit breaker still apply to it exactly as to everything else. The connection check's machine-list read is the only caller, because it is the credential gate: "each check run makes one live `GET /v1/machines` call" is part of what a connection test promises an owner, and a machine list that did not pass concludes nothing whether it failed once or four times — see [Nayax connection checks and the Test endpoint](#nayax-connection-checks-and-the-test-endpoint-issue-536). It is stated per request rather than configured per client because the check runner sends its other six probes through the same `HttpClient` and they keep the ordinary budget; `SendAsync` sets the flag from the request on every call, because the Polly context is pooled, and `NayaxResilienceHandlerTests` pins both that a marked request is not retried and that the marker does not outlive it.
 
 It composes three bounded Polly v8 strategies, built once per handler instance (`NayaxResilienceOptions` holds the tunables - fixed engineering constants, not environment configuration, so there is nothing here for `appsettings.json`/README to document):
 

@@ -16,18 +16,40 @@ namespace Inventory.Infrastructure.Nayax;
 /// circuit-breaker types stay an Infrastructure concern and never appear in the
 /// <c>INayaxLynxClient</c> port <see cref="NayaxLynxClient"/> implements.
 ///
-/// <see cref="NayaxLynxClient"/> itself is unchanged: it still calls <c>HttpClient.GetAsync</c>/
-/// <c>PostAsJsonAsync</c> and inspects the final <see cref="HttpResponseMessage"/> exactly as
-/// before, unaware that some of those calls were retried underneath it.
+/// <see cref="NayaxLynxClient"/> sends its requests and inspects the final
+/// <see cref="HttpResponseMessage"/> exactly as it would with no handler attached, unaware that some
+/// of those calls were retried underneath it. The one thing it states is
+/// <see cref="SingleAttemptOnly"/> on the one request that may not be: how many attempts that
+/// becomes, and what is timed out or short-circuited around it, stays entirely here.
 ///
 /// Issue #844 bounded the rate-limited case separately. A request still gets at most 3 retries in
 /// total, whatever mix of failures it meets, but at most one of them may follow a
 /// <c>429 Too Many Requests</c>: a rate-limited Nayax that answers 429 twice is told to stop rather
 /// than sent two more copies of the same request, and the wait before that single retry is the one
 /// the upstream asked for when <see cref="NayaxRetryAfterPolicy"/> accepts it.
+///
+/// Issue #1310 added one opt-out, <see cref="SingleAttemptOnly"/>, for a caller whose contract is
+/// "one live request" rather than "an answer". Nothing else sets it, so every other request keeps
+/// the policy above unchanged.
 /// </summary>
 public sealed class NayaxResilienceHandler : DelegatingHandler
 {
+    /// <summary>
+    /// Set on a request that must reach Nayax exactly once, whatever it answers.
+    ///
+    /// <para>The connection check's machine-list read is the only caller (issue #1310), and it is
+    /// one because the machine list is the credential gate: "each check run makes one live
+    /// <c>GET /v1/machines</c> call" is part of what a connection test promises an Owner, and a
+    /// transient answer retried underneath it would send the same probe up to four times for one
+    /// run - a Nayax account's own rate allowance spent on a diagnostic that already has its
+    /// answer, because a machine list that did not pass concludes nothing either way.</para>
+    ///
+    /// <para>Only retrying is skipped. The per-attempt timeout and the circuit breaker still apply:
+    /// a single-attempt request is still bounded, and its failure still counts towards a sustained
+    /// outage like any other.</para>
+    /// </summary>
+    public static readonly HttpRequestOptionsKey<bool> SingleAttemptOnly = new("Nayax.SingleAttemptOnly");
+
     /// <summary>
     /// Retries that may follow a 429 on one request. The total retry budget
     /// (<see cref="NayaxResilienceOptions.MaxRetryAttempts"/>) still applies on top of this: a 429
@@ -36,6 +58,7 @@ public sealed class NayaxResilienceHandler : DelegatingHandler
     private const int MaxRetriesAfterTooManyRequests = 1;
 
     private static readonly ResiliencePropertyKey<bool> IsIdempotentKey = new("Nayax.IsIdempotentRequest");
+    private static readonly ResiliencePropertyKey<bool> SingleAttemptKey = new("Nayax.SingleAttemptOnlyRequest");
     private static readonly ResiliencePropertyKey<string> RequestPathKey = new("Nayax.RequestPath");
     private static readonly ResiliencePropertyKey<int> TooManyRequestsRetriesKey = new("Nayax.TooManyRequestsRetries");
 
@@ -70,6 +93,11 @@ public sealed class NayaxResilienceHandler : DelegatingHandler
     {
         var context = ResilienceContextPool.Shared.Get(cancellationToken);
         context.Properties.Set(IsIdempotentKey, IsIdempotent(request.Method));
+        // Read off the request rather than configured per client: the one caller that needs it sends
+        // other requests through the same HttpClient that do want the ordinary retry budget.
+        context.Properties.Set(
+            SingleAttemptKey,
+            request.Options.TryGetValue(SingleAttemptOnly, out var singleAttempt) && singleAttempt);
         // No query string is ever built for a Nayax request, so the path alone is safe to log:
         // it never carries the token, an id from a filter value, or anything else sensitive.
         context.Properties.Set(RequestPathKey, request.RequestUri?.AbsolutePath ?? string.Empty);
@@ -137,6 +165,14 @@ public sealed class NayaxResilienceHandler : DelegatingHandler
     private static bool ShouldRetry(
         RetryPredicateArguments<HttpResponseMessage> args, IClock clock)
     {
+        // Before every other consideration, because this one is the caller's contract rather than a
+        // judgement about the answer: a request that may be sent once is never sent twice, however
+        // retryable what came back was.
+        if (args.Context.Properties.GetValue(SingleAttemptKey, false))
+        {
+            return false;
+        }
+
         if (!args.Context.Properties.TryGetValue(IsIdempotentKey, out var idempotent) || !idempotent)
         {
             return false;

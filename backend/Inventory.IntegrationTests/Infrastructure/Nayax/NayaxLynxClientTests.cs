@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Net;
+using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Nayax;
 using Microsoft.Extensions.Logging;
@@ -144,6 +145,61 @@ public class NayaxLynxClientTests
         Assert.Equal(8, machines[1].MachineID);
         Assert.Null(machines[1].CustomerID);
         Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// The connection gate's own machine-list read (issue #1310). Two things differ from
+    /// <c>GetMachinesAsync</c>, and both are because this read decides whether a candidate token may
+    /// replace a business's stored credentials.
+    ///
+    /// <para>Nayax documents a <c>200</c> here as a JSON array of machine objects
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info), so a
+    /// <c>null</c> body is refused rather than coalesced into an empty list: coalesced, it would read
+    /// as a verified fleet of none and permit the replacement. And the request is marked
+    /// single-attempt, so the resilience handler returns a transient answer instead of sending the
+    /// gate's probe again.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    public async Task The_connection_gate_s_machine_list_read_refuses_a_200_that_is_not_an_array(string body)
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, body);
+
+        await Assert.ThrowsAsync<JsonException>(
+            () => client.ReadMachineListForConnectionGateAsync(CancellationToken.None));
+
+        Assert.True(handler.LastRequest!.Options.TryGetValue(
+            NayaxResilienceHandler.SingleAttemptOnly, out var singleAttempt));
+        Assert.True(singleAttempt);
+    }
+
+    /// <summary>
+    /// An empty array is a real answer and stays one: a business with no machines yet has a verified
+    /// connection. The refusal above is about <c>null</c>, not about emptiness.
+    /// </summary>
+    [Fact]
+    public async Task The_connection_gate_s_machine_list_read_accepts_an_empty_array()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.OK, "[]");
+
+        Assert.Empty(await client.ReadMachineListForConnectionGateAsync(CancellationToken.None));
+        Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// And every other consumer is untouched. An absent body is still the empty collection it has
+    /// always been - harmless for a list of machines nobody is judging a credential by - and the
+    /// request carries no single-attempt marker, so the ordinary retry policy still applies to it.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_read_still_coalesces_an_absent_body_and_is_not_marked_single_attempt()
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, "null");
+
+        Assert.Empty(await client.GetMachinesAsync(CancellationToken.None));
+        Assert.False(handler.LastRequest!.Options.TryGetValue(
+            NayaxResilienceHandler.SingleAttemptOnly, out _));
     }
 
     [Fact]

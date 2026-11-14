@@ -302,6 +302,57 @@ public class NayaxConnectionCheckRunnerTests
     }
 
     /// <summary>
+    /// A <c>200</c> that is not a machine-list array is not a verified empty fleet, whichever shape
+    /// it takes. Nayax documents this endpoint's success as an array of machine objects
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-all-machine-basic-info), so a
+    /// <c>null</c> body, an object, or no body at all is an answer nobody has interpreted.
+    ///
+    /// <para>It matters here and nowhere else in the client (issue #1310). Every ordinary read
+    /// coalesces an absent body to an empty collection, which is harmless for a list of products;
+    /// since the machine list became the credential gate, the same coalescing would read as "this
+    /// token listed your machines and you have none" and let an untested candidate replace a working
+    /// connection. The run concludes nothing instead, so nothing may be saved -
+    /// <see cref="An_empty_machine_list_is_a_verified_answer_that_may_be_saved"/> is the empty array
+    /// this must not be confused with.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("")]
+    public async Task A_machine_list_that_is_not_an_array_concludes_nothing_and_cannot_be_saved(string body)
+    {
+        var handler = ScriptedHandler.AllOk().Override("machines", HttpStatusCode.OK, body);
+
+        var report = await Run(handler);
+
+        AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.UnexpectedResponse);
+        Assert.Null(report.MachineCount);
+        AssertNotChecked(report, NayaxConnectionCheck.Machine);
+        Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, report.Outcome);
+        Assert.False(NayaxConnectionCheckOutcomePolicy.MayBeSaved(report.Outcome));
+        Assert.Null(NayaxConnectionCheckOutcomePolicy.ConcludedStatus(report.Outcome));
+    }
+
+    /// <summary>
+    /// The empty array is the other half of the test above, and it is unchanged: an owner whose
+    /// token really did list a fleet of none has a verified connection, so the run is
+    /// <see cref="NayaxConnectionCheckOutcome.Ready"/> and may be saved. The distinction being
+    /// pinned is <c>[]</c> against <c>null</c>, not "empty against non-empty".
+    /// </summary>
+    [Fact]
+    public async Task An_empty_machine_list_is_a_verified_answer_that_may_be_saved()
+    {
+        var handler = ScriptedHandler.AllOk().Override("machines", HttpStatusCode.OK, "[]");
+
+        var report = await Run(handler);
+
+        AssertPassed(report, NayaxConnectionCheck.Machines);
+        Assert.Equal(0, report.MachineCount);
+        Assert.Equal(NayaxConnectionCheckOutcome.Ready, report.Outcome);
+        Assert.True(NayaxConnectionCheckOutcomePolicy.MayBeSaved(report.Outcome));
+    }
+
+    /// <summary>
     /// A business with no machines yet: the four machine checks are reported as not checked, nothing
     /// is reported as failing, and the machine endpoints are not called at all. An operator
     /// connecting Nayax before their first machine exists must be able to finish.
@@ -403,6 +454,10 @@ public class NayaxConnectionCheckRunnerTests
         // resilience handler is deliberately absent, so a scripted 5xx is answered once rather than
         // retried - what is under test is the classification, not the retry policy, which has its
         // own tests.
+        //
+        // Which means the request counts below are method calls, not live requests: a one-per-run
+        // count here cannot speak for a pipeline that may retry. That is
+        // NayaxConnectionCheckRunnerResilienceTests, over the production composition.
         var http = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://nayax.invalid/operational/v1/"),
