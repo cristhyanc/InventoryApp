@@ -15,7 +15,6 @@ namespace InventoryApi.Tests.Domain.Nayax;
 public class NayaxConnectionCheckPolicyTests
 {
     [Theory]
-    [InlineData(NayaxConnectionCheck.SignIn)]
     [InlineData(NayaxConnectionCheck.Machines)]
     [InlineData(NayaxConnectionCheck.Machine)]
     [InlineData(NayaxConnectionCheck.ProductCatalogue)]
@@ -31,7 +30,6 @@ public class NayaxConnectionCheckPolicyTests
     }
 
     [Theory]
-    [InlineData(NayaxConnectionCheck.SignIn)]
     [InlineData(NayaxConnectionCheck.Machines)]
     [InlineData(NayaxConnectionCheck.Machine)]
     [InlineData(NayaxConnectionCheck.ProductCatalogue)]
@@ -66,7 +64,6 @@ public class NayaxConnectionCheckPolicyTests
     /// would send an operator to re-check a correct operator id.
     /// </summary>
     [Theory]
-    [InlineData(NayaxConnectionCheck.SignIn)]
     [InlineData(NayaxConnectionCheck.Machines)]
     [InlineData(NayaxConnectionCheck.Machine)]
     [InlineData(NayaxConnectionCheck.MachineProducts)]
@@ -90,7 +87,7 @@ public class NayaxConnectionCheckPolicyTests
     {
         Assert.Equal(
             NayaxConnectionCheckFailure.NayaxUnavailable,
-            NayaxConnectionCheckPolicy.Classify(NayaxConnectionCheck.SignIn, statusCode));
+            NayaxConnectionCheckPolicy.Classify(NayaxConnectionCheck.Machines, statusCode));
     }
 
     /// <summary>
@@ -102,7 +99,7 @@ public class NayaxConnectionCheckPolicyTests
     {
         Assert.Equal(
             NayaxConnectionCheckFailure.NayaxUnavailable,
-            NayaxConnectionCheckPolicy.Classify(NayaxConnectionCheck.SignIn, null));
+            NayaxConnectionCheckPolicy.Classify(NayaxConnectionCheck.Machines, null));
     }
 
     /// <summary>
@@ -153,7 +150,6 @@ public class NayaxConnectionCheckPolicyTests
     }
 
     [Theory]
-    [InlineData(NayaxConnectionCheck.SignIn)]
     [InlineData(NayaxConnectionCheck.Machines)]
     [InlineData(NayaxConnectionCheck.ProductCatalogue)]
     [InlineData(NayaxConnectionCheck.ProductGroups)]
@@ -165,7 +161,6 @@ public class NayaxConnectionCheckPolicyTests
     [Theory]
     [InlineData(NayaxConnectionCheck.ProductCatalogue, true)]
     [InlineData(NayaxConnectionCheck.ProductGroups, true)]
-    [InlineData(NayaxConnectionCheck.SignIn, false)]
     [InlineData(NayaxConnectionCheck.Machines, false)]
     [InlineData(NayaxConnectionCheck.Machine, false)]
     [InlineData(NayaxConnectionCheck.MachineProducts, false)]
@@ -186,7 +181,6 @@ public class NayaxConnectionCheckPolicyTests
         Assert.Equal(
             new[]
             {
-                NayaxConnectionCheck.SignIn,
                 NayaxConnectionCheck.Machines,
                 NayaxConnectionCheck.Machine,
                 NayaxConnectionCheck.ProductCatalogue,
@@ -196,6 +190,23 @@ public class NayaxConnectionCheckPolicyTests
                 NayaxConnectionCheck.MachineLastAlerts,
             },
             NayaxConnectionCheckPolicy.All);
+    }
+
+    /// <summary>
+    /// Every declared check is declared, and the retired <c>GET devices</c> sign-in probe is not
+    /// (issue #1310). Its number stays reserved, so a line read back from a report stored before it
+    /// was retired names a check this build does not declare - and an undeclared check is evidence
+    /// about nothing rather than about whichever check its number now happens to land on.
+    /// </summary>
+    [Fact]
+    public void Only_the_declared_checks_are_declared_and_the_retired_sign_in_value_is_not()
+    {
+        Assert.All(NayaxConnectionCheckPolicy.All, check => Assert.True(NayaxConnectionCheckPolicy.IsDeclared(check)));
+
+        // 1 was SignIn (GET devices); 99 is a number no check has ever had.
+        Assert.False(NayaxConnectionCheckPolicy.IsDeclared((NayaxConnectionCheck)1));
+        Assert.False(NayaxConnectionCheckPolicy.IsDeclared((NayaxConnectionCheck)99));
+        Assert.DoesNotContain(1, NayaxConnectionCheckPolicy.All.Select(check => (int)check));
     }
 
     /// <summary>

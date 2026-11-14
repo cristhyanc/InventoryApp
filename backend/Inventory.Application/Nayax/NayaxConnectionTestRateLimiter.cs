@@ -9,11 +9,11 @@ namespace Inventory.Application.Nayax;
 /// <see cref="Window"/>" (issue #536), enforced before any Nayax call is made.
 ///
 /// <para>Since issue #537 the Owner-only re-test of the <em>stored</em> credentials claims from this
-/// same limiter, so test and re-test runs count together: a re-test is the same eight calls against
+/// same limiter, so test and re-test runs count together: a re-test is the same seven calls against
 /// the same upstream, and two separate allowances would simply double the rate.</para>
 ///
 /// <para>The limit is per business rather than per actor because what it protects is the upstream:
-/// one test is eight Nayax calls, and a form with a Test button is trivially clickable in a loop.
+/// one test is seven Nayax calls, and a form with a Test button is trivially clickable in a loop.
 /// Rate-limiting the actor would let a second Owner start again from zero against the same operator
 /// account, so the business - the owner of the operator account being tested - is the right
 /// bucket.</para>
@@ -61,7 +61,7 @@ public sealed class NayaxConnectionTestRateLimiter
     /// The claim is taken <em>before</em> the Nayax calls, not after them, which is what makes
     /// several simultaneous presses cost one allowance each rather than all passing a count that
     /// nothing has incremented yet. A run that then fails is not refunded: a failing test is exactly
-    /// the run that gets repeated, and it costs the upstream the same eight calls as a successful
+    /// the run that gets repeated, and it costs the upstream the same seven calls as a successful
     /// one.
     ///
     /// <para>Expiring the runs that have left the window, deciding on the count and recording the

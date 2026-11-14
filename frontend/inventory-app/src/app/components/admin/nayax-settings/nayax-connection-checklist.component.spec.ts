@@ -7,7 +7,7 @@ import {
 } from './nayax-connection-checklist.component';
 
 function line(overrides: Partial<NayaxConnectionCheckLine> = {}): NayaxConnectionCheckLine {
-  return { check: 'SignIn', status: 'Passed', failure: null, ...overrides };
+  return { check: 'Machines', status: 'Passed', failure: null, ...overrides };
 }
 
 async function render(checks: NayaxConnectionCheckLine[], machineCount: number | null) {
@@ -49,7 +49,7 @@ describe('NayaxConnectionChecklistComponent (issue #538)', () => {
   it('reads each declared failure cause as its own sentence, so a refusal is never mistaken for an expiry', async () => {
     const { host } = await render(
       [
-        line({ check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' }),
+        line({ check: 'Machine', status: 'Failed', failure: 'InvalidOrExpiredToken' }),
         line({ check: 'Machines', status: 'Failed', failure: 'NayaxUnavailable' }),
         line({ check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' }),
         line({ check: 'ProductGroups', status: 'Failed', failure: 'UnexpectedResponse' })
@@ -57,7 +57,7 @@ describe('NayaxConnectionChecklistComponent (issue #538)', () => {
       null
     );
 
-    expect(host.querySelector('[data-testid="check-SignIn"]')?.textContent).toContain('invalid or has expired');
+    expect(host.querySelector('[data-testid="check-Machine"]')?.textContent).toContain('invalid or has expired');
     expect(host.querySelector('[data-testid="check-Machines"]')?.textContent).toContain('could not be reached');
     expect(host.querySelector('[data-testid="check-ProductCatalogue"]')?.textContent).toContain(
       'not one this token covers'
@@ -111,6 +111,22 @@ describe('NayaxConnectionChecklistComponent (issue #538)', () => {
     const row = host.querySelector('[data-testid="check-SomethingNew"]');
     expect(row?.textContent).toContain('SomethingNew');
     expect(row?.textContent).toContain('✗');
+  });
+
+  it('omits the retired sign-in row an older stored report still carries, and does not count it as a failure', async () => {
+    const { host } = await render(
+      [
+        { check: 'SignIn', status: 'Failed', failure: 'PermissionNotGranted' } as unknown as NayaxConnectionCheckLine,
+        line({ check: 'Machines' })
+      ],
+      1
+    );
+
+    expect(host.querySelector('[data-testid="check-SignIn"]')).toBeNull();
+    expect(host.textContent).not.toContain('Signing in');
+    expect(host.textContent).not.toContain('devices');
+    expect(host.querySelector('[data-testid="check-Machines"]')?.textContent).toContain('Passed');
+    expect(host.textContent).not.toContain('✗');
   });
 
   it('shares one vocabulary for areas and causes with the support request of step 5', () => {

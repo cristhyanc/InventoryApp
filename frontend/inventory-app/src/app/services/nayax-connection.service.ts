@@ -19,9 +19,12 @@ import { ConfigService } from './config.service';
  * and can carry no credential: the stored pair is exactly the one the server tested.
  */
 
-/** One declared check, as `Inventory.Domain.Nayax.NayaxConnectionCheck` publishes its name. */
+/**
+ * One declared check, as `Inventory.Domain.Nayax.NayaxConnectionCheck` publishes its name. The
+ * retired `SignIn` (`GET devices`) probe is deliberately absent since issue #1310; a line still
+ * naming it is dropped by `provider/nayax-read-areas.ts`.
+ */
 export type NayaxConnectionCheckName =
-  | 'SignIn'
   | 'Machines'
   | 'Machine'
   | 'ProductCatalogue'
@@ -77,8 +80,8 @@ export interface NayaxConnectionTestResult {
 }
 
 /**
- * What one re-test of the stored credentials found. `statusUpdated` is `false` when Nayax never
- * answered the sign-in, which leaves the stored status exactly as it was.
+ * What one re-test of the stored credentials found. `statusUpdated` is `false` when Nayax gave no
+ * verdict on the machine list, which leaves the stored status exactly as it was.
  */
 export interface NayaxConnectionRetestResult {
   connection: NayaxConnectionState;

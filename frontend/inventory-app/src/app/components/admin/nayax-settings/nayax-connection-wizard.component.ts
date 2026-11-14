@@ -14,6 +14,7 @@ import {
 } from '../../../services/nayax-connection.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { withoutRetiredNayaxConnectionChecks } from '../../../provider/nayax-read-areas';
 import {
   NayaxConnectionChecklistComponent,
   nayaxConnectionAreaLabel,
@@ -83,8 +84,10 @@ const STEP_LABELS = [
  * **It decides nothing about the connection.** Every check line, cause, machine count and status on
  * screen is the server's own finding. There is no rule here that concludes a token works, no second
  * reading of a Nayax refusal, and no status this component derives: `NotChecked` is rendered as
- * neither a pass nor a failure, and a run whose sign-in never passed is not offered for saving
+ * neither a pass nor a failure, and a run whose machine list never passed is not offered for saving
  * because the server refuses it - this only avoids spending a request on a refusal already known.
+ * The one thing it drops is a line for a read this application has retired (issue #1310), which only
+ * an older stored report can carry and which the server's own answers already ignore.
  *
  * **Owner only, twice over and authoritative in neither place.** The route already requires
  * `Integration.Manage` (`app.routes.ts`), and the endpoints behind every action require it
@@ -339,10 +342,11 @@ const STEP_LABELS = [
                   Saving stores the operator id and the token the server just tested, and nothing
                   else: this page sends back only the server's own reference to that test.
                 </p>
-                @if (!signInPassed) {
-                  <p class="mt-2 text-sm text-md-danger-text" data-testid="sign-in-failed">
-                    This token did not sign in to Nayax, so it cannot be saved. Create or copy a
-                    working Lynx token and test again from step 2.
+                @if (!machineListPassed) {
+                  <p class="mt-2 text-sm text-md-danger-text" data-testid="machine-list-failed">
+                    This token could not read this business's machine list from Nayax, so it cannot
+                    be saved. The checklist says whether the token itself was refused or only that
+                    one area was; fix that, then test again.
                   </p>
                 } @else if (draftExpired) {
                   <p class="mt-2 text-sm text-md-danger-text">
@@ -515,14 +519,22 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     return this.connection !== null && this.connection.status !== 'NotConfigured';
   }
 
-  /** Whether any line of the completed test failed, as the server's own flag reports it. */
+  /**
+   * Whether any line of the completed test failed. It agrees with the server's own `nothingFailed`
+   * flag for every report this build's server produces; it is computed from the lines so that a
+   * retired read's refusal - which an older stored report can still carry, and which the server's
+   * flag already ignores - never puts the screen into "some areas were refused" (issue #1310).
+   */
   get anyFailed(): boolean {
-    return this.result !== null && !this.result.nothingFailed;
+    return this.failedChecks().length > 0;
   }
 
-  /** Whether the tested token signed in at all. The server refuses to save one that did not. */
-  get signInPassed(): boolean {
-    return this.result?.checks.some((line) => line.check === 'SignIn' && line.status === 'Passed') ?? false;
+  /**
+   * Whether the tested token read this business's machine list. That is the check the credentials
+   * are judged by since issue #1310, and the server refuses to save a token that failed it.
+   */
+  get machineListPassed(): boolean {
+    return this.result?.checks.some((line) => line.check === 'Machines' && line.status === 'Passed') ?? false;
   }
 
   /** Whether the server's short-lived draft has already stopped existing. */
@@ -536,7 +548,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       !this.sessionActive &&
       !this.busy &&
       this.result !== null &&
-      this.signInPassed &&
+      this.machineListPassed &&
       !this.draftExpired
     );
   }
@@ -652,10 +664,10 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         this.result = result;
         this.testedOperatorId = operatorId;
         this.step = 4;
-        if (result.nothingFailed) {
-          this.toast.success('Every check this token was asked for passed.');
-        } else {
+        if (this.anyFailed) {
           this.toast.warning('Some Nayax areas were refused. Step 5 has the request to send Nayax.');
+        } else {
+          this.toast.success('Every check this token was asked for passed.');
         }
       },
       error: (error: unknown) => {
@@ -673,13 +685,13 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     if (!this.canManage || this.sessionActive || this.busy || !result) {
       return;
     }
-    if (!this.signInPassed) {
+    if (!this.machineListPassed) {
       this.notice = {
         tone: 'danger',
-        title: 'The tested token did not sign in to Nayax, so it was not saved.',
+        title: 'The tested token could not read this business\'s machine list, so it was not saved.',
         detail:
-          'A token that has never been shown to authenticate must not replace what this business ' +
-          'is using. Create or copy a working Lynx token and test again.'
+          'A token that has never been shown to read this business\'s machines must not replace ' +
+          'what it is using. Fix what the checklist reported, then test again.'
       };
       return;
     }
@@ -874,9 +886,13 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     return advice.filter((entry) => entry.areas.length > 0);
   }
 
-  /** The lines that were refused. A `NotChecked` line is not one: nothing was asked of it. */
+  /**
+   * The lines that were refused. A `NotChecked` line is not one: nothing was asked of it. Neither is
+   * a retired read's line (issue #1310) - the refusal is of a permission this application no longer
+   * needs, so it earns no advice, no support request and no failure summary.
+   */
   private failedChecks(): NayaxConnectionCheckLine[] {
-    return (this.result?.checks ?? []).filter(
+    return withoutRetiredNayaxConnectionChecks(this.result?.checks ?? []).filter(
       (line) => line.status !== 'Passed' && line.status !== 'NotChecked'
     );
   }

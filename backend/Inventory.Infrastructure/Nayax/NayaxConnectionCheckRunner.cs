@@ -20,6 +20,13 @@ namespace Inventory.Infrastructure.Nayax;
 /// the credential comes from, so only the credential provider differs: it is constructed over
 /// <see cref="CandidateCredentialProvider"/>, which answers with the pair being tested.</para>
 ///
+/// <para><strong>There is no sign-in probe</strong> (issue #1310). The <c>GET devices</c> call that
+/// existed only to prove the token authenticated is gone: Nayax's device hardware inventory is a
+/// permission an owner has no reason to hold, and a <c>403</c> there made setup inconclusive even
+/// when the business's own machines could be read. The machine list this runner needs anyway is what
+/// decides whether the credentials can be used, so each run makes exactly one <c>GET machines</c>
+/// call and no <c>GET devices</c> call at all.</para>
+///
 /// <para><strong>Nothing is written anywhere.</strong> The candidate provider's 401 report is a
 /// no-op, so a test against an expired token cannot move a stored connection to
 /// <c>NeedsAttention</c> - the credentials being tested are not the stored ones, and a business
@@ -53,15 +60,12 @@ public sealed class NayaxConnectionCheckRunner : INayaxConnectionCheckRunner
         var client = new NayaxLynxClient(_http, new CandidateCredentialProvider(candidate), _logger);
         var lines = new Dictionary<NayaxConnectionCheck, NayaxConnectionCheckLine>();
 
-        lines[NayaxConnectionCheck.SignIn] = (await RunCheckAsync(
-            NayaxConnectionCheck.SignIn,
-            () => client.GetDevicesAsync(cancellationToken),
-            cancellationToken).ConfigureAwait(false)).Line;
-
-        // The machine list decides the machine-scoped checks, so it is read before them and its
-        // first machine is what they are run against. One machine is enough: a token either carries
-        // the machine permissions or it does not, and walking the estate would turn a connection
-        // test into a load test of somebody else's API.
+        // The machine list is read first and read once. It is the credential gate (issue #1310): a
+        // 401 here is Nayax's verdict on the token, so nothing else has to be called to find out
+        // whether the pair authenticates. It also decides the machine-scoped checks, so its first
+        // machine is what they are run against. One machine is enough: a token either carries the
+        // machine permissions or it does not, and walking the estate would turn a connection test
+        // into a load test of somebody else's API.
         var machines = await RunCheckAsync(
             NayaxConnectionCheck.Machines,
             () => client.GetMachinesAsync(cancellationToken),

@@ -97,8 +97,8 @@ public class NayaxConnectionSaveTransactionTests
     }
 
     /// <summary>
-    /// A run whose sign-in did not pass is refused - and the claim is rolled back with it, so the
-    /// Owner still has the draft and nothing was stored.
+    /// A run whose machine list did not pass is refused - and the claim is rolled back with it, so
+    /// the Owner still has the draft and nothing was stored.
     /// </summary>
     [Fact]
     public async Task A_refused_save_leaves_the_draft_in_place_and_stores_nothing()
@@ -107,7 +107,7 @@ public class NayaxConnectionSaveTransactionTests
         var draftId = await fixture.StoreDraftAsync(new NayaxConnectionCheckReport(
             [
                 NayaxConnectionCheckLine.Failed(
-                    NayaxConnectionCheck.SignIn,
+                    NayaxConnectionCheck.Machines,
                     NayaxConnectionCheckFailure.InvalidOrExpiredToken),
             ],
             MachineCount: null));

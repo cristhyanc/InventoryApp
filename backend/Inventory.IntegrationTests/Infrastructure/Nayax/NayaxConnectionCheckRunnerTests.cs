@@ -16,7 +16,9 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// reaches a real Nayax endpoint: the base address is a deliberately unroutable host and every
 /// response is scripted.
 ///
-/// <para>Five things are pinned, and each is a property an operator's decision depends on. Each
+/// <para>Six things are pinned, and each is a property an operator's decision depends on. There is
+/// no device-inventory probe at all (issue #1310): one <c>GET machines</c> call per run and no
+/// <c>GET devices</c> call, whatever Nayax answers. Each
 /// check is reported on its own line, so one missing permission does not look like a dead token.
 /// Nayax's documented statuses map to the documented causes
 /// (https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens). A business with no
@@ -50,12 +52,13 @@ public class NayaxConnectionCheckRunnerTests
     }
 
     /// <summary>
-    /// The eight documented endpoints, each called exactly once and each with the submitted
+    /// The seven documented endpoints, each called exactly once and each with the submitted
     /// credentials. The paths are the ones <c>NayaxLynxClient</c> builds, which is the point of
-    /// running the checks through it.
+    /// running the checks through it. The machine list comes first, because it is the credential
+    /// gate and the machine checks run against the machine it returns.
     /// </summary>
     [Fact]
-    public async Task The_checks_call_the_eight_documented_read_endpoints_once_each()
+    public async Task The_checks_call_the_seven_documented_read_endpoints_once_each()
     {
         var handler = ScriptedHandler.AllOk();
 
@@ -64,7 +67,6 @@ public class NayaxConnectionCheckRunnerTests
         Assert.Equal(
             new[]
             {
-                "devices",
                 "machines",
                 $"operators/{OperatorId}/products",
                 $"operators/{OperatorId}/productGroups",
@@ -76,6 +78,29 @@ public class NayaxConnectionCheckRunnerTests
             handler.Paths);
         Assert.All(handler.Requests, request => Assert.Equal("GET", request.Method));
         Assert.All(handler.Requests, request => Assert.Equal($"Bearer {FakeToken}", request.Authorization));
+    }
+
+    /// <summary>
+    /// The device-inventory probe is retired (issue #1310): the machine list is what decides whether
+    /// the credentials can be used, so a run makes exactly one <c>GET machines</c> call and no
+    /// <c>GET devices</c> call at all. An Owner whose token cannot read Nayax's device hardware
+    /// inventory has nothing to ask Nayax for, and asking would have been asking for the wrong thing.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.OK)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task No_check_ever_calls_the_devices_endpoint(HttpStatusCode status)
+    {
+        var handler = status == HttpStatusCode.OK
+            ? ScriptedHandler.AllOk()
+            : ScriptedHandler.Answering(status, SensitiveUpstreamBody);
+
+        await Run(handler);
+
+        Assert.DoesNotContain("devices", handler.Paths);
+        Assert.Equal(1, handler.Paths.Count(path => path == "machines"));
     }
 
     /// <summary>
@@ -144,7 +169,6 @@ public class NayaxConnectionCheckRunnerTests
         // The machine list failed, so there is no machine to run the machine checks against.
         Assert.Null(report.MachineCount);
         Assert.False(report.NothingFailed);
-        AssertLine(report, NayaxConnectionCheck.SignIn, NayaxConnectionCheckFailure.InvalidOrExpiredToken);
         AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.InvalidOrExpiredToken);
         AssertLine(report, NayaxConnectionCheck.ProductCatalogue, NayaxConnectionCheckFailure.InvalidOrExpiredToken);
         AssertLine(report, NayaxConnectionCheck.ProductGroups, NayaxConnectionCheckFailure.InvalidOrExpiredToken);
@@ -155,8 +179,8 @@ public class NayaxConnectionCheckRunnerTests
     }
 
     /// <summary>
-    /// The case the issue exists for: a token that signs in perfectly and lacks one permission. The
-    /// refused line says so, and every other line still reports its own answer.
+    /// The case the issue exists for: a token that reads the machine list perfectly and lacks one
+    /// permission. The refused line says so, and every other line still reports its own answer.
     /// </summary>
     [Fact]
     public async Task A_403_on_one_endpoint_fails_only_that_line()
@@ -170,6 +194,28 @@ public class NayaxConnectionCheckRunnerTests
             report.Lines.Where(line => line.Check != NayaxConnectionCheck.MachineLastAlerts),
             line => Assert.Equal(NayaxConnectionCheckStatus.Passed, line.Status));
         Assert.False(report.NothingFailed);
+    }
+
+    /// <summary>
+    /// A <c>403</c> on the machine list is a refusal of that one endpoint and not a verdict on the
+    /// token (issue #1310): the line names the machine list, the run concludes nothing, and the
+    /// machine-scoped checks have no machine to run against. It must not read as an expired token,
+    /// which would send an Owner to generate a replacement that would be refused identically.
+    /// </summary>
+    [Fact]
+    public async Task A_403_on_the_machine_list_is_a_permission_refusal_and_concludes_nothing()
+    {
+        var handler = ScriptedHandler.AllOk().Override("machines", HttpStatusCode.Forbidden, SensitiveUpstreamBody);
+
+        var report = await Run(handler);
+
+        AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.PermissionNotGranted);
+        AssertPassed(report, NayaxConnectionCheck.ProductCatalogue);
+        AssertNotChecked(report, NayaxConnectionCheck.MachineProducts);
+        Assert.Null(report.MachineCount);
+        Assert.False(report.NothingFailed);
+        Assert.False(report.MachineChecksPending);
+        Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, report.Outcome);
     }
 
     /// <summary>
@@ -188,7 +234,6 @@ public class NayaxConnectionCheckRunnerTests
 
         AssertLine(report, NayaxConnectionCheck.ProductCatalogue, NayaxConnectionCheckFailure.OperatorIdMismatch);
         AssertLine(report, NayaxConnectionCheck.ProductGroups, NayaxConnectionCheckFailure.OperatorIdMismatch);
-        AssertPassed(report, NayaxConnectionCheck.SignIn);
         AssertPassed(report, NayaxConnectionCheck.Machines);
     }
 
@@ -217,8 +262,8 @@ public class NayaxConnectionCheckRunnerTests
 
         var report = await Run(handler);
 
-        AssertLine(report, NayaxConnectionCheck.SignIn, NayaxConnectionCheckFailure.NayaxUnavailable);
         AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.NayaxUnavailable);
+        AssertLine(report, NayaxConnectionCheck.ProductCatalogue, NayaxConnectionCheckFailure.NayaxUnavailable);
     }
 
     /// <summary>
@@ -239,17 +284,21 @@ public class NayaxConnectionCheckRunnerTests
 
     /// <summary>
     /// A body that is not the documented shape is an answer nobody has interpreted, and is reported
-    /// as one rather than as a pass.
+    /// as one rather than as a pass. On the machine list - the credential gate since issue #1310 -
+    /// that also means no verdict on the credentials at all, so the run concludes nothing and the
+    /// stored connection keeps whatever status it had.
     /// </summary>
     [Fact]
-    public async Task A_response_that_cannot_be_read_is_an_unexpected_response()
+    public async Task A_machine_list_response_that_cannot_be_read_is_an_unexpected_response()
     {
-        var handler = ScriptedHandler.AllOk().Override("devices", HttpStatusCode.OK, "not json at all");
+        var handler = ScriptedHandler.AllOk().Override("machines", HttpStatusCode.OK, "not json at all");
 
         var report = await Run(handler);
 
-        AssertLine(report, NayaxConnectionCheck.SignIn, NayaxConnectionCheckFailure.UnexpectedResponse);
-        AssertPassed(report, NayaxConnectionCheck.Machines);
+        AssertLine(report, NayaxConnectionCheck.Machines, NayaxConnectionCheckFailure.UnexpectedResponse);
+        AssertPassed(report, NayaxConnectionCheck.ProductCatalogue);
+        Assert.Null(report.MachineCount);
+        Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, report.Outcome);
     }
 
     /// <summary>
@@ -266,7 +315,6 @@ public class NayaxConnectionCheckRunnerTests
 
         Assert.Equal(0, report.MachineCount);
         Assert.True(report.NothingFailed);
-        AssertPassed(report, NayaxConnectionCheck.SignIn);
         AssertPassed(report, NayaxConnectionCheck.Machines);
         AssertPassed(report, NayaxConnectionCheck.ProductCatalogue);
         AssertPassed(report, NayaxConnectionCheck.ProductGroups);

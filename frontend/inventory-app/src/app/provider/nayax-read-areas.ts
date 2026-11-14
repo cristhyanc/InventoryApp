@@ -19,7 +19,6 @@ import { NayaxConnectionCheckName } from '../services/nayax-connection.service';
  * docs/architecture.md § Provider-locked navigation.
  */
 const AREA_LABELS: Record<NayaxConnectionCheckName, string> = {
-  SignIn: 'Signing in (GET devices)',
   Machines: 'Machine list (GET machines)',
   Machine: 'Machine details (GET machines/{id})',
   ProductCatalogue: 'Operator product catalogue (GET operators/{operatorId}/products)',
@@ -32,4 +31,36 @@ const AREA_LABELS: Record<NayaxConnectionCheckName, string> = {
 /** The published area label, or the raw name for a check a newer deployment reports. */
 export function nayaxConnectionAreaLabel(check: NayaxConnectionCheckName): string {
   return AREA_LABELS[check] ?? check;
+}
+
+/**
+ * The reads this application used to declare and does not any more. `SignIn` was a `GET devices`
+ * probe that existed only to prove a token authenticated, retired by issue #1310 because Nayax's
+ * device hardware inventory is a permission an owner has no reason to hold: a refusal there made
+ * setup inconclusive even when the machine list answered perfectly.
+ *
+ * It is a list of **names** rather than of `NayaxConnectionCheckName`s precisely because the name is
+ * one this build no longer has a type for, and it can still arrive: a report the server stored
+ * before the change, or a response from an instance that has not been deployed yet.
+ */
+const RETIRED_AREA_NAMES: readonly string[] = ['SignIn'];
+
+/** Whether `check` names a read this application has retired. */
+export function isRetiredNayaxConnectionCheck(check: string): boolean {
+  return RETIRED_AREA_NAMES.includes(check);
+}
+
+/**
+ * The lines worth showing or acting on: every line but a retired one.
+ *
+ * A retired line is dropped rather than rendered under its raw name, which is what an unrecognised
+ * check gets ({@link nayaxConnectionAreaLabel}), because the two cases are opposites. A check a
+ * *newer* deployment reports is something this application may yet depend on, so naming it is
+ * honest. A check this application has *retired* is one it no longer depends on at all, so a row or
+ * a support request naming it would ask an owner to chase a permission nothing needs.
+ */
+export function withoutRetiredNayaxConnectionChecks<T extends { readonly check: string }>(
+  lines: readonly T[]
+): T[] {
+  return lines.filter((line) => !isRetiredNayaxConnectionCheck(line.check));
 }

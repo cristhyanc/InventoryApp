@@ -56,7 +56,7 @@ public class RetestNayaxConnectionTests
         NayaxConnectionStatus stored)
     {
         var fixture = new Fixture(stored, Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
             NayaxConnectionCheckLine.Failed(
                 NayaxConnectionCheck.MachineProducts,
                 NayaxConnectionCheckFailure.PermissionNotGranted)));
@@ -76,12 +76,12 @@ public class RetestNayaxConnectionTests
     [InlineData(NayaxConnectionStatus.Ready)]
     [InlineData(NayaxConnectionStatus.PendingPermissions)]
     [InlineData(NayaxConnectionStatus.NeedsAttention)]
-    public async Task A_401_on_sign_in_concludes_needs_attention_from_any_stored_status(
+    public async Task A_401_on_the_machine_list_concludes_needs_attention_from_any_stored_status(
         NayaxConnectionStatus stored)
     {
         var fixture = new Fixture(stored, Report(
             NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.InvalidOrExpiredToken)));
 
         var outcome = await fixture.Retest.Handle();
@@ -104,7 +104,7 @@ public class RetestNayaxConnectionTests
     {
         var fixture = new Fixture(stored, Report(
             NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.NayaxUnavailable)));
         var before = fixture.Connections.Connection;
 
@@ -119,7 +119,7 @@ public class RetestNayaxConnectionTests
         // The lines still report why, so the wizard can say "Nayax is unavailable, try again".
         Assert.Equal(
             NayaxConnectionCheckFailure.NayaxUnavailable,
-            outcome.Result.Report.Lines.Single(line => line.Check == NayaxConnectionCheck.SignIn).Failure);
+            outcome.Result.Report.Lines.Single(line => line.Check == NayaxConnectionCheck.Machines).Failure);
     }
 
     /// <summary>
@@ -153,7 +153,6 @@ public class RetestNayaxConnectionTests
         var withoutMachines = new Fixture(
             NayaxConnectionStatus.PendingPermissions,
             Report(
-                NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
                 NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
                 NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.Machine),
                 NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineProducts),
@@ -194,7 +193,7 @@ public class RetestNayaxConnectionTests
         var runner = new InterleavingRunner(
             Report(
                 NayaxConnectionCheckLine.Failed(
-                    NayaxConnectionCheck.SignIn,
+                    NayaxConnectionCheck.Machines,
                     NayaxConnectionCheckFailure.InvalidOrExpiredToken)),
             async () =>
             {
@@ -248,7 +247,7 @@ public class RetestNayaxConnectionTests
             OperatorId, Token, NayaxConnectionStatus.Ready, credentialRevision: 1);
 
         var runner = new InterleavingRunner(
-            Report(NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.SignIn, failure)),
+            Report(NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.Machines, failure)),
             async () =>
             {
                 await connections.SaveCredentialAsync(
@@ -288,7 +287,7 @@ public class RetestNayaxConnectionTests
 
         var runner = new InterleavingRunner(
             Report(NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.NayaxUnavailable)),
             () =>
             {
@@ -314,7 +313,7 @@ public class RetestNayaxConnectionTests
         var fixture = new Fixture(
             NayaxConnectionStatus.Ready,
             Report(NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.NayaxUnavailable)));
 
         var outcome = await fixture.Retest.Handle();

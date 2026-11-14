@@ -23,6 +23,19 @@ public static class NayaxConnectionCheckPolicy
     public static IReadOnlyList<NayaxConnectionCheck> All { get; } =
         [.. Enum.GetValues<NayaxConnectionCheck>()];
 
+    private static readonly FrozenSet<NayaxConnectionCheck> Declared = FrozenSet.ToFrozenSet(All);
+
+    /// <summary>
+    /// Whether <paramref name="check"/> is one of the checks this build declares.
+    ///
+    /// It exists because a check can arrive from outside the enum: a report serialized before a
+    /// check was retired still names it by number (issue #1310 retired <c>GET devices</c>, value
+    /// <c>1</c>), and an enum is a compile-time constraint rather than a validated one. A line
+    /// naming an undeclared check is evidence about nothing - this build neither ran it nor knows
+    /// what it meant - so it is ignored rather than counted as a pass, a failure or a permission.
+    /// </summary>
+    public static bool IsDeclared(NayaxConnectionCheck check) => Declared.Contains(check);
+
     /// <summary>
     /// The checks whose endpoint carries the operator id in its path. Only these can answer "that
     /// operator is not yours", which is why only these turn a <c>404</c> into

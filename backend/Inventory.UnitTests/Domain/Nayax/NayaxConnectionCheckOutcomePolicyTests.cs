@@ -4,10 +4,11 @@ using Xunit;
 namespace InventoryApi.Tests.Domain.Nayax;
 
 /// <summary>
-/// The rule that turns one completed check run into what it concluded (issue #537).
+/// The rule that turns one completed check run into what it concluded (issue #537), with the machine
+/// list as the credential gate since issue #1310.
 ///
 /// Every case of the agreed table is pinned here, including the ones the issue did not spell out,
-/// because the fail-closed reading of those is a decision: a sign-in that neither passed nor
+/// because the fail-closed reading of those is a decision: a machine list that neither passed nor
 /// produced Nayax's documented <c>401</c> verdict concludes <em>nothing</em>, so the stored status
 /// is left exactly as it was. The alternative - guessing - would either break a working connection
 /// or mark a dead token usable.
@@ -19,7 +20,7 @@ public class NayaxConnectionCheckOutcomePolicyTests
     {
         var outcome = NayaxConnectionCheckOutcomePolicy.Classify(
             NayaxConnectionCheckStatus.Passed,
-            signInFailure: null,
+            machineListFailure: null,
             anyOtherCheckFailed: false);
 
         Assert.Equal(NayaxConnectionCheckOutcome.Ready, outcome);
@@ -28,15 +29,15 @@ public class NayaxConnectionCheckOutcomePolicyTests
     }
 
     /// <summary>
-    /// A token that signs in but lacks a permission is a real, usable credential with a gap, which
-    /// is the ordinary case this whole feature exists for.
+    /// A token that reads the machine list but lacks another permission is a real, usable credential
+    /// with a gap, which is the ordinary case this whole feature exists for.
     /// </summary>
     [Fact]
-    public void A_sign_in_that_passed_beside_another_failed_check_is_pending_permissions()
+    public void A_machine_list_that_passed_beside_another_failed_check_is_pending_permissions()
     {
         var outcome = NayaxConnectionCheckOutcomePolicy.Classify(
             NayaxConnectionCheckStatus.Passed,
-            signInFailure: null,
+            machineListFailure: null,
             anyOtherCheckFailed: true);
 
         Assert.Equal(NayaxConnectionCheckOutcome.PendingPermissions, outcome);
@@ -52,7 +53,7 @@ public class NayaxConnectionCheckOutcomePolicyTests
     /// <see cref="NayaxConnectionStatus.NeedsAttention"/>.
     /// </summary>
     [Fact]
-    public void A_sign_in_refused_with_an_invalid_token_rejects_the_token()
+    public void A_machine_list_refused_with_an_invalid_token_rejects_the_token()
     {
         var outcome = NayaxConnectionCheckOutcomePolicy.Classify(
             NayaxConnectionCheckStatus.Failed,
@@ -68,8 +69,10 @@ public class NayaxConnectionCheckOutcomePolicyTests
 
     /// <summary>
     /// Nothing was learned about the credentials in any of these, so nothing is concluded about
-    /// them: Nayax was unreachable, answered something nobody interprets, refused the sign-in
-    /// endpoint for lack of a scope, or the line never ran. In each case the stored status stays.
+    /// them: Nayax was unreachable, answered something nobody interprets, refused the machine list
+    /// for lack of a permission, or the line never ran. In each case the stored status stays - and
+    /// the refused machine list is the case issue #1310 kept apart from a dead token on purpose,
+    /// because a permission refusal names an endpoint rather than judging the credentials.
     /// </summary>
     [Theory]
     [InlineData(NayaxConnectionCheckStatus.Failed, NayaxConnectionCheckFailure.NayaxUnavailable)]
@@ -77,11 +80,11 @@ public class NayaxConnectionCheckOutcomePolicyTests
     [InlineData(NayaxConnectionCheckStatus.Failed, NayaxConnectionCheckFailure.PermissionNotGranted)]
     [InlineData(NayaxConnectionCheckStatus.Failed, NayaxConnectionCheckFailure.OperatorIdMismatch)]
     [InlineData(NayaxConnectionCheckStatus.NotChecked, null)]
-    public void A_sign_in_that_produced_no_verdict_concludes_nothing(
-        NayaxConnectionCheckStatus signIn,
+    public void A_machine_list_that_produced_no_verdict_concludes_nothing(
+        NayaxConnectionCheckStatus machineList,
         NayaxConnectionCheckFailure? failure)
     {
-        var outcome = NayaxConnectionCheckOutcomePolicy.Classify(signIn, failure, anyOtherCheckFailed: false);
+        var outcome = NayaxConnectionCheckOutcomePolicy.Classify(machineList, failure, anyOtherCheckFailed: false);
 
         Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, outcome);
         Assert.Null(NayaxConnectionCheckOutcomePolicy.ConcludedStatus(outcome));
@@ -90,12 +93,12 @@ public class NayaxConnectionCheckOutcomePolicyTests
 
     /// <summary>
     /// A later check failing cannot turn a dead token into a mere permission gap, and cannot turn an
-    /// unanswered sign-in into one either: the sign-in decides first.
+    /// unanswered machine list into one either: the machine list decides first.
     /// </summary>
     [Theory]
     [InlineData(NayaxConnectionCheckFailure.InvalidOrExpiredToken, NayaxConnectionCheckOutcome.TokenRejected)]
     [InlineData(NayaxConnectionCheckFailure.NayaxUnavailable, NayaxConnectionCheckOutcome.Inconclusive)]
-    public void A_failed_sign_in_decides_the_outcome_whatever_else_failed(
+    public void A_failed_machine_list_decides_the_outcome_whatever_else_failed(
         NayaxConnectionCheckFailure failure,
         NayaxConnectionCheckOutcome expected)
     {
@@ -112,11 +115,11 @@ public class NayaxConnectionCheckOutcomePolicyTests
     /// and a status read back from a stored report could be anything.
     /// </summary>
     [Fact]
-    public void An_undeclared_sign_in_status_concludes_nothing_and_cannot_be_saved()
+    public void An_undeclared_machine_list_status_concludes_nothing_and_cannot_be_saved()
     {
         var outcome = NayaxConnectionCheckOutcomePolicy.Classify(
             (NayaxConnectionCheckStatus)999,
-            signInFailure: null,
+            machineListFailure: null,
             anyOtherCheckFailed: false);
 
         Assert.Equal(NayaxConnectionCheckOutcome.Inconclusive, outcome);

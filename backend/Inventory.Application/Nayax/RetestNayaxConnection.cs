@@ -18,9 +18,9 @@ namespace Inventory.Application.Nayax;
 /// </summary>
 /// <param name="Summary">The connection's status and machine-check state after the re-test.</param>
 /// <param name="StatusUpdated">
-/// Whether the re-test concluded anything and wrote it. <see langword="false"/> means Nayax never
-/// answered the sign-in, so the stored status, its last-tested instant and its machine-check state
-/// are exactly as they were and the caller should try again later.
+/// Whether the re-test concluded anything and wrote it. <see langword="false"/> means Nayax gave no
+/// verdict on the machine list, so the stored status, its last-tested instant and its machine-check
+/// state are exactly as they were and the caller should try again later.
 /// </param>
 /// <param name="Report">Every check, in order, with its result.</param>
 public sealed record NayaxConnectionRetestResult(
@@ -79,13 +79,13 @@ public sealed record NayaxConnectionRetestOutcome
 /// test again. A connection that is gone by then is the same answer as a replaced one.</para>
 ///
 /// <para><strong>A run that learned nothing writes nothing.</strong> When Nayax never answered the
-/// sign-in - a <c>5xx</c>, a timeout, an open circuit - the stored status, the last-tested instant
+/// machine list - a <c>5xx</c>, a timeout, an open circuit - the stored status, the last-tested instant
 /// and the machine-check state all stay exactly as they were, because a connection that is working
 /// must not be marked broken by somebody else's outage, and a broken one must not be blessed by it
 /// either. The refusal above writes nothing either: there is no stale result to discard, because
 /// such a run has nothing to write in the first place.</para>
 ///
-/// <para><strong>It shares the test's rate limit</strong>, per business: a re-test is the same eight
+/// <para><strong>It shares the test's rate limit</strong>, per business: a re-test is the same seven
 /// calls against the same upstream, so test and re-test runs count together and the allowance is
 /// claimed before any call is made.</para>
 /// </summary>

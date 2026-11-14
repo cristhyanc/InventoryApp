@@ -137,22 +137,30 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
     }
 
     /// <summary>
-    /// A token that did not sign in is not stored, and the draft survives the refusal - so an Owner
-    /// can read the failing lines and fix the problem without the test result vanishing.
+    /// A token whose machine list was refused is not stored, and the draft survives the refusal - so
+    /// an Owner can read the failing lines and fix the problem without the test result vanishing.
+    /// Both refusals are covered: an expired token (<c>401</c>) and a machine list the token has no
+    /// permission for (<c>403</c>, issue #1310), because an unverified candidate must not replace
+    /// stored credentials in either case.
     /// </summary>
-    [Fact]
-    public async Task A_draft_whose_sign_in_failed_is_refused_and_stores_nothing()
+    [Theory]
+    [InlineData(NayaxConnectionCheckFailure.InvalidOrExpiredToken)]
+    [InlineData(NayaxConnectionCheckFailure.PermissionNotGranted)]
+    public async Task A_draft_whose_machine_list_failed_is_refused_and_stores_nothing(
+        NayaxConnectionCheckFailure failure)
     {
         await _factory.ResetAsync();
         _factory.Runner.Report = Report(
-            NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
-                NayaxConnectionCheckFailure.InvalidOrExpiredToken));
+            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.Machines, failure));
         var draftId = await TestAsync();
 
         var response = await Save(ApiFactory.OwnerObjectId, draftId);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(
+            SaveNayaxConnection.MachineListDidNotPassMessage,
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
         await using var db = _factory.Database();
         Assert.Empty(await db.BusinessNayaxConnections.AsNoTracking().ToListAsync());
         Assert.Equal(draftId, (await db.NayaxConnectionTestDrafts.AsNoTracking().SingleAsync()).Id);
@@ -188,11 +196,11 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
     }
 
     [Fact]
-    public async Task A_sign_in_that_passed_beside_a_permission_failure_is_saved_pending_permissions()
+    public async Task A_machine_list_that_passed_beside_a_permission_failure_is_saved_pending_permissions()
     {
         await _factory.ResetAsync();
         _factory.Runner.Report = Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
             NayaxConnectionCheckLine.Failed(
                 NayaxConnectionCheck.MachineLastAlerts,
                 NayaxConnectionCheckFailure.PermissionNotGranted));
@@ -214,7 +222,7 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
         await AssertOk(await Save(ApiFactory.OwnerObjectId, await TestAsync()));
         _factory.Runner.Reset();
         _factory.Runner.Report = Report(
-            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.Machines),
             NayaxConnectionCheckLine.Failed(
                 NayaxConnectionCheck.ProductGroups,
                 NayaxConnectionCheckFailure.PermissionNotGranted));
@@ -257,14 +265,14 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
     }
 
     [Fact]
-    public async Task A_re_test_whose_sign_in_is_refused_moves_the_connection_to_needs_attention()
+    public async Task A_re_test_whose_machine_list_is_refused_with_a_401_moves_the_connection_to_needs_attention()
     {
         await _factory.ResetAsync();
         await AssertOk(await Save(ApiFactory.OwnerObjectId, await TestAsync()));
         _factory.Runner.Reset();
         _factory.Runner.Report = Report(
             NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.InvalidOrExpiredToken));
 
         var body = await (await Retest(ApiFactory.OwnerObjectId))
@@ -292,7 +300,7 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
         _factory.Runner.Reset();
         _factory.Runner.Report = Report(
             NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.NayaxUnavailable));
 
         var response = await Retest(ApiFactory.OwnerObjectId);
@@ -319,7 +327,7 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
         _factory.Runner.Reset();
         _factory.Runner.Report = Report(
             NayaxConnectionCheckLine.Failed(
-                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheck.Machines,
                 NayaxConnectionCheckFailure.InvalidOrExpiredToken));
         _factory.Runner.DuringRun = () => Save(ApiFactory.OwnerObjectId, replacementDraftId);
 
@@ -363,7 +371,7 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
         var replacementDraftId = await TestAsync(token: "the-replacement-token");
         _factory.Runner.Reset();
         _factory.Runner.Report = Report(
-            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.SignIn, failure));
+            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.Machines, failure));
         string? afterReplacement = null;
         _factory.Runner.DuringRun = async () =>
         {
