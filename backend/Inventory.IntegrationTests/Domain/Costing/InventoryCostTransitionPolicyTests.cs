@@ -99,6 +99,27 @@ public class InventoryCostTransitionPolicyTests
         Assert.Equal("Legacy physical movement history reconciled at transition.", opening.DataQualityNote);
     }
 
+    /// <summary>
+    /// Issue #1256: a product whose machine stock could not be looked up at all is noted as such,
+    /// in front of the legacy note, so an empty machine stock is never read as a measured zero. The
+    /// quantities are untouched - there is no slot to count - and a resolved product's note is
+    /// exactly the legacy note it always was.
+    /// </summary>
+    [Fact]
+    public void Unresolved_machine_stock_is_noted_in_front_of_the_legacy_note()
+    {
+        var unresolved = InventoryCostTransitionPolicy.CalculateOpening(19, [], 1.25m, 19, machineStockResolved: false);
+        var resolved = InventoryCostTransitionPolicy.CalculateOpening(19, [], 1.25m, 19);
+
+        Assert.Equal(0, unresolved.MachineStockQuantity);
+        Assert.Equal(19, unresolved.OpeningCostingQuantity);
+        Assert.Equal(23.75m, unresolved.InventoryValue);
+        Assert.Equal(
+            $"{InventoryCostTransitionPolicy.UnresolvedMachineStockNote} Legacy physical movement history reconciled at transition.",
+            unresolved.DataQualityNote);
+        Assert.Equal("Legacy physical movement history reconciled at transition.", resolved.DataQualityNote);
+    }
+
     [Fact]
     public void An_opening_quantity_outside_int_range_overflows_rather_than_wrapping() =>
         Assert.Throws<OverflowException>(() =>

@@ -47,6 +47,16 @@ public static class InventoryCostTransitionPolicy
     /// <summary>The provenance recorded for every machine's transition stock quantity.</summary>
     public const string MachineStockSource = "Nayax PAR - MissingStockByMDB";
 
+    /// <summary>
+    /// What the preview says about a product the sales provider does not name (issue #1256): a
+    /// machine slot is matched to a product through its recorded provider id, so a product that has
+    /// none cannot be matched to any slot at all. Its opening baseline is therefore home stock
+    /// alone, and the operator is told that rather than shown a machine stock of zero that looks
+    /// measured.
+    /// </summary>
+    public const string UnresolvedMachineStockNote =
+        "Machine stock could not be resolved: this product has no sales-provider id, so no machine slot could be matched to it and the opening quantity is home stock only.";
+
     /// <summary>How long a stored preview may be applied after it was created.</summary>
     public static readonly TimeSpan PreviewLifetime = TimeSpan.FromMinutes(30);
 
@@ -91,22 +101,30 @@ public static class InventoryCostTransitionPolicy
     /// The opening costing position: home stock plus every machine's stock, valued at
     /// <paramref name="averageUnitCost"/>, with the legacy physical replay's discrepancy against
     /// verified home stock recorded as a data-quality note rather than corrected.
+    ///
+    /// <para><paramref name="machineStockResolved"/> is <see langword="false"/> for a product whose
+    /// machine stock could not be looked up at all because the product carries no sales-provider id
+    /// (issue #1256). The quantities are unchanged - there is no machine slot to count - and
+    /// <see cref="UnresolvedMachineStockNote"/> is put in front of the legacy note, so the operator
+    /// confirming the baseline sees why its machine stock is empty.</para>
     /// </summary>
     /// <exception cref="OverflowException">A quantity is outside <see cref="int"/> range.</exception>
     public static InventoryCostTransitionOpening CalculateOpening(
         int homeStockQuantity,
         IEnumerable<int> machineStockQuantities,
         decimal averageUnitCost,
-        int legacyReplayedPhysicalQuantity)
+        int legacyReplayedPhysicalQuantity,
+        bool machineStockResolved = true)
     {
         ArgumentNullException.ThrowIfNull(machineStockQuantities);
 
         var machineQuantity = machineStockQuantities.Sum();
         var costingQuantity = checked(homeStockQuantity + machineQuantity);
         var discrepancy = homeStockQuantity - legacyReplayedPhysicalQuantity;
-        var note = discrepancy == 0
+        var legacyNote = discrepancy == 0
             ? "Legacy physical movement history reconciled at transition."
             : $"Legacy physical movement history replayed to {legacyReplayedPhysicalQuantity}, while verified home stock was {homeStockQuantity}; discrepancy {discrepancy:+#;-#;0} was retired at cutover without altering legacy movements.";
+        var note = machineStockResolved ? legacyNote : $"{UnresolvedMachineStockNote} {legacyNote}";
         return new(machineQuantity, costingQuantity, costingQuantity * averageUnitCost, discrepancy, note);
     }
 

@@ -225,6 +225,28 @@ describe('AvcoTransitionWorkflowComponent single-product preview (issue #390)', 
     expect(note?.textContent?.trim()).toBe('');
   });
 
+  // Issue #1256: the all-products preview carries a note per product, and a product the sales
+  // provider does not name says there that its machine stock could not be resolved. Before this the
+  // batch table showed every product's quantities and none of their notes, so an operator confirming
+  // a hundred baselines at once could not see that one of them had no machine stock to find.
+  it('shows each product its own data-quality note in the all-products preview', async () => {
+    const batch = batchPreview({
+      productCount: 1,
+      products: [transitionPreview({
+        productName: 'Chips',
+        machineStockQuantity: 0,
+        dataQualityNote: 'Machine stock could not be resolved: this product has no sales-provider id.'
+      })]
+    });
+    const { component, fixture, host } = await render({ previewAll: jest.fn(() => of(batch)) });
+    component.transitionAllProducts = true;
+
+    component.previewTransition();
+    fixture.detectChanges();
+
+    expect(host.textContent ?? '').toContain('Machine stock could not be resolved: this product has no sales-provider id.');
+  });
+
   it('reports the API message and clears loading when the preview fails', async () => {
     const preview = jest.fn(() => throwError(() => ({ error: { message: 'A baseline already exists for this product.' } })));
     const { component, toast } = await render({ preview }, [product(1, 'Coke', 1.25)]);

@@ -1,6 +1,8 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -26,6 +28,16 @@ public class EfInventoryCostTransitionStoreTests
     private const int BusinessB = 2;
     private const long ProductA = 100;
     private const long ProductB = 200;
+
+    /// <summary>
+    /// Business A's product is Nayax 9001, and business B's is Nayax <see cref="ProductA"/> - the
+    /// number that is business A's own local key (issue #1256). Both businesses sell through Nayax,
+    /// so the production <see cref="EfNayaxProductLinkStore"/> resolves each slot here exactly as it
+    /// does in a request, and the tenant query filter is what keeps business B's Nayax id out of
+    /// business A's answer: a slot naming it is an unknown product for A, never A's product 100.
+    /// </summary>
+    private const long NayaxProductA = 9001;
+    private const long NayaxProductB = ProductA;
     private static readonly DateTime Now = new(2026, 9, 1, 2, 0, 0, DateTimeKind.Utc);
 
     [Fact]
@@ -37,7 +49,7 @@ public class EfInventoryCostTransitionStoreTests
 
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
-            var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax, new FakeClock(Now))
+            var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax, ProductLinks(db), new FakeClock(Now))
                 .Handle(new(DomainBaselineSource.ManualAuthoritative));
 
             var product = Assert.Single(preview.Products);
@@ -46,7 +58,7 @@ public class EfInventoryCostTransitionStoreTests
             Assert.Equal(3, product.MachineStockQuantity);
             Assert.Equal(10, product.LegacyReplayedPhysicalQuantity);
 
-            await TestCostingUseCases.ApplyAllTransitions(db, nayax, clock: new FakeClock(Now))
+            await TestCostingUseCases.ApplyAllTransitions(db, nayax, ProductLinks(db), clock: new FakeClock(Now))
                 .Handle(new(preview.PreviewId, Confirmed: true));
         }
 
@@ -74,22 +86,22 @@ public class EfInventoryCostTransitionStoreTests
         InventoryCostTransitionBatchPreview batchA;
         await using (var a = TestAppDbContext.For(options, BusinessA))
         {
-            previewA = await TestCostingUseCases.PreviewTransition(a, nayax, new FakeClock(Now))
+            previewA = await TestCostingUseCases.PreviewTransition(a, nayax, ProductLinks(a), new FakeClock(Now))
                 .Handle(new(ProductA, 2m, DomainBaselineSource.ManualAuthoritative));
-            batchA = await TestCostingUseCases.PreviewAllTransitions(a, nayax, new FakeClock(Now))
+            batchA = await TestCostingUseCases.PreviewAllTransitions(a, nayax, ProductLinks(a), new FakeClock(Now))
                 .Handle(new(DomainBaselineSource.ManualAuthoritative));
         }
 
         await using (var b = TestAppDbContext.For(options, BusinessB))
         {
             var foreignProduct = await Assert.ThrowsAsync<DomainValidationException>(() =>
-                TestCostingUseCases.PreviewTransition(b, nayax, new FakeClock(Now))
+                TestCostingUseCases.PreviewTransition(b, nayax, ProductLinks(b), new FakeClock(Now))
                     .Handle(new(ProductA, 2m, DomainBaselineSource.ManualAuthoritative)));
             var foreignPreview = await Assert.ThrowsAsync<DomainValidationException>(() =>
-                TestCostingUseCases.ApplyTransition(b, nayax, clock: new FakeClock(Now))
+                TestCostingUseCases.ApplyTransition(b, nayax, ProductLinks(b), clock: new FakeClock(Now))
                     .Handle(new(previewA.PreviewId, Confirmed: true)));
             var foreignBatch = await Assert.ThrowsAsync<DomainValidationException>(() =>
-                TestCostingUseCases.ApplyAllTransitions(b, nayax, clock: new FakeClock(Now))
+                TestCostingUseCases.ApplyAllTransitions(b, nayax, ProductLinks(b), clock: new FakeClock(Now))
                     .Handle(new(batchA.PreviewId, Confirmed: true)));
 
             Assert.Equal($"Product {ProductA} does not exist.", foreignProduct.Message);
@@ -137,7 +149,7 @@ public class EfInventoryCostTransitionStoreTests
             Assert.Empty(await store.ListProductsWithoutBaselineAsync(CancellationToken.None));
             Assert.Null(await store.GetProductAsync(ProductA, CancellationToken.None));
             await Assert.ThrowsAsync<DomainValidationException>(() =>
-                TestCostingUseCases.PreviewAllTransitions(denied, Nayax(), new FakeClock(Now))
+                TestCostingUseCases.PreviewAllTransitions(denied, Nayax(), ProductLinks(denied), new FakeClock(Now))
                     .Handle(new(DomainBaselineSource.ManualAuthoritative)));
         }
 
@@ -157,19 +169,19 @@ public class EfInventoryCostTransitionStoreTests
 
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
-            var single = await TestCostingUseCases.PreviewTransition(db, nayax, new FakeClock(Now))
+            var single = await TestCostingUseCases.PreviewTransition(db, nayax, ProductLinks(db), new FakeClock(Now))
                 .Handle(new(ProductA, 2m, DomainBaselineSource.ManualAuthoritative));
             await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
-                TestCostingUseCases.ApplyTransition(db, nayax, rebuild.Object, new FakeClock(Now))
+                TestCostingUseCases.ApplyTransition(db, nayax, ProductLinks(db), rebuild.Object, new FakeClock(Now))
                     .Handle(new(single.PreviewId, Confirmed: true)));
         }
 
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
-            var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax, new FakeClock(Now))
+            var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax, ProductLinks(db), new FakeClock(Now))
                 .Handle(new(DomainBaselineSource.ManualAuthoritative));
             await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
-                TestCostingUseCases.ApplyAllTransitions(db, nayax, rebuild.Object, new FakeClock(Now))
+                TestCostingUseCases.ApplyAllTransitions(db, nayax, ProductLinks(db), rebuild.Object, new FakeClock(Now))
                     .Handle(new(batch.PreviewId, Confirmed: true)));
         }
 
@@ -189,35 +201,71 @@ public class EfInventoryCostTransitionStoreTests
         nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
-                new() { NayaxProductID = ProductA, PAR = 5, MissingStockByMDB = 2 },
-                new() { NayaxProductID = ProductB, PAR = 9, MissingStockByMDB = 0 }
+                new() { NayaxProductID = NayaxProductA, PAR = 5, MissingStockByMDB = 2 },
+                new() { NayaxProductID = NayaxProductB, PAR = 9, MissingStockByMDB = 0 }
             });
         return nayax.Object;
     }
+
+    /// <summary>
+    /// The production lookup over the caller's own context (issue #1256): the transition resolves a
+    /// slot's <c>NayaxProductID</c> through <c>Product.ExternalProductId</c>, filtered by the same
+    /// business scope as every other read this adapter makes.
+    /// </summary>
+    private static INayaxProductLinkStore ProductLinks(AppDbContext db) => new EfNayaxProductLinkStore(db);
 
     private static async Task<DbContextOptions<AppDbContext>> SeedTwoBusinessesAsync(SqliteConnection connection)
     {
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
         await using (var setup = TestAppDbContext.Unrestricted(options))
+        {
             await setup.Database.EnsureCreatedAsync();
+            // Both businesses sell through Nayax, which is what makes their stored external product
+            // ids Nayax ids at all (EfSalesProviderQueries).
+            setup.Businesses.AddRange(NayaxBusiness(BusinessA, "Vending A"), NayaxBusiness(BusinessB, "Vending B"));
+            await setup.SaveChangesAsync();
+        }
 
         await using (var a = TestAppDbContext.For(options, BusinessA))
         {
-            a.Products.Add(new Product { Id = ProductA, Name = "Coke Zero", QuantityInStock = 10, AverageUnitCost = 2m });
+            a.Products.Add(new Product
+            {
+                Id = ProductA,
+                Name = "Coke Zero",
+                ExternalProductId = NayaxExternalId.From(NayaxProductA),
+                QuantityInStock = 10,
+                AverageUnitCost = 2m
+            });
             a.StockAdjustments.Add(Restock(ProductA, 10));
             await a.SaveChangesAsync();
         }
 
         await using (var b = TestAppDbContext.For(options, BusinessB))
         {
-            b.Products.Add(new Product { Id = ProductB, Name = "Business B Product", QuantityInStock = 5, AverageUnitCost = 9m });
+            b.Products.Add(new Product
+            {
+                Id = ProductB,
+                Name = "Business B Product",
+                ExternalProductId = NayaxExternalId.From(NayaxProductB),
+                QuantityInStock = 5,
+                AverageUnitCost = 9m
+            });
             b.StockAdjustments.Add(Restock(ProductB, 5));
             await b.SaveChangesAsync();
         }
 
         return options;
     }
+
+    private static Business NayaxBusiness(int id, string name) => new()
+    {
+        Id = id,
+        Name = name,
+        Status = BusinessStatus.Active,
+        SalesProvider = ExternalProvider.Nayax,
+        CreatedAtUtc = Now.AddYears(-1),
+    };
 
     private static StockAdjustment Restock(long productId, int quantity) => new()
     {

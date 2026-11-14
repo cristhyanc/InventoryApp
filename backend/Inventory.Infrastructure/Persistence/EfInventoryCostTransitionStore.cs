@@ -145,8 +145,11 @@ public sealed class EfInventoryCostTransitionStore : IInventoryCostTransitionSto
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => _db.SaveChangesAsync(cancellationToken);
 
+    // The recorded sales-provider id travels with the product (issue #1256) so the preview can say
+    // that a product the provider does not name has no machine stock to resolve, rather than
+    // reporting an unmeasured zero. It is passed on as the opaque text it is stored as.
     private static InventoryCostTransitionProduct ToTransitionProduct(Product product) =>
-        new(product.Id, product.Name, product.QuantityInStock, product.AverageUnitCost);
+        new(product.Id, product.Name, product.QuantityInStock, product.AverageUnitCost, product.ExternalProductId);
 
     private sealed class Transaction(IDbContextTransaction? transaction) : IInventoryCostTransitionTransaction
     {
