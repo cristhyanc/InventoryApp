@@ -142,6 +142,11 @@ describe('LegalPageComponent (issues #1190 and #1214)', () => {
     const { host } = render();
 
     expect(host.querySelector('[data-testid="legal-brand"]')?.getAttribute('href')).toBe('/home');
+    // The full Restockroo logo is the link's only content, named by its alt text (issue #1272).
+    const logos = host.querySelectorAll('[data-testid="legal-brand"] img');
+    expect(logos).toHaveLength(1);
+    expect(logos[0].getAttribute('src')).toBe('assets/brand/restockroo-logo.png');
+    expect(logos[0].getAttribute('alt')).toBe('Restockroo');
     expect(host.querySelector('[data-testid="legal-back-home"]')?.getAttribute('href')).toBe('/home');
   });
 

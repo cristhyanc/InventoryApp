@@ -593,9 +593,9 @@ public class NayaxSaleTimestampRepairTests : IDisposable
     public async Task Apply_rolls_everything_back_when_an_affected_products_cost_history_cannot_be_replayed()
     {
         var saleAt = new DateTime(2026, 10, 6, 2, 0, 0, DateTimeKind.Utc);
-        // The situation a costing repair exists for: the product entered the transition with an
-        // opening costing quantity of zero while stock was still in the machines, so its completed
-        // sale has no costed stock to consume and every write to it fails on the same fatal issue.
+        // A history nothing can replay: the product holds a legacy positive restock with no unit
+        // cost, which is fatal wherever it is replayed from. (A completed sale the ledger cannot
+        // cost is deliberately not fatal - issue #1239 - so it would not abort an apply.)
         await using (var setup = TestAppDbContext.Unrestricted(_options))
         {
             setup.Products.Add(new Product { Id = ProductId, BusinessId = BusinessA, Name = "Coke Zero", QuantityInStock = 10 });
@@ -608,6 +608,14 @@ public class NayaxSaleTimestampRepairTests : IDisposable
                 OpeningCostingQuantity = 0,
                 InventoryValue = 0m,
                 AverageUnitCost = 0m,
+            });
+            setup.StockAdjustments.Add(new StockAdjustment
+            {
+                BusinessId = BusinessA,
+                ProductId = ProductId,
+                QuantityChange = 4,
+                Reason = StockAdjustmentReason.Restock,
+                EffectiveAt = saleAt.AddHours(-12),
             });
             await setup.SaveChangesAsync();
         }

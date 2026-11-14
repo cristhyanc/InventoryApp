@@ -78,15 +78,16 @@ public class ImportNayaxSalesCoverageTests
     private static Inventory.Application.Commissions.IGetSiteCommissionReport EmptyCommissions()
     {
         var mock = new Mock<Inventory.Application.Commissions.IGetSiteCommissionReport>();
-        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
-                new Inventory.Application.Commissions.SiteCommissionReport(from, to, []));
+        mock.Setup(x => x.HandleBusinessPeriod(
+                It.IsAny<Inventory.Application.Commissions.SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Inventory.Application.Commissions.SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new Inventory.Application.Commissions.SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         return mock.Object;
     }
 
     private static Task<BookkeepingReportDto> ReportAsync(AppDbContext db) =>
         new GetBookkeepingReport(
-                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()))
+                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar))
             .Handle(new ReportingFilterDto(PeriodFrom, PeriodTo), CancellationToken.None);
 
     [Fact]

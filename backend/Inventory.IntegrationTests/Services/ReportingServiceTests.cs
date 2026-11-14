@@ -78,21 +78,23 @@ public class ReportingRegressionTests
         IGetSiteCommissionReport? siteCommissionService = null)
     {
         var commissions = siteCommissionService is null ? new Mock<IGetSiteCommissionReport>() : null;
-        commissions?.Setup(x => x.Handle(
-                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
-                new SiteCommissionReport(from, to, []));
+        commissions?.Setup(x => x.HandleBusinessPeriod(
+                It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
         var siteCommissions = siteCommissionService ?? commissions!.Object;
-        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
+            db, nayaxFees, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
-        var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
+        var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(
+            db, TestFinancialUseCases.TrivialCalendar));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
             new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
-            new EfDashboardReportFactsProvider(db, siteCommissions));
+            new EfDashboardReportFactsProvider(db, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
         return new ReportingHarness(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
@@ -419,7 +421,8 @@ public class ReportingRegressionTests
     {
         using var db = CreateDbContext();
         var commissions = new Mock<IGetSiteCommissionReport>();
-        commissions.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+        commissions.Setup(x => x.HandleBusinessPeriod(
+                It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
         var service = Reporting(db, siteCommissionService: commissions.Object);
 

@@ -1,6 +1,6 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
-using Inventory.Domain.Reporting.Availability;
+using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.Bookkeeping;
 
@@ -59,17 +59,10 @@ public sealed class FakeBookkeepingReportFactsProvider : IBookkeepingReportFacts
         UnknownStatusTransactionCount: 0,
         MissingStatusTransactionCount: 0)
         {
-            // A complete scope is one every provider source accounted for end to end (issue #730): the
-            // range is deliberately far wider than any period these tests ask for, so a test about
-            // something else is never incidentally about coverage. The tests that are about coverage
-            // replace these two lists.
-            SalesCoverage = [FullCoverage],
-            SettlementCoverage = [FullCoverage],
-            ContainsSalesRows = true,
+            // A complete scope is one every provider source accounted for end to end (issue #730):
+            // the decided period and its coverage are deliberately far wider than any period these
+            // tests ask for, so a test about something else is never incidentally about coverage.
+            // The tests that are about coverage replace this record.
+            Coverage = TestReportCoverage.Complete(),
         };
-
-    /// <summary>A range wider than every period these tests report on.</summary>
-    internal static readonly ReportCoverageRange FullCoverage = new(
-        new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-        new DateTime(2100, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 }

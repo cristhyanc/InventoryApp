@@ -1,5 +1,4 @@
 using Inventory.Application.Reporting.Shared;
-using Inventory.Domain.Reporting.Availability;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
 
@@ -68,25 +67,16 @@ public sealed record BookkeepingReportFacts(
     public int ExcludedByReviewTransactionCount { get; init; }
 
     /// <summary>
-    /// Every provider coverage range overlapping the requested period that accounts for sale
-    /// instants - a successful sales synchronization or a committed sales file import (issue #730).
-    /// Unordered and expected to overlap: successive successful runs claim overlapping windows by
-    /// design, and <c>ReportAvailabilityPolicy</c> clips and merges them.
+    /// The coverage evidence this period rests on (issue #730), in the one carrier every other
+    /// sales-based report already uses. It travels with the UTC window the adapter actually selected
+    /// its sales over - business-day midnights since issue #1250 - because a coverage range may only
+    /// be compared with the window the figures were measured over, and the requested calendar dates
+    /// are not that window.
+    ///
+    /// <para>Whether the scope holds any stored provider sale at all
+    /// (<see cref="ReportCoverageFacts.ContainsSalesRows"/>) is counted before the completed-sale
+    /// filter and is deliberately not derived from <see cref="GrossSales"/>: a period holding only
+    /// cancelled rows has sales data and a gross sales total of zero.</para>
     /// </summary>
-    public IReadOnlyList<ReportCoverageRange> SalesCoverage { get; init; } = [];
-
-    /// <summary>
-    /// The same, for the reimbursement periods committed settlement imports accounted for, which is
-    /// what the processing-fee figures rest on.
-    /// </summary>
-    public IReadOnlyList<ReportCoverageRange> SettlementCoverage { get; init; } = [];
-
-    /// <summary>
-    /// Whether the requested business, period and machine scope holds any stored provider sale at
-    /// all, counted before the completed-sale filter. It is what separates "nothing is recorded and
-    /// nothing covered this period" from "rows exist that no coverage accounts for"; it is
-    /// deliberately not derived from <see cref="GrossSales"/>, because a period holding only
-    /// cancelled rows has sales data and a gross sales total of zero.
-    /// </summary>
-    public bool ContainsSalesRows { get; init; }
+    public ReportCoverageFacts Coverage { get; init; } = new();
 }

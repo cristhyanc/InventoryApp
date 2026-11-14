@@ -325,6 +325,15 @@ public class ImportNayaxSalesTests
         db.InventoryCostTransitionBaselines.AddRange(
             Baseline(10, openingCostingQuantity: 10, inventoryValue: 20m, homeStockQuantity: 10),
             Baseline(20, openingCostingQuantity: 0, inventoryValue: 0m, homeStockQuantity: 4));
+        // The fatal history: a legacy positive restock with no unit cost. (An uncosted completed
+        // sale is no longer fatal - issue #1239 - so it would not abort the loop.)
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 20,
+            QuantityChange = 4,
+            Reason = StockAdjustmentReason.Restock,
+            EffectiveAt = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
         await db.SaveChangesAsync();
         var rebuild = new RecordingRebuild(TestCostingUseCases.Rebuild(db));
 
@@ -334,7 +343,7 @@ public class ImportNayaxSalesTests
                 "2001,12,1,20,3.00,Card,Uncosted Water,3/10/2026 7:30:00 PM\n" +
                 "1001,12,1,10,3.00,Card,Costed Snack,3/10/2026 7:30:00 PM")));
 
-        Assert.Contains("no known opening cost", exception.Message);
+        Assert.Contains("has no valid unit cost", exception.Message);
         Assert.Equal([20L], rebuild.ReplayedProductIds);
         // Both sales were saved before the replay began, so the import is not silently discarded.
         Assert.Equal(

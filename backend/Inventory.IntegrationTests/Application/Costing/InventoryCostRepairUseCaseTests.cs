@@ -21,8 +21,9 @@ namespace InventoryApi.Tests.Application.Costing;
 ///
 /// The seeded product is the situation a repair exists for: it entered the inventory-cost
 /// transition with an opening costing quantity of zero while stock was still in the machines, so
-/// its two later completed sales have no costed stock to consume and every write to the product
-/// fails on the same fatal issue.
+/// its two later completed sales have no costed stock to consume and stay uncosted until a repair
+/// restores the costing history (since issue #1239 that leaves them uncosted and flagged rather
+/// than refusing every write to the product).
 /// </summary>
 public class InventoryCostRepairUseCaseTests
 {
@@ -48,11 +49,18 @@ public class InventoryCostRepairUseCaseTests
         Assert.True(preview.ReplaysBeforeFirstUncostableSale);
         Assert.Equal((2, 4m, 2m), (preview.ProjectedCostingQuantity, preview.ProjectedInventoryValue, preview.ProjectedAverageUnitCost));
         Assert.Empty(preview.RemainingFatalIssues);
+        Assert.Empty(preview.RemainingUncostedSaleIssues);
         Assert.NotEmpty(preview.LedgerFingerprint);
     }
 
+    /// <summary>
+    /// Issue #1239: a sale the repaired history still cannot cost is not fatal, so the preview
+    /// reports it as the uncosted sale the apply would leave behind rather than as a refusal. The
+    /// operator sees the sale it does not reach - named with its product, transaction and time -
+    /// before approving a repair that applies anyway.
+    /// </summary>
     [Fact]
-    public async Task Preview_reports_the_fatal_issue_a_partial_repair_would_leave_behind()
+    public async Task Preview_reports_the_sale_a_partial_repair_would_leave_uncosted()
     {
         await using var db = await SeedAsync();
 
@@ -60,9 +68,11 @@ public class InventoryCostRepairUseCaseTests
 
         Assert.Equal(new UncostableSale(1, Day(3)), preview.FirstUncostableSale);
         Assert.Equal(0, preview.ProjectedCostingQuantity);
-        var issue = Assert.Single(preview.RemainingFatalIssues);
-        Assert.Equal(CostDataQualityIssueCodes.UnknownCost, issue.Code);
-        Assert.Contains("Completed Nayax sale 2", issue.Message, StringComparison.Ordinal);
+        Assert.Empty(preview.RemainingFatalIssues);
+        var issue = Assert.Single(preview.RemainingUncostedSaleIssues);
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.Code);
+        Assert.Contains("Completed Nayax sale 2 for product Coke Zero (10)", issue.Message, StringComparison.Ordinal);
+        Assert.Contains(Day(4).ToString("O"), issue.Message, StringComparison.Ordinal);
     }
 
     [Fact]

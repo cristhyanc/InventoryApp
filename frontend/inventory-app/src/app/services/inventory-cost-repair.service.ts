@@ -9,7 +9,7 @@ export interface InventoryCostRepairUncostableSale {
   authorizationTime: string;
 }
 
-/** One fatal data-quality issue a repair would leave behind, as the preview reports it. */
+/** One data-quality issue a repair would leave behind, as the preview reports it. */
 export interface InventoryCostDataQualityIssue {
   code: string;
   message: string;
@@ -47,6 +47,11 @@ export interface InventoryCostRepairPreview {
   projectedInventoryValue: number;
   projectedAverageUnitCost: number | null;
   remainingFatalIssues: InventoryCostDataQualityIssue[];
+  /**
+   * The completed sales the repaired history would still leave uncosted (issue #1239). They do not
+   * block the apply: the repair is recorded and each sale stays uncosted and flagged.
+   */
+  remainingUncostedSaleIssues: InventoryCostDataQualityIssue[];
   ledgerFingerprint: string;
 }
 

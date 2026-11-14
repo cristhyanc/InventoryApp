@@ -325,6 +325,42 @@ describe('SidebarNavComponent collapsed state (issue #391)', () => {
 });
 
 /**
+ * The Restockroo logo in the header row (issue #1272): the full logo where the panel shows labels,
+ * the kangaroo symbol alone on the collapsed rail, each named once by its alt text and never a link.
+ */
+describe('SidebarNavComponent brand logo (issue #1272)', () => {
+  function brandImages(host: HTMLElement): HTMLImageElement[] {
+    return Array.from(host.querySelectorAll<HTMLImageElement>('[data-testid="sidebar-brand"] img'));
+  }
+
+  it.each([
+    ['expanded', { expanded: true }, 'assets/brand/restockroo-logo.png'],
+    ['the narrow drawer', { drawer: true }, 'assets/brand/restockroo-logo.png'],
+    ['collapsed', { expanded: false }, 'assets/brand/restockroo-symbol.png']
+  ])('shows one logo image named Restockroo when %s', async (_case, options, src) => {
+    const { host } = await render(options);
+    const images = brandImages(host);
+
+    expect(images).toHaveLength(1);
+    expect(images[0].getAttribute('src')).toBe(src);
+    expect(images[0].getAttribute('alt')).toBe('Restockroo');
+    // No visible brand text beside the image, so the name is announced once.
+    expect(host.querySelector('[data-testid="sidebar-brand"]')?.textContent?.trim()).toBe('');
+    // The sidebar brand is not a link.
+    expect(images[0].closest('a')).toBeNull();
+  });
+
+  it('puts the symbol above the expand control in the collapsed rail, in the same centred row', async () => {
+    const { host } = await render({ expanded: false });
+    const row = host.querySelector('[data-testid="sidebar-brand"]')?.parentElement as HTMLElement;
+
+    expect(row.firstElementChild?.getAttribute('data-testid')).toBe('sidebar-brand');
+    expect(row.querySelector('button[aria-label="Expand navigation"]')).not.toBeNull();
+    expect(Array.from(row.classList)).toEqual(expect.arrayContaining(['flex-col', 'justify-center']));
+  });
+});
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328). The sidebar renders the
  * API's answer; it never decides it, and a hidden group protects nothing -
  * `/super-admin/diagnostics` and both diagnostics endpoints are independently authorized by the
@@ -1010,10 +1046,12 @@ describe('SidebarNavComponent header collapse control (issue #456)', () => {
     expect(toggle?.getAttribute('aria-expanded')).toBe('true');
     expect(toggle?.getAttribute('aria-controls')).toBe(PRIMARY_NAVIGATION_ID);
 
-    // Same header row as the title, with the title before it: the row is the toggle's parent.
+    // Same header row as the logo, with the logo before it: the row is the toggle's parent. The
+    // logo is an image (issue #1272), so the brand is named by its alt text, not by visible text.
     const row = toggle?.parentElement as HTMLElement;
-    expect(row.textContent).toContain('Restockroo');
-    expect(row.firstElementChild?.textContent).toContain('Restockroo');
+    const logo = row.firstElementChild?.querySelector('img');
+    expect(logo?.getAttribute('alt')).toBe('Restockroo');
+    expect(logo?.getAttribute('src')).toBe('assets/brand/restockroo-logo.png');
   });
 
   it('reports the collapse intent instead of changing its own expanded state', async () => {

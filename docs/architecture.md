@@ -8870,11 +8870,18 @@ A machine refill is an internal location transfer: it changes physical storage b
 
 Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
-Historical sale cost precedence is:
+Historical sale cost precedence is four steps, not three (`AGENTS.md` § Inventory and historical
+costing invariants holds the authoritative wording):
 
 1. persisted internal AVCO/ledger cost when reliable;
-2. transaction-level Nayax Product Cost Price captured on that sale;
-3. uncosted/unknown.
+2. in the cost replay, when the ledger has no known cost before the sale, the unit cost of the latest
+   costed purchase (restock) replayed before it, stored as `Costed` with `CostSource = Estimated`;
+3. the transaction-level Nayax Product Cost Price captured on that sale;
+4. otherwise the sale is left uncosted, which the replay reports as the **non-fatal**
+   `UncostedSale` issue (issue #1239).
+
+The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -8907,10 +8914,26 @@ sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` is
 as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
 it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
 fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
-before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
-earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+before the sale makes the next replay cost it from the ledger again.
 A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
 purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
+
+**A sale with no known cost at all is left uncosted, and that does not block a stock write**
+(repository owner's decision of 13 November 2026, issue #1239). A completed sale that steps 1 to 3
+cannot cost - no ledger cost, no earlier costed purchase and no valid Nayax cost, which is the state a
+business that connects Nayax with machines already stocked starts in - is reported as the non-fatal
+`UncostedSale` issue, consumes no costing quantity or value, and stages no sale cost. Because it is not
+fatal, `RebuildProductCost` no longer throws for it: a purchase dated *after* such a sale, a pick-list
+refill, a manual adjustment and a Take Inventory apply all commit, where every one of them used to be
+rolled back with `InventoryCostDataQualityException` and the only way out was to backdate a purchase
+before the sale (`UncostedSaleLaterStockWritesTests` walks those four writes). The sale stays uncosted
+and keeps being reported - in the `InventoryCostRebuildResult` issues and in the costing-repair
+preview's `remainingUncostedSaleIssues`, each naming the product, the transaction and the sale time -
+until a purchase or a costing repair before it is recorded, which is what makes the next replay cost it
+from the ledger. The sale is still listed in the replay's `UncostableSales`, so a costing repair is
+still previewed and placed against it. Everything else the replay calls fatal stays fatal: an uncosted
+positive `Restock`, a correction or write-off with no known cost, physically or cost-negative stock, and
+the end-of-replay opening reconciliation.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -8921,7 +8944,7 @@ source ID - and returns the physical/costing quantity, inventory value, unrounde
 the cost assigned to each movement and sale, the position each repair landed on, the completed sales
 it could not cost, and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
 (`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
-`LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
+`CostFallback`, `UncostedSale` and `LegacyUnlinkedCostedRestock` are not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
 quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
 physical stock with `InsufficientStockException`. Neither takes an
@@ -9052,9 +9075,11 @@ releases exactly the one unit of costing inventory it consumed.
 
 A costing repair is the one supported way to restore costing history that was never recorded. It
 exists for a single situation: physical stock the business genuinely held was never valued in the
-ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` reports
-`UnknownCost`/`MissingOpening` for the completed sales that depend on it, and every later write to
-that product (purchase, count, refill apply, sales sync) fails on the same fatal issue. Restock,
+ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` cannot cost the
+completed sales that depend on it and reports each of them as the non-fatal `UncostedSale` (since
+issue #1239; before that they were fatal and every later write to the product - purchase, count,
+refill apply, sales sync - failed on the same issue, which is why a repair was the only way to unblock
+the product rather than only the way to value its history). Restock,
 Correction, Damaged, Expired and MachineRefill are physical movements and keep their meanings, so
 none of them can express "the costing history was incomplete" without misstating physical stock; a
 repair is the explicit, auditable, costing-only alternative. It is never inferred - not from
@@ -9105,8 +9130,12 @@ and it never substitutes for a real purchase, correction or write-off.
   It replays the ledger twice through the shared `InventoryCostRepairProjection` - as it stands, and
   with the proposed repair - and reports the costing quantity/value immediately before the repair,
   the quantity/value it adds, the resulting average unit cost, the first completed sale the ledger
-  cannot cost today, whether the repair replays before it, the projected costing quantity/value, and
-  the fatal issues a partial repair would leave behind.
+  cannot cost today, whether the repair replays before it, the projected costing quantity/value,
+  the fatal issues a partial repair would leave behind, and - since issue #1239 - the completed sales
+  a partial repair would leave **uncosted** (`remainingUncostedSaleIssues`, each naming the product,
+  the transaction and the sale time). The second list does not block the apply: a repair too small to
+  reach those sales is recorded and they stay uncosted and flagged, so the operator has to be able to
+  see which ones before approving it.
 - **`ApplyInventoryCostRepair`** runs in one transaction, and in one order deliberately: the
   authoritative ledger read, the expected-state comparison and the write are a single operation.
   Because the preview stores nothing, the stale-preview model of
@@ -9117,8 +9146,11 @@ and it never substitutes for a real purchase, correction or write-off.
   the apply recomputes and requires to match. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
-  fatal data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a
-  product.
+  fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
+  with no known cost - fails and persists nothing at all. A completed sale the repair does not reach
+  is no longer such an issue (issue #1239): that repair is recorded, the sales it does reach are
+  costed from the ledger, and the ones it does not stay uncosted and flagged, which the preview
+  reported before it was approved.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by
   `Inventory.Infrastructure.Persistence.EfInventoryCostRepairStore`; it moved to
@@ -9132,7 +9164,7 @@ and it never substitutes for a real purchase, correction or write-off.
 
   | Endpoint | Request | Success response |
   | --- | --- | --- |
-  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues`, `remainingUncostedSaleIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
   | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
   | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
 
@@ -10031,6 +10063,49 @@ size from one key press alone, and hands focus on into the pager. Its captures a
 `reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
 (the focus ring on the selector).
 
+#### Restockroo logo (issue #1272)
+
+Issue #1272 puts the owner-approved Restockroo logo (teal kangaroo with a stock box, navy
+wordmark, transparent background) everywhere the app already showed its brand. It is a
+presentation change: no navigation label, destination, order, grouping, permission, route,
+account or business control, homepage copy or colour theme changed.
+
+**Source and files.** The approved original is kept, unchanged, at
+`docs/brand/restockroo-logo-original.png` (1600 x 533 PNG). It is the only source and is not part
+of the Angular build. Two files are made from it by trimming transparent canvas and resizing only
+(no recolouring, redrawing or effects) and ship as ordinary bundled assets under
+`frontend/inventory-app/src/assets/brand/`:
+
+| File | Content | Pixels | Displayed at |
+| --- | --- | --- | --- |
+| `restockroo-logo.png` | Full logo: symbol and navy wordmark | 404 x 108 | 32-36px high |
+| `restockroo-symbol.png` | Kangaroo-and-box symbol alone | 81 x 96 | 32px high |
+
+Both are PNG, not SVG, and are exported at about three times their largest display height so they
+stay sharp on high-density screens. There is no white-wordmark variant, because no surface that
+shows the brand is dark; one would be made from the same original if a dark surface is added. No
+image, font or logo is loaded from Stitch, Google or any other remote host.
+
+**`BrandLogoComponent`** (`components/shared/brand-logo.component.ts`) is the one place the logo is
+rendered. Its `variant` input picks the file (`full` or `symbol`) and its `height` input sets the
+visible height in CSS pixels; the width follows the file's own aspect ratio, and the `<img>` carries
+the file's `width`/`height` attributes so the box is reserved before it loads. Its `alt` is
+"Restockroo" and callers put no visible "Restockroo" text beside it, so the brand is announced once.
+It renders no link: a caller that links the brand wraps it in its own anchor.
+
+**Where it appears.**
+
+- Landing header, legal pages and sign-in page: the full logo, 36px, inside the existing brand link
+  to `/home` (unchanged destination, `min-h-11` target and focus style).
+- Landing footer: the full logo, 32px, not a link.
+- Sidebar, expanded, and the narrow-layout More sheet: the full logo, 32px, in the header row
+  beside the collapse or Close control, not a link.
+- Sidebar collapsed to the `w-16` rail: the symbol alone, 32px, stacked and centred above the
+  expand control, which keeps its 44px target; not a link.
+- The authenticated top bar on a narrow layout has no logo, as before.
+
+The favicon, page titles and any social, PWA or email branding are unchanged.
+
 #### Shared help toggletip (issues #1015 and #1016)
 
 `components/shared/help-toggletip/` is the one help toggletip the application has, built once on the
@@ -10756,12 +10831,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Reports keep the calendar-date `Handle` overload with their own date filters unchanged: `FeeDate` is null there, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
 
 What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks in the report facts adapters.
-- The Transaction Sales report filters its requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter.
+- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
+- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -10940,7 +11015,8 @@ changed.
 
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
-([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
+([the dashboard rule above](#time)), the money reports select their sales between the same kind of
+boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -10952,19 +11028,64 @@ its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays
 row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
 business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
 status counts and fee estimate all describe the same business day. Imported reimbursement coverage
-dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
-shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
-them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
+dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted.
+Before issue #380 the daily report bucketed and
 filtered by the UTC date of the instant, so a sale in the first 10–11 hours of a Sydney day landed on
 the previous day's row; the owner decided on PR #392 that this belongs to #380's acceptance
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
+**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
+(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
+business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
+`Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
+in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
+COGS, fees and GST on sales disagreed between reports for the same dates. The conversion is now made
+once, by `EfReportingSharedQueries.SalesWindow`, into a `BusinessDateSalesWindow` - the two requested
+business dates and the UTC instants of business-day midnight at the start of the first and at the
+start of the day after the last - and every shared helper that selects *sales* takes that window:
+the completed-sale and all-status queries, the cost projection, the commission calculation and total,
+and the provider-coverage query. Four things follow it:
+
+- The **fee rates and imported fee days** come from the same window (`HandleBusinessPeriod` over
+  `BusinessDateSalesWindow.FeePeriod`), so a sale is charged a fee, and estimated at the rate
+  effective, on the business date whose revenue counted it.
+- **Recorded provider coverage is judged over those instants**, not the calendar range: the
+  bookkeeping facts now carry the one `ReportCoverageFacts` record every other sales-based report
+  already carried (issue #730/#731), and `GetBookkeepingReport` decides both availability states from
+  it instead of re-deriving the period from the request. A coverage range may only be compared with
+  the window the figures were measured over.
+- **Reconciliation attributes a sale to the reimbursement period covering its business date**
+  (`ToBusinessDate`), not the UTC date of its instant.
+- The **site commission these reports subtract is calculated over the same window**
+  (`IGetSiteCommissionReport.HandleBusinessPeriod` over `BusinessDateSalesWindow.CommissionPeriod`).
+  The first fix moved only the window the commission was *gated* on — which machines had a completed
+  sale — and left the dollar `CommissionDue` coming from the calendar-date `Handle`, so bookkeeping
+  counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
+  net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
+  separates the two questions the calculation asks: its two UTC instants select the completed sales,
+  and its two business dates resolve the effective-dated agreement, the recorded payments and the
+  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
+  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+
+Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
+and purchase dates keep their plain calendar-date bounds in these reports too.
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
+daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
+date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
+on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
+the standalone Commission report still answering $0.35 for the 4th. Figures for past
+ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
+anyone who has exported or lodged figures from these reports.
+
 Transaction Sales still filters its `from`/`to` by the UTC date of the instant
 (`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
 on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
 outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and is an open follow-up.
+inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -14248,14 +14369,18 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report selects sales
-between business-day midnights; the others between plain calendar-date bounds. Its `Availability()`
-and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
+only be compared with the window the figures were measured over. The daily report, bookkeeping, the
+reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
+machine and product profitability still select between plain calendar-date bounds. Its
+`Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
 calls, including the bookkeeping one #730 introduced, so the reports cannot read coverage
 differently. It takes no machine predicate (coverage is about whether provider data was retrieved
-for the business at all) and no provider predicate (P5).
+for the business at all) and no provider predicate (P5). The bookkeeping facts carried that coverage
+as three loose fields, with the use case re-deriving the period from the request, until issue #1250
+moved them onto the same carrier: once that adapter selected its sales over business-day midnights,
+the requested calendar dates were no longer the window its figures had been measured over.
 
 **Two families or one, decided by what each report actually shows.** A figure is never labelled by
 evidence that does not feed it, so the contract differs by report on purpose:

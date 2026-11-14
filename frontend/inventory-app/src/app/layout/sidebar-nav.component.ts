@@ -18,6 +18,7 @@ import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CapabilitySet } from '../access/capabilities';
 import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
+import { BrandLogoComponent } from '../components/shared/brand-logo.component';
 import { IconComponent } from '../components/shared/icon.component';
 import { ProviderAvailability, ProviderAvailabilityService } from '../provider/provider-availability.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
@@ -84,7 +85,7 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
 @Component({
   selector: 'app-sidebar-nav',
   standalone: true,
-  imports: [RouterLink, IconComponent, NgClass, NgTemplateOutlet],
+  imports: [RouterLink, BrandLogoComponent, IconComponent, NgClass, NgTemplateOutlet],
   host: { class: 'contents' },
   templateUrl: './sidebar-nav.component.html'
 })
