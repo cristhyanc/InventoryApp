@@ -82,6 +82,14 @@ public sealed class EfProductStore : IProductStore
         if (ProductCataloguePolicy.NormalizeUnit(fields.Unit) is not { } unit)
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnitRequiredMessage);
 
+        // Opening stock above zero carries a cost (issue #1238). Checked here as well as in the use
+        // case, and for the same reason the two rules above are: this is the method that writes the
+        // opening Restock movement, and an uncosted one is a product no later stock write can
+        // rebuild. Nothing is written when it refuses.
+        if (ProductInitialCostPolicy.Validate(fields.QuantityInStock, fields.InitialUnitCost)
+            is { } initialCostRefusal)
+            return ProductWriteAttempt.Refused(initialCostRefusal);
+
         // BEGIN IMMEDIATE: the write lock is taken when the transaction opens, before the reads a
         // master product link is decided from (issue #1051). An InMemory provider gets no transaction
         // at all, exactly as this method's own BeginTransactionAsync did.

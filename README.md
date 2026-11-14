@@ -2683,6 +2683,15 @@ does not manage.
   fields, values, defaults, labels and validation, the same category picker, the same
   support-session restriction, and the same two writes described next. **Editing** a product keeps
   its existing layout, because a provider-managed name and category are locked there.
+- **A new product with opening stock needs its Initial Unit Cost** (issue #1238). In **Opening
+  inventory**, as soon as **Opening Stock** is above zero, **Initial Unit Cost** is required: the
+  field is marked with a `*`, **Create product** stays unavailable until it is filled, and the server
+  refuses the create with the same sentence. Enter **0** if the stock cost nothing — zero is an
+  answer, and it is accepted. Leave **Opening Stock** at zero and the cost stays optional, exactly as
+  before. The reason is that opening stock is recorded as a costed stock movement: a movement with no
+  cost cannot be replayed, so a product created that way could not afterwards be refilled, adjusted,
+  counted or purchased at all. Nothing about **Editing** a product changes — the Opening inventory
+  section only appears while creating one.
 - **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
   offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
   with the same meanings and the same help. The rule is its own resource, so creating a product with
@@ -3294,7 +3303,7 @@ price** (`machinePrice`, from Nayax) and the machine pages' suggested prices, a 
 unit cost**, a **supplier order line's agreed price**, the amount on a **recorded sale**, and a
 product's `averageUnitCost`, costing quantity and inventory value are all exactly as they were.
 Purchases, supplier orders, their suppliers, quantities, totals, GST and receipt attachments are
-untouched, the initial unit **cost** you may give a new product still records its opening stock
+untouched, the initial unit **cost** you give a new product still records its opening stock
 movement, and no cost, average cost, inventory value, COGS, recorded sale or reorder figure is
 recalculated or backfilled.
 

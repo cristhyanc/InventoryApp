@@ -8,8 +8,9 @@ namespace Inventory.Application.Products;
 /// <para>Issue #736 gave it an HTTP route for the first time (<c>POST /api/products</c>) and the
 /// catalogue invariants a manually created product needs (<see cref="ProductCataloguePolicy"/>):
 /// a name, and since issue #895 a unit label. The selling price it also bounded is gone with the
-/// field. The initial-cost and restock rules, their messages and the order they are checked in are
-/// unchanged from issue #240.</para>
+/// field. The restock rule, the messages and the order the rules are checked in are unchanged from
+/// issue #240; the initial-cost rule gained its second field in issue #1238 and is now decided from
+/// the opening stock beside the cost (<see cref="ProductInitialCostPolicy"/>).</para>
 ///
 /// <para>The unit label is checked here because a create's answer depends on nothing but the
 /// request: a new product has no stored label to preserve. The <em>update</em>'s unit rule is the
@@ -38,7 +39,10 @@ public sealed class CreateProduct
     {
         ArgumentNullException.ThrowIfNull(fields);
 
-        var costError = ProductInitialCostPolicy.Validate(fields.InitialUnitCost);
+        // Both fields, since issue #1238: opening stock above zero is recorded as a costed opening
+        // movement, so the cost it would be recorded with is required here - before anything is
+        // saved - rather than left to freeze the product's later stock writes.
+        var costError = ProductInitialCostPolicy.Validate(fields.QuantityInStock, fields.InitialUnitCost);
         if (costError is not null) return CreateProductResult.Invalid(costError);
 
         var restockError = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo);
