@@ -33,13 +33,8 @@ public sealed record SiteCommissionReportRow(
     decimal EligibleSales,
     decimal CommissionRate,
     decimal CommissionDue,
-    decimal Paid,
-    decimal Outstanding,
-    DateTime? DueDate,
-    string Status,
     IReadOnlyList<SiteCommissionMachineReportRow> Machines,
     IReadOnlyList<SiteCommissionProductReportRow> Products,
-    IReadOnlyList<CommissionPayment> Payments,
     string? DataQuality = null)
 {
     public bool HasConfigurationGap { get; init; }
@@ -66,7 +61,7 @@ public enum SiteCommissionUnavailableReason
     /// <summary>
     /// The business has no Nayax credentials an ordinary operation may use - nothing stored, or a
     /// connection the status gate refuses (<c>NotConfigured</c>, <c>NeedsAttention</c>). An operator
-    /// has to connect or reconnect Nayax; the stored agreements and payments are unaffected.
+    /// has to connect or reconnect Nayax; the stored agreements are unaffected.
     /// </summary>
     NayaxNotConnected = 1,
 
@@ -81,7 +76,7 @@ public enum SiteCommissionUnavailableReason
     /// The business's effective plan does not include the sales provider (issue #967), so the
     /// credential gate refused the fleet read before the stored connection was read and no Nayax
     /// request was made. Distinct from <see cref="NayaxNotConnected"/>: the credentials may be valid
-    /// and still saved, and the stored agreements and payments are unaffected either way.
+    /// and still saved, and the stored agreements are unaffected either way.
     /// </summary>
     PlanRequired = 3,
 }
@@ -131,7 +126,7 @@ public static class SiteCommissionUnavailableReasons
         SiteCommissionUnavailableReason.PermissionNotGranted =>
             "Site commission is unavailable because Nayax refused the machine list for lack of permission, so no machine can be matched to a site. The amounts shown are not a measured zero.",
         SiteCommissionUnavailableReason.PlanRequired =>
-            "Site commission is unavailable because this business's plan does not include the Nayax connection, so no machine can be matched to a site. The stored agreements and payments are unchanged, and the amounts shown are not a measured zero.",
+            "Site commission is unavailable because this business's plan does not include the Nayax connection, so no machine can be matched to a site. The stored agreements are unchanged, and the amounts shown are not a measured zero.",
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown site commission unavailability reason."),
     };

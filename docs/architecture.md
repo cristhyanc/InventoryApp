@@ -1332,8 +1332,10 @@ now fails to compile rather than failing a review. `ApiLayerOwnershipTests` asse
 is not externally visible and that `Inventory.Domain`/`Inventory.Application` declare no `IQueryable`
 or expression tree of their own, which is the general form of the same rule.
 
-`Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement/payment use cases
-orchestrate the commission endpoints through `ISiteCommissionStore`.
+`Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement use cases
+orchestrate the commission endpoints through `ISiteCommissionStore` (issue #1251 removed the payment
+use case, its port methods and its route — see
+[The commission report states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251)).
 `Inventory.Application.NayaxProcessingFees.GetNayaxProcessingFees` uses
 `INayaxProcessingFeeFactsProvider` and the existing `INayaxFeeRateStore`.
 `Inventory.Domain.FinancialConfiguration.NayaxProcessingFeePolicy` owns the actual-versus-estimated
@@ -1689,7 +1691,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
-| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
+| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -3160,7 +3162,7 @@ reads Free.
 
 **The second enforcement point is the endpoint, for what a plan refuses outright.** `InventoryApi.Auth.RequirePlanAttribute` declares the feature an endpoint needs and is an **MVC authorization filter, not an authorization policy**. That is the design rather than a detail: a second `AuthorizeAttribute` would be evaluated together with the capability policy by one middleware in no defined order, and a caller holding neither could be told about the plan instead of simply being refused. An MVC filter runs after the authorization middleware has finished, so **a role refusal stays exactly the bodiless `403` it is today**, a plan is only ever asked about for a caller the role already allowed, and the check happens before model binding and before the action — which is what makes "a refused save leaves the stored credentials unchanged" and "a refused import stores nothing" properties of the pipeline rather than of a use case. A plan never grants a role more access: every endpoint that declares a plan requirement still declares its capability, which an architecture test asserts. The refusal is one shape everywhere, `InventoryApi.Auth.PlanRequirement`: `403` with the stable code `plan_required`, the plan the business would need and the feature, and nothing about the caller, their role, the capability or a price.
 
-**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report, the agreements and the payments — a site is known only from the live fleet read, so commission is a provider feature throughout), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. Pro also, since issue #1163: `POST /api/purchases/scan` — the one purchasing endpoint a plan decides, and the one that is refused while enforcement is off ([Receipt scanning](#receipt-scanning-issue-975)). **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
+**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report and the agreements — a site is known only from the live fleet read, so commission is a provider feature throughout; issue #1251 removed the payment route that used to be the third member of this set), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. Pro also, since issue #1163: `POST /api/purchases/scan` — the one purchasing endpoint a plan decides, and the one that is refused while enforcement is off ([Receipt scanning](#receipt-scanning-issue-975)). **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
 
 **A report and its own export cannot need different plans.** `GET /api/reports/{report}/export` is one endpoint serving every report family, so its requirement cannot be a constant: it declares `[RequirePlanPerReport]` and resolves the feature through `Inventory.Domain.Subscriptions.ReportPlanRequirements`, the same table the report actions' declared features are asserted against. A report name this application does not recognise resolves to the **most restricted** feature, because the export's own row builder falls through to product profitability for one — so misspelling a URL is not a way to download a Pro report.
 
@@ -5410,6 +5412,14 @@ tracked every remaining write control as follow-up under #513. This slice closes
 Operating Expenses and site commissions: `OperatingExpenseComponent`, `SiteCommissionAgreementsComponent`
 and the commission payment control on `SiteCommissionsReportComponent`.
 
+**Since issue #1251 the commission report page is not one of them.** Payment recording is gone from
+the application, so `SiteCommissionsReportComponent` has no write control for a session to hide, no
+longer reads `SupportSessionService.active$` at all, and is a read-only page like the expense table
+and the current-agreements table below. Everything this section says about
+`OperatingExpenseComponent`, `ExpenseFormPageComponent` and `SiteCommissionAgreementsComponent` is
+unchanged. See
+[The commission report states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251).
+
 **The same wrong signal, for two more capabilities.** `SupportSessionAccessPolicy` grants a session
 `Capability.ExpensesManage` and `Capability.SiteCommissionsManage` alongside the capabilities #554
 already named, so a page that gates its own write controls on either of those - exactly as Products
@@ -5433,17 +5443,19 @@ deliberately not a sentence worded per page: Add and Edit refuse the same thing 
 expense from outside the business - and one sentence is what issue #1167 asks both pages for.
 `SiteCommissionAgreementsComponent` disables its single Save agreement
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
-Payment control - the input group and the button together - hides rather than disables, since (like
-Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
+Payment control - the input group and the button together - hid rather than disabled, since (like
+Products' Delete) there was no mid-edit state the control being merely inert would protect; that
+control is gone entirely since issue #1251. Every
 guarded handler (`confirmDelete` and `deleteConfirmed` on the expense register - since issue #1170
 both halves of a delete, the ask and the write, check the flag - and `onSave` on the expense form page;
-`saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
+`saveCommissionAgreement`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
 
 **Read-only listings and reports are unaffected.** The expense table, the current-agreements table
 and the commission report's rows, details and Print details stay visible and interactive during a
-session; only the controls that attempt a write are touched. Server-side enforcement - the method
+session; only the controls that attempt a write are touched. Since issue #1251 the commission report
+is *entirely* in that category. Server-side enforcement - the method
 rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
 
 **What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
@@ -5455,8 +5467,9 @@ one shared notice being the same sentence on both addresses.
 `site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
 agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
 is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
-added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
-service while a session is active, and both working normally while none is.
+added by this slice, covered Record Payment being hidden and `recordPayment` refusing to call the
+service while a session is active; issue #1251 replaced that block with the proof that the page
+carries no payment control at all.
 
 ### Extending the read-only support-view guard to machines and stock (issue #658)
 
@@ -11265,8 +11278,9 @@ and the provider-coverage query. Four things follow it:
   counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
   net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
   separates the two questions the calculation asks: its two UTC instants select the completed sales,
-  and its two business dates resolve the effective-dated agreement, the recorded payments and the
-  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  and its two business dates resolve the effective-dated agreement. (They resolved the recorded
+  payments and the payment due date too until issue #1251 removed both from the report.) The
+  standalone Commission report (`GET /api/site-commissions`) keeps the
   calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
   product profitability and Transaction Sales keep their calendar-date selection and are part 2.
 
@@ -14670,6 +14684,56 @@ read either contract shape, `providerIncomplete()` decides whether a page shows 
 count — a count of `0` with no coverage behind it reads as "nothing happened here" just as `$0.00`
 does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
 incomplete and the business's own records are not.
+
+### The commission report states commission due and records no payment (issue #1251)
+
+The Site Commission report used to carry a settled balance beside the commission it calculated:
+`paid`, `outstanding`, `status` (`Paid`/`Partially Paid`/`Overdue`/`Due`/`—`), a `dueDate` derived
+from the agreement's `PaymentDueDaysAfterPeriodEnd`, the period's `payments`, and a `POST
+api/site-commissions/{siteId}/payments` route behind a Record Payment control on the page. **All of
+that is gone**, by the repository owner's decision of 13 November 2026 (audit #1223, findings REP-06
+and REP-14): the business does not record commission payments in this application.
+
+**Why it was removed rather than fixed.** A `CommissionPayment` row was keyed by the exact
+`(periodStart, periodEnd)` it was recorded against, and `GetPaymentsAsync` matched those two dates
+exactly. So a payment recorded for July showed up only for a request whose range was *precisely*
+July: every other range — a quarter, a financial year, July 1–30 — reported the same, already-paid
+commission as fully outstanding, and accepted a second payment for the same sales. The guard against
+overpaying (`paid + amount > commissionDue + $0.01`) read the report and then inserted in a separate
+operation, so two concurrent requests could both pass it. A balance that is right for one spelling of
+a period and wrong for every other is worse than no balance at all, and the owner did not want the
+feature.
+
+**What the removal is, exactly.** `RecordSiteCommissionPayment` and its DI registration are gone, so
+the route is absent and answers `404` — not `403`, which is what a member refused the capability
+gets. `ISiteCommissionStore.GetPaymentsAsync`/`AddPaymentAsync` and their `EfSiteCommissionStore`
+implementations are gone with it, and `GetSiteCommissionReport` reads no payment at all; dropping the
+status also dropped its only use of `IBusinessCalendar`, so the use case no longer takes one.
+`SiteCommissionReportRow`/`SiteCommissionRowDto` no longer carry the five payment-derived members,
+and the domain `CommissionPayment` record — which existed only to carry a payment across the removed
+port — is gone. The Angular page drops the Paid, Outstanding and Status columns, the Outstanding
+figure in the details, the Payment history section and the Record Payment form, and the printable
+details page drops Outstanding and Payment history.
+
+**What is deliberately untouched.** Gross, card, cash and eligible sales, the rate, commission due,
+the machine breakdown and the products rows are the same figures for the same inputs — the
+availability model above, the agreement resolution, the data-quality states and the business-date
+window of issue #1250 all behave exactly as they did. The **stored rows stay**: `CommissionPayments`
+is still a tenant-owned EF entity with its mapping, its index and its migration history, still
+counted by `BusinessBootstrapper` and still on the Super Admin diagnostics surface. There is no
+migration and no data change; the rows are simply never read. The agreement's
+`PaymentDueDaysAfterPeriodEnd` column and its form field stay as they are, so an agreement already
+recording a due-days value keeps it.
+
+**What proves it.** `SiteCommissionsControllerRetiredPaymentRouteTests` hosts the real API and
+asserts an Owner's `POST` to the retired route answers `404`, that the controller publishes no
+endpoint whose path contains `payments`, and that the report route still answers that same Owner
+`200`. `SiteCommissionServiceTests` keeps every commission-due, gap, overlap, multiple-rate and
+machine-breakdown assertion unchanged and adds one over a seeded payment row: the stated commission
+is the period's own, and the row is still in the database afterwards.
+`site-commissions-report.component.spec.ts` covers the three absent columns, the absent Outstanding
+figure, Payment history and Record Payment control, the machine and product sections still being
+there, and the printable page dropping the same two sections.
 
 ### Provider identity on the local row (issues #732, #759, #760 and #735)
 

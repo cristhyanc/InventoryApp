@@ -21,12 +21,6 @@ public interface ISiteCommissionStore
         long? siteId,
         CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<CommissionPayment>> GetPaymentsAsync(
-        long? siteId,
-        DateTime periodStart,
-        DateTime periodEnd,
-        CancellationToken cancellationToken);
-
     Task<bool> HasOverlappingAgreementAsync(
         long siteId,
         DateTime effectiveFrom,
@@ -35,9 +29,5 @@ public interface ISiteCommissionStore
 
     Task<CommissionAgreement> AddAgreementAsync(
         CommissionAgreement agreement,
-        CancellationToken cancellationToken);
-
-    Task<CommissionPayment> AddPaymentAsync(
-        CommissionPayment payment,
         CancellationToken cancellationToken);
 }

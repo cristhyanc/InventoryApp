@@ -50,17 +50,6 @@ public sealed record CommissionAgreement(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record CommissionPayment(
-    int Id,
-    long SiteId,
-    DateTime PeriodStart,
-    DateTime PeriodEnd,
-    DateTime PaymentDate,
-    decimal Amount,
-    string? Notes,
-    DateTime CreatedAt,
-    DateTime UpdatedAt);
-
 public readonly record struct EffectiveNayaxFeeRate(DateTime EffectiveFrom, decimal FeeExGst);
 
 public static class EffectiveFinancialConfiguration

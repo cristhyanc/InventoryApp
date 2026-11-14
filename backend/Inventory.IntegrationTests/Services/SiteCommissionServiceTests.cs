@@ -5,7 +5,6 @@ using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Models;
-using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -113,42 +112,40 @@ public class SiteCommissionServiceTests
         Assert.True(row.HasConfigurationGap);
     }
 
+    /// <summary>
+    /// Issue #1251: a commission payment that was recorded before the app stopped recording them is
+    /// still in the database, and the report no longer reads it. The row is commission due over the
+    /// period's sales and nothing about payment - which is what makes the figure the same for every
+    /// range that holds the same sales, instead of only for the range a payment was recorded for.
+    /// </summary>
     [Fact]
-    public async Task Unpaid_commission_is_overdue_once_the_business_calendar_date_passes_the_due_date()
+    public async Task A_stored_payment_row_does_not_change_the_commission_the_report_states()
     {
         await using var db = CreateDb();
-        db.SiteCommissionAgreements.Add(Agreement(91, new DateTime(2025, 1, 1), null, .10m, paymentDueDaysAfterPeriodEnd: 0));
+        db.SiteCommissionAgreements.Add(Agreement(91, new DateTime(2025, 1, 1), null, .10m, paymentDueDaysAfterPeriodEnd: 14));
+        db.CommissionPayments.Add(new CommissionPayment
+        {
+            SiteId = 91,
+            PeriodStart = new DateTime(2025, 7, 15),
+            PeriodEnd = new DateTime(2025, 7, 15),
+            PaymentDate = new DateTime(2025, 7, 15),
+            Amount = 1m
+        });
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Report(Service(db, new DateTime(2025, 7, 16), (10, 91)),
+        var row = Assert.Single((await Report(Service(db, (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
-        Assert.Equal(new DateTime(2025, 7, 15), row.DueDate);
-        Assert.Equal("Overdue", row.Status);
-    }
-
-    [Fact]
-    public async Task Unpaid_commission_is_not_overdue_on_the_business_calendar_due_date()
-    {
-        await using var db = CreateDb();
-        db.SiteCommissionAgreements.Add(Agreement(91, new DateTime(2025, 1, 1), null, .10m, paymentDueDaysAfterPeriodEnd: 0));
-        AddSale(db, 1, 10, new DateTime(2025, 7, 15));
-        await db.SaveChangesAsync();
-
-        var row = Assert.Single((await Report(Service(db, new DateTime(2025, 7, 15), (10, 91)),
-            new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
-
-        Assert.Equal("Due", row.Status);
+        Assert.Equal(10m, row.GrossSales);
+        Assert.Equal(1m, row.CommissionDue);
+        Assert.Equal(1, await db.CommissionPayments.CountAsync());
     }
 
     private static AppDbContext CreateDb() => TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static GetSiteCommissionReport Service(AppDbContext db, params (long MachineId, long SiteId)[] machines) =>
-        Service(db, DateTime.UtcNow, machines);
-
-    private static GetSiteCommissionReport Service(AppDbContext db, DateTime businessToday, params (long MachineId, long SiteId)[] machines)
+    private static GetSiteCommissionReport Service(AppDbContext db, params (long MachineId, long SiteId)[] machines)
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
@@ -156,8 +153,7 @@ public class SiteCommissionServiceTests
         return new GetSiteCommissionReport(
             nayax.Object,
             new EfSiteCommissionStore(db),
-            new SiteNameResolver(),
-            new FakeBusinessCalendar(businessToday));
+            new SiteNameResolver());
     }
 
     private static Task<SiteCommissionReport> Report(

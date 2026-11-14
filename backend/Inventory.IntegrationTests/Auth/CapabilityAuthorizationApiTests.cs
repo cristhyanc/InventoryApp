@@ -179,7 +179,6 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "SiteCommissions.Manage", "GET", "/api/site-commissions?from=2026-07-01&to=2026-07-31", "Manager,Owner" },
         { "SiteCommissions.Manage", "GET", "/api/site-commissions/agreements", "Manager,Owner" },
         { "SiteCommissions.Manage", "POST", "/api/site-commissions/agreements", "Manager,Owner" },
-        { "SiteCommissions.Manage", "POST", "/api/site-commissions/1/payments", "Manager,Owner" },
 
         // Issue #526: the Owner-only surfaces.
         { "Integration.Manage", "GET", "/api/settings/nayax-processing-fee-rates", "Owner" },

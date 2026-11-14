@@ -15,7 +15,6 @@ import {
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
-import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
  * Issue #731 (under issue #730's model, parent #329 decision P9): every remaining sales-based report
@@ -309,7 +308,6 @@ async function renderSiteCommissions(report: SiteCommissionReport) {
     providers: [
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of(report)) } },
       { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
-      { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus('Ready'),
     ],
   }).compileComponents();

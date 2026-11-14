@@ -36,8 +36,7 @@ public class SiteCommissionsControllerTests
         return new(
             report,
             new GetSiteCommissionAgreements(store),
-            new SaveSiteCommissionAgreement(store),
-            new RecordSiteCommissionPayment(report, store));
+            new SaveSiteCommissionAgreement(store));
     }
 
     private static SiteCommissionAgreementDto Dto(long siteId, DateTime from, DateTime? to) =>
