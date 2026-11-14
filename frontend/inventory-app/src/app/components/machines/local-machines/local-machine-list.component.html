@@ -131,6 +131,6 @@
     confirmLabel="Delete"
     cancelLabel="Cancel"
     [message]="'Delete machine \'' + confirmingMachine.name + '\'? This cannot be undone.'"
-    (confirmed)="deleteConfirmed()"
+    (confirmed)="deleteConfirmed($event)"
     (canceled)="cancelDelete()" />
 }

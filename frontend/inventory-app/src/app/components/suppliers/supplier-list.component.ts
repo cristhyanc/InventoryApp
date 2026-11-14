@@ -9,6 +9,7 @@ import { AvailableSupplierPreset, Supplier } from '../../models/models';
 import { SupplierGstDefaultsDialogComponent } from './supplier-gst-defaults-dialog/supplier-gst-defaults-dialog.component';
 import { SupplierFormDialogComponent } from './supplier-form-dialog/supplier-form-dialog.component';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
+import { handOffFocusFromRemovedOpener } from '../shared/confirmation-focus';
 import { ActionMenuComponent } from '../shared/action-menu/action-menu.component';
 import { IconComponent } from '../shared/icon.component';
 import { ListLoadState } from '../shared/list-load-state';
@@ -313,17 +314,23 @@ export class SupplierListComponent implements OnInit, OnDestroy {
     this.deleting = null;
   }
 
-  confirmDelete(): void {
+  /**
+   * `opener` is the control the confirmation returned focus to as it closed, which keeps focus while
+   * the delete is in flight so a refusal leaves it on the row it is about. A success re-reads the
+   * list without that row, so focus is handed on rather than dropped on the document body
+   * (issue #1277).
+   */
+  confirmDelete(opener: HTMLElement | null = null): void {
     const supplier = this.deleting;
     this.deleting = null;
     if (supplier === null) {
       return;
     }
 
-    this.remove(supplier);
+    this.remove(supplier, opener);
   }
 
-  remove(supplier: Supplier): void {
+  remove(supplier: Supplier, opener: HTMLElement | null = null): void {
     // Checked here as well as hidden in the template, so the write is actually unavailable rather
     // than merely invisible - the endpoint refuses it either way.
     if (this.sessionActive) return;
@@ -331,7 +338,10 @@ export class SupplierListComponent implements OnInit, OnDestroy {
 
     this.error = null;
     this.supplierService.delete(supplier.id).subscribe({
-      next: () => this.load(),
+      next: () => {
+        this.load();
+        handOffFocusFromRemovedOpener(opener);
+      },
       error: (response: HttpErrorResponse) =>
         (this.error = supplierRefusal(response, 'Failed to delete the supplier.'))
     });

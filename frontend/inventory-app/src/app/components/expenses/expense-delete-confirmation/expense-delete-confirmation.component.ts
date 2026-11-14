@@ -1,10 +1,7 @@
-import { Component, ElementRef, EventEmitter, Inject, Input, LOCALE_ID, Output, ViewChild } from '@angular/core';
+import { Component, EventEmitter, Inject, Input, LOCALE_ID, Output } from '@angular/core';
 import { formatCurrency, formatDate } from '@angular/common';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { OperatingExpense } from '../../../services/operating-expense.service';
-
-/** What takes focus inside the confirmation: every enabled control the dialog renders. */
-const DIALOG_CONTROLS = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])';
 
 /**
  * The control focus should come back to, given whatever had it when the confirmation opened.
@@ -29,12 +26,13 @@ function openerOf(active: Element | null): HTMLElement | null {
 /**
  * The register's delete confirmation (issue #1170).
  *
- * It is the shared `confirmation-dialog`, named for the expense it would delete, plus the keyboard
- * behaviour that dialog does not own: focus moves into it when it opens (onto **Cancel**, not the
- * destructive action), Tab and Shift+Tab stay inside it, Escape cancels, and focus returns to
- * whatever opened it. Changing the shared dialog itself is out of scope for issue #1170, so that
- * behaviour lives here, beside the one workflow that needs it, rather than in the register's own
- * page template (`docs/architecture.md` § Page composition boundary).
+ * It is the shared `confirmation-dialog`, named for the expense it would delete. The dialog itself
+ * now owns the keyboard behaviour common to every caller - initial focus onto **Cancel**, Tab and
+ * Shift+Tab staying inside it, Escape cancelling (issue #1277) - so `[restoreFocus]="false"` is the
+ * only thing this wrapper tells it: this is the one caller whose opener the dialog's own default (
+ * whatever has focus when it opens) resolves wrongly, per `openerOf` above, so this wrapper restores
+ * it itself instead rather than in the register's own page template (`docs/architecture.md` §
+ * Page composition boundary).
  *
  * A **confirmed** delete deliberately restores no focus: the row the trigger belonged to is about to
  * disappear with the expense, so the register decides where focus goes once the list has reloaded.
@@ -45,16 +43,15 @@ function openerOf(active: Element | null): HTMLElement | null {
   imports: [ConfirmationDialogComponent],
   template: `
     @if (expense) {
-      <div #dialog (keydown)="onKeydown($event)">
-        <app-confirmation-dialog
-          title="Delete expense"
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
-          [message]="message(expense)"
-          (confirmed)="onConfirm()"
-          (canceled)="onCancel()"
-        ></app-confirmation-dialog>
-      </div>
+      <app-confirmation-dialog
+        title="Delete expense"
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        [message]="message(expense)"
+        [restoreFocus]="false"
+        (confirmed)="onConfirm()"
+        (canceled)="onCancel()"
+      ></app-confirmation-dialog>
     }
   `
 })
@@ -75,7 +72,7 @@ export class ExpenseDeleteConfirmationComponent {
     const closing = value === null && this.pending !== null;
     this.pending = value;
     if (closing) {
-      this.restoreFocus();
+      this.restoreOpenerFocus();
     }
   }
 
@@ -86,25 +83,8 @@ export class ExpenseDeleteConfirmationComponent {
   private opener: HTMLElement | null = null;
   /** Set while a confirmed delete closes the dialog, which is the one close that restores nothing. */
   private confirming = false;
-  private dialogElement?: HTMLElement;
 
   constructor(@Inject(LOCALE_ID) private readonly locale: string) {}
-
-  /**
-   * Focus moves into the dialog as soon as it is rendered, the way the shared action menu focuses
-   * its panel: a `ViewChild` setter runs inside the same change detection that created the element.
-   */
-  @ViewChild('dialog')
-  private set dialog(dialog: ElementRef<HTMLElement> | undefined) {
-    if (dialog === undefined) {
-      this.dialogElement = undefined;
-      return;
-    }
-    if (dialog.nativeElement !== this.dialogElement) {
-      this.dialogElement = dialog.nativeElement;
-      this.controls()[0]?.focus();
-    }
-  }
 
   /** What the confirmation says it would delete: the expense's description, date and total. */
   message(expense: OperatingExpense): string {
@@ -112,34 +92,6 @@ export class ExpenseDeleteConfirmationComponent {
     // `$` and this format are what the register's own `currency` pipe renders beside it.
     const total = formatCurrency(expense.totalAmount, this.locale, '$');
     return `Delete "${expense.description}" recorded on ${date} for ${total}? This cannot be undone.`;
-  }
-
-  onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      this.onCancel();
-      return;
-    }
-    if (event.key !== 'Tab') {
-      return;
-    }
-
-    // Containment: the dialog has no other way out, so Tab cycles its own controls.
-    const controls = this.controls();
-    if (controls.length === 0) {
-      return;
-    }
-    const current = controls.indexOf(document.activeElement as HTMLElement);
-    const last = controls.length - 1;
-    let next: number;
-    if (event.shiftKey) {
-      next = current <= 0 ? last : current - 1;
-    } else {
-      next = current === -1 || current === last ? 0 : current + 1;
-    }
-    event.preventDefault();
-    controls[next].focus();
   }
 
   onConfirm(): void {
@@ -158,15 +110,11 @@ export class ExpenseDeleteConfirmationComponent {
     this.canceled.emit();
   }
 
-  private controls(): HTMLElement[] {
-    return this.dialogElement ? Array.from(this.dialogElement.querySelectorAll<HTMLElement>(DIALOG_CONTROLS)) : [];
-  }
-
   /**
    * Back to whatever opened the dialog, when it is still on the page. A cancelled delete always has
    * its trigger to go back to; a confirmed one leaves the choice to the register.
    */
-  private restoreFocus(): void {
+  private restoreOpenerFocus(): void {
     const opener = this.opener;
     this.opener = null;
     const confirming = this.confirming;
