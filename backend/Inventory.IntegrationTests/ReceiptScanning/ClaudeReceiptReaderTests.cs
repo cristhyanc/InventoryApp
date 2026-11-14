@@ -237,18 +237,159 @@ public class ClaudeReceiptReaderTests
     }
 
     /// <summary>
+    /// Issue #1236's first criterion at the adapter: a 400 with the documented error document is
+    /// reported with its status, its error type, its message and the response's request id - and the
+    /// exception's own message still says nothing but the status.
+    /// </summary>
+    [Fact]
+    public async Task A_refusal_carries_the_status_the_error_type_the_message_and_the_request_id()
+    {
+        var handler = new RecordingHandler(Error(
+            HttpStatusCode.BadRequest,
+            """{"type":"error","error":{"type":"invalid_request_error","message":"Schema is too complex"}}""",
+            requestId: "req_011CTM9fictional"));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        var failure = exception.Failure!;
+        Assert.Equal(ReceiptReaderFailureKind.Refused, failure.Kind);
+        Assert.Equal(400, failure.StatusCode);
+        Assert.Equal("invalid_request_error", failure.ErrorType);
+        Assert.Equal("Schema is too complex", failure.ErrorMessage);
+        Assert.Equal("req_011CTM9fictional", failure.RequestId);
+        Assert.Equal("The receipt reader answered 400.", exception.Message);
+    }
+
+    /// <summary>
+    /// A message longer than 200 characters, with line breaks in it, is cut to its first 200 on one
+    /// line before it leaves the adapter.
+    /// </summary>
+    [Fact]
+    public async Task A_long_multi_line_message_is_cut_to_200_characters_on_one_line()
+    {
+        var stated = "Overloaded\nwhile\rreading" + new string('x', 400);
+        var handler = new RecordingHandler(Error(
+            HttpStatusCode.ServiceUnavailable,
+            JsonSerializer.Serialize(new
+            {
+                type = "error",
+                error = new { type = "overloaded_error", message = stated },
+            })));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        var message = exception.Failure!.ErrorMessage!;
+        Assert.Equal(200, message.Length);
+        Assert.StartsWith("Overloaded while reading", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The statuses the two production failures and the overload answer arrive with: the status is
+    /// recorded as answered, with the type and message the body states.
+    /// </summary>
+    [Theory]
+    [InlineData(429, "rate_limit_error", "Number of requests has exceeded your rate limit")]
+    [InlineData(529, "overloaded_error", "Overloaded")]
+    [InlineData(401, "authentication_error", "invalid x-api-key")]
+    public async Task The_status_and_what_the_body_states_are_recorded_as_answered(
+        int status, string type, string message)
+    {
+        var handler = new RecordingHandler(Error(
+            (HttpStatusCode)status,
+            JsonSerializer.Serialize(new { type = "error", error = new { type, message } })));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        Assert.Equal(status, exception.Failure!.StatusCode);
+        Assert.Equal(type, exception.Failure.ErrorType);
+        Assert.Equal(message, exception.Failure.ErrorMessage);
+    }
+
+    /// <summary>
+    /// An error body that is not the documented error document - not JSON at all, no <c>error</c>
+    /// member, members of the wrong kind, or larger than the adapter reads - still records the
+    /// status and guesses nothing. <strong>The body itself is never carried anywhere.</strong>
+    /// </summary>
+    [Theory]
+    [InlineData("<html><body>502 Bad Gateway</body></html>")]
+    [InlineData("{\"type\":\"error\"}")]
+    [InlineData("{\"error\":{\"type\":42,\"message\":{\"text\":\"no\"}}}")]
+    [InlineData("{\"error\":\"invalid_request_error\"}")]
+    [InlineData("")]
+    public async Task A_body_that_is_not_the_error_document_still_records_the_status_and_nothing_else(
+        string body)
+    {
+        var handler = new RecordingHandler(Error(HttpStatusCode.BadGateway, body));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        Assert.Equal(502, exception.Failure!.StatusCode);
+        Assert.Null(exception.Failure.ErrorType);
+        Assert.Null(exception.Failure.ErrorMessage);
+    }
+
+    /// <summary>
+    /// An error body past the adapter's reading limit is not parsed at all: the status stands on its
+    /// own rather than a receipt-sized body being taken apart in a process that is holding one.
+    /// </summary>
+    [Fact]
+    public async Task An_oversized_error_body_is_not_read()
+    {
+        var padding = new string('x', ClaudeReceiptReader.MaxErrorBodyBytes);
+        var handler = new RecordingHandler(Error(
+            HttpStatusCode.BadRequest,
+            JsonSerializer.Serialize(new
+            {
+                type = "error",
+                error = new { type = "invalid_request_error", message = "Schema is too complex", padding },
+            })));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        Assert.Equal(400, exception.Failure!.StatusCode);
+        Assert.Null(exception.Failure.ErrorType);
+        Assert.Null(exception.Failure.ErrorMessage);
+    }
+
+    /// <summary>
     /// A transport failure is an unusable reader, and still exactly one call: there is no resilience
-    /// handler on this client, deliberately, because a retried scan is a second payment.
+    /// handler on this client, deliberately, because a retried scan is a second payment. It is
+    /// recorded as the local failure it is, with no status (issue #1236).
     /// </summary>
     [Fact]
     public async Task A_transport_failure_is_an_unusable_reader_and_is_not_retried()
     {
         var handler = new RecordingHandler(() => throw new HttpRequestException("no route to host"));
 
-        await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
             () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
 
+        Assert.Equal(ReceiptReaderFailureKind.NetworkError, exception.Failure!.Kind);
+        Assert.Null(exception.Failure.StatusCode);
         Assert.Equal(1, handler.Requests);
+    }
+
+    /// <summary>
+    /// A success whose body is not the JSON it claims to be is recorded as an unreadable answer, and
+    /// not as something the reader said.
+    /// </summary>
+    [Fact]
+    public async Task An_unreadable_answer_is_recorded_as_one()
+    {
+        var handler = new RecordingHandler(Response("{\"content\": [ not json"));
+
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+            () => Reader(handler).ReadAsync(Request(), CancellationToken.None));
+
+        Assert.Equal(ReceiptReaderFailureKind.UnreadableAnswer, exception.Failure!.Kind);
+        Assert.Null(exception.Failure.StatusCode);
     }
 
     /// <summary>
@@ -279,9 +420,16 @@ public class ClaudeReceiptReaderTests
     [InlineData("{\"content\": []}")]
     [InlineData("{\"content\": [{\"type\": \"thinking\", \"thinking\": \"hmm\"}]}")]
     [InlineData("[]")]
-    public async Task An_answer_with_no_text_block_is_an_unusable_reader(string json) =>
-        await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
+    public async Task An_answer_with_no_text_block_is_an_unusable_reader(string json)
+    {
+        var exception = await Assert.ThrowsAsync<ReceiptReaderUnavailableException>(
             () => Reader(new RecordingHandler(Response(json))).ReadAsync(Request(), CancellationToken.None));
+
+        // It answered, so there is no transport failure; it said nothing usable, so there is no
+        // status either (issue #1236).
+        Assert.Equal(ReceiptReaderFailureKind.NoTextBlock, exception.Failure!.Kind);
+        Assert.Null(exception.Failure.StatusCode);
+    }
 
     /// <summary>
     /// With no key configured the adapter makes no call at all. The use case refuses first, so this
@@ -341,6 +489,25 @@ public class ClaudeReceiptReaderTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+
+    /// <summary>A refusal, as the vendor answers one: a status, a body, and the request id header.</summary>
+    private static HttpResponseMessage Error(
+        HttpStatusCode status,
+        string body,
+        string? requestId = null)
+    {
+        var response = new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
+        if (requestId is not null)
+        {
+            response.Headers.Add(ClaudeReceiptReader.RequestIdHeader, requestId);
+        }
+
+        return response;
+    }
 
     /// <summary>
     /// The transport, substituted: it records the request it was asked to send and answers whatever
