@@ -25,67 +25,70 @@ const APP_TOKEN_ACTION = 'actions/create-github-app-token@';
 
 /** Splits a workflow into its top-level text and its jobs, each with job-level text and steps. */
 export function parseWorkflow(text, source = 'workflow') {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const lines = text.replaceAll('\r\n', '\n').split('\n');
   const jobsIndex = lines.indexOf('jobs:');
   if (jobsIndex < 0) throw new Error(`${source}: no top-level jobs: key`);
-  const topLevel = lines.slice(0, jobsIndex).join('\n');
   const jobs = [];
-  let job = null;
-  let step = null;
-  for (let index = jobsIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
+  for (const line of lines.slice(jobsIndex + 1)) {
     if (/^\S/.test(line)) break;
-    const jobHeader = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-    if (jobHeader) {
-      job = { name: jobHeader[1], header: [], steps: [] };
-      step = null;
-      jobs.push(job);
-      continue;
-    }
-    if (!job) {
-      if (line.trim() === '' || line.trim().startsWith('#')) continue;
-      throw new Error(`${source}: unexpected line before the first job: ${line}`);
-    }
-    if (/^ {6}- /.test(line) && job.inSteps) {
-      step = { lines: [line] };
-      job.steps.push(step);
-      continue;
-    }
-    if (/^ {4}steps:\s*$/.test(line)) {
-      job.inSteps = true;
-      step = null;
-      continue;
-    }
-    if (/^ {4}\S/.test(line)) {
-      job.inSteps = false;
-      step = null;
-    }
-    if (step && (line.trim() === '' || /^ {8}/.test(line) || /^\s*#/.test(line))) step.lines.push(line);
-    else if (!job.inSteps) job.header.push(line);
+    addJobLine(jobs, line, source);
   }
+  return { topLevel: lines.slice(0, jobsIndex).join('\n'), jobs: jobs.map(finishJob) };
+}
+
+function addJobLine(jobs, line, source) {
+  const jobHeader = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+  if (jobHeader) {
+    jobs.push({ name: jobHeader[1], header: [], steps: [], inSteps: false });
+    return;
+  }
+  const job = jobs.at(-1);
+  if (!job) {
+    if (line.trim() === '' || line.trim().startsWith('#')) return;
+    throw new Error(`${source}: unexpected line before the first job: ${line}`);
+  }
+  if (/^ {4}steps:\s*$/.test(line)) {
+    job.inSteps = true;
+    return;
+  }
+  if (/^ {4}\S/.test(line)) job.inSteps = false;
+  if (!job.inSteps) {
+    job.header.push(line);
+  } else if (line.startsWith('      - ')) {
+    job.steps.push([line]);
+  } else if (job.steps.length > 0) {
+    job.steps.at(-1).push(line);
+  }
+}
+
+function finishJob({ name, header, steps }) {
   return {
-    topLevel,
-    jobs: jobs.map(({ name, header, steps }) => ({
-      name,
-      header: header.join('\n'),
-      steps: steps.map(({ lines: stepLines }) => {
-        const body = stepLines.join('\n');
-        return { text: body, name: field(body, 'name'), id: field(body, 'id'), uses: field(body, 'uses') };
-      }),
-    })),
+    name,
+    header: header.join('\n'),
+    steps: steps.map((stepLines) => {
+      const body = stepLines.join('\n');
+      return { text: body, name: field(body, 'name'), id: field(body, 'id'), uses: field(body, 'uses') };
+    }),
   };
 }
 
+function withoutComment(value) {
+  const comment = value.indexOf(' #');
+  return (comment < 0 ? value : value.slice(0, comment)).trim();
+}
+
 function field(stepText, key) {
-  const match = new RegExp(`^ {6}(?:- | {2})${key}: (.+)$`, 'm').exec(stepText);
-  return match ? match[1].replace(/\s+#.*$/, '').trim() : '';
+  const prefixes = [`      - ${key}: `, `        ${key}: `];
+  const line = stepText.split('\n').find((candidate) => prefixes.some((prefix) => candidate.startsWith(prefix)));
+  return line ? withoutComment(line.slice(prefixes[0].length)) : '';
 }
 
 /** Every `uses:` names a local action or `owner/repo[/path]@<40-hex SHA>` (WF-06). */
 export function verifyPinnedActions(file, workflow) {
   for (const job of workflow.jobs) {
-    const jobUses = /^ {4}uses: (.+)$/m.exec(job.header)?.[1].replace(/\s+#.*$/, '').trim();
-    const uses = [...job.steps.map((step) => [step.name || step.id || 'unnamed step', step.uses]), ['job', jobUses ?? '']];
+    const jobUsesLine = job.header.split('\n').find((line) => line.startsWith('    uses: '));
+    const jobUses = jobUsesLine ? withoutComment(jobUsesLine.slice('    uses: '.length)) : '';
+    const uses = [...job.steps.map((step) => [step.name || step.id || 'unnamed step', step.uses]), ['job', jobUses]];
     for (const [where, value] of uses) {
       if (!value || value.startsWith('./')) continue;
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[0-9a-f]{40}$/.test(value)) {
@@ -99,7 +102,7 @@ export function verifyPinnedActions(file, workflow) {
 export function verifyClaudeModels(file, workflow) {
   for (const job of workflow.jobs) {
     for (const step of job.steps.filter((candidate) => candidate.uses.startsWith(CLAUDE_CODE_ACTION))) {
-      if (!/^\s+--model \S+/m.test(step.text)) {
+      if (!step.text.split('\n').some((line) => /^ +--model \S/.test(line))) {
         throw new Error(`${file} job ${job.name} step ${step.name}: Claude Code must be given an explicit --model.`);
       }
     }
