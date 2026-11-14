@@ -1,6 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxSqs;
+using Inventory.Application.Purchases;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Persistence;
@@ -446,6 +447,246 @@ public class NayaxSqsConcurrencyTests
     }
 
     #endregion
+
+    #region A stock write a drain is replaying over
+
+    /// <summary>
+    /// <strong>A purchase recorded while a drain is replaying is not overwritten by that drain.</strong>
+    ///
+    /// <para>This is the case the pending row's <c>Revision</c> cannot answer (issue #1245, finding
+    /// INV-08 of audit #1222). Only a <em>sale</em> enqueues a pending rebuild, so a purchase committed
+    /// while the replay is running adds no work to that row and leaves the drain's claim looking
+    /// intact - while the costing inputs the replay is computing from have changed underneath it. The
+    /// drain would then write a costing position with the purchase left out of it, exactly as the audit
+    /// found: the purchase's own rebuild of 20 units worth $60 overwritten by the 9 units worth $18 the
+    /// replay had computed before it existed. What the acknowledgement compares as well is the
+    /// product's <c>CostingVersion</c>, which every cost rebuild moves.</para>
+    ///
+    /// <para>Two connections to one file, and the real replay with the other writer's purchase
+    /// committed <em>after</em> it has read its costing inputs and before the drain acknowledges, which
+    /// is the window a drain cannot hold the write lock across.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_recorded_while_a_drain_replays_is_not_overwritten_by_that_drain()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+
+        // The work the drain will read: one completed sale, saved with its pending replay and not yet
+        // replayed.
+        await using (var seed = fixture.Context())
+        {
+            await NayaxSqsSaleFixture.Store(seed).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(NayaxTransactionStatusIds.Completed),
+                CancellationToken.None);
+        }
+
+        await using var drainContext = fixture.Context();
+        await using var otherWriter = fixture.SecondWriter();
+
+        var replay = InterleavedRealReplay(
+            drainContext,
+            interleave: () => RecordPurchaseAsync(otherWriter, unitCost: 4m));
+
+        var drained = await NayaxSqsSaleFixture.Store(drainContext, replay)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        // The replay that ran is not the history that is stored now, so the product is reported as
+        // still pending - because it is.
+        Assert.Equal([NayaxSqsSaleFixture.ProductA], drained.StillPendingProductIds);
+        Assert.Empty(drained.Failures);
+
+        await using (var read = fixture.Context())
+        {
+            // The row survives, so the product is rebuilt again and nothing is lost - and it survives
+            // at the revision it already held, which is the whole difficulty: a purchase adds no work
+            // to it, and only the product's costing version says the history moved.
+            var pending = await read.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
+            Assert.Equal(NayaxSqsSaleFixture.SaleInstant, pending.FromInstantUtc);
+            Assert.Equal(1, pending.Revision);
+
+            // What stands is the purchase's own rebuild: the baseline's 10 units at $2, plus 10 at $4,
+            // less the one unit the sale consumed at the $3 average it then had.
+            Assert.Equal(
+                (19, 57m, 3m),
+                await CostingPositionAsync(read));
+        }
+
+        // The preserved work is then done: the next drain replays the sale over the history the
+        // purchase left and clears the row, reaching the same position.
+        await using (var next = fixture.Context())
+        {
+            var again = await NayaxSqsSaleFixture.Store(next)
+                .RebuildInventoryCostsAsync(CancellationToken.None);
+
+            Assert.Empty(again.StillPendingProductIds);
+            Assert.Empty(again.Failures);
+        }
+
+        await using var final = fixture.Context();
+        Assert.Empty(await final.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+        Assert.Equal((19, 57m, 3m), await CostingPositionAsync(final));
+    }
+
+    /// <summary>
+    /// <strong>A purchase <em>edit</em> committed while a drain is replaying is not overwritten
+    /// either.</strong>
+    ///
+    /// <para>This is why the comparison is a version on the product rather than its latest movement
+    /// (issue #1245): correcting a purchase line's quantity or unit cost rewrites the stored movement
+    /// <em>in place</em> and adds no new one, so a latest-movement id would be exactly as it was while
+    /// the product's whole cost history had changed. The edited unit cost is what separates the two
+    /// outcomes here - both leave 19 units - so the figures say which rebuild stands.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_edit_committed_while_a_drain_replays_is_not_overwritten_by_that_drain()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+
+        // A purchase the product's cost was already rebuilt over, and then the sale whose replay is
+        // still pending.
+        int purchaseId;
+        await using (var seed = fixture.Context())
+        {
+            purchaseId = (await RecordPurchaseAsync(seed, unitCost: 4m)).Id;
+        }
+
+        await using (var seed = fixture.Context())
+        {
+            await NayaxSqsSaleFixture.Store(seed).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(NayaxTransactionStatusIds.Completed),
+                CancellationToken.None);
+        }
+
+        await using var drainContext = fixture.Context();
+        await using var otherWriter = fixture.SecondWriter();
+
+        var replay = InterleavedRealReplay(
+            drainContext,
+            interleave: () => EditPurchaseAsync(otherWriter, purchaseId, unitCost: 6m));
+
+        var drained = await NayaxSqsSaleFixture.Store(drainContext, replay)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        Assert.Equal([NayaxSqsSaleFixture.ProductA], drained.StillPendingProductIds);
+        Assert.Empty(drained.Failures);
+
+        await using (var read = fixture.Context())
+        {
+            var pending = await read.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
+            Assert.Equal(1, pending.Revision);
+
+            // The edit changed the line in place, so there is still exactly one purchase movement -
+            // and it carries the corrected cost.
+            var movement = await read.StockAdjustments.AsNoTracking().SingleAsync();
+            Assert.Equal(6m, movement.UnitCost);
+
+            // What stands is the edit's own rebuild: 10 units at $2 plus 10 at the corrected $6, less
+            // the one unit the sale consumed at the $4 average that leaves. The drain's own figures
+            // would have been 19 units worth $57 at $3 - the same quantity, computed from the cost
+            // before the correction.
+            Assert.Equal((19, 76m, 4m), await CostingPositionAsync(read));
+        }
+
+        await using (var next = fixture.Context())
+        {
+            var again = await NayaxSqsSaleFixture.Store(next)
+                .RebuildInventoryCostsAsync(CancellationToken.None);
+
+            Assert.Empty(again.StillPendingProductIds);
+            Assert.Empty(again.Failures);
+        }
+
+        await using var final = fixture.Context();
+        Assert.Empty(await final.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+        Assert.Equal((19, 76m, 4m), await CostingPositionAsync(final));
+    }
+
+    #endregion
+
+    /// <summary>The purchase date the cases above buy on: after the baseline cutoff, before the sale.</summary>
+    private static readonly DateTime PurchaseDate = new(2026, 11, 3, 0, 0, 0, DateTimeKind.Utc);
+
+    private static EfPurchaseStore PurchaseStore(AppDbContext db) =>
+        new(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+
+    private static PurchaseFields Fields() =>
+        new("Fictional restock", null, null, null, null, PurchaseDate, null);
+
+    private static Task<PurchaseRecord> RecordPurchaseAsync(AppDbContext db, decimal unitCost) =>
+        PurchaseStore(db).CreateAsync(
+            Fields(),
+            [new PurchaseItemInput(NayaxSqsSaleFixture.ProductA, 10m, unitCost)],
+            file: null,
+            supplierOrderCompletion: null,
+            attachmentReservation: null,
+            CancellationToken.None);
+
+    /// <summary>
+    /// Corrects the purchase's one line to <paramref name="unitCost"/> at the same quantity, which
+    /// rewrites its stock movement in place and adds none.
+    /// </summary>
+    private static Task<PurchaseRecord?> EditPurchaseAsync(
+        AppDbContext db, int purchaseId, decimal unitCost) =>
+        PurchaseStore(db).UpdateAsync(
+            purchaseId,
+            Fields(),
+            [new PurchaseItemInput(NayaxSqsSaleFixture.ProductA, 10m, unitCost)],
+            CancellationToken.None);
+
+    private static async Task<(int? CostingQuantity, decimal? InventoryValue, decimal AverageUnitCost)>
+        CostingPositionAsync(AppDbContext db)
+    {
+        var product = await db.Products.AsNoTracking()
+            .SingleAsync(row => row.Id == NayaxSqsSaleFixture.ProductA);
+        return (product.CostingQuantity, product.InventoryValue, product.AverageUnitCost);
+    }
+
+    /// <summary>
+    /// The <strong>real</strong> replay - the real ledger read, the real weighted-average replay and
+    /// the real staging - with <paramref name="interleave"/> run once after it has read the product's
+    /// costing inputs and before it stages anything computed from them. That is the window the two
+    /// purchase cases are about, and placing the interleaving inside the ledger read is what makes the
+    /// order the one they are about rather than one the scheduler chose.
+    ///
+    /// <para>It is deliberately not <see cref="InterleavingReplay"/>: those cases ask whether a
+    /// recognisable stale value reached the database, and these ask which of two <em>real</em> rebuilt
+    /// positions stands, so the figures have to be the ones the production replay computes.</para>
+    /// </summary>
+    private static IRebuildProductCost InterleavedRealReplay(AppDbContext db, Func<Task> interleave) =>
+        new RebuildProductCost(new InterleavingLedgerStore(new EfInventoryCostLedgerStore(db), interleave));
+
+    private sealed class InterleavingLedgerStore(
+        IInventoryCostLedgerStore inner, Func<Task> interleave) : IInventoryCostLedgerStore
+    {
+        private bool _interleaved;
+
+        public async Task<InventoryCostLedger?> LoadAsync(
+            long productId, bool forUpdate, CancellationToken cancellationToken)
+        {
+            var ledger = await inner.LoadAsync(productId, forUpdate, cancellationToken);
+
+            if (!_interleaved)
+            {
+                _interleaved = true;
+                await interleave();
+            }
+
+            return ledger;
+        }
+
+        public Task<InventoryCostLedger?> LoadAsOfAsync(
+            long productId, DateTime asOf, CancellationToken cancellationToken) =>
+            inner.LoadAsOfAsync(productId, asOf, cancellationToken);
+
+        public void StageReplay(
+            InventoryCostLedger ledger,
+            IReadOnlyCollection<Inventory.Domain.Costing.CostReplayAdjustmentOutcome> adjustments,
+            IReadOnlyCollection<Inventory.Domain.Costing.CostReplaySaleCost> recostedSales) =>
+            inner.StageReplay(ledger, adjustments, recostedSales);
+
+        public void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position) =>
+            inner.StageProductPosition(ledger, position);
+    }
 
     private static async Task<NayaxSqsProcessingOutcome> ProcessAsync(NayaxSqsSaleFixture fixture)
     {
