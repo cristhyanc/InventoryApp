@@ -10,8 +10,9 @@ public class CreateProductTests
         int restockTo = 10,
         decimal? initialUnitCost = null,
         string name = "Coke",
-        string? unit = "unit") =>
-        new(name, "SKU-1", null, 0, lowStockThreshold, restockTo, unit, null, true,
+        string? unit = "unit",
+        int quantityInStock = 0) =>
+        new(name, "SKU-1", null, quantityInStock, lowStockThreshold, restockTo, unit, null, true,
             initialUnitCost);
 
     [Fact]
@@ -38,6 +39,59 @@ public class CreateProductTests
         Assert.False(result.IsValid);
         Assert.Equal(Inventory.Domain.Products.ProductInitialCostPolicy.NegativeInitialUnitCostMessage, result.ValidationError);
         Assert.Null(store.LastCreated);
+    }
+
+    /// <summary>
+    /// Issue #1238: opening stock above zero with no initial unit cost is refused before the store
+    /// is reached, so the uncosted opening <c>Restock</c> movement that froze the product's later
+    /// stock writes is never written.
+    /// </summary>
+    [Fact]
+    public async Task Handle_RejectsOpeningStockWithNoInitialUnitCost_WithoutPersisting()
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(
+            ValidFields(quantityInStock: 10, initialUnitCost: null), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductInitialCostPolicy.InitialUnitCostRequiredMessage,
+            result.ValidationError);
+        Assert.Null(store.LastCreated);
+        Assert.Null(result.ProductId);
+    }
+
+    /// <summary>
+    /// Free opening stock is an answer, so a cost of zero is accepted and the product is created
+    /// with a costed opening movement its rebuild can replay (issue #1238).
+    /// </summary>
+    [Fact]
+    public async Task Handle_AcceptsOpeningStockWithAZeroInitialUnitCost()
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(
+            ValidFields(quantityInStock: 10, initialUnitCost: 0m), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(0m, store.LastCreated!.InitialUnitCost);
+    }
+
+    /// <summary>
+    /// No opening stock and no cost is the create every caller already made, and it is unchanged:
+    /// there is no opening movement for a missing cost to leave uncosted (issue #1238).
+    /// </summary>
+    [Fact]
+    public async Task Handle_AcceptsNoOpeningStockWithNoInitialUnitCost()
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(
+            ValidFields(quantityInStock: 0, initialUnitCost: null), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Null(store.LastCreated!.InitialUnitCost);
     }
 
     /// <summary>

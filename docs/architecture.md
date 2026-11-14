@@ -8972,7 +8972,10 @@ in behaviour:
   `EfProductStore`, `EfLatestNayaxSalesStore`, the sale-costing use cases (issue #297), the
   inventory-cost transition apply use cases (issue #298), and the uploaded sales import (issue #301) -
   keep their existing transaction around a movement and the rebuild it triggers, so both still
-  commit or roll back together.
+  commit or roll back together. Where the decision to record the movement is made from a read, that
+  transaction is the `BEGIN IMMEDIATE` write lock and it is opened before that read: inside
+  `EfStockAdjustmentStore.ApplyAsync` for a manual adjustment, and in the `ApplyInventoryCount` use
+  case for Take Inventory, whose comparison happens before the movement is staged (issue #1241).
 
 Sale costing and its backfills are Application use cases since issue #297; see
 [Sale import and costing](#sale-import-and-costing).
@@ -11431,15 +11434,48 @@ which offer both of the line's prices as linked inputs: type the amount paid for
 it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
+**A create with opening stock has an initial unit cost, and that is now a rule rather than a
+description (issue #1238).** `POST api/products` records opening stock above zero as a costed
+opening `Restock` movement, and `WeightedAverageCostReplay` treats a positive `Restock` with no unit
+cost as a fatal data-quality fault (`UnknownCost`). While the cost was optional, a create that left
+it empty produced a product whose *every* later stock write — a pick-list refill, a manual
+adjustment, a Take Inventory apply, a new purchase — ended in a rebuild that refused the opening
+movement with "Restock adjustment … has no valid unit cost", and no ordinary screen could repair it.
+So `Inventory.Domain.Products.ProductInitialCostPolicy` is a rule about two fields: **opening stock
+above zero requires an initial unit cost**, refused with
+`ProductInitialCostPolicy.InitialUnitCostRequiredMessage` as `400`. `0` is a cost — stock that was
+free — and is accepted; a negative one is still refused with the existing message; and opening stock
+of zero or absent records no movement and keeps the cost optional, exactly as before. `CreateProduct`
+applies it before anything is saved and `EfProductStore.CreateAsync` applies it again at the write,
+the same way the name and unit-label rules are applied twice, so neither the product nor the opening
+movement is written. Making an uncosted `Restock` non-fatal in the replay, and repairing products
+created before this rule, are deliberately *not* part of it.
+
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
 (`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
 their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
 create/update/delete (`EfPurchaseStore`, whose purchase-linked restock movements still come from
-`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`)
+`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`,
+whose initial stock carries a cost because issue #1238 requires one)
 write their movements as before. All five then rebuild the affected product's cost through
 `Inventory.Application.Costing.IRebuildProductCost` inside the same transaction as before (issue
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
+
+**A manual adjustment's stock check runs inside the write lock** (issue #1241).
+`EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
+it stages the movement, because staging it is what reads the stored quantity that
+`StockMovementCostPolicy`'s "this would make physical stock negative" check is decided on. Read
+before the transaction opened, two simultaneous write-offs of 4 against a stock of 5 both read 5,
+both computed a new stock of 1, and the loser's movement was then refused by the cost replay as
+*becomes physically negative* — an `InventoryCostDataQualityException`, which no HTTP handler claims,
+so an operator whose adjustment simply no longer fitted got a `500`. Inside the lock the loser reads
+the quantity the winner left and is refused with the established `InsufficientStockException`
+(`400`, "Not enough products in stock. Available stock: 1"), and two adjustments that both fit are
+both recorded, the second against the quantity the first left.
+`ManualStockAdjustmentConcurrencyTests` holds both. Take Inventory's apply takes the same lock, in
+its use case rather than its adapter, because its comparison is decided before the movement is
+staged; see [Take Inventory](#take-inventory-issue-245).
 
 **A purchase write moves the stored physical stock with its movements, before the rebuild (issue
 #831).** Purchase create, update and delete add each product's net change to its purchase-linked
@@ -13647,13 +13683,29 @@ audit trail for Take Inventory.
 through the narrow `IInventoryCountAdjustmentStore` port (implemented by
 `Inventory.Infrastructure.Persistence.EfInventoryCountAdjustmentStore`, the same pattern as
 `EfMachineStockEventStore`). The request carries both the counted quantity and the current quantity
-the operator counted against (`ExpectedCurrentStock`); the use case re-reads the authoritative
-current quantity at the mutation boundary and throws `DomainConflictException` (409) when it no
-longer matches, instead of silently applying a delta against a quantity that has since changed
-underneath a stale UI row. An invalid count or a missing restock-cost suggestion throws
-`DomainValidationException` (400). Both map to a `ProblemDetails` response through the existing
-central `DomainExceptionHandler`, described under [Domain and application error
-mapping](#domain-and-application-error-mapping).
+the operator counted against (`ExpectedCurrentStock`).
+
+**The read, the comparison and the mutation are one write-locked operation** (issue #1241). The use
+case opens `IInventoryCountAdjustmentStore.BeginWriteTransactionAsync` — `SqliteWriteLockTransaction`,
+so SQLite's write lock is held from `BEGIN IMMEDIATE` until the commit — and only then reads the
+authoritative current quantity, compares it with `ExpectedCurrentStock`, resolves the difference and
+records the movement, all inside that one transaction. "Has this quantity changed since the operator
+counted it?" is a check-then-write rule, and reading it before the transaction opened left a gap
+another writer could commit in: stock 10, the operator counts 8, a refill of 4 commits, and the
+stale -2 was applied to 14, leaving storage reporting 12. A competing change can now only land
+*before* that read, where it is answered with `DomainConflictException` (409) and **no movement is
+recorded**; a count that arrives while another writer holds the lock waits, re-reads the committed
+quantity and is answered the same way, never with a provider lock error. The zero-difference
+`Confirmed` outcome reads under the same lock and writes nothing, so it commits nothing. An invalid
+count or a missing restock-cost suggestion throws `DomainValidationException` (400). Both map to a
+`ProblemDetails` response through the existing central `DomainExceptionHandler`, described under
+[Domain and application error mapping](#domain-and-application-error-mapping).
+
+`InventoryCountApplyConcurrencyTests` is what holds that: a competing restock driven at the instant
+the count has read its quantity cannot even begin and the count applies exactly what was counted; a
+change that commits while the count waits for the lock is answered `409` with no movement; two
+simultaneous counts of one product apply exactly one; and a zero-difference count is refused the
+same way when the quantity changed first.
 
 ### Sale import and costing
 
@@ -15585,6 +15637,18 @@ rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a si
 transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
 persisted quantity whose ledger and costing position were never written — under a request the caller
 saw fail and would retry, which would otherwise create a second product beside the first.
+
+**And the movement is always costed, so the rebuild is always one the replay accepts** (issue
+#1238). The third write only exists because the second one does, and it can only succeed if the
+opening movement carries a unit cost: an uncosted positive `Restock` is a fatal `UnknownCost` to
+`WeightedAverageCostReplay`, which is why opening stock above zero now *requires* an initial unit
+cost rather than merely offering one. `ProductInitialCostPolicy` is that rule (`0` accepted,
+negative refused with its existing message, no opening stock leaving the cost optional), it is
+applied by `CreateProduct` before anything is saved and again by this adapter at the write, and a
+refusal is `400` with `ProductInitialCostPolicy.InitialUnitCostRequiredMessage` having written
+neither the product nor the movement. Before it, a create with stock and no cost produced a product
+whose every later stock write failed its rebuild. See [Product purchase and
+restock](#product-purchase-and-restock).
 
 **Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
 refusal points at, and a retired product is one the business has taken out of use: it must not be
@@ -19413,7 +19477,9 @@ files" as the historical record of that slice, not as a test to look for today.
        `IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` use cases (issue
        #296; formerly `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`)
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
-       transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
+       transaction shape - with the movement staged inside that transaction rather than before it
+       since issue #1241, so the stock its sufficiency check reads is read under the write lock - and
+       stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
        `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` mapped the Application record back
        onto the `StockAdjustment` entity shape `StockController`'s history/adjust

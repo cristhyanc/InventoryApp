@@ -411,6 +411,64 @@ public class ProductsControllerTests
     }
 
     /// <summary>
+    /// Issue #1238 at the API boundary: <c>POST api/products</c> refuses opening stock above zero
+    /// with no initial unit cost, with the route's existing 400 convention, and writes neither the
+    /// product nor the opening movement it would have carried.
+    /// </summary>
+    [Fact]
+    public async Task Create_WithOpeningStockAndNoInitialUnitCost_ReturnsBadRequestAndPersistsNothing()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, 10, 5, 10, "can", null, true, InitialUnitCost: null),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductInitialCostPolicy.InitialUnitCostRequiredMessage,
+            badRequest.Value);
+        Assert.Empty(await db.Products.ToListAsync());
+        Assert.Empty(await db.StockAdjustments.ToListAsync());
+    }
+
+    /// <summary>
+    /// Opening stock that cost nothing is still a costed opening movement, so a cost of <c>0</c> is
+    /// accepted and recorded (issue #1238).
+    /// </summary>
+    [Fact]
+    public async Task Create_WithOpeningStockAndAZeroInitialUnitCost_IsAcceptedAndCostsTheOpeningMovement()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, 10, 5, 10, "can", null, true, InitialUnitCost: 0m),
+            CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        var movement = await db.StockAdjustments.SingleAsync();
+        Assert.Equal(0m, movement.UnitCost);
+        Assert.Equal(10, movement.QuantityChange);
+    }
+
+    /// <summary>
+    /// No opening stock and no cost records no movement, so it stays the create it always was
+    /// (issue #1238).
+    /// </summary>
+    [Fact]
+    public async Task Create_WithNoOpeningStockAndNoInitialUnitCost_IsStillAccepted()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, 0, 5, 10, "can", null, true, InitialUnitCost: null),
+            CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Empty(await db.StockAdjustments.ToListAsync());
+    }
+
+    /// <summary>
     /// An accepted unit label is stored trimmed (issue #895).
     /// </summary>
     [Fact]

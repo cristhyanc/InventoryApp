@@ -2225,3 +2225,115 @@ describe('ProductFormComponent unsaved changes (issue #1111)', () => {
     expect(guarded.confirmLeave).toHaveBeenCalled();
   });
 });
+
+/**
+ * Initial Unit Cost is required while there is opening stock (issue #1238). It used to be optional
+ * always, and a product created with stock and no cost was frozen: the uncosted opening movement
+ * made every later stock write fail its cost rebuild. The form asks for the cost instead, and the
+ * server refuses it too with the same sentence.
+ */
+describe('ProductFormComponent requiring an Initial Unit Cost with opening stock (issue #1238)', () => {
+  const REQUIRED_MESSAGE = 'Initial Unit Cost is required when Opening Stock is above zero.';
+
+  const errors = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.field-error')).map((element) => element.textContent?.trim());
+
+  const costInput = (host: HTMLElement) => host.querySelector('[name="initialUnitCost"]') as HTMLInputElement;
+
+  const costLabelText = (host: HTMLElement) =>
+    costInput(host).closest('label')?.querySelector('.field-label')?.textContent?.replace(/\s+/g, ' ').trim();
+
+  const submitButton = (host: HTMLElement) =>
+    host.querySelector('[data-testid="product-form-submit"]') as HTMLButtonElement;
+
+  /** New Product with the two fields the page already requires filled in, so only the cost is at issue. */
+  const newProduct = async () => {
+    const rendered = await render({ routeParams: {} });
+    rendered.component.form.name = 'New Snack';
+    rendered.component.form.unit = 'bag';
+    rendered.fixture.detectChanges();
+    return rendered;
+  };
+
+  it('leaves the cost optional while Opening Stock is zero', async () => {
+    const { host } = await newProduct();
+
+    expect(costLabelText(host)).toBe('Initial Unit Cost ($) (optional)');
+    expect(costInput(host).required).toBe(false);
+    expect(errors(host)).not.toContain(REQUIRED_MESSAGE);
+    expect(submitButton(host).disabled).toBe(false);
+  });
+
+  it('marks the cost required and disables Create product once Opening Stock is above zero', async () => {
+    const { fixture, component, host } = await newProduct();
+
+    component.form.quantityInStock = 10;
+    fixture.detectChanges();
+
+    expect(costLabelText(host)).toBe('Initial Unit Cost ($) *');
+    expect(costInput(host).required).toBe(true);
+    expect(costInput(host).getAttribute('aria-invalid')).toBe('true');
+    expect(errors(host)).toContain(REQUIRED_MESSAGE);
+    expect(submitButton(host).disabled).toBe(true);
+  });
+
+  it('refuses to create a product with opening stock and no cost, and says why', async () => {
+    const { fixture, component, create } = await newProduct();
+
+    component.form.quantityInStock = 10;
+    fixture.detectChanges();
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe(REQUIRED_MESSAGE);
+  });
+
+  it.each([[0], [2.5]])('accepts a cost of %p beside opening stock', async (initialUnitCost) => {
+    const { fixture, component, host, create } = await newProduct();
+
+    component.form.quantityInStock = 10;
+    component.form.initialUnitCost = initialUnitCost;
+    fixture.detectChanges();
+
+    expect(errors(host)).not.toContain(REQUIRED_MESSAGE);
+    expect(submitButton(host).disabled).toBe(false);
+
+    component.save();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ quantityInStock: 10, initialUnitCost }));
+  });
+
+  it('creates a product with no opening stock and no cost exactly as before', async () => {
+    const { component, create } = await newProduct();
+
+    component.save();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ quantityInStock: 0, initialUnitCost: null }));
+  });
+
+  it('still refuses a negative cost with its own message', async () => {
+    const { fixture, component, create } = await newProduct();
+
+    component.form.quantityInStock = 10;
+    component.form.initialUnitCost = -1;
+    fixture.detectChanges();
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Initial unit cost cannot be negative.');
+  });
+
+  /** Edit Product has no Opening inventory section at all, so the rule has nothing to say there. */
+  it('does not reach Edit Product', async () => {
+    const { host, component, update } = await render();
+
+    expect(host.querySelector('[name="initialUnitCost"]')).toBeNull();
+    expect(submitButton(host).disabled).toBe(false);
+
+    component.form.sku = 'SNK-300';
+    component.save();
+
+    expect(update).toHaveBeenCalled();
+    expect(component.error).toBeFalsy();
+  });
+});

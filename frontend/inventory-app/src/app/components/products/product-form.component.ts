@@ -391,6 +391,23 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
     return !this.form.unit.trim();
   }
 
+  /**
+   * Whether Initial Unit Cost is required by the values on screen (issue #1238): New Product with
+   * Opening Stock above zero. That stock is recorded as a costed opening movement, and one with no
+   * cost froze the product - every later stock write failed its cost rebuild - so the cost is asked
+   * for here and refused by the API with the same sentence. Opening Stock of zero or empty records
+   * no movement and keeps the cost optional, as before, and Edit Product has no Opening inventory
+   * section at all.
+   */
+  get initialUnitCostRequired(): boolean {
+    return !this.productId && (this.form.quantityInStock ?? 0) > 0;
+  }
+
+  /** Whether that required cost is still unanswered, so the message shows and Save is unavailable. */
+  get initialUnitCostMissing(): boolean {
+    return this.initialUnitCostRequired && this.form.initialUnitCost === null;
+  }
+
   /** Whether Restock To is below the Low Stock Threshold, the one cross-field rule of the form. */
   get restockBelowThreshold(): boolean {
     return this.form.restockTo < this.form.lowStockThreshold;
@@ -446,7 +463,7 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
       return false;
     }
 
-    return this.unitMissing || this.restockBelowThreshold;
+    return this.unitMissing || this.initialUnitCostMissing || this.restockBelowThreshold;
   }
 
   /** The primary action's handler: create or save, or - once a product exists - retry its rule. */
@@ -552,6 +569,12 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
     }
     if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
       return 'Initial unit cost cannot be negative.';
+    }
+    // Checked here as well as shown beside the field and disabled on the button (issue #1238), so
+    // opening stock is never sent with no cost to record it at. The API refuses it too, with this
+    // same sentence (`Inventory.Domain.Products.ProductInitialCostPolicy.InitialUnitCostRequiredMessage`).
+    if (this.initialUnitCostMissing) {
+      return 'Initial Unit Cost is required when Opening Stock is above zero.';
     }
     if (this.form.lowStockThreshold === null || this.form.restockTo === null) {
       return 'Low Stock Threshold and Restock To are required.';
