@@ -30,7 +30,7 @@ function withTemp(fn) {
 }
 
 /** A fake `gh` that serves the trusted publisher, logs every call and answers fixed reads. */
-function fakeGh(root, { prHead = '', latestStatusUrl = '' } = {}) {
+function fakeGh(root, { prHead = '', latestStatusUrl = '', runSource = '' } = {}) {
   const bin = join(root, 'bin');
   mkdirSync(bin, { recursive: true });
   const log = join(root, 'gh.log');
@@ -41,6 +41,7 @@ case "$*" in
   "pr view"*"--json headRefOid"*) printf '{"headRefOid":"%s"}\\n' '${prHead}' ;;
   "pr comment"*) ;;
   "api repos/owner/repo/commits/"*"/statuses?per_page=100"*) printf '%s\\n' '${latestStatusUrl}' ;;
+  "api repos/owner/repo/actions/runs/"*) [ -n '${runSource}' ] || exit 1; printf '%s\\n' '${runSource}' ;;
   "api --method POST"*) ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
@@ -129,7 +130,7 @@ describe('repair recovery (WF-09)', () => {
     it(`says in the outcome comment where unpublished work is: ${label}`, () => repairFixture(({ root, start, commit, run }) => {
       const head = commit();
       const gh = fakeGh(root, { prHead: start });
-      const result = run('Record outcome on the pull request', gh, { CLAUDE_OUTCOME: 'success', EXPECTED_SHA: '', RESTORED_HEAD: head, ...extra });
+      const result = run('Record outcome on the pull request', gh, { CLAUDE_OUTCOME: 'success', EXPECTED_SHA: '', RESTORE_OUTCOME: 'success', RESTORED_HEAD: head, ...extra });
       assert.equal(result.status, 0, result.stderr + result.stdout);
       const comment = gh.log().slice(gh.log().indexOf('pr comment'));
       for (const pattern of expected) assert.match(comment, pattern);
@@ -137,11 +138,29 @@ describe('repair recovery (WF-09)', () => {
     }));
   }
 
+  for (const restoreOutcome of ['failure', '']) {
+    it(`says no commit could be recovered when the hand-off artifact is missing (restore: ${restoreOutcome || 'not run'})`, () => repairFixture(({ root, start, run, output }) => {
+      const gh = fakeGh(root, { prHead: start });
+      const result = run('Record outcome on the pull request', gh, {
+        CLAUDE_OUTCOME: 'cancelled', REPAIR_RESULT_OUTCOME: '', EXPECTED_SHA: '', RESTORE_OUTCOME: restoreOutcome, RESTORED_HEAD: '', AGENT_WORKTREE: '',
+        SAVED_BRANCH: '', PERSIST_OUTCOME: '',
+      });
+      assert.equal(result.status, 0, result.stderr + result.stdout);
+      const comment = gh.log().slice(gh.log().indexOf('pr comment'));
+      assert.match(comment, new RegExp(`could not be handed to this job \\(restore step: ${restoreOutcome || 'not run'}\\)`));
+      assert.match(comment, /cannot tell whether the agent committed anything/);
+      assert.match(comment, /No verified new commit was published/);
+      assert.doesNotMatch(comment, /saved on branch/);
+      assert.match(readFileSync(output, 'utf8'), /dispatch_validation=false/);
+      assert.doesNotMatch(readFileSync(output, 'utf8'), /dispatch_validation=true/);
+    }));
+  }
+
   it('adds no recovery note when the repair was published', () => repairFixture(({ root, commit, run, output }) => {
     const head = commit();
     const gh = fakeGh(root, { prHead: head });
     const result = run('Record outcome on the pull request', gh, {
-      CLAUDE_OUTCOME: 'success', REPAIR_RESULT_OUTCOME: 'success', EXPECTED_SHA: head, RESTORED_HEAD: head, AGENT_WORKTREE: 'clean',
+      CLAUDE_OUTCOME: 'success', REPAIR_RESULT_OUTCOME: 'success', EXPECTED_SHA: head, RESTORE_OUTCOME: 'success', RESTORED_HEAD: head, AGENT_WORKTREE: 'clean',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(gh.log(), /recovery branch|was not published/);
@@ -151,26 +170,38 @@ describe('repair recovery (WF-09)', () => {
 
 describe('cancelled validation status (WF-15)', () => {
   const script = stepShell('.github/workflows/validate.yml', 'Publish exact-SHA status');
+  const runs = 'https://example.invalid/owner/repo/actions/runs';
   const run = (root, gh, extra) => spawnSync('bash', ['-c', script], {
     encoding: 'utf8',
     env: {
       ...process.env, PATH: `${gh.bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'owner/repo', GITHUB_STEP_SUMMARY: join(root, 'summary'),
-      HEAD_SHA: 'c'.repeat(40), STATUS_CONTEXT: 'merge-validation', RUN_URL: 'https://example.invalid/runs/1', ...extra,
+      HEAD_SHA: 'c'.repeat(40), STATUS_CONTEXT: 'merge-validation', RUN_ID: '100', EVENT_NAME: 'pull_request', RUN_URL: `${runs}/100`, ...extra,
     },
   });
   const posted = (gh) => gh.log().split('\n').filter((line) => line.startsWith('api --method POST'));
+  const sameMode = '.github/workflows/validate.yml pull_request';
 
-  it('stands down when a newer run already owns the SHA', () => withTemp((root) => {
-    const gh = fakeGh(root, { latestStatusUrl: 'https://example.invalid/runs/2' });
+  it('stands down when a newer run of the same workflow and mode owns the SHA', () => withTemp((root) => {
+    const gh = fakeGh(root, { latestStatusUrl: `${runs}/200`, runSource: sameMode });
     const result = run(root, gh, { VALIDATION_RESULT: 'cancelled' });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(posted(gh), []);
     assert.match(result.stdout, /a newer run .* already owns merge-validation/);
+    assert.match(gh.log(), /api repos\/owner\/repo\/actions\/runs\/200 /);
   }));
 
-  for (const [label, latest] of [['this run posted the latest status', 'https://example.invalid/runs/1'], ['no status exists yet', '']]) {
+  for (const [label, latest, runSource] of [
+    ['this run posted the latest status', `${runs}/100`, sameMode],
+    ['no status exists yet', '', sameMode],
+    ['the latest status belongs to an older run (a stale success)', `${runs}/50`, sameMode],
+    ['the newer run is another workflow', `${runs}/200`, '.github/workflows/agent-review.yml workflow_dispatch'],
+    ['the newer run is the other validation mode', `${runs}/200`, '.github/workflows/validate.yml workflow_dispatch'],
+    ['the newer run cannot be read', `${runs}/200`, ''],
+    ['the latest status links elsewhere', 'https://elsewhere.invalid/owner/repo/actions/runs/200', sameMode],
+    ['the latest status is not a run link', `${runs}/200/attempts/2`, sameMode],
+  ]) {
     it(`still reports a cancellation as a failure when ${label}`, () => withTemp((root) => {
-      const gh = fakeGh(root, { latestStatusUrl: latest });
+      const gh = fakeGh(root, { latestStatusUrl: latest, runSource });
       const result = run(root, gh, { VALIDATION_RESULT: 'cancelled' });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(posted(gh).length, 1);
@@ -180,10 +211,10 @@ describe('cancelled validation status (WF-15)', () => {
   }
 
   it('publishes success and failure without looking at other runs', () => withTemp((root) => {
-    const gh = fakeGh(root, { latestStatusUrl: 'https://example.invalid/runs/2' });
+    const gh = fakeGh(root, { latestStatusUrl: `${runs}/200`, runSource: sameMode });
     assert.equal(run(root, gh, { VALIDATION_RESULT: 'success' }).status, 0);
     assert.equal(run(root, gh, { VALIDATION_RESULT: 'failure' }).status, 0);
     assert.deepEqual(posted(gh).map((line) => /state=(\w+)/.exec(line)[1]), ['success', 'failure']);
-    assert.doesNotMatch(gh.log(), /statuses\?per_page/);
+    assert.doesNotMatch(gh.log(), /statuses\?per_page|api repos\/owner\/repo\/actions\/runs/);
   }));
 });

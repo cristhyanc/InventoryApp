@@ -10,8 +10,10 @@
 //   - repair concurrency is taken by the repair job, not the whole workflow (WF-10).
 //
 // The repository keeps no YAML dependency, so this reads the fixed layout every workflow here uses:
-// top-level keys at column 0, jobs at two spaces under `jobs:`, job keys at four, steps as `      - `.
-// A workflow that leaves that layout fails the check instead of being skipped.
+// top-level keys at column 0, jobs at two spaces under `jobs:`, job keys at four, and steps as a sequence
+// whose items start at four (indentless) or six spaces. Column-zero comments are allowed anywhere. A line
+// outside that layout fails the check instead of being skipped, and every `uses:` in the file must be
+// attributed to a step or a job, so an action the parser could not place fails the check too.
 //
 // Run with: node scripts/workflow-structure.mjs
 import { readFileSync, readdirSync } from 'node:fs';
@@ -22,42 +24,67 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const WORKFLOW_DIRECTORY = '.github/workflows';
 const CLAUDE_CODE_ACTION = 'anthropics/claude-code-action@';
 const APP_TOKEN_ACTION = 'actions/create-github-app-token@';
+const JOB_HEADER = /^ {2}([A-Za-z0-9_-]+):\s*(?:#.*)?$/;
+const STEPS_KEY = /^ {4}steps:\s*(?:#.*)?$/;
+const USES_KEY = /(?:^|[\s{,-])uses\s*:/;
+
+const isBlankOrComment = (line) => line.trim() === '' || line.trim().startsWith('#');
 
 /** Splits a workflow into its top-level text and its jobs, each with job-level text and steps. */
 export function parseWorkflow(text, source = 'workflow') {
   const lines = text.replaceAll('\r\n', '\n').split('\n');
   const jobsIndex = lines.indexOf('jobs:');
   if (jobsIndex < 0) throw new Error(`${source}: no top-level jobs: key`);
+  const topLevel = lines.slice(0, jobsIndex);
   const jobs = [];
-  for (const line of lines.slice(jobsIndex + 1)) {
-    if (/^\S/.test(line)) break;
+  let index = jobsIndex + 1;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\S/.test(line) && !line.startsWith('#')) break;
     addJobLine(jobs, line, source);
   }
-  return { topLevel: lines.slice(0, jobsIndex).join('\n'), jobs: jobs.map(finishJob) };
+  // Top-level keys may also follow `jobs:`; they belong to the workflow, not to the last job.
+  topLevel.push(...lines.slice(index));
+  const workflow = { topLevel: topLevel.join('\n'), jobs: jobs.map(finishJob) };
+  verifyEveryUsesIsAttributed(lines, workflow, source);
+  return workflow;
 }
 
 function addJobLine(jobs, line, source) {
-  const jobHeader = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+  const jobHeader = JOB_HEADER.exec(line);
   if (jobHeader) {
-    jobs.push({ name: jobHeader[1], header: [], steps: [], inSteps: false });
+    jobs.push({ name: jobHeader[1], header: [], steps: [], inSteps: false, stepIndent: 0 });
     return;
   }
   const job = jobs.at(-1);
-  if (!job) {
-    if (line.trim() === '' || line.trim().startsWith('#')) return;
-    throw new Error(`${source}: unexpected line before the first job: ${line}`);
+  if (isBlankOrComment(line)) {
+    // Comments and blank lines never change the structure; inside a step they stay part of its text.
+    if (job?.inSteps && job.steps.length > 0) job.steps.at(-1).lines.push(line);
+    return;
   }
-  if (/^ {4}steps:\s*$/.test(line)) {
+  if (!job || /^ {2}\S/.test(line)) throw new Error(`${source}: unexpected line outside a job: ${line}`);
+  if (STEPS_KEY.test(line)) {
     job.inSteps = true;
     return;
   }
-  if (/^ {4}\S/.test(line)) job.inSteps = false;
-  if (!job.inSteps) {
+  if (job.inSteps) addStepLine(job, line, source);
+  else job.header.push(line);
+}
+
+function addStepLine(job, line, source) {
+  if (job.stepIndent === 0) {
+    const first = /^( {4}| {6})- /.exec(line);
+    if (!first) throw new Error(`${source} job ${job.name}: steps must be a sequence indented four or six spaces: ${line}`);
+    job.stepIndent = first[1].length;
+  }
+  const indent = ' '.repeat(job.stepIndent);
+  if (line.startsWith(`${indent}- `)) {
+    job.steps.push({ indent: job.stepIndent, lines: [line] });
+  } else if (/^ {4}\S/.test(line)) {
+    job.inSteps = false;
     job.header.push(line);
-  } else if (line.startsWith('      - ')) {
-    job.steps.push([line]);
-  } else if (job.steps.length > 0) {
-    job.steps.at(-1).push(line);
+  } else {
+    job.steps.at(-1).lines.push(line);
   }
 }
 
@@ -65,9 +92,9 @@ function finishJob({ name, header, steps }) {
   return {
     name,
     header: header.join('\n'),
-    steps: steps.map((stepLines) => {
-      const body = stepLines.join('\n');
-      return { text: body, name: field(body, 'name'), id: field(body, 'id'), uses: field(body, 'uses') };
+    steps: steps.map(({ indent, lines }) => {
+      const body = lines.join('\n');
+      return { text: body, name: field(body, 'name', indent), id: field(body, 'id', indent), uses: field(body, 'uses', indent) };
     }),
   };
 }
@@ -77,18 +104,30 @@ function withoutComment(value) {
   return (comment < 0 ? value : value.slice(0, comment)).trim();
 }
 
-function field(stepText, key) {
-  const prefixes = [`      - ${key}: `, `        ${key}: `];
+function field(stepText, key, indent) {
+  const prefixes = [`${' '.repeat(indent)}- ${key}: `, `${' '.repeat(indent + 2)}${key}: `];
   const line = stepText.split('\n').find((candidate) => prefixes.some((prefix) => candidate.startsWith(prefix)));
   return line ? withoutComment(line.slice(prefixes[0].length)) : '';
+}
+
+const jobUses = (job) => {
+  const line = job.header.split('\n').find((candidate) => candidate.startsWith('    uses: '));
+  return line ? withoutComment(line.slice('    uses: '.length)) : '';
+};
+
+/** Every non-comment line naming `uses:` must be one the parser attributed to a step or a job. */
+function verifyEveryUsesIsAttributed(lines, workflow, source) {
+  const written = lines.filter((line) => !isBlankOrComment(line) && USES_KEY.test(line)).length;
+  const attributed = workflow.jobs.reduce((total, job) => total + job.steps.filter((step) => step.uses).length + (jobUses(job) ? 1 : 0), 0);
+  if (written !== attributed) {
+    throw new Error(`${source}: ${written - attributed} uses: reference(s) are outside the layout this check reads; keep every step under a job's steps: list.`);
+  }
 }
 
 /** Every `uses:` names a local action or `owner/repo[/path]@<40-hex SHA>` (WF-06). */
 export function verifyPinnedActions(file, workflow) {
   for (const job of workflow.jobs) {
-    const jobUsesLine = job.header.split('\n').find((line) => line.startsWith('    uses: '));
-    const jobUses = jobUsesLine ? withoutComment(jobUsesLine.slice('    uses: '.length)) : '';
-    const uses = [...job.steps.map((step) => [step.name || step.id || 'unnamed step', step.uses]), ['job', jobUses]];
+    const uses = [...job.steps.map((step) => [step.name || step.id || 'unnamed step', step.uses]), ['job', jobUses(job)]];
     for (const [where, value] of uses) {
       if (!value || value.startsWith('./')) continue;
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[0-9a-f]{40}$/.test(value)) {

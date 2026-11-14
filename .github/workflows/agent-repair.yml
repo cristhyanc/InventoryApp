@@ -470,6 +470,7 @@ jobs:
         env:
           CLAUDE_OUTCOME: ${{ needs.repair.outputs.claude_outcome }}
           REPAIR_RESULT_OUTCOME: ${{ steps.repair_result.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
           AGENT_WORKTREE: ${{ steps.restore.outputs.worktree }}
           RESTORED_HEAD: ${{ steps.restore.outputs.head_sha }}
           SAVED_BRANCH: ${{ steps.persist_repair.outputs.saved_branch }}
@@ -494,7 +495,11 @@ jobs:
           [[ "$end_sha" =~ ^[0-9a-f]{40}$ ]] || end_sha=""
 
           # Committed repair work that did not reach the pull request: say where it is, or that it was lost.
+          # Recovery needs the agent job's hand-off artifact; without it no commit from the agent's runner survives.
           recovery_line=""
+          if [ -n "$START_SHA" ] && [ "$RESTORE_OUTCOME" != "success" ]; then
+            recovery_line="The repair result could not be handed to this job (restore step: ${RESTORE_OUTCOME:-not run}), for example because the repair run was cancelled or lost its runner before uploading it. This run cannot tell whether the agent committed anything; any commit it made existed only on the agent's runner and was not saved."
+          fi
           if [[ -n "$RESTORED_HEAD" && -n "$START_SHA" && "$RESTORED_HEAD" != "$START_SHA" && "$RESTORED_HEAD" != "$end_sha" ]]; then
             if [ -n "$SAVED_BRANCH" ]; then
               recovery_line="The repair's committed work ($RESTORED_HEAD) was not published to this pull request. It is saved on branch \`$SAVED_BRANCH\` for you to inspect."

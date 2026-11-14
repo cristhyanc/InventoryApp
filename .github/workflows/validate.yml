@@ -337,6 +337,8 @@ jobs:
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       statuses: write
+      # Read-only: a cancelled run checks which workflow and event posted the newest status (WF-15).
+      actions: read
 
     steps:
       - name: Report and validate runner mode
@@ -362,6 +364,8 @@ jobs:
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}
           VALIDATION_RESULT: ${{ needs.validate.result }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -387,16 +391,27 @@ jobs:
               ;;
           esac
           # A run that was cancelled because a newer run took over the same SHA must not overwrite that run's
-          # status with a failure (audit finding WF-15). The newest status for this context belongs to whichever
-          # run posted last; when that is another run, this one stands down. Any other cancellation still fails.
+          # status with a failure (audit finding WF-15). This run stands down only when the newest status for this
+          # context was posted by a newer run (higher run id) of this same workflow and validation mode. A status
+          # from this run, an older run (for example its success, when this run's pending status was never posted),
+          # another workflow, or an unreadable status still gets this run's failure. The read and the write below
+          # are not atomic: a newer run can post between them, and its own final status then replaces this one.
           if [ "$VALIDATION_RESULT" = "cancelled" ]; then
-            # If the statuses cannot be read, fall through and publish the failure.
+            # If anything cannot be read or does not match, fall through and publish the failure.
             latest_url="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" \
               --jq "[.[] | select(.context == \"$STATUS_CONTEXT\")][0].target_url // \"\"")" || latest_url=""
-            if [ -n "$latest_url" ] && [ "$latest_url" != "$RUN_URL" ]; then
-              echo "::notice::Validation was cancelled and a newer run ($latest_url) already owns $STATUS_CONTEXT on $HEAD_SHA; not publishing a failure."
-              printf '### %s: cancelled; a newer run owns this SHA, no status published\n' "$STATUS_CONTEXT" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-              exit 0
+            runs_prefix="${RUN_URL%/*}/"
+            latest_run=""
+            if [[ "$latest_url" == "$runs_prefix"* && "${latest_url#"$runs_prefix"}" =~ ^[0-9]+$ ]]; then
+              latest_run="${latest_url#"$runs_prefix"}"
+            fi
+            if [[ "${RUN_ID:-}" =~ ^[0-9]+$ && -n "$latest_run" ]] && (( 10#$latest_run > 10#$RUN_ID )); then
+              latest_run_source="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$latest_run" --jq '"\(.path) \(.event)"')" || latest_run_source=""
+              if [ "$latest_run_source" = ".github/workflows/validate.yml ${EVENT_NAME:-}" ]; then
+                echo "::notice::Validation was cancelled and a newer run ($latest_url) already owns $STATUS_CONTEXT on $HEAD_SHA; not publishing a failure."
+                printf '### %s: cancelled; a newer run owns this SHA, no status published\n' "$STATUS_CONTEXT" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                exit 0
+              fi
             fi
           fi
           printf '### %s: %s\n' "$STATUS_CONTEXT" "$description" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
