@@ -27,7 +27,7 @@ namespace Inventory.Infrastructure.ReceiptScanning;
 /// <para><strong>The failure still says why, to the log and to nobody else</strong> (issue #1236).
 /// Beside that message the exception carries a <see cref="ReceiptReaderFailure"/>: the status, the
 /// vendor's own <c>error.type</c> and <c>error.message</c> (capped on one line by that type itself,
-/// and withheld entirely when it quotes a catalogue name or a piece of the file),
+/// and withheld entirely when it quotes anything the request carried),
 /// the response's request id, and - when nothing was answered - which local failure it was. The raw
 /// body is read for exactly those two members and is never logged, stored, echoed or put in an
 /// exception message, and a body that is not the documented error shape simply yields nothing rather
@@ -128,7 +128,7 @@ public sealed class ClaudeReceiptReader : IReceiptReader
                 // vendor's own error type and message, and nothing else the body holds.
                 throw new ReceiptReaderUnavailableException(
                     $"The receipt reader answered {(int)response.StatusCode}.",
-                    await RefusalAsync(response, request, cancellationToken).ConfigureAwait(false));
+                    await RefusalAsync(response, request, apiKey, cancellationToken).ConfigureAwait(false));
             }
 
             try
@@ -172,15 +172,25 @@ public sealed class ClaudeReceiptReader : IReceiptReader
     private static async Task<ReceiptReaderFailure> RefusalAsync(
         HttpResponseMessage response,
         ReceiptReadRequest request,
+        string apiKey,
         CancellationToken cancellationToken)
     {
         var (errorType, errorMessage) = await ErrorAsync(response.Content, cancellationToken)
             .ConfigureAwait(false);
 
-        // A message that quotes the request - a product or supplier name, or a piece of the file -
-        // is withheld, not capped (the owner's decision of 14 November 2026): a cap keeps whatever
-        // the quote's first 200 characters hold.
-        var withheld = errorMessage is not null && ReceiptRequestEcho.Quotes(errorMessage, request);
+        // A message that quotes the request - a product or supplier name, a piece of the file, the
+        // prompt, the schema, the catalogue text or the key - is withheld, not capped (the owner's
+        // decision of 14 November 2026): a cap keeps whatever the quote's first 200 characters hold.
+        var withheld = errorMessage is not null
+            && ReceiptRequestEcho.Quotes(
+                errorMessage,
+                request,
+                [
+                    ReceiptReadPrompt.System,
+                    ReceiptReadPrompt.Schema().ToJsonString(),
+                    ReceiptReadPrompt.Catalogue(request.Products, request.Suppliers),
+                    apiKey,
+                ]);
 
         return ReceiptReaderFailure.Refused(
             (int)response.StatusCode,

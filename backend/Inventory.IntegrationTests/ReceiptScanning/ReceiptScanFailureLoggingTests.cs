@@ -163,7 +163,9 @@ public class ReceiptScanFailureLoggingTests
         var logger = await LogOfAsync(failure switch
         {
             // An error body that quotes the request back outside its own message, which is exactly
-            // what is never logged: only `error.type` and `error.message` are read at all.
+            // what is never logged: only `error.type` and `error.message` are read at all. A quote
+            // inside `error.message` is covered by
+            // A_message_that_quotes_the_request_is_withheld_and_the_rest_is_logged.
             "refused" => Answering(Error(
                 HttpStatusCode.BadRequest,
                 JsonSerializer.Serialize(new
@@ -224,6 +226,10 @@ public class ReceiptScanFailureLoggingTests
     [InlineData("product")]
     [InlineData("supplier")]
     [InlineData("file")]
+    [InlineData("prompt")]
+    [InlineData("prompt-rewrapped")]
+    [InlineData("key")]
+    [InlineData("catalogue")]
     public async Task A_message_that_quotes_the_request_is_withheld_and_the_rest_is_logged(string quoted)
     {
         var fragment = Convert.ToBase64String(Content).Substring(5, 20);
@@ -231,6 +237,10 @@ public class ReceiptScanFailureLoggingTests
         {
             "product" => $"messages.0.content.1.text: unexpected product '{ProductName.ToUpperInvariant()}'",
             "supplier" => $"Supplier {SupplierName} is not a valid value",
+            "prompt" => $"system: text '{PromptPhrase}' is not permitted",
+            "prompt-rewrapped" => $"system: '{PromptPhrase.Replace(" ", "\n", StringComparison.Ordinal).ToUpperInvariant()}'",
+            "key" => $"invalid x-api-key: {ApiKey}",
+            "catalogue" => "messages.0.content.1.text: 'This business's suppliers (id and name):' is not expected",
             _ => $"messages.0.content.0.source.base64.data: invalid image data near '{fragment}'",
         };
 
@@ -247,7 +257,18 @@ public class ReceiptScanFailureLoggingTests
         Assert.Equal("True", entry.Properties["MessageWithheld"]);
 
         var line = $"{entry.Message} {string.Join(' ', entry.Properties.Select(property => $"{property.Key}={property.Value}"))}";
-        foreach (var value in new[] { ProductName, SupplierName, fragment, "unexpected product", "invalid image data" })
+        foreach (var value in new[]
+        {
+            ProductName,
+            SupplierName,
+            fragment,
+            ApiKey,
+            PromptPhrase,
+            "unexpected product",
+            "invalid image data",
+            "not permitted",
+            "suppliers (id and name)",
+        })
         {
             Assert.DoesNotContain(value, line, StringComparison.OrdinalIgnoreCase);
         }
