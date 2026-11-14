@@ -390,14 +390,14 @@ jobs:
           npm --prefix "$FRONTEND_DIR" run build
 
       - name: Upload API package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: api-${{ needs.resolve.outputs.sha }}
           path: ${{ runner.temp }}/api
           if-no-files-found: error
 
       - name: Upload frontend bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-${{ needs.resolve.outputs.sha }}
           path: ${{ env.FRONTEND_OUTPUT }}
@@ -476,7 +476,7 @@ jobs:
           esac
 
       - name: Download API package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: api-${{ needs.resolve.outputs.sha }}
           path: ${{ runner.temp }}/api
@@ -674,7 +674,7 @@ jobs:
           esac
 
       - name: Download frontend bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-${{ needs.resolve.outputs.sha }}
           path: release-frontend

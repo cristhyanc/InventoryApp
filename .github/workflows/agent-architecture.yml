@@ -510,6 +510,8 @@ jobs:
 
           claude_args: |
             --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'
+            --model opus
+            --effort high
             --max-turns 100
             --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
             "Bash(gh pr diff ${{ needs.context.outputs.pr_number }}),Bash(gh pr diff ${{ needs.context.outputs.pr_number }} *),Bash(gh pr comment ${{ needs.context.outputs.pr_number }} *)"

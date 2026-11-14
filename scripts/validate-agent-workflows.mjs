@@ -1,3 +1,4 @@
+import { runWorkflowStructureChecks } from './workflow-structure.mjs';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1926,6 +1927,9 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyAppTokenStepsRunTrustedScripts(read);
   verifyTrustedAgentContext(read);
   verifyAgentPublishIsolation(read);
+  // Structural checks over every workflow file: pinned actions, explicit models, no App token beside an agent,
+  // repair concurrency (workflow-structure.mjs).
+  runWorkflowStructureChecks({ read });
 }
 
 export const branchCleanupPath = '.github/workflows/agent-branch-cleanup.yml';

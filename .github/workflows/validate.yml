@@ -386,6 +386,19 @@ jobs:
               description="Validation failed: the validate job ended with '$VALIDATION_RESULT'; see the run."
               ;;
           esac
+          # A run that was cancelled because a newer run took over the same SHA must not overwrite that run's
+          # status with a failure (audit finding WF-15). The newest status for this context belongs to whichever
+          # run posted last; when that is another run, this one stands down. Any other cancellation still fails.
+          if [ "$VALIDATION_RESULT" = "cancelled" ]; then
+            # If the statuses cannot be read, fall through and publish the failure.
+            latest_url="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" \
+              --jq "[.[] | select(.context == \"$STATUS_CONTEXT\")][0].target_url // \"\"")" || latest_url=""
+            if [ -n "$latest_url" ] && [ "$latest_url" != "$RUN_URL" ]; then
+              echo "::notice::Validation was cancelled and a newer run ($latest_url) already owns $STATUS_CONTEXT on $HEAD_SHA; not publishing a failure."
+              printf '### %s: cancelled; a newer run owns this SHA, no status published\n' "$STATUS_CONTEXT" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              exit 0
+            fi
+          fi
           printf '### %s: %s\n' "$STATUS_CONTEXT" "$description" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
           gh api \
