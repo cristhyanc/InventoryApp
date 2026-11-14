@@ -11,9 +11,9 @@
 //
 // The repository keeps no YAML dependency, so this reads the fixed layout every workflow here uses:
 // top-level keys at column 0, jobs at two spaces under `jobs:`, job keys at four, and steps as a sequence
-// whose items start at four (indentless) or six spaces. Column-zero comments are allowed anywhere. A line
-// outside that layout fails the check instead of being skipped, and every `uses:` in the file must be
-// attributed to a step or a job, so an action the parser could not place fails the check too.
+// whose items start at four (indentless) or six spaces. Keys are unquoted; column-zero comments are allowed
+// anywhere. A line outside that layout fails the check instead of being skipped, and every `uses:` in the
+// file must be attributed to a step or a job, so an action the parser could not place fails the check too.
 //
 // Run with: node scripts/workflow-structure.mjs
 import { readFileSync, readdirSync } from 'node:fs';
@@ -24,9 +24,12 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const WORKFLOW_DIRECTORY = '.github/workflows';
 const CLAUDE_CODE_ACTION = 'anthropics/claude-code-action@';
 const APP_TOKEN_ACTION = 'actions/create-github-app-token@';
+const APP_PRIVATE_KEY = 'AGENT_AUTOMATION_APP_PRIVATE_KEY';
 const JOB_HEADER = /^ {2}([A-Za-z0-9_-]+):\s*(?:#.*)?$/;
 const STEPS_KEY = /^ {4}steps:\s*(?:#.*)?$/;
-const USES_KEY = /(?:^|[\s{,-])uses\s*:/;
+const USES_KEY = /(?:^|[\s{,-])['"]?uses['"]?\s*:/;
+// A quoted mapping key (`'uses': x`) is valid YAML but outside the fixed layout, so it is refused.
+const QUOTED_KEY = /^\s*(?:- )?(['"])[^'"]*\1\s*:(?:\s|$)/;
 
 const isBlankOrComment = (line) => line.trim() === '' || line.trim().startsWith('#');
 
@@ -35,6 +38,8 @@ export function parseWorkflow(text, source = 'workflow') {
   const lines = text.replaceAll('\r\n', '\n').split('\n');
   const jobsIndex = lines.indexOf('jobs:');
   if (jobsIndex < 0) throw new Error(`${source}: no top-level jobs: key`);
+  const quoted = lines.findIndex((line) => QUOTED_KEY.test(line));
+  if (quoted >= 0) throw new Error(`${source}: line ${quoted + 1} uses a quoted key, which is outside the layout this check reads: ${lines[quoted]}`);
   const topLevel = lines.slice(0, jobsIndex);
   const jobs = [];
   let index = jobsIndex + 1;
@@ -148,11 +153,15 @@ export function verifyClaudeModels(file, workflow) {
   }
 }
 
-/** A job that runs Claude Code never holds the GitHub App credential; a separate job publishes. */
+/**
+ * A job that runs Claude Code never holds the GitHub App credential; a separate job publishes. Every step
+ * inherits job-level and workflow-level `env`, so the private key may not appear there either.
+ */
 export function verifyAgentJobsHoldNoAppToken(file, workflow) {
   for (const job of workflow.jobs) {
     const runsAgent = job.steps.some((step) => step.uses.startsWith(CLAUDE_CODE_ACTION));
-    const mintsToken = job.steps.some((step) => step.uses.startsWith(APP_TOKEN_ACTION) || step.text.includes('AGENT_AUTOMATION_APP_PRIVATE_KEY'));
+    const inherited = [workflow.topLevel, job.header].some((text) => text.includes(APP_PRIVATE_KEY));
+    const mintsToken = inherited || job.steps.some((step) => step.uses.startsWith(APP_TOKEN_ACTION) || step.text.includes(APP_PRIVATE_KEY));
     if (runsAgent && mintsToken) {
       throw new Error(`${file} job ${job.name}: runs Claude Code and also mints the GitHub App token; publish from a separate job.`);
     }

@@ -175,30 +175,39 @@ describe('cancelled validation status (WF-15)', () => {
     encoding: 'utf8',
     env: {
       ...process.env, PATH: `${gh.bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'owner/repo', GITHUB_STEP_SUMMARY: join(root, 'summary'),
-      HEAD_SHA: 'c'.repeat(40), STATUS_CONTEXT: 'merge-validation', RUN_ID: '100', EVENT_NAME: 'pull_request', RUN_URL: `${runs}/100`, ...extra,
+      HEAD_SHA: 'c'.repeat(40), STATUS_CONTEXT: 'merge-validation', RUN_ID: '100', RUN_NUMBER: '10', EVENT_NAME: 'pull_request',
+      RUN_URL: `${runs}/100`, ...extra,
     },
   });
   const posted = (gh) => gh.log().split('\n').filter((line) => line.startsWith('api --method POST'));
-  const sameMode = '.github/workflows/validate.yml pull_request';
+  const validation = (number, event = 'pull_request') => `.github/workflows/validate.yml ${event} ${number}`;
 
-  it('stands down when a newer run of the same workflow and mode owns the SHA', () => withTemp((root) => {
-    const gh = fakeGh(root, { latestStatusUrl: `${runs}/200`, runSource: sameMode });
-    const result = run(root, gh, { VALIDATION_RESULT: 'cancelled' });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(posted(gh), []);
-    assert.match(result.stdout, /a newer run .* already owns merge-validation/);
-    assert.match(gh.log(), /api repos\/owner\/repo\/actions\/runs\/200 /);
-  }));
+  // Run ids are identifiers, not an ordering: run_number decides which run is newer, whatever the ids are.
+  for (const [label, latest, runSource] of [
+    ['a newer run (higher run number) of the same workflow and mode owns the SHA', `${runs}/200`, validation(11)],
+    ['the newer run has a lower run id but a higher run number', `${runs}/50`, validation(11)],
+  ]) {
+    it(`stands down when ${label}`, () => withTemp((root) => {
+      const gh = fakeGh(root, { latestStatusUrl: latest, runSource });
+      const result = run(root, gh, { VALIDATION_RESULT: 'cancelled' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(posted(gh), []);
+      assert.match(result.stdout, /a newer run .* run number 11\) already owns merge-validation/);
+    }));
+  }
 
   for (const [label, latest, runSource] of [
-    ['this run posted the latest status', `${runs}/100`, sameMode],
-    ['no status exists yet', '', sameMode],
-    ['the latest status belongs to an older run (a stale success)', `${runs}/50`, sameMode],
-    ['the newer run is another workflow', `${runs}/200`, '.github/workflows/agent-review.yml workflow_dispatch'],
-    ['the newer run is the other validation mode', `${runs}/200`, '.github/workflows/validate.yml workflow_dispatch'],
+    ['this run posted the latest status', `${runs}/100`, validation(11)],
+    ['no status exists yet', '', validation(11)],
+    ['the latest status belongs to an older run (a stale success)', `${runs}/50`, validation(9)],
+    ['a higher run id has a lower run number', `${runs}/200`, validation(9)],
+    ['the other run has the same run number', `${runs}/200`, validation(10)],
+    ['the newer run is another workflow', `${runs}/200`, '.github/workflows/agent-review.yml pull_request 11'],
+    ['the newer run is the other validation mode', `${runs}/200`, validation(11, 'workflow_dispatch')],
     ['the newer run cannot be read', `${runs}/200`, ''],
-    ['the latest status links elsewhere', 'https://elsewhere.invalid/owner/repo/actions/runs/200', sameMode],
-    ['the latest status is not a run link', `${runs}/200/attempts/2`, sameMode],
+    ['the run number is not a number', `${runs}/200`, '.github/workflows/validate.yml pull_request null'],
+    ['the latest status links elsewhere', 'https://elsewhere.invalid/owner/repo/actions/runs/200', validation(11)],
+    ['the latest status is not a run link', `${runs}/200/attempts/2`, validation(11)],
   ]) {
     it(`still reports a cancellation as a failure when ${label}`, () => withTemp((root) => {
       const gh = fakeGh(root, { latestStatusUrl: latest, runSource });
@@ -210,8 +219,15 @@ describe('cancelled validation status (WF-15)', () => {
     }));
   }
 
+  it('never looks up its own run, so every attempt of one run is treated as its own', () => withTemp((root) => {
+    const gh = fakeGh(root, { latestStatusUrl: `${runs}/100`, runSource: validation(99) });
+    assert.equal(run(root, gh, { VALIDATION_RESULT: 'cancelled' }).status, 0);
+    assert.doesNotMatch(gh.log(), /api repos\/owner\/repo\/actions\/runs/);
+    assert.equal(posted(gh).length, 1);
+  }));
+
   it('publishes success and failure without looking at other runs', () => withTemp((root) => {
-    const gh = fakeGh(root, { latestStatusUrl: `${runs}/200`, runSource: sameMode });
+    const gh = fakeGh(root, { latestStatusUrl: `${runs}/200`, runSource: validation(11) });
     assert.equal(run(root, gh, { VALIDATION_RESULT: 'success' }).status, 0);
     assert.equal(run(root, gh, { VALIDATION_RESULT: 'failure' }).status, 0);
     assert.deepEqual(posted(gh).map((line) => /state=(\w+)/.exec(line)[1]), ['success', 'failure']);

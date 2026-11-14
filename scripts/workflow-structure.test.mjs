@@ -66,6 +66,14 @@ describe('workflow structure checks', () => {
     assert.throws(() => runWorkflowStructureChecks(withOverride('agent-repair.yml', unsafe)), /mints the GitHub App token/);
   });
 
+  it('reject the App private key in job-level or workflow-level env of a job that runs Claude Code', () => {
+    const secret = '${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}';
+    const jobEnv = (text) => replaceOnce(text, '    concurrency:\n      group: agent-repair-pr-', `    env:\n      APP_KEY: ${secret}\n    concurrency:\n      group: agent-repair-pr-`);
+    assert.throws(() => runWorkflowStructureChecks(withOverride('agent-repair.yml', jobEnv)), /job repair: runs Claude Code and also mints/);
+    const workflowEnv = (text) => replaceOnce(text, 'permissions: {}\n', `permissions: {}\n\nenv:\n  APP_KEY: ${secret}\n`);
+    assert.throws(() => runWorkflowStructureChecks(withOverride('agent-repair.yml', workflowEnv)), /job repair: runs Claude Code and also mints/);
+  });
+
   it('reject workflow-level repair concurrency or a repair job without it (WF-10)', () => {
     const jobLevel = '    concurrency:\n      group: agent-repair-pr-${{ github.event.issue.number }}\n      cancel-in-progress: true\n';
     const workflowLevel = (text) => replaceOnce(text, 'permissions: {}\n', 'permissions: {}\n\nconcurrency:\n  group: agent-repair-pr-${{ github.event.issue.number }}\n  cancel-in-progress: true\n');
@@ -101,10 +109,24 @@ describe('workflow structure checks', () => {
     assert.throws(() => verifyPinnedActions('x.yml', parseWorkflow(indentless('actions/checkout@v4'), 'x.yml')), /actions\/checkout@v4 is not pinned/);
   });
 
+  it('refuse quoted keys, which the field parser does not read', () => {
+    for (const steps of [
+      "      - 'uses': actions/checkout@v4\n",
+      '      - "uses": actions/checkout@v4\n',
+      "      - name: x\n        'uses': actions/checkout@v4\n",
+      "    'steps':\n      - run: echo\n",
+    ]) {
+      assert.throws(() => parseWorkflow(`jobs:\n  build:\n    steps:\n${steps}`, 'x.yml'), /quoted key/, steps);
+    }
+    const quotedUses = (text) => replaceOnce(text, '        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262', "        'uses': actions/checkout@v4 #");
+    assert.throws(() => runWorkflowStructureChecks(withOverride('vm-manager.yml', quotedUses)), /quoted key/);
+  });
+
   it('refuse a uses: the parser cannot attribute to a step', () => {
     for (const steps of [
       '      - run: echo\n    - uses: actions/checkout@v4\n',
       '      - {uses: actions/checkout@v4}\n',
+      "      - {'uses': actions/checkout@v4}\n",
       '      - name: deep\n          uses: actions/checkout@v4\n',
     ]) {
       assert.throws(() => parseWorkflow(`jobs:\n  build:\n    steps:\n${steps}`, 'x.yml'), /outside the layout this check reads/, steps);
