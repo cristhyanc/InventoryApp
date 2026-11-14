@@ -15,7 +15,7 @@ import { ConfirmationDialogComponent } from './confirmation-dialog.component';
         message="This cannot be undone."
         confirmLabel="Delete"
         cancelLabel="Cancel"
-        (confirmed)="confirmed = confirmed + 1"
+        (confirmed)="onConfirmed($event)"
         (canceled)="open = false"
       ></app-confirmation-dialog>
     }
@@ -24,6 +24,12 @@ import { ConfirmationDialogComponent } from './confirmation-dialog.component';
 class DialogHostComponent {
   open = false;
   confirmed = 0;
+  confirmedOpener: HTMLElement | null = null;
+
+  onConfirmed(opener: HTMLElement | null): void {
+    this.confirmed = this.confirmed + 1;
+    this.confirmedOpener = opener;
+  }
 }
 
 /** A host whose opener is removed before the dialog closes, to exercise the fallback target. */
@@ -163,6 +169,21 @@ describe('ConfirmationDialogComponent (issue #1277)', () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.confirmed).toBe(1);
+  });
+
+  /**
+   * The caller's half of the handoff (issue #1277): a confirmed delete is answered after this
+   * dialog has already closed and given focus back, so the caller is told which control that was
+   * and hands focus on itself once its own request removed it (`shared/confirmation-focus.ts`).
+   */
+  it('tells the caller which control it returns focus to when it confirms', async () => {
+    const { fixture, panel, opener } = await render();
+    const confirmButton = panel.querySelectorAll('.confirm-actions button')[1] as HTMLButtonElement;
+
+    confirmButton.click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.confirmedOpener).toBe(opener);
   });
 
   it('falls back to the caller-supplied element when the opener is gone when it closes', async () => {

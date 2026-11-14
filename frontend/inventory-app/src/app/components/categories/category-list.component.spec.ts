@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { CategoryListComponent } from './category-list.component';
 import { CategoryService } from '../../services/category.service';
 import { ToastService } from '../../services/toast.service';
@@ -14,6 +14,8 @@ function category(overrides: Partial<Category> = {}): Category {
 async function render(
   overrides: {
     categories?: Category[];
+    /** A list that answers differently per call, for a reload that no longer has the deleted row. */
+    getAll?: jest.Mock;
     create?: jest.Mock;
     update?: jest.Mock;
     deleteFn?: jest.Mock;
@@ -21,6 +23,7 @@ async function render(
   } = {}
 ) {
   const categories = overrides.categories ?? [category()];
+  const getAll = overrides.getAll ?? jest.fn(() => of(categories));
   const create = overrides.create ?? jest.fn(() => of(category({ id: 2 })));
   const update = overrides.update ?? jest.fn(() => of(undefined));
   const deleteFn = overrides.deleteFn ?? jest.fn(() => of(undefined));
@@ -31,7 +34,7 @@ async function render(
     providers: [
       {
         provide: CategoryService,
-        useValue: { getAll: jest.fn(() => of(categories)), create, update, delete: deleteFn }
+        useValue: { getAll, create, update, delete: deleteFn }
       },
       { provide: ToastService, useValue: toastService },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } }
@@ -45,6 +48,7 @@ async function render(
     fixture,
     component: fixture.componentInstance,
     host: fixture.nativeElement as HTMLElement,
+    getAll,
     create,
     update,
     deleteFn,
@@ -182,6 +186,76 @@ describe('CategoryListComponent delete vs refusal (issue #737)', () => {
     );
     // The category is still on screen: a failed delete must not be mistaken for a successful one.
     expect(host.textContent).toContain('Snacks');
+  });
+});
+
+/**
+ * Keyboard focus across a confirmed delete (issue #1277). The shared dialog returns focus to the
+ * row's own Delete button the instant it closes, which is what a cancelled or a refused delete
+ * needs. A confirmed delete, though, is still in flight at that moment, and the list the success
+ * re-reads no longer has that button - so focus must be handed on rather than dropped on the
+ * document body, where Tab would start again at the top of the page.
+ */
+describe('CategoryListComponent focus after a confirmed delete (issue #1277)', () => {
+  it('keeps focus on the row while the delete is in flight, then hands it to the page heading once the reloaded list drops the row', async () => {
+    const deleted = new Subject<void>();
+    const answers = [[category({ id: 3, name: 'Snacks' })], []];
+    const { fixture, host } = await render({
+      getAll: jest.fn(() => of(answers.shift() ?? [])),
+      deleteFn: jest.fn(() => deleted.asObservable())
+    });
+
+    const rowDelete = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
+    rowDelete.focus();
+    rowDelete.click();
+    fixture.detectChanges();
+
+    const confirmButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Delete' && b.className.includes('btn-danger') && b.closest('.confirm-modal')
+    ) as HTMLButtonElement;
+    confirmButton.click();
+    fixture.detectChanges();
+
+    // The delete has not answered yet: the row is still there, and so is the focus a refusal needs.
+    expect(host.textContent).toContain('Snacks');
+    expect(document.activeElement).toBe(rowDelete);
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Snacks');
+    const focused = document.activeElement as HTMLElement;
+    expect(focused.tagName).toBe('H1');
+    expect(focused.textContent).toContain('Categories');
+    // Given a tabindex only because a heading carries none, so it can be focused at all.
+    expect(focused.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('leaves focus on the row when the delete is refused, so the toast is about where the user still is', async () => {
+    const deleted = new Subject<void>();
+    const { fixture, host } = await render({
+      categories: [category({ id: 3, name: 'Snacks' })],
+      deleteFn: jest.fn(() => deleted.asObservable())
+    });
+
+    const rowDelete = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
+    rowDelete.focus();
+    rowDelete.click();
+    fixture.detectChanges();
+
+    (
+      Array.from(host.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Delete' && b.className.includes('btn-danger') && b.closest('.confirm-modal')
+      ) as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    deleted.error(new HttpErrorResponse({ status: 409, error: 'Nothing was deleted.' }));
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain('Snacks');
+    expect(document.activeElement).toBe(rowDelete);
   });
 });
 

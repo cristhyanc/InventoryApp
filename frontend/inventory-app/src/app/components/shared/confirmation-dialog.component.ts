@@ -1,5 +1,6 @@
 import { AfterViewInit, Component, ElementRef, EventEmitter, Input, OnDestroy, Output, Renderer2, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { focusPageHeading } from './confirmation-focus';
 
 /** The two controls a confirmation ever renders, in the order Tab should visit them. */
 const DIALOG_CONTROLS = 'button:not([disabled])';
@@ -14,6 +15,10 @@ const DIALOG_CONTROLS = 'button:not([disabled])';
  * the escape hatch `ExpenseDeleteConfirmationComponent` uses, because it already resolves and
  * restores a better opener itself (the row's menu trigger, not the menu item the dialog's own open
  * would capture) and deliberately restores nothing at all after a confirmed delete.
+ *
+ * `confirmed` carries that opener, so a caller whose confirmed action is asynchronous can hand
+ * focus on once the action succeeded and removed it - see `shared/confirmation-focus.ts`, which
+ * explains why the dialog cannot do that part itself.
  */
 @Component({
   selector: 'app-confirmation-dialog',
@@ -84,7 +89,14 @@ export class ConfirmationDialogComponent implements AfterViewInit, OnDestroy {
    */
   @Input() returnFocusTo: HTMLElement | null = null;
 
-  @Output() readonly confirmed = new EventEmitter<void>();
+  /**
+   * Emitted with the control this dialog captured on open and returns focus to as it closes, or
+   * `null` when there is none (nothing had focus, or `restoreFocus` is `false`). A caller whose
+   * confirmed action removes that control passes it back to
+   * `handOffFocusFromRemovedOpener` once the action has succeeded; a caller whose action leaves the
+   * control in place ignores it.
+   */
+  @Output() readonly confirmed = new EventEmitter<HTMLElement | null>();
   @Output() readonly canceled = new EventEmitter<void>();
 
   private readonly instanceId = ++ConfirmationDialogComponent.instances;
@@ -144,11 +156,11 @@ export class ConfirmationDialogComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    this.focusMainHeading();
+    focusPageHeading();
   }
 
   confirmChoice(): void {
-    this.confirmed.emit();
+    this.confirmed.emit(this.opener);
   }
 
   cancelChoice(): void {
@@ -178,21 +190,5 @@ export class ConfirmationDialogComponent implements AfterViewInit, OnDestroy {
     const from = current === -1 && event.shiftKey ? 0 : current;
     const step = event.shiftKey ? -1 : 1;
     stops[(from + step + stops.length) % stops.length].focus();
-  }
-
-  /**
-   * A heading carries no tabindex by default, so it is not programmatically focusable until one is
-   * added - the same `tabindex="-1"` the landing page's own `#main-content` already uses to be a
-   * focus target without joining the tab order.
-   */
-  private focusMainHeading(): void {
-    const heading = document.querySelector<HTMLElement>('h1');
-    if (heading === null) {
-      return;
-    }
-    if (!heading.hasAttribute('tabindex')) {
-      heading.setAttribute('tabindex', '-1');
-    }
-    heading.focus();
   }
 }
