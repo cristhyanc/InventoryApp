@@ -10031,6 +10031,49 @@ size from one key press alone, and hands focus on into the pager. Its captures a
 `reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
 (the focus ring on the selector).
 
+#### Restockroo logo (issue #1272)
+
+Issue #1272 puts the owner-approved Restockroo logo (teal kangaroo with a stock box, navy
+wordmark, transparent background) everywhere the app already showed its brand. It is a
+presentation change: no navigation label, destination, order, grouping, permission, route,
+account or business control, homepage copy or colour theme changed.
+
+**Source and files.** The approved original is kept, unchanged, at
+`docs/brand/restockroo-logo-original.png` (1600 x 533 PNG). It is the only source and is not part
+of the Angular build. Two files are made from it by trimming transparent canvas and resizing only
+(no recolouring, redrawing or effects) and ship as ordinary bundled assets under
+`frontend/inventory-app/src/assets/brand/`:
+
+| File | Content | Pixels | Displayed at |
+| --- | --- | --- | --- |
+| `restockroo-logo.png` | Full logo: symbol and navy wordmark | 404 x 108 | 32-36px high |
+| `restockroo-symbol.png` | Kangaroo-and-box symbol alone | 81 x 96 | 32px high |
+
+Both are PNG, not SVG, and are exported at about three times their largest display height so they
+stay sharp on high-density screens. There is no white-wordmark variant, because no surface that
+shows the brand is dark; one would be made from the same original if a dark surface is added. No
+image, font or logo is loaded from Stitch, Google or any other remote host.
+
+**`BrandLogoComponent`** (`components/shared/brand-logo.component.ts`) is the one place the logo is
+rendered. Its `variant` input picks the file (`full` or `symbol`) and its `height` input sets the
+visible height in CSS pixels; the width follows the file's own aspect ratio, and the `<img>` carries
+the file's `width`/`height` attributes so the box is reserved before it loads. Its `alt` is
+"Restockroo" and callers put no visible "Restockroo" text beside it, so the brand is announced once.
+It renders no link: a caller that links the brand wraps it in its own anchor.
+
+**Where it appears.**
+
+- Landing header, legal pages and sign-in page: the full logo, 36px, inside the existing brand link
+  to `/home` (unchanged destination, `min-h-11` target and focus style).
+- Landing footer: the full logo, 32px, not a link.
+- Sidebar, expanded, and the narrow-layout More sheet: the full logo, 32px, in the header row
+  beside the collapse or Close control, not a link.
+- Sidebar collapsed to the `w-16` rail: the symbol alone, 32px, stacked and centred above the
+  expand control, which keeps its 44px target; not a link.
+- The authenticated top bar on a narrow layout has no logo, as before.
+
+The favicon, page titles and any social, PWA or email branding are unchanged.
+
 #### Shared help toggletip (issues #1015 and #1016)
 
 `components/shared/help-toggletip/` is the one help toggletip the application has, built once on the

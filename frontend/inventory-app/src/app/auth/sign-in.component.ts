@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { AuthorityId, isExternalIdConfigured } from '../auth-config';
+import { BrandLogoComponent } from '../components/shared/brand-logo.component';
 import { IconComponent } from '../components/shared/icon.component';
 import { PUBLIC_HOME_ROUTE } from '../public/landing/landing-routes';
 import { SignInFailureKind, SignInService, classifySignInFailure } from './sign-in.service';
@@ -64,20 +65,17 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
 @Component({
   selector: 'app-sign-in',
   standalone: true,
-  imports: [IconComponent, RouterLink],
+  imports: [BrandLogoComponent, IconComponent, RouterLink],
   template: `
     <div class="flex min-h-screen flex-col bg-rr-canvas font-rr">
       <header class="border-b border-rr-line bg-white">
         <div class="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-8">
           <a
             [routerLink]="homeLink"
-            class="flex min-h-11 items-center gap-2 rounded-lg text-lg font-bold text-rr-navy no-underline"
+            class="flex min-h-11 shrink-0 items-center rounded-lg no-underline"
             data-testid="sign-in-brand"
           >
-            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
-              <app-icon name="inventory_2" [size]="18" />
-            </span>
-            Restockroo
+            <app-brand-logo variant="full" [height]="36" />
           </a>
         </div>
       </header>

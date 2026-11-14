@@ -232,6 +232,11 @@ describe('LandingPageComponent (issue #954)', () => {
       const footer = host.querySelector('footer')!;
 
       expect(text(footer)).toContain(`© ${new Date().getFullYear()} Restockroo`);
+      // The footer brand is the full logo (issue #1272), not a link.
+      const footerLogo = byTestId(footer as unknown as HTMLElement, 'landing-footer-brand')?.querySelector('img');
+      expect(footerLogo?.getAttribute('src')).toBe('assets/brand/restockroo-logo.png');
+      expect(footerLogo?.getAttribute('alt')).toBe('Restockroo');
+      expect(footerLogo?.closest('a')).toBeNull();
 
       const mailto = footer.querySelector<HTMLAnchorElement>('a[href="mailto:admin@restockroo.com.au"]');
       expect(mailto?.textContent?.trim()).toBe('admin@restockroo.com.au');

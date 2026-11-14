@@ -109,7 +109,12 @@ describe('SignInComponent (issue #711)', () => {
       const brand = fixture.nativeElement.querySelector('[data-testid="sign-in-brand"]') as HTMLAnchorElement;
       const back = fixture.nativeElement.querySelector('[data-testid="sign-in-back-home"]') as HTMLAnchorElement;
       expect(brand.getAttribute('href')).toBe('/home');
-      expect(brand.textContent).toContain('Restockroo');
+      // The full logo names the brand once, through its alt text (issue #1272).
+      const logos = brand.querySelectorAll('img');
+      expect(logos).toHaveLength(1);
+      expect(logos[0].getAttribute('alt')).toBe('Restockroo');
+      expect(logos[0].getAttribute('src')).toBe('assets/brand/restockroo-logo.png');
+      expect(brand.textContent?.trim()).toBe('');
       expect(back.getAttribute('href')).toBe('/home');
       expect(back.textContent?.trim()).toBe('Back to home');
     });
