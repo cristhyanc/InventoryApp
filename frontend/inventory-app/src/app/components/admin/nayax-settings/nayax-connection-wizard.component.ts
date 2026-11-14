@@ -732,8 +732,8 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   /** Re-renders the review when the draft expires, so Save is withdrawn on time and not on the next click. */
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Forces the expiry check to be re-read when {@link expiryTimer} fires. */
-  private expiryTick = 0;
+  /** Set when {@link expiryTimer} fires: the current draft has lapsed, whatever the clock says now. */
+  private draftLapsed = false;
 
   constructor(
     private readonly connections: NayaxConnectionService,
@@ -793,9 +793,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   /** Whether the server's short-lived draft has already stopped existing. */
   get draftExpired(): boolean {
-    // Read so that the expiry timer's tick re-evaluates this getter in the template.
-    void this.expiryTick;
-    return this.result !== null && Date.parse(this.result.expiresAtUtc) <= Date.now();
+    return this.result !== null && (this.draftLapsed || Date.parse(this.result.expiresAtUtc) <= Date.now());
   }
 
   /** What the review step says about {@link result}; see {@link NayaxReviewState} for the order. */
@@ -1240,12 +1238,13 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     if (Number.isFinite(remaining) && remaining > 0) {
       this.expiryTimer = setTimeout(() => {
         this.expiryTimer = null;
-        this.expiryTick++;
+        this.draftLapsed = true;
       }, remaining + 50);
     }
   }
 
   private clearExpiryTimer(): void {
+    this.draftLapsed = false;
     if (this.expiryTimer !== null) {
       clearTimeout(this.expiryTimer);
       this.expiryTimer = null;

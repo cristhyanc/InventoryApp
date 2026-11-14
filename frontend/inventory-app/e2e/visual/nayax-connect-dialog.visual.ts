@@ -238,9 +238,7 @@ test.describe('The Connect Nayax dialog (issue #1311)', () => {
       // Every screenshot opens full size in a new tab, which is how a phone enlarges it.
       const enlarge = page.locator(`${dialog} [data-testid="step-2"] [data-testid="enlarge-screenshot"]`);
       await expect(enlarge).toHaveCount(3);
-      for (const link of await enlarge.all()) {
-        await expect(link).toHaveAttribute('target', '_blank');
-      }
+      await Promise.all((await enlarge.all()).map((link) => expect(link).toHaveAttribute('target', '_blank')));
       const shrunk = await page.locator(`${dialog} [data-testid="step-2"] img`).first().evaluate(
         (image: HTMLImageElement) => image.naturalWidth > image.getBoundingClientRect().width
       );

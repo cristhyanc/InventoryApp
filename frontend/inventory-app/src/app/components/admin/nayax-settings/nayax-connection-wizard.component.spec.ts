@@ -374,7 +374,7 @@ describe('NayaxConnectionWizardComponent (issues #538 and #1311)', () => {
       toTokenStep();
 
       const steps = host.querySelectorAll('[data-testid="nayax-core-steps"] li');
-      expect(steps.length).toBe(5);
+      expect(steps).toHaveLength(5);
       const instructions = testId('token-instructions')?.textContent ?? '';
       expect(instructions).toContain('Account Settings');
       expect(instructions).toContain('Security and Login');
