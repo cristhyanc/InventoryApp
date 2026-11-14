@@ -31,13 +31,29 @@ internal static class TestPurchaseUseCases
         IDocumentStorage documents,
         IClock? clock = null,
         IAuthenticatedActorAccessor? actors = null,
-        AttachmentQuotaGuard? quota = null) =>
-        new(
+        AttachmentQuotaGuard? quota = null,
+        IBusinessCalendar? calendar = null)
+    {
+        var resolvedClock = clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc));
+        return new(
             store,
             documents,
             actors ?? FakeAuthenticatedActorAccessor.Identified(Operator),
-            clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc)),
+            resolvedClock,
+            // A purchase is never dated after today (issue #1246), so a test that is not about that
+            // rule gets a calendar that agrees with its own clock: the business date is the clock's
+            // UTC date, which is what keeps every date these tests record a date in the past. A test
+            // about the rule, or about a zone the two differ in, supplies its own calendar.
+            calendar ?? new FakeBusinessCalendar(resolvedClock.UtcNow),
             quota ?? FakeAttachmentQuota.NotEnforced());
+    }
+
+    /// <summary>
+    /// Issue #1246's edit use case, which needs the same business calendar: the date an edit would
+    /// leave standing - submitted or stored - must be today's or earlier.
+    /// </summary>
+    public static UpdatePurchase Update(IPurchaseStore store, IBusinessCalendar? calendar = null) =>
+        new(store, calendar ?? new FakeBusinessCalendar(DateTime.UtcNow));
 
     /// <summary>Issue #976's "add a document later" use case, for the controller tests that construct it.</summary>
     public static AttachPurchaseDocument Attach(

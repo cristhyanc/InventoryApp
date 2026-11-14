@@ -28,6 +28,14 @@ public class PurchasesControllerTests
 {
     private const string InvalidFileOrSupplier = "Invalid file or supplier";
 
+    private static readonly DateTime NowUtc = new(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// The business date these tests record on, so a purchase date later than it is in the future
+    /// and every date they do submit is not (issue #1246).
+    /// </summary>
+    private static readonly FakeBusinessCalendar Calendar = new(NowUtc);
+
     private static PurchasesController CreateController(IPurchaseStore store, IDocumentStorage? documents = null)
     {
         var storage = documents ?? NoDocuments().Object;
@@ -35,9 +43,9 @@ public class PurchasesControllerTests
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, storage),
-            TestPurchaseUseCases.Upload(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Upload(store, storage, new FakeClock(NowUtc), calendar: Calendar),
             TestPurchaseUseCases.Attach(store, storage),
-            new UpdatePurchase(store),
+            TestPurchaseUseCases.Update(store, Calendar),
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),
@@ -229,6 +237,56 @@ public class PurchasesControllerTests
         Assert.Equal(
             Inventory.Domain.Purchases.PurchaseItemFormatPolicy.InvalidItemsMessage,
             Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+    }
+
+    /// <summary>
+    /// Issue #1246's contract on the create endpoint: a purchase date later than today in the
+    /// business's calendar is a <c>400</c> carrying the policy's own message, and the store is never
+    /// asked to write anything.
+    /// </summary>
+    [Fact]
+    public async Task Upload_returns_bad_request_for_a_purchase_date_later_than_today()
+    {
+        var store = AcceptingStore();
+
+        var result = await CreateController(store.Object).Upload(
+            CreateFile("scan.jpg"), "Weekly restock", null, null, 30m, null, null, null, null,
+            NowUtc.AddDays(1), 4, null,
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
+
+        Assert.Equal(
+            Inventory.Domain.Purchases.PurchaseDatePolicy.AfterTodayMessage,
+            Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+        store.Verify(
+            s => s.CreateAsync(
+                It.IsAny<PurchaseFields>(),
+                It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
+                It.IsAny<PurchaseFileMetadata?>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>The same contract on the edit endpoint, where the store's transaction never opens.</summary>
+    [Fact]
+    public async Task Update_returns_bad_request_for_a_purchase_date_later_than_today()
+    {
+        var store = new Mock<IPurchaseStore>();
+
+        var result = await CreateController(store.Object)
+            .Update(7, "Updated", null, null, null, null, null, null, null, NowUtc.AddDays(1), null, null);
+
+        Assert.Equal(
+            Inventory.Domain.Purchases.PurchaseDatePolicy.AfterTodayMessage,
+            Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+        store.Verify(
+            s => s.UpdateAsync(
+                It.IsAny<int>(),
+                It.IsAny<PurchaseFields>(),
+                It.IsAny<IReadOnlyList<PurchaseItemInput>?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

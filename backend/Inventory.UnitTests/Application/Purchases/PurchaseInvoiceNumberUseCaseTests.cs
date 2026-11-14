@@ -21,8 +21,17 @@ public class PurchaseInvoiceNumberUseCaseTests
 {
     private static readonly FakeClock Clock = new(new DateTime(2026, 3, 11, 14, 30, 0, DateTimeKind.Utc));
 
+    /// <summary>The business date the clock's instant falls on in Sydney, so no date is in the future here.</summary>
+    private static readonly FakeBusinessCalendar Calendar = new(new DateTime(2026, 3, 12));
+
     private static UploadPurchase CreateUseCase(IPurchaseStore store, IDocumentStorage documents) =>
-        new(store, documents, FakeAuthenticatedActorAccessor.Identified(Operator()), Clock, FakeAttachmentQuota.NotEnforced());
+        new(
+            store,
+            documents,
+            FakeAuthenticatedActorAccessor.Identified(Operator()),
+            Clock,
+            Calendar,
+            FakeAttachmentQuota.NotEnforced());
 
     private static ActorIdentity Operator()
     {
@@ -112,7 +121,7 @@ public class PurchaseInvoiceNumberUseCaseTests
         var store = new FakePurchaseStore();
         var tooLong = new string('9', PurchaseInvoiceNumberPolicy.MaxLength + 1);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new UpdatePurchase(store)
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new UpdatePurchase(store, Calendar)
             .Handle(7, Fields(tooLong), null, CancellationToken.None));
 
         Assert.Equal(PurchaseInvoiceNumberPolicy.TooLongMessage, error.Message);

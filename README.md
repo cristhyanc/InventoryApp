@@ -2263,6 +2263,13 @@ Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px
 - **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
   (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
   your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Purchase date: today or earlier** (issue #1246). The date field offers no date later than today in your
+  business's own time zone, and a later one is refused with "Purchase date cannot be later than today. Correct
+  the date and save again." — whether you typed it or a scanned receipt filled it in, and nothing is saved. The
+  reason is practical: a purchase dated next week adds its stock straight away, but a refill or a write-off
+  **today** would then be refused as physically negative, because the cost history replays today's movement
+  before the purchase's. Saving an edit of a purchase that is already dated in the future needs its date
+  corrected first; nothing else about it can be saved while that date stands.
 - **Invoice number (optional).** The supplier's own receipt or invoice number, beside the supplier, date and
   title in **Purchase details**. Leave it empty if you have none — nothing about the purchase changes either
   way. What you type is stored without the spaces around it (" INV-123 " is saved as "INV-123"), up to 100

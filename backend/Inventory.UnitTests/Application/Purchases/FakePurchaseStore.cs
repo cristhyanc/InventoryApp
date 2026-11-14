@@ -159,13 +159,17 @@ public sealed class FakePurchaseStore : IPurchaseStore
         return Task.FromResult(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.Attached, attached));
     }
 
-    /// <summary>Seeds a stored purchase so an attach has something to attach to.</summary>
-    public PurchaseRecord AddPurchase(PurchaseFileMetadata? document = null)
+    /// <summary>
+    /// Seeds a stored purchase so an attach has something to attach to. <paramref name="purchaseDate"/>
+    /// is the date it is already stored with, which an edit that submits no date of its own has to
+    /// judge (issue #1246); it defaults to the current instant, as every earlier caller assumed.
+    /// </summary>
+    public PurchaseRecord AddPurchase(PurchaseFileMetadata? document = null, DateTime? purchaseDate = null)
     {
         var id = _nextId++;
         var record = new PurchaseRecord(
             id, 1, "Weekly restock", null, null, null, null, GstClassification.Unknown, GstClassificationSource.Unknown,
-            null, GstClassification.Unknown, GstClassificationSource.Unknown, DateTime.UtcNow, null, null, [],
+            null, GstClassification.Unknown, GstClassificationSource.Unknown, purchaseDate ?? DateTime.UtcNow, null, null, [],
             document?.FileName, document?.StoredFileName, document?.ContentType, document?.FileSizeBytes,
             DateTime.UtcNow);
         _records[id] = record;

@@ -48,9 +48,27 @@
         </select>
       </div>
 
+      <!--
+        The date is never later than today in the business's own time zone (issue #1246): `max`
+        stops the picker offering one, and the message explains a later date - typed or filled in by
+        a receipt scan - before Save sends anything.
+      -->
       <div class="field">
         <label class="field-label" [for]="fieldId('purchaseDate')">Purchase date</label>
-        <input [id]="fieldId('purchaseDate')" [attr.name]="fieldId('purchaseDate')" [ngModelOptions]="{ standalone: true }" type="date" [ngModel]="form.purchaseDate" (ngModelChange)="onDateChange($event)" />
+        <input
+          [id]="fieldId('purchaseDate')"
+          [attr.name]="fieldId('purchaseDate')" [ngModelOptions]="{ standalone: true }"
+          type="date"
+          [attr.max]="maxPurchaseDate"
+          [ngModel]="form.purchaseDate"
+          (ngModelChange)="onDateChange($event)"
+          [class.border-md-danger]="purchaseDateProblem"
+          [attr.aria-invalid]="purchaseDateProblem ? true : null"
+          [attr.aria-describedby]="purchaseDateProblem ? fieldId('purchaseDateError') : null"
+        />
+        @if (purchaseDateProblem) {
+          <p class="field-error m-0" [id]="fieldId('purchaseDateError')" [attr.data-testid]="testId('purchase-date-error')">{{ purchaseDateProblem }}</p>
+        }
       </div>
 
       <div class="field">

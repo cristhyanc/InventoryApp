@@ -324,6 +324,9 @@ public class AttachmentQuotaUploadPathTests
             documents,
             FakeAuthenticatedActorAccessor.Unidentifiable(),
             new FakeClock(NowUtc),
+            // Today is the clock's own date, so nothing here is dated in the future (issue #1246):
+            // this file is about the storage allowance, not about the purchase date.
+            new FakeBusinessCalendar(NowUtc),
             quota);
 
     private static PurchaseFileInput File(string fileName, long length) =>

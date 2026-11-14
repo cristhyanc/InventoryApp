@@ -309,7 +309,7 @@ public class PurchaseUseCaseTests
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
             TestPurchaseUseCases.Upload(store, documents, new FakeClock(DateTime.UtcNow)),
-            new UpdatePurchase(store),
+            TestPurchaseUseCases.Update(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation());
     }

@@ -687,7 +687,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new GetPurchaseFile(store, documents),
             TestPurchaseUseCases.Upload(store, documents, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
             TestPurchaseUseCases.Attach(store, documents),
-            new UpdatePurchase(store),
+            TestPurchaseUseCases.Update(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),

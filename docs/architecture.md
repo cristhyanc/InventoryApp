@@ -11391,6 +11391,34 @@ which offer both of the line's prices as linked inputs: type the amount paid for
 it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
+**A purchase date is never later than today, in the business's own time zone (issue #1246).** A
+purchase's date is the instant its restock movement is replayed at, so a purchase dated a week ahead
+showed its 12 units on the shelf immediately while a refill or a write-off *today* failed with
+"becomes physically negative" — `WeightedAverageCostReplay` orders today's movement before the
+purchase's — and no ordinary screen could repair it other than by correcting the date. So
+`Inventory.Domain.Purchases.PurchaseDatePolicy` is the rule (`AfterTodayMessage`, `400`) and
+`Inventory.Application.Purchases.PurchaseDateSubmission` applies it from the one place both paths
+call, deriving the purchase's business date through `Inventory.Application.Time.IBusinessCalendar`
+rather than from the host's own clock (AGENTS.md § Reporting dates and filters): for the hours
+between Sydney midnight and UTC midnight the two are different calendar days, and a purchase dated
+the business's own date is accepted then. Today and every earlier date are unchanged, including a
+time of day later than the current instant — the rule compares business *days* — and a request that
+submits no date still defaults to `IClock.UtcNow`, which is today by construction.
+
+`UploadPurchase` applies it after resolving the date to store and **before** the document is saved or
+the write transaction opens, so a refused create leaves no purchase, no line, no stock movement and
+no stored bytes. `UpdatePurchase` applies it to the date that would stand after the save — the
+submitted one, or the stored one when the request submits none — which is what the issue's recorded
+decision requires: *every* save needs a date of today or earlier, so an existing future-dated
+purchase (none is expected, and finding or repairing one is not part of this) can only be saved by
+correcting its date, and the refusal happens before the store's transaction opens. Reading the
+stored date outside that transaction cannot let a future-dated save through, because every write
+that could change it in between obeys this same rule. On the Angular side the one module
+`purchase-form/purchase-date-limit.ts` sets the shared Add/Edit form's date input `max` to the
+business date (the browser's local date while `GET /api/business/current` has not answered yet, as
+issue #1171 chose for the expense form), shows the server's own wording for a later date — typed or
+filled in by a receipt scan — and holds Save, so the refusal is explained rather than discovered.
+
 **A create with opening stock has an initial unit cost, and that is now a rule rather than a
 description (issue #1238).** `POST api/products` records opening stock above zero as a costed
 opening `Restock` movement, and `WeightedAverageCostReplay` treats a positive `Restock` with no unit

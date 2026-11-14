@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { GstClassification, Product, PurchaseGstSummary } from '../../../models/models';
 import { PurchaseFormFields, PurchaseFormLayoutComponent, PurchaseFormLine } from './purchase-form-layout.component';
 import {
@@ -601,6 +602,97 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
 
       expect(byTestId('purchase-error')).not.toBeNull();
       expect(byTestId('purchase-save-without-receipt')).toBeNull();
+    });
+  });
+
+  /**
+   * Issue #1246: a purchase is never dated later than today in the business's own time zone,
+   * because the stock such a purchase adds cannot be refilled or written off until that date
+   * arrives. The date input stops offering it, the form explains it, and Save does not send it -
+   * including when a receipt scan is what filled the date in.
+   *
+   * The clock is held at 13:30 UTC on 14 November 2026, which is 00:30 on the 15th in Sydney: the
+   * business day is already the 15th while the UTC date is still the 14th, which is the boundary the
+   * issue asks about.
+   */
+  describe('the purchase date limit', () => {
+    const justAfterSydneyMidnight = new Date('2026-11-14T13:30:00Z');
+
+    afterEach(() => jest.useRealTimers());
+
+    async function renderAtSydneyMidnight(purchaseDate: string, options: Parameters<typeof render>[0] = {}): Promise<void> {
+      await render({ ...options, form: emptyForm({ purchaseDate }) });
+      TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
+      jest.useFakeTimers().setSystemTime(justAfterSydneyMidnight);
+      refresh();
+    }
+
+    const dateInput = () => host.querySelector<HTMLInputElement>('#purchaseDate')!;
+
+    it('offers no later date than the business date, even while the UTC date is the day before', async () => {
+      await renderAtSydneyMidnight('2026-11-15');
+
+      expect(dateInput().getAttribute('max')).toBe('2026-11-15');
+      expect(justAfterSydneyMidnight.toISOString().slice(0, 10)).toBe('2026-11-14');
+    });
+
+    it('accepts the business date itself and saves it', async () => {
+      await renderAtSydneyMidnight('2026-11-15');
+      const submitted = jest.fn();
+      component.submitted.subscribe(submitted);
+
+      expect(component.purchaseDateProblem).toBeNull();
+      expect(byTestId('purchase-date-error')).toBeNull();
+
+      component.submit();
+
+      expect(submitted).toHaveBeenCalledTimes(1);
+    });
+
+    it('explains a later date and does not save it', async () => {
+      await renderAtSydneyMidnight('2026-11-16');
+      const submitted = jest.fn();
+      component.submitted.subscribe(submitted);
+
+      expect(byTestId('purchase-date-error')?.textContent).toContain(
+        'Purchase date cannot be later than today'
+      );
+      expect(dateInput().getAttribute('aria-invalid')).toBe('true');
+
+      component.submit();
+
+      expect(submitted).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The scanned-receipt case the issue names: the date was filled in by the scan rather than
+     * typed, so the explanation is there before anything is touched, and Save sends nothing.
+     */
+    it('explains a future date a receipt scan filled in, instead of saving it', async () => {
+      await renderAtSydneyMidnight('2026-11-21', { items: [pricedLine()] });
+      const submitted = jest.fn();
+      component.submitted.subscribe(submitted);
+
+      expect(byTestId('purchase-date-error')?.textContent).toContain(
+        'Purchase date cannot be later than today'
+      );
+
+      component.submit();
+
+      expect(submitted).not.toHaveBeenCalled();
+    });
+
+    it('leaves the date alone, and still saves, while the business time zone is unknown', async () => {
+      await render({ form: emptyForm({ purchaseDate: '2026-10-24' }) });
+      const submitted = jest.fn();
+      component.submitted.subscribe(submitted);
+
+      expect(component.purchaseDateProblem).toBeNull();
+      expect(dateInput().getAttribute('max')).not.toBe('');
+
+      component.submit();
+
+      expect(submitted).toHaveBeenCalledTimes(1);
     });
   });
 });

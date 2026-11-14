@@ -1,6 +1,7 @@
-import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { GstClassification, Product, PurchaseGstSummary, Supplier } from '../../../models/models';
 import { IconComponent } from '../../shared/icon.component';
 import { HelpToggletipComponent } from '../../shared/help-toggletip/help-toggletip.component';
@@ -15,6 +16,11 @@ import {
   totalPriceFieldValue,
   unitPriceFieldValue
 } from '../purchase-line-price';
+import {
+  PURCHASE_DATE_AFTER_TODAY_MESSAGE,
+  isPurchaseDateAfter,
+  latestPurchaseDate
+} from './purchase-date-limit';
 import { PurchaseProductPickerComponent } from './purchase-product-picker.component';
 import { PurchaseReceiptFieldComponent, StoredReceipt } from './purchase-receipt-field.component';
 import { PurchaseReceiptPreviewComponent } from './purchase-receipt-preview.component';
@@ -191,6 +197,13 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   private touchedLines = new WeakSet<PurchaseFormLine>();
 
+  /**
+   * The business's own time zone, which is the calendar the purchase date's limit is read in (issue
+   * #1246). It is read here rather than passed in because both forms need exactly the same limit,
+   * and the date field this component owns is the one place that shows it.
+   */
+  private readonly businessTimeZone = inject(BusinessTimeZoneService);
+
   ngOnChanges(changes: SimpleChanges): void {
     // A new form object is a newly opened purchase (a route change or a reset), so its own
     // validation and section state start again.
@@ -234,6 +247,26 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   onDateChange(purchaseDate: string): void {
     this.form.purchaseDate = purchaseDate;
     this.detailsChange.emit();
+  }
+
+  /**
+   * The latest date the purchase may carry: today in the business's own time zone (issue #1246). It
+   * is the date input's `max`, so a later date is not offered at all.
+   */
+  get maxPurchaseDate(): string {
+    return latestPurchaseDate(this.businessTimeZone.timeZoneId);
+  }
+
+  /**
+   * Why the entered purchase date cannot be saved, or `null` when it can. Unlike the title's
+   * problem it is shown as soon as it exists, without waiting for a blur or a save attempt: a date
+   * later than today is only ever put there by a date picker slip or by a receipt scan that misread
+   * the receipt, and both need to be seen rather than discovered on save.
+   */
+  get purchaseDateProblem(): string | null {
+    return isPurchaseDateAfter(this.form.purchaseDate, this.maxPurchaseDate)
+      ? PURCHASE_DATE_AFTER_TODAY_MESSAGE
+      : null;
   }
 
   onTitleChange(title: string): void {
@@ -416,6 +449,14 @@ export class PurchaseFormLayoutComponent implements OnChanges {
     }
 
     this.submitAttempted = true;
+
+    // A purchase dated later than today is not sent at all (issue #1246). The API refuses it with
+    // the same message, so this only saves the round trip - and it is what makes a future date a
+    // receipt scan filled in show the message instead of being saved.
+    if (this.purchaseDateProblem !== null) {
+      return;
+    }
+
     this.submitted.emit();
   }
 

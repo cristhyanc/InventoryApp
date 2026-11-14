@@ -35,6 +35,13 @@ namespace Inventory.Application.Purchases;
 /// Only the <em>document</em> is ever refused for storage - the purchase itself can always be
 /// recorded without one - and while no plan is enforced nothing is reserved at all.</para>
 ///
+/// <para><strong>Since issue #1246 the purchase date is never later than today</strong> in the
+/// business's own time zone. It is judged through <see cref="IBusinessCalendar"/> by
+/// <see cref="PurchaseDateSubmission"/>, after the date to store has been resolved and before the
+/// document is saved, so a future-dated save - whose restock movement the cost replay would order
+/// after today's refills and write-offs, making them fail as physically negative - writes nothing at
+/// all.</para>
+///
 /// <para>Since issue #974 the request may also carry the operator's decision to complete a linked
 /// supplier order with whatever stays undelivered. This use case adds only the attribution a client
 /// may not supply - who decided, and when - and hands the decision to the same
@@ -48,6 +55,7 @@ public sealed class UploadPurchase
     private readonly IDocumentStorage _documents;
     private readonly IAuthenticatedActorAccessor _actors;
     private readonly IClock _clock;
+    private readonly IBusinessCalendar _calendar;
     private readonly AttachmentQuotaGuard _quota;
 
     public UploadPurchase(
@@ -55,12 +63,14 @@ public sealed class UploadPurchase
         IDocumentStorage documents,
         IAuthenticatedActorAccessor actors,
         IClock clock,
+        IBusinessCalendar calendar,
         AttachmentQuotaGuard quota)
     {
         _store = store;
         _documents = documents;
         _actors = actors;
         _clock = clock;
+        _calendar = calendar;
         _quota = quota;
     }
 
@@ -113,6 +123,13 @@ public sealed class UploadPurchase
         // The same UTC instant the host clock used to supply directly, now through the port so the
         // default is deterministic and testable; the persisted value for a given instant is unchanged.
         var effectivePurchaseDate = fields.PurchaseDate ?? _clock.UtcNow;
+
+        // A date the business has not reached yet is refused here, before the document is saved and
+        // before the write transaction opens, so nothing at all is written (issue #1246). The
+        // defaulted instant above is today in the business's calendar by construction, so only a
+        // submitted date can be refused.
+        PurchaseDateSubmission.EnsureNotAfterToday(effectivePurchaseDate, _calendar);
+
         var conflict = await _store.FindConflictingCostTransitionBaselineAsync(productIds, effectivePurchaseDate, cancellationToken);
         if (conflict is { } conflictingBaseline)
             throw new InvalidOperationException(

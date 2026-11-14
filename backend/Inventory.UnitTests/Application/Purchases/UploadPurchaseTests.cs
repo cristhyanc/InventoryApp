@@ -37,6 +37,10 @@ public class UploadPurchaseTests
             documents,
             actors ?? FakeAuthenticatedActorAccessor.Identified(Operator),
             Clock,
+            // The Sydney business date of the clock's instant, so the dates these tests submit are
+            // the past dates they read as and the future-date rule of issue #1246 is not what any of
+            // them is about; PurchaseDateUseCaseTests is.
+            new FakeBusinessCalendar(new DateTime(2026, 3, 12)),
             quota ?? FakeAttachmentQuota.NotEnforced());
 
     private static ActorIdentity Actor(string objectId)
