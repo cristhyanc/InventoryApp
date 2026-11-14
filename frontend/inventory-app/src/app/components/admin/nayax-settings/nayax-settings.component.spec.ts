@@ -114,6 +114,25 @@ describe('NayaxSettingsComponent (issue #388)', () => {
     expect(connections.retest).not.toHaveBeenCalled();
   });
 
+  /**
+   * Issue #1311: setup is a dialog over this one page. The card, the fee-rate editor and Re-test
+   * stay on the page behind it, and no step of the old inline wizard is rendered on arrival.
+   */
+  it('launches Nayax setup as a dialog over the page, with no inline wizard steps', async () => {
+    const { fixture, host } = await render({ getRates: jest.fn(() => of([rate()])), saveRate: jest.fn() });
+
+    expect(host.querySelector('[data-testid="open-connect"]')?.textContent).toContain('Connect Nayax');
+    expect(host.querySelector('#nayax-operator-id')).toBeNull();
+    expect(host.querySelector('[data-testid="step-progress"]')).toBeNull();
+
+    (host.querySelector('[data-testid="open-connect"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="connect-nayax-dialog"]')).toBeTruthy();
+    expect(host.querySelector('#nayax-operator-id')).toBeTruthy();
+    expect(host.querySelector('#nayax-fee-ex-gst')).toBeTruthy();
+  });
+
   it('reports an API error on save failure without reloading', async () => {
     const getRates = jest.fn(() => of([]));
     const saveRate = jest.fn(() => throwError(() => ({ error: 'Rate already configured for that date.' })));

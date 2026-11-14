@@ -15,11 +15,13 @@ import {
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { withoutRetiredNayaxConnectionChecks } from '../../../provider/nayax-read-areas';
+import { ModalDialogComponent } from '../../shared/modal-dialog/modal-dialog.component';
 import {
   NayaxConnectionChecklistComponent,
   nayaxConnectionAreaLabel,
   nayaxConnectionFailureSentence
 } from './nayax-connection-checklist.component';
+import { NayaxCoreGuideComponent, NayaxCoreGuideSource } from './nayax-core-guide.component';
 
 /** One outcome of the last action an Owner took, with what to do about it. */
 export interface NayaxConnectionNotice {
@@ -35,15 +37,32 @@ export const NAYAX_SUPPORT_PORTAL_URL = 'https://nayax.service-now.com/csm';
 export const NAYAX_SUPPORT_EMAIL = 'integration-support@nayax.com';
 
 /**
- * Step 5's advice for refused areas that asking Nayax for a permission would not fix, one entry per
- * kind of cause, with the areas it covers (issue #681). `Other` is every cause that is not one of
- * the three named: an answer nobody interpreted is not evidence of a missing permission either.
+ * The review step's advice for refused areas that asking Nayax for a permission would not fix, one
+ * entry per kind of cause, with the areas it covers (issue #681). `Other` is every cause that is not
+ * one of the three named: an answer nobody interpreted is not evidence of a missing permission either.
  */
 export interface NayaxConnectionRefusalAdvice {
   readonly cause: 'InvalidOrExpiredToken' | 'OperatorIdMismatch' | 'NayaxUnavailable' | 'Other';
   readonly advice: string;
   readonly areas: string[];
 }
+
+/** The three steps of the Connect Nayax dialog (issue #1311). */
+export type NayaxConnectStep = 1 | 2 | 3;
+
+/**
+ * What the token step shows about the last Test press. `invalid-token` and `timeout` are the two
+ * outcomes that send an Owner back to an empty token field rather than on to the review: the token
+ * itself was refused, or Nayax never answered, so there is nothing to review.
+ */
+export type NayaxTokenTestState = 'testing' | 'invalid-token' | 'timeout';
+
+/**
+ * What the review step says about a completed test, in the order it is decided: an expired draft
+ * needs a fresh test whatever it found; a machine list that did not pass cannot be saved; then a
+ * save-eligible run is a partial one, an empty-account one or a clean one.
+ */
+export type NayaxReviewState = 'expired' | 'not-saveable' | 'partial' | 'zero-machines' | 'passed';
 
 /**
  * What a re-test refused for a changed credential means. The server sends this sentence itself, and
@@ -60,24 +79,64 @@ const STATUS_PRESENTATION: Record<NayaxConnectionStatusName, { label: string; ba
   NeedsAttention: { label: 'Needs attention', badge: 'badge-danger' }
 };
 
-/** The six steps, in order, for the progress list. */
-const STEP_LABELS = [
-  'Operator ID',
-  'Token instructions',
-  'Paste the token',
-  'Checklist',
-  'Ask Nayax',
-  'Save'
+/** The three steps, in order, for the progress indicator. */
+export const NAYAX_CONNECT_STEP_LABELS: readonly string[] = ['Operator ID', 'Lynx token', 'Review & save'];
+
+/**
+ * Nayax's official guides, linked beside each step as the place to see its screens (issue #1311).
+ * The Operator ID path is the "How to find your Operator ID in Nayax Core" section of the access
+ * request guide, and the operator screen showing the field is in the create-operator guide's
+ * "Verify creation" section; the token path is the "Access token" section of the Lynx security
+ * guide. Their screenshots are not embedded: each shows a demo account's identifiers (see
+ * `NayaxCoreGuideComponent`).
+ */
+export const NAYAX_OPERATOR_ID_GUIDE: NayaxCoreGuideSource = {
+  title: 'How to find your Operator ID in Nayax Core',
+  url: 'https://devzone.nayax.com/docs/manage-data-operations/lynx-api/request-access#how-to-find-your-operator-id-in-nayax-core'
+};
+export const NAYAX_OPERATOR_SCREEN_GUIDE: NayaxCoreGuideSource = {
+  title: 'Create an operator: verify creation',
+  url: 'https://devzone.nayax.com/docs/manage-data-operations/lynx-api/operator/create-operator#verify-creation'
+};
+export const NAYAX_TOKEN_GUIDE: NayaxCoreGuideSource = {
+  title: 'Lynx API security: access token',
+  url: 'https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token'
+};
+
+/** Where the Operator ID is, as Nayax's own guide words it. Static markup: control names in bold. */
+export const NAYAX_OPERATOR_ID_STEPS: readonly string[] = [
+  'Sign in to Nayax Core and go to <strong>Operator</strong> in the left sidebar.',
+  'Select your operator from the list and click <strong>Search</strong>.',
+  'Your numeric ID is listed under <strong>Company Info</strong> as <strong>Operator Id</strong>.'
+];
+
+/** The path to a Lynx token, as Nayax's own guide words it. Static markup: control names in bold. */
+export const NAYAX_TOKEN_STEPS: readonly string[] = [
+  'Sign in to Nayax Core with your username and password.',
+  'Click your username in the top right corner, then choose <strong>Account Settings</strong>.',
+  'Open the <strong>Security and Login</strong> tab, next to Account.',
+  'Find the <strong>User Tokens</strong> section, below Your Trusted Devices.',
+  'If a Lynx token is listed, choose <strong>Show Token</strong> next to it and copy it. If not, ' +
+    'choose <strong>Add Token</strong> and select <strong>Lynx Token</strong>.'
 ];
 
 /**
- * The Owner-only Nayax connection wizard (issue #538), composed by the Integrations page beside
- * the processing-fee editor, over the endpoints of issues #536 and #537.
+ * The Owner-only Nayax connection card on Admin → Integrations, and the **Connect Nayax** dialog it
+ * launches (issues #538 and #1311), over the endpoints of issues #536, #537 and #1310.
  *
- * **The token is write-only.** The field on step 3 is bound to no component state at all: it is
- * read from the DOM at the moment Test is pressed, passed once to `POST …/test`, and cleared the
- * moment that call returns, whatever it concluded. Nothing here writes it to `localStorage`,
- * `sessionStorage`, a cookie, the URL or a component field, and nothing re-sends it - the save step
+ * **The card stays on the page; setup is a dialog.** The card shows the stored connection, its
+ * status and Re-test, and a single launcher: **Connect Nayax** when nothing is stored, **Replace
+ * connection** when something is. The dialog has three steps - Operator ID, Lynx token, Review &
+ * save - each guide step putting Nayax's own instructions and guide links (**In Nayax Core**) beside
+ * the field (**In Restockroo**). Nothing in the dialog touches the stored connection until **Save
+ * connection** succeeds.
+ *
+ * **The token is write-only.** The field on the Lynx token step is bound to no component state at
+ * all: it is read from the DOM at the moment Test is pressed, passed once to `POST …/test`, and
+ * cleared the moment that call returns, whatever it concluded. Going Back, closing the dialog and
+ * destroying the component clear it too, and closing also abandons a test still in flight so its
+ * answer can never reach a dialog that was closed. Nothing here writes it to `localStorage`,
+ * `sessionStorage`, a cookie, the URL or a component field, and nothing re-sends it - the save
  * carries the server's own opaque draft id, so the credentials stored are exactly the ones the
  * server tested (see docs/architecture.md § Saving a tested connection and re-testing it).
  *
@@ -92,7 +151,7 @@ const STEP_LABELS = [
  * **Owner only, twice over and authoritative in neither place.** The route already requires
  * `Integration.Manage` (`app.routes.ts`), and the endpoints behind every action require it
  * themselves and refuse the request regardless. The capability read here hides a control an Owner's
- * role is the only one that can use; it starts granted so an unanswered read leaves the wizard
+ * role is the only one that can use; it starts granted so an unanswered read leaves the card
  * exactly as it was before roles were rendered.
  *
  * **A support session is the other reason Test, Save connection and Re-test are disabled** (issue
@@ -103,7 +162,13 @@ const STEP_LABELS = [
 @Component({
   selector: 'app-nayax-connection-wizard',
   standalone: true,
-  imports: [CommonModule, FormsModule, NayaxConnectionChecklistComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    ModalDialogComponent,
+    NayaxConnectionChecklistComponent,
+    NayaxCoreGuideComponent
+  ],
   template: `
     <section class="card" data-testid="nayax-connection">
       <div class="card-header">
@@ -117,7 +182,7 @@ const STEP_LABELS = [
         } @else {
           @if (notice) {
             <div
-              class="alert"
+              class="alert mb-4"
               role="status"
               [class.alert-danger]="notice.tone === 'danger'"
               [class.alert-warning]="notice.tone === 'warning'"
@@ -130,17 +195,17 @@ const STEP_LABELS = [
           }
 
           @if (statusUnavailable) {
-            <p class="text-sm value-muted" data-testid="status-unavailable">
-              The current Nayax connection state could not be read. The steps below still work, and
+            <p class="mb-4 text-sm value-muted" data-testid="status-unavailable">
+              The current Nayax connection state could not be read. You can still connect Nayax, and
               saving a tested token reports the state the server concluded.
             </p>
           }
 
           @if (connectionStored && connection) {
-            <div class="mb-5 rounded-lg border border-md-gray-200 p-4" data-testid="stored-connection">
+            <div data-testid="stored-connection">
               <div class="flex flex-wrap items-center gap-2">
                 <h3 class="text-sm font-semibold text-md-gray-800">Stored connection</h3>
-                <span [class]="'badge ' + statusBadge(connection.status)">
+                <span [class]="'badge ' + statusBadge(connection.status)" data-testid="stored-status">
                   {{ statusLabel(connection.status) }}
                 </span>
               </div>
@@ -151,13 +216,23 @@ const STEP_LABELS = [
                   still unverified.
                 </p>
               }
-              <button
-                type="button"
-                class="btn btn-secondary mt-3"
-                data-testid="retest"
-                [disabled]="busy || sessionActive"
-                (click)="retest()"
-              >{{ retesting ? 'Re-testing…' : 'Re-test this connection' }}</button>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  data-testid="retest"
+                  [disabled]="busy || sessionActive"
+                  (click)="retest()"
+                >{{ retesting ? 'Re-testing…' : 'Re-test this connection' }}</button>
+                <button
+                  #launcher
+                  type="button"
+                  class="btn btn-secondary"
+                  data-testid="open-connect"
+                  [disabled]="busy"
+                  (click)="openDialog()"
+                >Replace connection</button>
+              </div>
 
               @if (retestResult) {
                 <div class="mt-4" data-testid="retest-checklist">
@@ -168,71 +243,112 @@ const STEP_LABELS = [
                 </div>
               }
             </div>
+          } @else {
+            <p class="text-sm value-muted" data-testid="not-connected">
+              This business is not connected to Nayax yet. You will need your Nayax operator ID and a
+              Lynx token from Nayax Core.
+            </p>
+            <button
+              #launcher
+              type="button"
+              class="btn btn-primary mt-3"
+              data-testid="open-connect"
+              [disabled]="busy"
+              (click)="openDialog()"
+            >Connect Nayax</button>
           }
+        }
+      </div>
+    </section>
 
-          <ol class="mb-4 flex flex-wrap gap-2 text-sm" data-testid="step-progress">
-            @for (label of stepLabels; track label; let index = $index) {
-              <li>
-                <button
-                  type="button"
-                  class="btn btn-sm"
-                  [class.btn-primary]="step === index + 1"
-                  [class.btn-secondary]="step !== index + 1"
-                  [attr.aria-current]="step === index + 1 ? 'step' : null"
-                  [disabled]="busy || !canGoTo(index + 1)"
-                  (click)="goTo(index + 1)"
-                >{{ index + 1 }}. {{ label }}</button>
-              </li>
-            }
-          </ol>
+    @if (dialogOpen) {
+      <app-modal-dialog
+        size="wide"
+        testId="connect-nayax-dialog"
+        [dialogTitle]="replacing ? 'Replace Nayax connection' : 'Connect Nayax'"
+        [closeDisabled]="saving"
+        (closeRequested)="closeDialog()"
+      >
+        <ol class="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-sm" aria-label="Progress" data-testid="step-progress">
+          @for (label of stepLabels; track label; let index = $index) {
+            <li
+              class="flex items-center gap-2"
+              [class.font-semibold]="step === index + 1"
+              [class.text-md-gray-800]="step >= index + 1"
+              [class.value-muted]="step < index + 1"
+              [attr.aria-current]="step === index + 1 ? 'step' : null"
+              [attr.data-testid]="'progress-' + (index + 1)"
+            >
+              <span
+                class="inline-flex h-6 w-6 items-center justify-center rounded-full border text-xs"
+                [class.border-md-gray-200]="step < index + 1"
+                [class.bg-md-gray-800]="step >= index + 1"
+                [class.text-white]="step >= index + 1"
+                aria-hidden="true"
+              >{{ step > index + 1 || saved ? '✓' : index + 1 }}</span>
+              <span>{{ label }}</span>
+              @if (step > index + 1 || saved) {
+                <span class="sr-only">(done)</span>
+              }
+            </li>
+          }
+        </ol>
 
-          @if (step === 1) {
-            <div data-testid="step-1">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 1. Your Nayax operator id</h3>
-              <div class="field mt-2 sm:max-w-xs">
+        @if (dialogNotice) {
+          <div
+            class="alert mb-4"
+            role="alert"
+            [class.alert-danger]="dialogNotice.tone === 'danger'"
+            [class.alert-warning]="dialogNotice.tone === 'warning'"
+            [class.alert-success]="dialogNotice.tone === 'success'"
+            data-testid="dialog-notice"
+          >
+            <p class="alert-title">{{ dialogNotice.title }}</p>
+            <p class="mt-1">{{ dialogNotice.detail }}</p>
+          </div>
+        }
+
+        @if (step === 1) {
+          <div class="grid gap-6 lg:grid-cols-12" data-testid="step-1">
+            <app-nayax-core-guide
+              class="block min-w-0 lg:col-span-7"
+              [steps]="operatorIdSteps"
+              [sources]="operatorSources"
+            ></app-nayax-core-guide>
+            <section class="min-w-0 lg:col-span-5" aria-labelledby="nayax-step-1-heading">
+              <h3 id="nayax-step-1-heading" class="text-sm font-semibold text-md-gray-800">In Restockroo</h3>
+              <div class="field mt-2">
                 <label class="field-label" for="nayax-operator-id">Operator ID</label>
                 <input
                   id="nayax-operator-id"
                   type="text"
                   inputmode="numeric"
                   autocomplete="off"
+                  data-dialog-autofocus
                   [disabled]="busy"
                   [(ngModel)]="operatorId"
+                  (keydown.enter)="next()"
                 />
                 <p class="field-hint">
-                  In Nayax Core: <strong>Operator</strong> &rsaquo;
-                  <strong>Company Info</strong> &rsaquo; <strong>Operator Id</strong>. Open Operator
-                  in the left sidebar, select your operator and search; the numeric id is listed
-                  under Company Info. It is not a secret, and it is stored with the connection.
+                  The numeric Operator Id from Nayax Core. It is not a secret, and it is stored with the
+                  connection.
                 </p>
               </div>
-            </div>
-          }
+            </section>
+          </div>
+        }
 
-          @if (step === 2) {
-            <div data-testid="step-2">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 2. Create a Lynx token in Nayax Core</h3>
-              <ol class="mt-2 ml-5 list-decimal text-sm text-md-gray-800" data-testid="token-instructions">
-                <li>Sign in to Nayax Core with your username and password.</li>
-                <li>Click your username in the top right corner, then choose Account Settings.</li>
-                <li>Open the Security and Login tab, the second one, next to Account.</li>
-                <li>Find the User Tokens section, below Your Trusted Devices.</li>
-                <li>Choose Add Token, and select the Lynx Token type.</li>
-                <li>
-                  If a Lynx token is already listed, use Show Token next to it instead, and copy it.
-                </li>
-              </ol>
-              <p class="mt-2 text-sm value-muted">
-                The token is a secret. Paste it on the next step; it is sent once to check it and is
-                not kept in this browser.
-              </p>
-            </div>
-          }
-
-          @if (step === 3) {
-            <div data-testid="step-3">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 3. Paste the token and test it</h3>
-              <div class="field mt-2 sm:max-w-md">
+        @if (step === 2) {
+          <div class="grid gap-6 lg:grid-cols-12" data-testid="step-2">
+            <app-nayax-core-guide
+              class="block min-w-0 lg:col-span-7"
+              [steps]="tokenSteps"
+              [sources]="tokenSources"
+              data-testid="token-instructions"
+            ></app-nayax-core-guide>
+            <section class="min-w-0 lg:col-span-5" aria-labelledby="nayax-step-2-heading">
+              <h3 id="nayax-step-2-heading" class="text-sm font-semibold text-md-gray-800">In Restockroo</h3>
+              <div class="field mt-2">
                 <label class="field-label" for="nayax-token">Lynx token</label>
                 <input
                   #tokenField
@@ -240,41 +356,113 @@ const STEP_LABELS = [
                   type="password"
                   autocomplete="off"
                   spellcheck="false"
+                  data-dialog-autofocus
                   [disabled]="busy"
+                  (keydown.enter)="runTest()"
                 />
                 <p class="field-hint">
-                  Write-only: it is sent once with the test, discarded by this page as soon as the
-                  test comes back, and never stored in this browser. Nothing is saved yet &mdash;
-                  testing changes no Nayax data and leaves any stored connection untouched.
+                  The token is a secret. It is sent once to test it, cleared from this page as soon as
+                  the test comes back, and never stored in this browser. Testing changes no Nayax data
+                  and leaves any stored connection untouched.
                 </p>
               </div>
-              <button
-                type="button"
-                class="btn btn-primary mt-3"
-                data-testid="run-test"
-                [disabled]="busy || sessionActive"
-                (click)="runTest()"
-              >{{ testing ? 'Testing…' : 'Test connection' }}</button>
-            </div>
-          }
+              <p class="mt-2 text-xs value-muted">Testing for operator ID {{ operatorId.trim() }}.</p>
 
-          @if (step === 4 && result) {
-            <div data-testid="step-4">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 4. What this token can do</h3>
-              <p class="mt-1 mb-3 text-sm value-muted">
-                Every line is the server's own result for one Nayax endpoint this application reads.
-                Nothing has been stored yet.
-              </p>
+              <div class="mt-3" aria-live="polite" data-testid="token-test-state">
+                @switch (testState) {
+                  @case ('testing') {
+                    <p class="flex items-center gap-2 text-sm text-md-gray-800" data-testid="state-testing">
+                      <span aria-hidden="true">⏳</span>
+                      Testing the connection with Nayax…
+                    </p>
+                  }
+                  @case ('invalid-token') {
+                    <div class="alert alert-danger" data-testid="state-invalid-token">
+                      <p class="alert-title"><span aria-hidden="true">✗ </span>Nayax refused this token.</p>
+                      <p class="mt-1">
+                        It is invalid or has expired. In Nayax Core, copy the Lynx token again with Show
+                        Token, or add a new one, then paste it above and test again.
+                      </p>
+                    </div>
+                  }
+                  @case ('timeout') {
+                    <div class="alert alert-warning" data-testid="state-timeout">
+                      <p class="alert-title"><span aria-hidden="true">⚠ </span>Nayax did not answer in time.</p>
+                      <p class="mt-1">
+                        Nothing was learned about this token, and nothing was saved. Paste the token
+                        again and test in a few minutes.
+                      </p>
+                    </div>
+                  }
+                }
+              </div>
+            </section>
+          </div>
+        }
+
+        @if (step === 3) {
+          <div data-testid="step-3">
+            @if (saved) {
+              <div class="alert alert-success" role="status" data-testid="saved">
+                <p class="alert-title"><span aria-hidden="true">✓ </span>Nayax connected</p>
+                <p class="mt-1">
+                  This business now calls Nayax with the token you tested. Its status is on the
+                  Integrations page, where you can re-test it at any time.
+                </p>
+              </div>
+            } @else if (result) {
+              @switch (reviewState) {
+                @case ('expired') {
+                  <div class="alert alert-danger" data-testid="review-expired">
+                    <p class="alert-title"><span aria-hidden="true">⏱ </span>This test result has expired.</p>
+                    <p class="mt-1">
+                      A tested token is kept for fifteen minutes only. Go back, paste the token again and
+                      test it before saving.
+                    </p>
+                  </div>
+                }
+                @case ('not-saveable') {
+                  <div class="alert alert-danger" data-testid="machine-list-failed">
+                    <p class="alert-title"><span aria-hidden="true">✗ </span>This token cannot be saved.</p>
+                    <p class="mt-1">
+                      It could not read this business's machine list from Nayax. The checklist says why;
+                      fix that, then test again.
+                    </p>
+                  </div>
+                }
+                @case ('partial') {
+                  <div class="alert alert-warning" data-testid="review-partial">
+                    <p class="alert-title"><span aria-hidden="true">⚠ </span>Connection test passed, with some permissions refused.</p>
+                    <p class="mt-1">
+                      You can save now. The connection is then recorded as having permissions pending,
+                      and the features that need the refused areas keep saying so until Nayax grants them
+                      and a re-test confirms it.
+                    </p>
+                  </div>
+                }
+                @case ('zero-machines') {
+                  <div class="alert alert-success" data-testid="review-zero-machines">
+                    <p class="alert-title"><span aria-hidden="true">✓ </span>Connection test passed. No machines found yet.</p>
+                    <p class="mt-1">
+                      You can save now, and re-test once your machines are set up in Nayax so the
+                      machine checks can run.
+                    </p>
+                  </div>
+                }
+                @case ('passed') {
+                  <div class="alert alert-success" data-testid="review-passed">
+                    <p class="alert-title"><span aria-hidden="true">✓ </span>Connection test passed.</p>
+                    <p class="mt-1">Nayax shows as connected once you save this connection.</p>
+                  </div>
+                }
+              }
+
+              <h3 class="mt-4 mb-2 text-sm font-semibold text-md-gray-800">What this token can do</h3>
               <app-nayax-connection-checklist
                 [checks]="result.checks"
                 [machineCount]="result.machineCount"
               ></app-nayax-connection-checklist>
-            </div>
-          }
 
-          @if (step === 5 && result) {
-            <div data-testid="step-5">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 5. What to do about the refused areas</h3>
               @for (advice of refusalAdvice(); track advice.cause) {
                 <div class="alert alert-warning mt-3" [attr.data-testid]="'refusal-advice-' + advice.cause">
                   <p class="alert-title">{{ advice.advice }}</p>
@@ -285,108 +473,59 @@ const STEP_LABELS = [
                   </ul>
                 </div>
               }
+
               @if (permissionRefusals().length > 0) {
-                <p class="mt-3 text-sm value-muted">
-                  Nayax grants a token's permissions, so this is a request to them. Copy the text below
-                  into a support ticket; it names the operator id you tested and every area refused for
-                  lack of a permission.
-                </p>
-                <label class="field-label mt-3" for="nayax-support-request">Request to send Nayax</label>
-                <textarea
-                  #supportRequestField
-                  id="nayax-support-request"
-                  class="w-full rounded-lg border border-md-gray-200 p-3 font-mono text-xs"
-                  rows="12"
-                  readonly
-                  data-testid="support-request"
-                  [value]="supportRequest()"
-                ></textarea>
-                <div class="mt-2 flex flex-wrap gap-2">
+                <div class="mt-4 rounded-lg border border-md-gray-200 p-4" data-testid="permission-request">
+                  <h3 class="text-sm font-semibold text-md-gray-800">Ask Nayax for the refused permissions</h3>
+                  <p class="mt-1 text-sm value-muted">
+                    Nayax grants a token's permissions. Copy this request into a support ticket; it names
+                    the operator ID you tested and only the areas refused for lack of a permission.
+                  </p>
+                  <label class="field-label mt-3" for="nayax-support-request">Request to send Nayax</label>
+                  <textarea
+                    #supportRequestField
+                    id="nayax-support-request"
+                    class="w-full rounded-lg border border-md-gray-200 p-3 font-mono text-xs"
+                    rows="10"
+                    readonly
+                    data-testid="support-request"
+                    [value]="supportRequest()"
+                  ></textarea>
                   <button
                     type="button"
-                    class="btn btn-secondary"
+                    class="btn btn-secondary mt-2"
                     data-testid="copy-support-request"
                     (click)="copySupportRequest()"
                   >Copy this request</button>
+                  <p class="mt-3 text-sm text-md-gray-800">
+                    Raise it in the Nayax support portal:
+                    <a
+                      class="btn-link break-all"
+                      data-testid="support-portal-link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      [href]="supportPortalUrl"
+                    >{{ supportPortalUrl }}</a>
+                  </p>
+                  <p class="mt-1 text-sm value-muted">
+                    If the portal gets no answer, the integration mailbox is the secondary contact:
+                    <a class="btn-link break-all" data-testid="support-email-link" [href]="'mailto:' + supportEmail">
+                      {{ supportEmail }}
+                    </a>
+                  </p>
                 </div>
-                <p class="mt-3 text-sm text-md-gray-800">
-                  Raise it in the Nayax support portal:
-                  <a
-                    class="btn-link"
-                    data-testid="support-portal-link"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    [href]="supportPortalUrl"
-                  >{{ supportPortalUrl }}</a>
-                </p>
-                <p class="mt-1 text-sm value-muted">
-                  If the portal gets no answer, the integration mailbox is the secondary contact:
-                  <a class="btn-link" data-testid="support-email-link" [href]="'mailto:' + supportEmail">
-                    {{ supportEmail }}
-                  </a>
-                </p>
-              } @else {
-                <p class="mt-3 text-sm value-muted" data-testid="no-permission-request">
-                  No area was refused for lack of a permission, so there is nothing to ask Nayax to
-                  grant. Follow the advice above, then test again.
-                </p>
               }
-            </div>
-          }
+            } @else {
+              <p class="text-sm value-muted" data-testid="no-result">
+                There is no completed test to save. Go back and test the token.
+              </p>
+            }
+          </div>
+        }
 
-          @if (step === 6) {
-            <div data-testid="step-6">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 6. Save this connection</h3>
-              @if (result) {
-                <p class="mt-1 text-sm value-muted">
-                  Saving stores the operator id and the token the server just tested, and nothing
-                  else: this page sends back only the server's own reference to that test.
-                </p>
-                @if (!machineListPassed) {
-                  <p class="mt-2 text-sm text-md-danger-text" data-testid="machine-list-failed">
-                    This token could not read this business's machine list from Nayax, so it cannot
-                    be saved. The checklist says whether the token itself was refused or only that
-                    one area was; fix that, then test again.
-                  </p>
-                } @else if (draftExpired) {
-                  <p class="mt-2 text-sm text-md-danger-text">
-                    This test result has expired. Run the test again from step 3 before saving.
-                  </p>
-                } @else if (!result.nothingFailed) {
-                  <p class="mt-2 text-sm text-md-gray-800">
-                    Some areas were refused. Saving now records the connection as having permissions
-                    pending, so the features that need those areas keep saying so until Nayax grants
-                    them and a re-test confirms it.
-                  </p>
-                }
-                <button
-                  type="button"
-                  class="btn btn-primary mt-3"
-                  data-testid="save-connection"
-                  [disabled]="!canSave"
-                  (click)="saveConnection()"
-                >{{ saving ? 'Saving…' : 'Save connection' }}</button>
-              } @else if (saved) {
-                <p class="mt-1 text-sm text-md-success-text" data-testid="saved">
-                  Saved. This business now calls Nayax with the token you tested.
-                </p>
-                <button
-                  type="button"
-                  class="btn btn-secondary mt-3"
-                  data-testid="connect-another"
-                  [disabled]="busy"
-                  (click)="startOver()"
-                >Connect a different token</button>
-              } @else {
-                <p class="mt-1 text-sm value-muted">
-                  There is no completed test to save. Run the test again from step 3.
-                </p>
-              }
-            </div>
-          }
-
-          <div class="mt-4 flex flex-wrap gap-2">
-            @if (step > 1) {
+        <div dialog-actions class="flex w-full flex-wrap items-center justify-between gap-2">
+          <div>
+            @if (step > 1 && !saved) {
               <button
                 type="button"
                 class="btn btn-secondary"
@@ -395,35 +534,71 @@ const STEP_LABELS = [
                 (click)="back()"
               >Back</button>
             }
-            @if (step !== 3 && step !== 6) {
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            @if (step === 1) {
+              <button type="button" class="btn btn-primary" data-testid="next" [disabled]="busy" (click)="next()">
+                Next
+              </button>
+            }
+            @if (step === 2) {
+              <span class="hidden text-xs value-muted sm:inline">Nothing is saved yet</span>
               <button
                 type="button"
                 class="btn btn-primary"
-                data-testid="next"
-                [disabled]="busy"
-                (click)="next()"
-              >Next</button>
+                data-testid="run-test"
+                [disabled]="busy || sessionActive"
+                (click)="runTest()"
+              >{{ testing ? 'Testing…' : 'Test connection' }}</button>
+            }
+            @if (step === 3 && !saved) {
+              @if (reviewState === 'expired') {
+                <button type="button" class="btn btn-primary" data-testid="test-again" [disabled]="busy" (click)="back()">
+                  Test again
+                </button>
+              } @else if (result) {
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  data-testid="save-connection"
+                  [disabled]="!canSave"
+                  (click)="saveConnection()"
+                >{{ saving ? 'Saving…' : 'Save connection' }}</button>
+              }
+            }
+            @if (saved) {
+              <button type="button" class="btn btn-primary" data-testid="done" (click)="closeDialog()">Done</button>
             }
           </div>
-        }
-      </div>
-    </section>
+        </div>
+      </app-modal-dialog>
+    }
   `
 })
 export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
-  readonly stepLabels = STEP_LABELS;
+  readonly stepLabels = NAYAX_CONNECT_STEP_LABELS;
   readonly supportPortalUrl = NAYAX_SUPPORT_PORTAL_URL;
   readonly supportEmail = NAYAX_SUPPORT_EMAIL;
+  readonly operatorIdSteps = NAYAX_OPERATOR_ID_STEPS;
+  readonly operatorSources = [NAYAX_OPERATOR_ID_GUIDE, NAYAX_OPERATOR_SCREEN_GUIDE];
+  readonly tokenSteps = NAYAX_TOKEN_STEPS;
+  readonly tokenSources = [NAYAX_TOKEN_GUIDE];
 
-  /** Which step is on screen, 1 to 6. */
-  step = 1;
+  /** Whether the Connect Nayax dialog is on screen. */
+  dialogOpen = false;
+
+  /** Whether the dialog was opened to replace a stored connection, which only changes its title. */
+  replacing = false;
+
+  /** Which dialog step is on screen. */
+  step: NayaxConnectStep = 1;
 
   /** The operator id. Not a secret, and the only credential field this component holds. */
   operatorId = '';
 
   /**
    * Whether the signed-in member's role may manage this integration. It starts `true` so an
-   * unanswered capability read leaves the wizard exactly as it was before roles were rendered; the
+   * unanswered capability read leaves the card exactly as it was before roles were rendered; the
    * route guard and every endpoint check it themselves.
    */
   canManage = true;
@@ -439,16 +614,20 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   /** The stored connection's state, as the server reported it. */
   connection: NayaxConnectionState | null = null;
 
-  /** True when the stored state could not be read; the wizard stays usable regardless. */
+  /** True when the stored state could not be read; connecting stays possible regardless. */
   statusUnavailable = false;
 
   /** The completed test awaiting a save. It carries the draft id and the check lines, never a token. */
   result: NayaxConnectionTestResult | null = null;
 
+  /** What the token step shows about the last Test press, if anything. */
+  testState: NayaxTokenTestState | null = null;
+
   /**
-   * The trimmed operator id {@link result} was tested with (issue #681). Step 5 names this one, not
-   * whatever the step 1 field holds now: the draft a save promotes carries the tested id, so a
-   * request pairing an edited id with another id's refusals would ask Nayax about the wrong operator.
+   * The trimmed operator id {@link result} was tested with (issue #681). The support request names
+   * this one, not whatever the Operator ID field holds now: the draft a save promotes carries the
+   * tested id, so a request pairing an edited id with another id's refusals would ask Nayax about
+   * the wrong operator.
    */
   private testedOperatorId = '';
 
@@ -459,16 +638,23 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   saving = false;
   retesting = false;
 
-  /** True once a draft has been promoted into the connection from this screen. */
+  /** True once a draft has been promoted into the connection from the open dialog. */
   saved = false;
 
+  /** The outcome of a re-test or a status change, shown on the card. */
   notice: NayaxConnectionNotice | null = null;
+
+  /** The outcome of a test or save that is not one of the token step's own states, shown in the dialog. */
+  dialogNotice: NayaxConnectionNotice | null = null;
 
   /**
    * The token field. It is read at the moment Test is pressed and cleared when that call returns:
    * there is deliberately no `ngModel`, signal or field holding the token between those two points.
    */
   @ViewChild('tokenField') private readonly tokenField?: ElementRef<HTMLInputElement>;
+
+  /** Connect Nayax or Replace connection, whichever the card shows now. */
+  @ViewChild('launcher') private readonly launcher?: ElementRef<HTMLButtonElement>;
 
   @ViewChild('supportRequestField')
   private readonly supportRequestField?: ElementRef<HTMLTextAreaElement>;
@@ -480,7 +666,18 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   private readonly manageAccess: Subscription;
   private readonly sessionActiveSubscription: Subscription;
 
+  /**
+   * Bumped by every Test press, every Back, and every close, so a test answer that arrives after
+   * any of them is recognised as stale and dropped: it can neither reopen the dialog nor fill in a
+   * step the Owner has already left.
+   */
   private testSequence = 0;
+
+  /** Re-renders the review when the draft expires, so Save is withdrawn on time and not on the next click. */
+  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Set when {@link expiryTimer} fires: the current draft has lapsed, whatever the clock says now. */
+  private draftLapsed = false;
 
   constructor(
     private readonly connections: NayaxConnectionService,
@@ -502,6 +699,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     // The field goes with the view, but clearing it is explicit rather than incidental.
     this.discardToken();
+    this.clearExpiryTimer();
     this.manageAccess.unsubscribe();
     this.sessionActiveSubscription.unsubscribe();
     this.statusSubscription?.unsubscribe();
@@ -539,7 +737,24 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   /** Whether the server's short-lived draft has already stopped existing. */
   get draftExpired(): boolean {
-    return this.result !== null && Date.parse(this.result.expiresAtUtc) <= Date.now();
+    return this.result !== null && (this.draftLapsed || Date.parse(this.result.expiresAtUtc) <= Date.now());
+  }
+
+  /** What the review step says about {@link result}; see {@link NayaxReviewState} for the order. */
+  get reviewState(): NayaxReviewState | null {
+    if (this.result === null) {
+      return null;
+    }
+    if (this.draftExpired) {
+      return 'expired';
+    }
+    if (!this.machineListPassed) {
+      return 'not-saveable';
+    }
+    if (this.anyFailed) {
+      return 'partial';
+    }
+    return this.result.machineCount === 0 ? 'zero-machines' : 'passed';
   }
 
   get canSave(): boolean {
@@ -561,89 +776,113 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     return STATUS_PRESENTATION[status]?.badge ?? 'badge-neutral';
   }
 
-  /** Whether a step can be opened at all: the result-bearing steps need a completed test. */
-  canGoTo(step: number): boolean {
-    if (step < 1 || step > STEP_LABELS.length) {
-      return false;
-    }
-    if (step >= 4) {
-      return this.result !== null || (step === 6 && this.saved);
-    }
-    return true;
-  }
-
-  goTo(step: number): void {
-    if (!this.canGoTo(step)) {
+  /** Opens the dialog on its first step with nothing carried over from an earlier attempt. */
+  openDialog(): void {
+    if (!this.canManage || this.busy) {
       return;
     }
-    this.step = step;
-  }
-
-  next(): void {
-    if (this.step === 1) {
-      if (!this.operatorId.trim()) {
-        this.notice = {
-          tone: 'danger',
-          title: 'Enter the operator id from Nayax Core first.',
-          detail:
-            'Nothing was sent to Nayax. The operator id is in Nayax Core under Operator › ' +
-            'Company Info › Operator Id.'
-        };
-        return;
-      }
-      this.notice = null;
-      this.goTo(2);
-      return;
-    }
-    if (this.step === 4) {
-      this.goTo(this.anyFailed ? 5 : 6);
-      return;
-    }
-    this.goTo(this.step + 1);
-  }
-
-  back(): void {
-    this.goTo(this.previousStep());
-  }
-
-  /** Starts a fresh connection attempt, keeping nothing of the completed one. */
-  startOver(): void {
-    this.result = null;
-    this.retestResult = null;
+    this.resetAttempt();
+    this.operatorId = '';
     this.saved = false;
+    this.replacing = this.connectionStored;
     this.notice = null;
-    this.discardToken();
     this.step = 1;
+    this.dialogOpen = true;
   }
 
   /**
-   * Runs the server's checks with the operator id on screen and the token in the field.
+   * Closes the dialog from Escape, the backdrop, Close or Done. It is refused only while a save is in
+   * flight, whose answer decides what is stored. Anything else is abandoned: the token field is
+   * cleared, a test in flight is unsubscribed and its sequence retired, and the unsaved result is
+   * dropped, so nothing of this attempt survives to be shown, saved or reopened.
+   */
+  closeDialog(): void {
+    if (this.saving) {
+      return;
+    }
+    this.resetAttempt();
+    this.dialogOpen = false;
+    // The dialog gives focus back to the control that opened it. A save swaps Connect Nayax for
+    // Replace connection, so that control may be gone: focus then goes to the one now on the card.
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) {
+        this.launcher?.nativeElement.focus();
+      }
+    });
+  }
+
+  next(): void {
+    if (this.step !== 1) {
+      return;
+    }
+    if (!this.operatorId.trim()) {
+      this.dialogNotice = {
+        tone: 'danger',
+        title: 'Enter the operator ID from Nayax Core first.',
+        detail: 'Nothing was sent to Nayax. The steps beside the field show where to find it.'
+      };
+      return;
+    }
+    this.dialogNotice = null;
+    this.step = 2;
+  }
+
+  /**
+   * One step back. Leaving the token step clears the field; leaving the review drops the result,
+   * because the test is of a token that is no longer anywhere on this page and a new one is only
+   * reached by testing again.
+   */
+  back(): void {
+    if (this.busy) {
+      return;
+    }
+    if (this.step === 3) {
+      this.result = null;
+      this.clearExpiryTimer();
+      this.testState = null;
+      this.dialogNotice = null;
+      this.step = 2;
+      return;
+    }
+    if (this.step === 2) {
+      this.discardToken();
+      this.testSequence++;
+      this.testState = null;
+      this.dialogNotice = null;
+      this.step = 1;
+    }
+  }
+
+  /**
+   * Runs the server's checks with the operator id entered and the token in the field.
    *
    * The token is read here, passed once, and cleared the moment the call returns - on a success, a
-   * refusal and a transport failure alike.
+   * refusal and a transport failure alike. A token Nayax refused, or a test Nayax never answered,
+   * keeps the Owner on this step with the field empty to paste again; every other completed run goes
+   * on to the review.
    */
   runTest(): void {
-    if (!this.canManage || this.sessionActive || this.busy) {
+    if (!this.canManage || this.sessionActive || this.busy || this.step !== 2) {
       return;
     }
 
     const operatorId = this.operatorId.trim();
     if (!operatorId) {
-      this.notice = {
+      this.dialogNotice = {
         tone: 'danger',
-        title: 'Enter the operator id from Nayax Core first.',
-        detail: 'Nothing was sent to Nayax. Go back to step 1 and enter the operator id.'
+        title: 'Enter the operator ID from Nayax Core first.',
+        detail: 'Nothing was sent to Nayax. Go back and enter the operator ID.'
       };
-      this.goTo(1);
       return;
     }
 
     const token = this.tokenField?.nativeElement.value.trim() ?? '';
     if (!token) {
-      this.notice = {
+      this.dialogNotice = {
         tone: 'danger',
         title: 'Paste the Lynx token before testing.',
-        detail: 'Nothing was sent to Nayax. Step 2 has the path to the token in Nayax Core.'
+        detail: 'Nothing was sent to Nayax. The steps beside the field show where the token is in Nayax Core.'
       };
       return;
     }
@@ -651,30 +890,47 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     this.testSubscription?.unsubscribe();
     const sequence = ++this.testSequence;
     this.testing = true;
-    this.notice = null;
+    this.testState = 'testing';
+    this.dialogNotice = null;
     this.result = null;
     this.retestResult = null;
-    this.saved = false;
 
     this.testSubscription = this.connections.test(operatorId, token).subscribe({
       next: (result) => {
         this.discardToken();
         if (sequence !== this.testSequence) return;
         this.testing = false;
-        this.result = result;
         this.testedOperatorId = operatorId;
-        this.step = 4;
-        if (this.anyFailed) {
-          this.toast.warning('Some Nayax areas were refused. Step 5 has the request to send Nayax.');
-        } else {
-          this.toast.success('Every check this token was asked for passed.');
+
+        const machineList = result.checks.find((line) => line.check === 'Machines');
+        if (machineList?.status !== 'Passed' && machineList?.failure === 'InvalidOrExpiredToken') {
+          this.testState = 'invalid-token';
+          this.focusTokenField();
+          return;
         }
+        if (machineList?.status !== 'Passed' && machineList?.failure === 'NayaxUnavailable') {
+          this.testState = 'timeout';
+          this.focusTokenField();
+          return;
+        }
+
+        this.testState = null;
+        this.result = result;
+        this.scheduleExpiry(result);
+        this.step = 3;
       },
       error: (error: unknown) => {
         this.discardToken();
         if (sequence !== this.testSequence) return;
         this.testing = false;
-        this.notice = this.describeFailure(error, 'The connection test could not be completed.', 'test');
+        const status = this.statusOf(error);
+        if (status === 408 || status === 504) {
+          this.testState = 'timeout';
+        } else {
+          this.testState = null;
+          this.dialogNotice = this.describeFailure(error, 'The connection test could not be completed.', 'test');
+        }
+        this.focusTokenField();
       }
     });
   }
@@ -686,7 +942,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       return;
     }
     if (!this.machineListPassed) {
-      this.notice = {
+      this.dialogNotice = {
         tone: 'danger',
         title: 'The tested token could not read this business\'s machine list, so it was not saved.',
         detail:
@@ -696,18 +952,13 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.draftExpired) {
-      this.result = null;
-      this.notice = {
-        tone: 'danger',
-        title: 'This test result has expired.',
-        detail: 'The server keeps a tested token for fifteen minutes only. Run the test again, then save.'
-      };
+      // The review says so on its own; nothing is sent for a draft the server no longer holds.
       return;
     }
 
     this.saveSubscription?.unsubscribe();
     this.saving = true;
-    this.notice = null;
+    this.dialogNotice = null;
 
     this.saveSubscription = this.connections.save(result.draftId).subscribe({
       next: (connection) => {
@@ -719,16 +970,18 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         // The draft is consumed: withdrawing it is what makes a second save impossible here as
         // well as refused by the server.
         this.result = null;
+        this.clearExpiryTimer();
         this.retestResult = null;
-        this.step = 6;
-        this.toast.success('Nayax connection saved.');
+        this.toast.success('Nayax connected.');
       },
       error: (error: unknown) => {
         this.saving = false;
         // A draft is single-use, so this one can never be saved again whatever refused it. A fresh
         // test is the only safe next step, and the stored state is re-read rather than assumed.
         this.result = null;
-        this.notice = this.describeFailure(error, 'The connection could not be saved.', 'save');
+        this.clearExpiryTimer();
+        this.step = 2;
+        this.dialogNotice = this.describeFailure(error, 'The connection could not be saved.', 'save');
         this.loadStatus();
       }
     });
@@ -750,10 +1003,21 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         this.retesting = false;
         this.retestResult = result;
         this.acceptConnection(result.connection, result.checks);
+        if (!result.statusUpdated && this.machineListRefused(result)) {
+          this.notice = {
+            tone: 'warning',
+            title: 'Nayax refused this token access to the machine list.',
+            detail:
+              'Nayax answered, but this token does not have permission to read the machine list ' +
+              '(GET machines). The stored connection and its last-tested time are unchanged. Ask ' +
+              'Nayax for read access to the machine list for this operator, then re-test.'
+          };
+          return;
+        }
         if (!result.statusUpdated) {
           this.notice = {
             tone: 'warning',
-            title: 'Nayax never answered, so nothing was concluded.',
+            title: 'No usable answer came back from Nayax, so nothing was concluded.',
             detail:
               'The stored status is left exactly as it was - nothing about the credentials was ' +
               'learned. Try the re-test again in a few minutes.'
@@ -858,14 +1122,14 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         cause: 'InvalidOrExpiredToken',
         advice:
           'Nayax says this token is invalid or has expired, so asking for permissions will not help. ' +
-          'Generate a new Lynx token in Nayax Core (step 2) and test it.',
+          'Copy or add a Lynx token in Nayax Core (the Lynx token step) and test it.',
         areas: areasFor('InvalidOrExpiredToken')
       },
       {
         cause: 'OperatorIdMismatch',
         advice:
-          `Nayax says operator id ${operatorId} is not one this token covers. Check the operator id ` +
-          'in Nayax Core (step 1) and test again.',
+          `Nayax says operator ID ${operatorId} is not one this token covers. Check the operator ID ` +
+          'in Nayax Core (the Operator ID step) and test again.',
         areas: areasFor('OperatorIdMismatch')
       },
       {
@@ -909,17 +1173,48 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     }
   }
 
-  private previousStep(): number {
-    if (this.step === 6) {
-      if (this.result === null) {
-        return 3;
-      }
-      return this.anyFailed ? 5 : 4;
+  /**
+   * Whether a re-test's machine list was refused for lack of a permission. The server leaves the
+   * stored status and last-tested time untouched for that answer just as it does when Nayax never
+   * answered (issue #1310), but Nayax did answer, so the two need different guidance.
+   */
+  private machineListRefused(result: NayaxConnectionRetestResult): boolean {
+    return result.checks.some(
+      (line) => line.check === 'Machines' && line.status !== 'Passed' && line.failure === 'PermissionNotGranted'
+    );
+  }
+
+  /** Forgets everything of the current attempt: the token, a test in flight, its result and notices. */
+  private resetAttempt(): void {
+    this.discardToken();
+    this.testSubscription?.unsubscribe();
+    this.testSubscription = null;
+    this.testSequence++;
+    this.testing = false;
+    this.testState = null;
+    this.result = null;
+    this.testedOperatorId = '';
+    this.dialogNotice = null;
+    this.clearExpiryTimer();
+  }
+
+  private scheduleExpiry(result: NayaxConnectionTestResult): void {
+    this.clearExpiryTimer();
+    const remaining = Date.parse(result.expiresAtUtc) - Date.now();
+    if (Number.isFinite(remaining) && remaining > 0) {
+      this.expiryTimer = setTimeout(() => {
+        this.expiryTimer = null;
+        this.draftLapsed = true;
+      }, remaining + 50);
     }
-    if (this.step === 5 || this.step === 4) {
-      return this.step === 5 ? 4 : 3;
+  }
+
+  private clearExpiryTimer(): void {
+    this.draftLapsed = false;
+    if (this.expiryTimer !== null) {
+      clearTimeout(this.expiryTimer);
+      this.expiryTimer = null;
     }
-    return Math.max(1, this.step - 1);
   }
 
   private loadStatus(): void {
@@ -956,6 +1251,11 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     if (field) {
       field.value = '';
     }
+  }
+
+  /** Puts focus back in the (now empty) token field, ready for the token to be pasted again. */
+  private focusTokenField(): void {
+    setTimeout(() => this.tokenField?.nativeElement.focus());
   }
 
   private selectSupportRequest(): void {
@@ -998,8 +1298,8 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         title: 'The request did not reach the server, or did not come back.',
         detail:
           action === 'save'
-            ? 'Whether the connection was stored is not known from here, so the stored state above ' +
-              'was re-read. Check it before testing again.'
+            ? 'Whether the connection was stored is not known from here, so the stored state on the ' +
+              'Integrations page was re-read. Check it before testing again.'
             : 'Nothing was concluded about your Nayax credentials. Check the connection and try again.'
       };
     }
@@ -1008,8 +1308,8 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       title: message ?? fallback,
       detail:
         action === 'save'
-          ? 'Nothing was stored, and this test result cannot be saved again. Run the test again ' +
-            'from step 3.'
+          ? 'Nothing was stored, and this test result cannot be saved again. Paste the token and test ' +
+            'it again.'
           : 'Nothing about your stored connection was changed.'
     };
   }
