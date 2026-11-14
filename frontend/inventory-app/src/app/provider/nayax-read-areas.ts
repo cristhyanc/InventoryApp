@@ -43,11 +43,11 @@ export function nayaxConnectionAreaLabel(check: NayaxConnectionCheckName): strin
  * one this build no longer has a type for, and it can still arrive: a report the server stored
  * before the change, or a response from an instance that has not been deployed yet.
  */
-const RETIRED_AREA_NAMES: readonly string[] = ['SignIn'];
+const RETIRED_AREA_NAMES: ReadonlySet<string> = new Set(['SignIn']);
 
 /** Whether `check` names a read this application has retired. */
 export function isRetiredNayaxConnectionCheck(check: string): boolean {
-  return RETIRED_AREA_NAMES.includes(check);
+  return RETIRED_AREA_NAMES.has(check);
 }
 
 /**
