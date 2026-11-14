@@ -1,4 +1,5 @@
 using Inventory.Application.Commissions;
+using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -16,6 +17,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -45,6 +47,10 @@ public class MoneyReportSydneyBusinessDayTests
 
     private static readonly DateTime Sunday = new(2026, 10, 4);
     private static readonly DateTime Monday = new(2026, 10, 5);
+
+    /// <summary>The one machine every seeded sale is recorded against, and the site it is mapped to.</summary>
+    private const long MachineId = 10;
+    private const long SiteId = 91;
 
     /// <summary>
     /// 00:30 on Monday 5 October 2026 in Sydney (AEDT, +11), which is 13:30Z on Sunday 4 October:
@@ -164,6 +170,81 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.Equal(1, monday.NayaxProcessingFees.EstimatedCardTransactionCount);
         Assert.Equal(0.50m, monday.NayaxProcessingFees.EstimatedFeeExGst);
         Assert.Equal(Monday, monday.NayaxProcessingFees.EstimatedFeeFromDate);
+    }
+
+    /// <summary>
+    /// The site commission these reports publish is calculated over exactly the sales their revenue
+    /// counts (issue #1250; the repository owner's blocking review of the commission window on
+    /// 14 November 2026). Bookkeeping's <c>SiteCommission</c> is what the Domain profit rule
+    /// subtracts to reach direct and net profit, so a commission measured over a different window
+    /// than sales makes one report disagree with itself.
+    ///
+    /// The real <see cref="EfSiteCommissionStore"/> and the real commission use case answer here -
+    /// the amount comes out of the same relational query the Commission report uses, so a faked
+    /// commission report could not show which sales the window selected. With an active 10%
+    /// gross-sales agreement, the $3.50 sale at 00:30 Monday Sydney owes $0.35 on Monday 5 October
+    /// and nothing at all on Sunday 4 October.
+    /// </summary>
+    [Fact]
+    public async Task Site_commission_follows_the_sales_business_date_in_bookkeeping_and_the_reports_dashboard()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedTenPercentAgreementAndTheMondaySaleAsync(connection);
+
+        await using var db = Context(connection);
+        var monday = await Bookkeeping(db, SiteCommissions(db)).Handle(Filter(Monday), CancellationToken.None);
+        var sunday = await Bookkeeping(db, SiteCommissions(db)).Handle(Filter(Sunday), CancellationToken.None);
+        // The machine filter is a separate path through the same resolution: it picks the selected
+        // machine's own commission row rather than totalling the sites'.
+        var mondayForTheMachine = await Bookkeeping(db, SiteCommissions(db)).Handle(
+            new ReportingFilterDto(From: Monday, To: Monday, MachineId: MachineId), CancellationToken.None);
+        var mondayDashboard = await Dashboard(db, SiteCommissions(db)).Handle(Filter(Monday), CancellationToken.None);
+        var sundayDashboard = await Dashboard(db, SiteCommissions(db)).Handle(Filter(Sunday), CancellationToken.None);
+
+        Assert.Equal(0.35m, monday.SiteCommission);
+        Assert.Equal(3.5m, monday.Sales);
+        Assert.Equal(0m, sunday.SiteCommission);
+        Assert.Equal(0m, sunday.Sales);
+        Assert.Equal(0.35m, mondayForTheMachine.SiteCommission);
+        Assert.Equal(0.35m, mondayDashboard.SiteCommission);
+        Assert.Equal(0m, sundayDashboard.SiteCommission);
+    }
+
+    /// <summary>
+    /// The standalone Commission report is deliberately left on its calendar-date selection until
+    /// issue #1252 migrates it, so the same fixture still shows the sale's commission under its
+    /// <em>UTC</em> date - $0.35 asked for 4 October and nothing asked for the 5th, the mirror image
+    /// of the money reports above. This pins that the fix did not move the report #1252 owns.
+    /// </summary>
+    [Fact]
+    public async Task The_standalone_commission_report_keeps_its_calendar_date_selection()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedTenPercentAgreementAndTheMondaySaleAsync(connection);
+
+        await using var db = Context(connection);
+        var commissions = SiteCommissions(db);
+        var sunday = await commissions.Handle(Sunday, Sunday, null, CancellationToken.None);
+        var monday = await commissions.Handle(Monday, Monday, null, CancellationToken.None);
+
+        Assert.Equal(0.35m, Assert.Single(sunday.Rows).CommissionDue);
+        Assert.Equal(0m, Assert.Single(monday.Rows).CommissionDue);
+    }
+
+    private static async Task SeedTenPercentAgreementAndTheMondaySaleAsync(SqliteConnection connection)
+    {
+        await using var seed = Context(connection);
+        seed.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = SiteId,
+            EffectiveFrom = new DateTime(2026, 1, 1),
+            EffectiveTo = null,
+            CommissionRate = 0.10m,
+            Frequency = CommissionFrequency.Monthly,
+            Basis = CommissionBasis.GrossSales
+        });
+        seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
+        await seed.SaveChangesAsync();
     }
 
     public static TheoryData<string, DateTime, DateTime, DateTime, int> BusinessDays => new()
@@ -376,7 +457,7 @@ public class MoneyReportSydneyBusinessDayTests
         string paymentMethod = "Credit Card") => new()
         {
             TransactionID = transactionId,
-            MachineID = 10,
+            MachineID = MachineId,
             ProductId = null,
             SettlementValue = value,
             PaymentMethod = paymentMethod,
@@ -388,14 +469,29 @@ public class MoneyReportSydneyBusinessDayTests
     private static IGetSiteCommissionReport EmptyCommissions()
     {
         var mock = new Mock<IGetSiteCommissionReport>();
-        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
+        mock.Setup(x => x.HandleBusinessPeriod(It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         return mock.Object;
     }
 
-    private static GetBookkeepingReport Bookkeeping(AppDbContext db) =>
+    /// <summary>
+    /// The real commission use case over the real <see cref="EfSiteCommissionStore"/>, so the
+    /// commission amount these reports consume is the one the relational query produces. Only the
+    /// Nayax fleet read is faked, because a site is known only from a machine's <c>CustomerID</c>
+    /// and nothing stored here can supply it.
+    /// </summary>
+    private static IGetSiteCommissionReport SiteCommissions(AppDbContext db)
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = MachineId, CustomerID = SiteId } });
+        return new GetSiteCommissionReport(nayax.Object, new EfSiteCommissionStore(db), new SiteNameResolver(), Sydney);
+    }
+
+    private static GetBookkeepingReport Bookkeeping(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>
         new(new EfBookkeepingReportFactsProvider(
-            db, TestFinancialUseCases.ProcessingFees(db, Sydney), EmptyCommissions(), Sydney));
+            db, TestFinancialUseCases.ProcessingFees(db, Sydney), commissions ?? EmptyCommissions(), Sydney));
 
     private static GetDailyReport Daily(AppDbContext db) =>
         new(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db, Sydney), Sydney));
@@ -406,8 +502,9 @@ public class MoneyReportSydneyBusinessDayTests
     private static GetProductProfitabilityReport Products(AppDbContext db) =>
         new(new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
 
-    private static GetDashboardReport Dashboard(AppDbContext db) =>
-        new(Bookkeeping(db), Products(db), new EfDashboardReportFactsProvider(db, EmptyCommissions(), Sydney));
+    private static GetDashboardReport Dashboard(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>
+        new(Bookkeeping(db, commissions), Products(db),
+            new EfDashboardReportFactsProvider(db, commissions ?? EmptyCommissions(), Sydney));
 
     private static GetReconciliationReport Reconciliation(AppDbContext db) =>
         new(new EfReconciliationReportFactsProvider(db, Sydney));

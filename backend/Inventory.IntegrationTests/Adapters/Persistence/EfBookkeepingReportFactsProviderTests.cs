@@ -32,8 +32,9 @@ public class EfBookkeepingReportFactsProviderTests
     private static IGetSiteCommissionReport EmptyCommissions()
     {
         var mock = new Mock<IGetSiteCommissionReport>();
-        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
+        mock.Setup(x => x.HandleBusinessPeriod(It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         return mock.Object;
     }
 

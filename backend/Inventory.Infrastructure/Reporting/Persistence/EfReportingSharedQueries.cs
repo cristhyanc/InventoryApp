@@ -24,10 +24,12 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 ///
 /// Since issue #1250 the helpers that select <em>sales</em> also take a
 /// <see cref="BusinessDateSalesWindow"/>, which resolves an inclusive range of requested business
-/// dates to the UTC instants those business days actually cover. Bookkeeping, the GST accounting aid
-/// (through bookkeeping), the reports dashboard and reconciliation select that way, as the daily
-/// report already did; machine and product profitability, the Commission report and Transaction
-/// Sales still pass plain calendar-date bounds and are part 2 of that change.
+/// dates to the UTC instants those business days actually cover - including the site commission
+/// those reports subtract, which is calculated over the same window rather than over the requested
+/// dates read as UTC. Bookkeeping, the GST accounting aid (through bookkeeping), the reports
+/// dashboard and reconciliation select that way, as the daily report already did; machine and
+/// product profitability, the standalone Commission report and Transaction Sales still pass plain
+/// calendar-date bounds and are part 2 of that change.
 ///
 /// <see cref="EfTransactionSalesReportFactsProvider"/>, the last migrated adapter, deliberately does
 /// not reuse these helpers: it needs every transaction status (not only completed sales) and its own
@@ -68,6 +70,15 @@ internal static class EfReportingSharedQueries
         /// </summary>
         public NayaxProcessingFeeBusinessPeriod FeePeriod =>
             new(StartUtc, EndExclusiveUtc.AddTicks(-1), FirstBusinessDate, LastBusinessDate);
+
+        /// <summary>
+        /// The same period as a <see cref="SiteCommissionBusinessPeriod"/>, so a report's commission
+        /// is calculated over exactly the sales its revenue counts while the effective-dated
+        /// agreement, payments and due date are still resolved from the requested business dates
+        /// (issue #1250).
+        /// </summary>
+        public SiteCommissionBusinessPeriod CommissionPeriod =>
+            new(StartUtc, EndExclusiveUtc, FirstBusinessDate, LastBusinessDate);
     }
 
     /// <summary>
@@ -191,36 +202,28 @@ internal static class EfReportingSharedQueries
     public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
         AppDbContext db, IGetSiteCommissionReport siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
         long? machineId, CancellationToken cancellationToken) =>
-        ResolveMachineCommissionsAsync(db, siteCommissions, new CommissionResolutionBounds(from, to, from, endExclusive), machineId, cancellationToken);
+        ResolveMachineCommissionsAsync(
+            db, siteCommissions, new SiteCommissionBusinessPeriod(from, endExclusive, from, to),
+            machineId, cancellationToken);
 
     /// <summary>
-    /// The same resolution for a business-date window (issue #1250): the commission report still
-    /// answers for the requested business <em>dates</em>, because an agreement is effective-dated,
-    /// while the completed-sale machine IDs it is gated on are selected between the window's
-    /// instants.
+    /// The same resolution for a business-date window (issue #1250): the commission report is asked
+    /// for the window's own period, so the commission <em>amounts</em> it returns - which bookkeeping
+    /// publishes as <c>SiteCommission</c> and the reports dashboard republishes - are calculated over
+    /// exactly the sales the report's revenue counts, and the completed-sale machine IDs they are
+    /// gated on are selected between the same instants. The effective-dated agreement, payments and
+    /// due date still come from the window's two business dates.
     /// </summary>
     public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
         AppDbContext db, IGetSiteCommissionReport siteCommissions, BusinessDateSalesWindow window,
         long? machineId, CancellationToken cancellationToken) =>
-        ResolveMachineCommissionsAsync(
-            db, siteCommissions,
-            new CommissionResolutionBounds(window.FirstBusinessDate, window.LastBusinessDate, window.StartUtc, window.EndExclusiveUtc),
-            machineId, cancellationToken);
-
-    /// <summary>
-    /// The commission report's own date pair (<see cref="From"/>/<see cref="To"/>, because an
-    /// agreement is effective-dated) alongside the UTC instants the completed-sale machine IDs it is
-    /// gated on are actually selected between (<see cref="SalesStartUtc"/>/<see cref="SalesEndExclusiveUtc"/>)
-    /// - the same pair for a plain calendar-date request, and the business-date window's dates and
-    /// instants for a <see cref="BusinessDateSalesWindow"/> request (issue #1250).
-    /// </summary>
-    private readonly record struct CommissionResolutionBounds(DateTime From, DateTime To, DateTime SalesStartUtc, DateTime SalesEndExclusiveUtc);
+        ResolveMachineCommissionsAsync(db, siteCommissions, window.CommissionPeriod, machineId, cancellationToken);
 
     private static async Task<CommissionResolutionResult> ResolveMachineCommissionsAsync(
-        AppDbContext db, IGetSiteCommissionReport siteCommissions, CommissionResolutionBounds bounds,
+        AppDbContext db, IGetSiteCommissionReport siteCommissions, SiteCommissionBusinessPeriod period,
         long? machineId, CancellationToken cancellationToken)
     {
-        var report = await siteCommissions.Handle(bounds.From, bounds.To, null, cancellationToken);
+        var report = await siteCommissions.HandleBusinessPeriod(period, null, cancellationToken);
 
         // An unusable provider makes the commission report an availability answer rather than a set
         // of zero-commission sites (issue #731). Commission therefore stays *incomplete* here: a
@@ -259,7 +262,7 @@ internal static class EfReportingSharedQueries
             : relevantRows.Any(x => x.HasOverlap);
         var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
         var hasMissingSiteMapping = false;
-        var saleMachineIds = await SalesQuery(db, bounds.SalesStartUtc, bounds.SalesEndExclusiveUtc, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
+        var saleMachineIds = await SalesQuery(db, period.StartUtc, period.EndExclusiveUtc, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
         if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
         {
             warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");

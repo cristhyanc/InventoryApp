@@ -10760,8 +10760,8 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 
 What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks in the report facts adapters, which `GetSiteCommissionReport` still makes for the requested calendar dates on every report that composes commission.
-- Machine profitability, product profitability, the Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport` and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above and is explicitly part 1 of 2; these four are part 2.
+- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
+- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -10970,8 +10970,8 @@ COGS, fees and GST on sales disagreed between reports for the same dates. The co
 once, by `EfReportingSharedQueries.SalesWindow`, into a `BusinessDateSalesWindow` - the two requested
 business dates and the UTC instants of business-day midnight at the start of the first and at the
 start of the day after the last - and every shared helper that selects *sales* takes that window:
-the completed-sale and all-status queries, the cost projection, the commission gating and total, and
-the provider-coverage query. Three things follow it:
+the completed-sale and all-status queries, the cost projection, the commission calculation and total,
+and the provider-coverage query. Four things follow it:
 
 - The **fee rates and imported fee days** come from the same window (`HandleBusinessPeriod` over
   `BusinessDateSalesWindow.FeePeriod`), so a sale is charged a fee, and estimated at the rate
@@ -10983,15 +10983,26 @@ the provider-coverage query. Three things follow it:
   the window the figures were measured over.
 - **Reconciliation attributes a sale to the reimbursement period covering its business date**
   (`ToBusinessDate`), not the UTC date of its instant.
-- The **commission report** is still asked for the requested business *dates*, because an agreement is
-  effective-dated; machine and product profitability, that report and Transaction Sales keep their
-  calendar-date selection and are part 2.
+- The **site commission these reports subtract is calculated over the same window**
+  (`IGetSiteCommissionReport.HandleBusinessPeriod` over `BusinessDateSalesWindow.CommissionPeriod`).
+  The first fix moved only the window the commission was *gated* on — which machines had a completed
+  sale — and left the dollar `CommissionDue` coming from the calendar-date `Handle`, so bookkeeping
+  counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
+  net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
+  separates the two questions the calculation asks: its two UTC instants select the completed sales,
+  and its two business dates resolve the effective-dated agreement, the recorded payments and the
+  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
+  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
 
 Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
 and purchase dates keep their plain calendar-date bounds in these reports too.
 `MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
 daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
-date-only filters, and the CSV/XLSX exports showing the same figures as the screens. Figures for past
+date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
+on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
+the standalone Commission report still answering $0.35 for the 4th. Figures for past
 ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
 anyone who has exported or lodged figures from these reports.
 

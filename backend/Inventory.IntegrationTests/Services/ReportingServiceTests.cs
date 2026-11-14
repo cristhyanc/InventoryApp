@@ -78,10 +78,10 @@ public class ReportingRegressionTests
         IGetSiteCommissionReport? siteCommissionService = null)
     {
         var commissions = siteCommissionService is null ? new Mock<IGetSiteCommissionReport>() : null;
-        commissions?.Setup(x => x.Handle(
-                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
-                new SiteCommissionReport(from, to, []));
+        commissions?.Setup(x => x.HandleBusinessPeriod(
+                It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
         var siteCommissions = siteCommissionService ?? commissions!.Object;
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(
@@ -421,7 +421,8 @@ public class ReportingRegressionTests
     {
         using var db = CreateDbContext();
         var commissions = new Mock<IGetSiteCommissionReport>();
-        commissions.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+        commissions.Setup(x => x.HandleBusinessPeriod(
+                It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
         var service = Reporting(db, siteCommissionService: commissions.Object);
 
