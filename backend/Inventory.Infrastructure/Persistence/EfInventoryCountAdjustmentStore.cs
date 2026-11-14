@@ -22,6 +22,11 @@ namespace Inventory.Infrastructure.Persistence;
 /// The restock-cost suggestion is the same authoritative use case an operator-entered positive
 /// Restock already uses (<see cref="IGetRestockCostSuggestion"/>, issue #282), reused rather than
 /// reimplemented.
+///
+/// <para>The transaction the apply runs in is <see cref="SqliteWriteLockTransaction"/>
+/// (<c>BEGIN IMMEDIATE</c>) and it is opened by the use case, before the quantity the count is
+/// decided from is read (issue #1241). <see cref="ApplyAsync"/> therefore saves inside that
+/// transaction and does not commit it.</para>
 /// </summary>
 public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentStore
 {
@@ -38,6 +43,10 @@ public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentS
         _rebuild = rebuild;
         _getRestockCostSuggestion = getRestockCostSuggestion;
     }
+
+    /// <inheritdoc />
+    public async Task<IInventoryCountWriteTransaction> BeginWriteTransactionAsync(CancellationToken cancellationToken) =>
+        new WriteTransaction(await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken).ConfigureAwait(false));
 
     public async Task<InventoryCountProduct?> GetCurrentStockAsync(long productId, CancellationToken cancellationToken)
     {
@@ -67,9 +76,6 @@ public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentS
             ? StockAdjustmentReason.Restock
             : StockAdjustmentReason.Correction;
 
-        await using var transaction = _db.Database.IsRelational()
-            ? await _db.Database.BeginTransactionAsync(cancellationToken)
-            : null;
         try
         {
             var adjustment = await _recordMovement.RecordAsync(
@@ -80,17 +86,26 @@ public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentS
             await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
             await _db.SaveChangesAsync(cancellationToken);
 
-            if (transaction is not null)
-                await transaction.CommitAsync(cancellationToken);
-
             return new InventoryCountAdjustmentApplication(adjustment.Id, adjustment.QuantityAfter);
         }
         catch
         {
-            if (transaction is not null)
-                await transaction.RollbackAsync(cancellationToken);
+            // The caller's transaction is what discards the writes; this only drops what they left
+            // tracked, so a failed apply carries nothing into the rest of the request.
             _db.ChangeTracker.Clear();
             throw;
         }
+    }
+
+    /// <summary>
+    /// The transaction handed back to the use case: <see cref="SqliteWriteLockTransaction"/>, which
+    /// already owns the rollback-on-dispose a refused count relies on.
+    /// </summary>
+    private sealed class WriteTransaction(SqliteWriteLockTransaction transaction) : IInventoryCountWriteTransaction
+    {
+        public Task CommitAsync(CancellationToken cancellationToken) =>
+            transaction.CommitAsync(cancellationToken);
+
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
     }
 }

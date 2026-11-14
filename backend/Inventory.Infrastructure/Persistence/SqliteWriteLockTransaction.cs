@@ -11,9 +11,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// One <c>BEGIN IMMEDIATE</c> transaction over the request's own <see cref="AppDbContext"/>, as
 /// <see cref="EfBusinessMembershipWriteStore"/> (issue #522), <see cref="EfNayaxConnectionSaveTransactions"/>
 /// (issue #537), <see cref="EfPickListRefillStore"/> (issue #743),
-/// <see cref="EfLatestNayaxSalesStore"/> (issue #1103, both of its save paths) and
+/// <see cref="EfLatestNayaxSalesStore"/> (issue #1103, both of its save paths),
 /// <see cref="MachineStockRefillWriteTransaction"/> (issue #1127, one per product of a Sync Restock
-/// apply) each open one.
+/// apply), <see cref="EfStockAdjustmentStore"/> and <see cref="EfInventoryCountAdjustmentStore"/>
+/// (issue #1241, one per manual adjustment and per Take Inventory apply) each open one.
 ///
 /// <para><strong>Why immediate.</strong> A deferred transaction - SQLite's default, and what
 /// <c>BeginTransactionAsync</c> opens - takes its write lock at the first <em>write</em>, which is

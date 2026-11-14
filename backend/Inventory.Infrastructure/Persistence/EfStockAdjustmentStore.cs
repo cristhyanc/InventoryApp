@@ -16,10 +16,12 @@ namespace Inventory.Infrastructure.Persistence;
 ///
 /// <see cref="ApplyAsync"/> records the movement through the Application
 /// <see cref="IRecordInventoryMovement"/> use case and rebuilds the product's cost through
-/// <see cref="IRebuildProductCost"/> (issue #296), inside the same transaction as the former
-/// <c>InventoryApi.Services.StockService.Adjust</c>, stamping <see cref="StockAdjustmentSource.Manual"/>,
+/// <see cref="IRebuildProductCost"/> (issue #296), inside one transaction as the former
+/// <c>InventoryApi.Services.StockService.Adjust</c> did, stamping <see cref="StockAdjustmentSource.Manual"/>,
 /// the machine id, and the eat-before date on the recorded movement. It applies no costing rule of
-/// its own.
+/// its own. Since issue #1241 that transaction is <see cref="SqliteWriteLockTransaction"/> and it is
+/// opened before the movement is staged, so the stock the sufficiency check reads and the stock the
+/// movement is applied to are the same one.
 /// </summary>
 public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
 {
@@ -114,32 +116,31 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
         return new RestockCostFacts(lastPurchaseFact, product.CostingQuantity, product.InventoryValue, product.AverageUnitCost);
     }
 
+    /// <summary>
+    /// Records the movement and rebuilds the product's cost in one write-locked transaction (issue
+    /// #1241). The <c>BEGIN IMMEDIATE</c> lock is taken before <see cref="IRecordInventoryMovement"/>
+    /// reads the stored quantity, because that read is what the sufficiency check is decided on:
+    /// staged outside it, two simultaneous write-offs of 4 against a stock of 5 both read 5, both
+    /// computed a new stock of 1, and the loser's movement was refused by the cost replay as
+    /// physically negative - a costing data-quality failure for an adjustment that simply no longer
+    /// fitted. Inside it the loser reads the quantity the winner left and is refused with the
+    /// established <see cref="Inventory.Domain.Exceptions.InsufficientStockException"/>.
+    /// </summary>
     public async Task<StockAdjustmentRecord> ApplyAsync(
         long productId, ManualStockAdjustmentInput input, CancellationToken cancellationToken)
     {
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var movement = await _recordMovement.RecordAsync(
             new InventoryMovement(
                 productId, input.QuantityChange, input.Reason, input.Notes ?? string.Empty, input.UnitCost,
                 input.MachineId, input.EatBefore, DomainStock.StockAdjustmentSource.Manual),
             cancellationToken);
 
-        await using var transaction = _db.Database.IsRelational()
-            ? await _db.Database.BeginTransactionAsync(cancellationToken)
-            : null;
-        try
-        {
-            await _db.SaveChangesAsync(cancellationToken);
-            await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
-            await _db.SaveChangesAsync(cancellationToken);
-            if (transaction is not null)
-                await transaction.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            if (transaction is not null)
-                await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
+        await _db.SaveChangesAsync(cancellationToken);
+        await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         var adjustment = await _db.StockAdjustments.FindAsync([movement.Id], cancellationToken)
             ?? throw new InvalidOperationException($"Stock adjustment {movement.Id} was not saved.");

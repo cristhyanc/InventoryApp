@@ -20,6 +20,11 @@ public class ApplyInventoryCountTests
         var store = new Mock<IInventoryCountAdjustmentStore>();
         store.Setup(x => x.GetCurrentStockAsync(productId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new InventoryCountProduct(productId, name, quantityInStock));
+        // The write transaction the apply runs in (issue #1241). These tests are about the decisions
+        // made inside it; that it is a BEGIN IMMEDIATE lock taken before the read, and what that
+        // buys under real concurrency, is InventoryCountApplyConcurrencyTests' subject.
+        store.Setup(x => x.BeginWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<IInventoryCountWriteTransaction>());
         return store;
     }
 
