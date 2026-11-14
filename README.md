@@ -3642,8 +3642,8 @@ Nayax Core](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/reque
 [Create an operator: verify creation](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/operator/create-operator#verify-creation)
 and [Lynx API security: access token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security#access-token)
 — shown from where Nayax publishes them and credited to those guides; each opens full size in a new
-tab. Nayax's portal states no terms permitting their reuse, so none is copied into this repository,
-and the guide's Show Token pop-up (which displays a token and its QR code) is not shown at all. If a
+tab. Nayax's portal states no terms permitting their reuse, so none is bundled with the application
+(only the page captures under `docs/screenshots/issue-1311/` show them, as rendered), and the guide's Show Token pop-up (which displays a token and its QR code) is not shown at all. If a
 screenshot cannot load, the written steps are complete without it.
 
 **Re-testing.** The stored connection is shown on the card with its status — Ready, Permissions

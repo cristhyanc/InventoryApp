@@ -4537,7 +4537,8 @@ the operator screen from Nayax's *Create an operator — verify creation* guide 
 screenshots of the *Lynx API security — access token* guide (the username menu with Account
 Settings, the Security and Login tab, and User Tokens with Add Token and Show Token). Nayax's
 developer portal states no terms that permit copying its images, so — as the issue directs when
-reuse cannot be verified — none is bundled, cropped or edited: each is an `<img>` of the portal's own
+reuse cannot be verified — none is bundled with the application, cropped or edited (the PR evidence
+captures in `docs/screenshots/issue-1311/` show them only as the page renders them): each is an `<img>` of the portal's own
 published address (`mintcdn.com/nayax-44d6e37b/…`), requested with `referrerpolicy="no-referrer"`,
 credited to and linked with its guide under the images. The guide's fourth screenshot, the Show
 Token pop-up, displays a token string and its QR code, so it is not shown; the text and the linked
