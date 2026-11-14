@@ -10,6 +10,16 @@ namespace Inventory.Application.InventoryCounting;
 /// difference is confirmed with no persisted movement; a non-zero difference reuses the existing
 /// positive Restock movement (increase) or Correction movement (decrease) - never
 /// <see cref="InventoryCountMovementKind.None"/> and never <c>MachineRefill</c>.
+///
+/// <para><strong>The read, the comparison and the mutation are one operation</strong> (issue
+/// #1241). The write transaction is opened first - <c>BEGIN IMMEDIATE</c> on SQLite, so the write
+/// lock is held from before the read until the commit - because "has this quantity changed since the
+/// operator counted it?" is a check-then-write rule and a check-then-write rule that is not
+/// serialised is not a rule. Reading first and locking at the write let another writer commit in
+/// between, and the stale difference was then applied to a quantity nobody counted: stock 10,
+/// counted 8, a refill of 4 committed in the gap, and storage left at 12. Now a change can only
+/// land before the read, where it is answered with the same <see cref="DomainConflictException"/>
+/// (409) and nothing is recorded.</para>
 /// </summary>
 public sealed class ApplyInventoryCount
 {
@@ -24,6 +34,10 @@ public sealed class ApplyInventoryCount
     public async Task<InventoryCountApplyResultDto?> Handle(
         long productId, InventoryCountApplyRequestDto request, CancellationToken cancellationToken)
     {
+        await using var transaction = await _store.BeginWriteTransactionAsync(cancellationToken);
+
+        // Authoritative, inside the write lock: this is the quantity the count is compared with and
+        // the one its difference is applied to.
         var product = await _store.GetCurrentStockAsync(productId, cancellationToken);
         if (product is null)
             return null;
@@ -38,6 +52,8 @@ public sealed class ApplyInventoryCount
         var plan = InventoryCountAdjustmentPolicy.Resolve(product.QuantityInStock, request.CountedStock);
         if (plan.Kind == InventoryCountMovementKind.None)
         {
+            // Nothing was written, so there is nothing to commit: the transaction's disposal releases
+            // the lock. The confirmation is still the quantity read under it.
             return new InventoryCountApplyResultDto(
                 InventoryCountApplyOutcome.Confirmed, QuantityChange: 0, product.QuantityInStock, StockAdjustmentId: null);
         }
@@ -55,6 +71,8 @@ public sealed class ApplyInventoryCount
         }
 
         var application = await _store.ApplyAsync(productId, plan.Kind, plan.QuantityChange, unitCost, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
         return new InventoryCountApplyResultDto(
             InventoryCountApplyOutcome.Applied, plan.QuantityChange, application.QuantityInStock, application.StockAdjustmentId);
     }
