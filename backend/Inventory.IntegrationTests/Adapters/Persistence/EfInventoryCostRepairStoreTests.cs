@@ -123,24 +123,39 @@ public class EfInventoryCostRepairStoreTests
     }
 
     /// <summary>
-    /// Issue #359: a repair that explains only part of the missing costing history leaves a fatal
-    /// data-quality issue, the rebuild refuses it, and the transaction takes the repair row with it.
-    /// Nothing is left behind - no repair, no half-costed sale, no changed product position.
+    /// Issue #359: a repair that leaves a fatal data-quality issue behind is refused by the rebuild,
+    /// and the transaction takes the repair row with it. Nothing is left behind - no repair, no
+    /// half-costed sale, no changed product position.
+    ///
+    /// The fatal issue here is a legacy positive restock with no unit cost, which no costing repair
+    /// can explain. A completed sale the repair does not reach is deliberately not fatal any more
+    /// (issue #1239): that repair applies and leaves the sale uncosted and flagged.
     /// </summary>
     [Fact]
     public async Task A_repair_that_leaves_the_history_incomplete_persists_nothing()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await SeedTwoBusinessesAsync(connection);
+        await using (var seed = TestAppDbContext.For(options, BusinessA))
+        {
+            seed.StockAdjustments.Add(new StockAdjustment
+            {
+                ProductId = ProductA,
+                QuantityChange = 4,
+                Reason = StockAdjustmentReason.Restock,
+                EffectiveAt = Day(2).AddHours(1),
+            });
+            await seed.SaveChangesAsync();
+        }
 
         await using (var a = TestAppDbContext.For(options, BusinessA))
         {
-            var preview = await TestCostingUseCases.PreviewRepair(a).Handle(new(ProductA, Day(2), 1, 2m, Reason));
+            var preview = await TestCostingUseCases.PreviewRepair(a).Handle(new(ProductA, Day(2), 4, 2m, Reason));
             Assert.Single(preview.RemainingFatalIssues);
 
             var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
                 TestCostingUseCases.ApplyRepair(a, Actor(), clock: new FakeClock(Now))
-                    .Handle(new(ProductA, Day(2), 1, 2m, Reason, preview.LedgerFingerprint)));
+                    .Handle(new(ProductA, Day(2), 4, 2m, Reason, preview.LedgerFingerprint)));
 
             Assert.StartsWith(
                 "This repair does not complete the product's cost history, so nothing was saved:",

@@ -20,7 +20,7 @@ internal sealed record InventoryCostRepairProjectionResult(
 /// It replays the ledger twice through <see cref="WeightedAverageCostReplay"/> - once as it stands,
 /// once with the proposed repair added - because the two answer different questions: the current
 /// replay says which completed sale is uncostable today, and the repaired replay says where the
-/// history ends up and what is still fatal afterwards. It persists nothing and reads the same
+/// history ends up and what is still fatal or still uncosted afterwards. It persists nothing and reads the same
 /// ledger the rebuild does, through <see cref="IInventoryCostLedgerStore"/>.
 /// </summary>
 internal sealed class InventoryCostRepairProjection
@@ -87,6 +87,14 @@ internal sealed class InventoryCostRepairProjection
             repaired.AverageUnitCost,
             repaired.Issues
                 .Where(issue => issue.IsFatal)
+                .Select(issue => new InventoryCostDataQualityIssue(issue.Code, issue.Message))
+                .DistinctBy(issue => issue.Message)
+                .ToList(),
+            // Not fatal, so the apply goes through: these are the completed sales the repaired
+            // history would still leave uncosted, which the operator approves the repair knowing
+            // about (issue #1239).
+            repaired.Issues
+                .Where(issue => issue.Code == CostDataQualityIssueCodes.UncostedSale)
                 .Select(issue => new InventoryCostDataQualityIssue(issue.Code, issue.Message))
                 .DistinctBy(issue => issue.Message)
                 .ToList(),
