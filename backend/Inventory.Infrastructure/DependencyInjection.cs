@@ -493,30 +493,6 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the filesystem source of pending reimbursement XML files behind
-    /// <see cref="IPendingReimbursementXmlSource"/> (issue #299).
-    ///
-    /// It is separate from <see cref="AddInfrastructureServices"/>, like
-    /// <see cref="AddDocumentStorage"/>, because only the composition root knows the host's
-    /// content and web roots; passing them in keeps <c>IWebHostEnvironment</c> out of both
-    /// inner layers. Registered as a singleton: the adapter holds only the resolved folder path
-    /// and reads nothing per request.
-    /// </summary>
-    /// <param name="services">The container being built.</param>
-    /// <param name="options">The host paths the pending-file folder is resolved from.</param>
-    public static IServiceCollection AddPendingReimbursementXmlSource(
-        this IServiceCollection services,
-        PendingReimbursementXmlOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        services.AddSingleton(options);
-        services.AddSingleton<IPendingReimbursementXmlSource, FileSystemPendingReimbursementXmlSource>();
-
-        return services;
-    }
-
-    /// <summary>
     /// Registers document storage: the configured provider behind
     /// <see cref="IDocumentStorage"/>, and the filesystem implementation as a concrete type
     /// whatever the provider is.

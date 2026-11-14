@@ -3,13 +3,10 @@
     <div class="mx-auto flex h-16 max-w-5xl items-center gap-4 px-4 sm:px-8">
       <a
         [routerLink]="homeLink"
-        class="flex min-h-11 items-center gap-2 rounded-lg text-lg font-bold text-rr-navy no-underline"
+        class="flex min-h-11 shrink-0 items-center rounded-lg no-underline"
         data-testid="legal-brand"
       >
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
-          <app-icon name="inventory_2" [size]="18" />
-        </span>
-        Restockroo
+        <app-brand-logo variant="full" [height]="36" />
       </a>
     </div>
   </header>

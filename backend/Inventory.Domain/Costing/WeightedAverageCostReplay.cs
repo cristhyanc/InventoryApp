@@ -146,8 +146,14 @@ public static class WeightedAverageCostReplay
                     continue;
                 }
 
-                issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
-                    $"Completed Nayax sale {sale.TransactionId} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known opening cost at {sale.AuthorizationTime:O}."));
+                // Precedence step 4 (issue #1239): nothing could cost this sale, so it is left
+                // uncosted and reported as such - a non-fatal issue, because a sale nobody can cost
+                // is not a reason to refuse the product's later purchases, refills, counts and
+                // adjustments. It consumes no costing quantity or value, exactly like the step 2/3
+                // fallback above, and it is still reported as uncostable so a costing repair can be
+                // previewed and placed against it (issue #359).
+                issues.Add(new(CostDataQualityIssueCodes.UncostedSale,
+                    $"Completed Nayax sale {sale.TransactionId} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known cost at {sale.AuthorizationTime:O} and is left uncosted."));
                 uncostableSales.Add(sale);
                 continue;
             }

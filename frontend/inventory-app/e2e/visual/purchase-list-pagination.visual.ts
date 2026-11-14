@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
  * The browser evidence for issue #1209: the paged Purchases list at 390 and 1440px. It checks that
  * the pager's per-page select, Previous and Next are reached with Tab and show a visible focus
  * indicator, and that the page has no horizontal overflow while the table scrolls inside its card.
+ * Since issue #1234 it also checks that the list renders a plain attachment icon from metadata
+ * alone, rather than a downloaded receipt thumbnail, for every row that has a document.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic data. It runs once, in the `desktop-1440` project, and sets
@@ -32,7 +34,8 @@ const OWNER_CAPABILITIES = [
   'Business.Manage'
 ];
 
-// An 8x8 slate-grey PNG: the synthetic thumbnail every image document answers with.
+// An 8x8 slate-grey PNG: what an image document's file request would answer with, if the list
+// made one. It never does (issue #1234); the route exists only so a stray request fails loudly.
 const PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4ffUhVsQwtCQAl+qgQfQVZUwAAAAASUVORK5CYII=',
   'base64'
@@ -82,6 +85,16 @@ function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
+/** Tracks every purchase file request the page makes, so a test can assert it made none. */
+function trackFileRequests(page: Page): number[] {
+  const requestedIds: number[] = [];
+  page.on('request', (request) => {
+    const match = /\/purchases\/(\d+)\/file$/.exec(new URL(request.url()).pathname);
+    if (match) requestedIds.push(Number(match[1]));
+  });
+  return requestedIds;
+}
+
 async function answerApi(page: Page): Promise<void> {
   await page.route('**/api/**', (route: Route) => {
     const path = new URL(route.request().url()).pathname;
@@ -129,6 +142,7 @@ test.describe('Purchases list pagination (issue #1209)', () => {
   for (const width of [390, 1440]) {
     test(`pager reached by Tab with visible focus and no page overflow at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
+      const fileRequests = trackFileRequests(page);
       await answerApi(page);
       await page.goto('/purchases');
       await page.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
@@ -136,6 +150,11 @@ test.describe('Purchases list pagination (issue #1209)', () => {
       await expect(page.getByTestId('list-pagination-range')).toHaveText(/Showing\s+1–10\s+of\s+25\s+purchases/);
       await expect(page.locator('tbody > tr')).toHaveCount(10);
       await expectNoHorizontalOverflow(page);
+
+      // Every row with a document shows the plain attachment icon from metadata, never a
+      // downloaded thumbnail image (issue #1234).
+      await expect(page.locator('tbody img')).toHaveCount(0);
+      expect(fileRequests).toEqual([]);
 
       // The table may scroll sideways inside its own card at narrow widths; the page itself must not.
       const tableScrolls = await page.evaluate(() => {
@@ -154,6 +173,8 @@ test.describe('Purchases list pagination (issue #1209)', () => {
       await page.screenshot({ path: join(screenshotDirectory, `purchases-next-focused-${width}px.png`) });
       await page.keyboard.press('Enter');
       await expect(page.getByTestId('list-pagination-range')).toHaveText(/Showing\s+11–20\s+of\s+25\s+purchases/);
+      await expect(page.locator('tbody img')).toHaveCount(0);
+      expect(fileRequests).toEqual([]);
 
       await page.keyboard.press('Shift+Tab');
       const previousFocused = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset['testid']);

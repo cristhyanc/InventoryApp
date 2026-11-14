@@ -82,6 +82,7 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
                 "quantity",
                 "reason",
                 "remainingFatalIssues",
+                "remainingUncostedSaleIssues",
                 "replaysBeforeFirstUncostableSale",
                 "totalValue",
                 "unitCost",
@@ -108,6 +109,7 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
             json.GetProperty("projectedAverageUnitCost").GetDecimal()));
         Assert.True(json.GetProperty("replaysBeforeFirstUncostableSale").GetBoolean());
         Assert.Empty(json.GetProperty("remainingFatalIssues").EnumerateArray());
+        Assert.Empty(json.GetProperty("remainingUncostedSaleIssues").EnumerateArray());
         Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("ledgerFingerprint").GetString()));
 
         var sale = json.GetProperty("firstUncostableSale");
@@ -122,11 +124,11 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
 
     /// <summary>
     /// A repair too small to cover the uncostable sales is still previewable: the operator has to
-    /// be able to see, before applying anything, which fatal data-quality issue it would leave
-    /// behind - which is also the reason the apply would refuse it.
+    /// be able to see, before applying anything, which completed sale it would leave uncosted
+    /// (issue #1239 - not fatal, so the apply goes through and the sale stays flagged).
     /// </summary>
     [Fact]
-    public async Task Preview_reports_the_fatal_issues_a_partial_repair_would_leave_behind()
+    public async Task Preview_reports_the_sale_a_partial_repair_would_leave_uncosted()
     {
         var productId = await _factory.SeedRepairableProductAsync(ApiFactory.CallerBusinessId);
 
@@ -136,11 +138,12 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var json = await ReadJsonAsync(response);
         Assert.Equal(0, json.GetProperty("projectedCostingQuantity").GetInt32());
-        var issue = json.GetProperty("remainingFatalIssues").EnumerateArray().Single();
+        Assert.Empty(json.GetProperty("remainingFatalIssues").EnumerateArray());
+        var issue = json.GetProperty("remainingUncostedSaleIssues").EnumerateArray().Single();
         Assert.Equal(
             ["code", "message"],
             issue.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
-        Assert.Equal(CostDataQualityIssueCodes.UnknownCost, issue.GetProperty("code").GetString());
+        Assert.Equal(CostDataQualityIssueCodes.UncostedSale, issue.GetProperty("code").GetString());
         Assert.Contains(
             $"Completed Nayax sale {ApiFactory.FirstTransactionId(productId) + 1}",
             issue.GetProperty("message").GetString(),
@@ -247,9 +250,11 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
     /// <summary>
     /// Every deliberate repair rule reaches the caller through the existing validation mapping,
     /// with the Application's own message: an unusable quantity, cost or reason, an effective
-    /// instant at the transition cutoff, a placement the replay reaches after the sale it must
-    /// cover, and a repair that would leave the history fatally incomplete. None of them persists
-    /// a repair - including the last one, which fails only once the rebuild has run.
+    /// instant at the transition cutoff, and a placement the replay reaches after the sale it must
+    /// cover. None of them persists a repair. The refusal that happens only once the rebuild has
+    /// run - a history still fatally incomplete - is
+    /// <see cref="Apply_refuses_a_repair_that_leaves_the_history_fatally_incomplete_and_persists_nothing"/>,
+    /// because it needs a product whose history is fatal for a reason a repair cannot fix.
     /// </summary>
     [Theory]
     [InlineData(0, 2, Reason, "2026-01-02T12:00:00Z", "A costing repair must add a positive quantity.")]
@@ -259,7 +264,6 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
     [InlineData(4, 2, "correction", "2026-01-02T12:00:00Z", "Record a specific reason for this costing repair: at least 10 characters, and not a placeholder.")]
     [InlineData(4, 2, Reason, "2026-01-01T12:00:00Z", "A costing repair must take effect after the product's inventory-cost transition cutoff")]
     [InlineData(4, 2, Reason, "2026-01-05T12:00:00Z", "The repair does not replay before completed sale")]
-    [InlineData(1, 2, Reason, "2026-01-02T12:00:00Z", "This repair does not complete the product's cost history, so nothing was saved:")]
     public async Task Apply_maps_a_refused_repair_to_400_problem_details_and_persists_nothing(
         int quantity,
         int unitCost,
@@ -285,6 +289,35 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
         var json = await ReadJsonAsync(response);
         Assert.Equal("Request validation failed", json.GetProperty("title").GetString());
         Assert.Contains(expectedDetail, json.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(json.GetProperty("detail").GetString(), json.GetProperty("message").GetString());
+        await _factory.AssertNothingWasRepairedAsync(productId);
+    }
+
+    /// <summary>
+    /// The refusal that happens after the rebuild has already run: the product also holds a legacy
+    /// positive restock with no unit cost, which no costing repair can explain, so the repaired
+    /// history is still fatal. It is a 400 with the Application's own message and the appended
+    /// repair rolls back with its transaction. An uncosted completed sale is deliberately not such
+    /// a reason any more (issue #1239).
+    /// </summary>
+    [Fact]
+    public async Task Apply_refuses_a_repair_that_leaves_the_history_fatally_incomplete_and_persists_nothing()
+    {
+        var productId = await _factory.SeedRepairableProductAsync(ApiFactory.CallerBusinessId);
+        await _factory.AddUncostedRestockAsync(productId, Day(2).AddHours(1));
+        var client = _factory.Caller();
+        var preview = await ReadJsonAsync(await client.PostAsJsonAsync(PreviewUri, PreviewRequest(productId)));
+
+        var response = await client.PostAsJsonAsync(
+            ApplyUri, ApplyRequest(productId, preview.GetProperty("ledgerFingerprint").GetString()!));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var json = await ReadJsonAsync(response);
+        Assert.Equal("Request validation failed", json.GetProperty("title").GetString());
+        Assert.Contains(
+            "This repair does not complete the product's cost history, so nothing was saved:",
+            json.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
         Assert.Equal(json.GetProperty("detail").GetString(), json.GetProperty("message").GetString());
         await _factory.AssertNothingWasRepairedAsync(productId);
     }
@@ -602,6 +635,25 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
             var product = await db.Products.AsNoTracking().SingleAsync(x => x.Id == productId);
             db.NayaxSales.Add(Sale(
                 product.BusinessId, productId, FirstTransactionId(productId) + 2, authorizationTime));
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// A legacy positive restock movement carrying no unit cost: the history no costing repair
+        /// can complete, which is what the replay still refuses as fatal.
+        /// </summary>
+        public async Task AddUncostedRestockAsync(long productId, DateTime effectiveAt)
+        {
+            await using var db = Database();
+            var product = await db.Products.AsNoTracking().SingleAsync(x => x.Id == productId);
+            db.StockAdjustments.Add(new StockAdjustment
+            {
+                BusinessId = product.BusinessId,
+                ProductId = productId,
+                QuantityChange = 4,
+                Reason = StockAdjustmentReason.Restock,
+                EffectiveAt = effectiveAt,
+            });
             await db.SaveChangesAsync();
         }
 

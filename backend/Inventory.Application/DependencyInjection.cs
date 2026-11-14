@@ -527,8 +527,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyCatalogueReview>();
         services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
-        services.AddScoped<ImportPendingReimbursementXmlFiles>();
-        // The per-file steps both reimbursement import paths share (issue #1149): hash dedupe, the
+        // The per-file steps of the reimbursement report import (issue #1149): hash dedupe, the
         // atomic write, and the settlement coverage a committed file proves.
         services.AddScoped<ImportReimbursementXmlFile>();
         // The uploaded Nayax ZIP of issue #1149: the upload, the two status reads, and the one job

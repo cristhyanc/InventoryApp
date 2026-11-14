@@ -29,6 +29,6 @@ public enum ProviderDataSource
     /// </summary>
     SalesFileImport = 2,
 
-    /// <summary>An imported settlement/reimbursement file (<c>ImportPendingReimbursementXmlFiles</c>).</summary>
+    /// <summary>An imported settlement/reimbursement file (<c>ImportReimbursementXmlFile</c>).</summary>
     SettlementImport = 3,
 }

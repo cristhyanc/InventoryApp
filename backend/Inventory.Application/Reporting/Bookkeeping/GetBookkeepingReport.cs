@@ -1,7 +1,6 @@
 using System.Globalization;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
-using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.Reporting.Bookkeeping;
 using Inventory.Domain.Reporting.Dashboard;
 
@@ -87,12 +86,15 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
         // families are decided separately, from the sources that actually feed them: sale instants
         // for the sales figures, imported reimbursement periods for the fee figures. A settlement
         // file arriving never makes the sales figures complete, and vice versa.
-        var salesAvailability = ReportAvailabilityPolicy.Decide(
-            range.From, range.EndExclusive, facts.SalesCoverage, facts.ContainsSalesRows);
-        var feesAvailability = ReportAvailabilityPolicy.Decide(
-            range.From, range.EndExclusive, facts.SettlementCoverage, facts.ImportedContainsRows);
-        ReportAvailabilityNotes.Add(qualityNotes, salesAvailability, SalesFigures, ReportAvailabilityNotes.NoSalesData);
-        ReportAvailabilityNotes.Add(qualityNotes, feesAvailability, FeeFigures, ReportAvailabilityNotes.NoSettlementData);
+        //
+        // The decision is made over the window the facts provider actually selected its rows by,
+        // which it carries on the coverage record - business-day midnights since issue #1250, not
+        // the requested calendar dates a business day straddles. Judging coverage against a window
+        // the figures were never measured over is what this carrier exists to prevent, and it is how
+        // the daily, reconciliation and profitability reports already decide these states.
+        var availability = facts.Coverage.Availability();
+        ReportAvailabilityNotes.Add(qualityNotes, availability.Sales, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+        ReportAvailabilityNotes.Add(qualityNotes, availability.Fees, FeeFigures, ReportAvailabilityNotes.NoSettlementData);
 
         // Conditional, scope-derived diagnostics (issue #476): every note above comes from a fact in
         // the requested business, date range and machine scope, and the calculation methodology this
@@ -145,7 +147,7 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             DirectProfit = profit.DirectProfit,
             DirectMarginPercent = profit.DirectMarginPercent,
             NayaxProcessingFees = facts.ProcessingFees,
-            ProviderAvailability = ReportProviderAvailabilityDto.From(salesAvailability, feesAvailability)
+            ProviderAvailability = availability
         };
     }
 

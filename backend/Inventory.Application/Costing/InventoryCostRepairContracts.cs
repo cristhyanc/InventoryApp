@@ -36,6 +36,11 @@ public sealed record UncostableSale(long TransactionId, DateTime AuthorizationTi
 /// <em>projected</em> values are where the whole history ends up once the rest of it replays on top,
 /// together with the fatal issues that would still be left. A repair is worth applying only when
 /// <see cref="RemainingFatalIssues"/> is empty - a rebuild refuses a history that still has one.
+///
+/// <see cref="RemainingUncostedSaleIssues"/> is the other half of that answer, and it does not block
+/// the apply (issue #1239): the completed sales the repaired history still cannot cost, each named
+/// with its product, transaction id and sale time. A repair too small to reach them applies and
+/// leaves them uncosted, so the operator has to be able to see which ones before approving it.
 /// </summary>
 public sealed record InventoryCostRepairPreview(
     long ProductId,
@@ -56,6 +61,7 @@ public sealed record InventoryCostRepairPreview(
     decimal ProjectedInventoryValue,
     decimal? ProjectedAverageUnitCost,
     IReadOnlyList<InventoryCostDataQualityIssue> RemainingFatalIssues,
+    IReadOnlyList<InventoryCostDataQualityIssue> RemainingUncostedSaleIssues,
     string LedgerFingerprint);
 
 /// <summary>One stored costing repair, as the history query and the apply result report it.</summary>

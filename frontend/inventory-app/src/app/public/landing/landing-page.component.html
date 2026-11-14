@@ -221,11 +221,8 @@
   <footer class="border-t border-rr-line bg-white px-4 py-10 sm:px-8">
     <div class="mx-auto flex max-w-6xl flex-col gap-8 md:flex-row md:justify-between">
       <div class="max-w-sm">
-        <p class="m-0 flex items-center gap-2 text-lg font-bold text-rr-navy">
-          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
-            <app-icon name="inventory_2" [size]="18" />
-          </span>
-          Restockroo
+        <p class="m-0 flex items-center" data-testid="landing-footer-brand">
+          <app-brand-logo variant="full" [height]="32" />
         </p>
         <p class="m-0 mt-3 text-sm text-rr-muted">
           Practical inventory and stock tracking for small businesses and vending operators.

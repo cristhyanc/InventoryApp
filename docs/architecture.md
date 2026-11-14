@@ -852,8 +852,8 @@ InventoryApp/
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the two Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxSales) with their source/reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the Imports use cases (ImportReimbursementXmlFile, ImportNayaxSales) with their reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), ReimbursementXmlParser, ZipReimbursementArchiveReader and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
 │   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
 │   │   ├── Models/                  EF entities and enums
@@ -1687,7 +1687,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
-| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `api/imports/pending-xml`, `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -5462,9 +5462,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
   nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
-  `ReimbursementReportPageComponent` renders the same notice, disables the ZIP upload and the
-  pending-XML action and guards both handlers, while leaving its recent-uploads list alone, because
-  those reads are `GET`s a read-only session may make.
+  `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
+  leaving its recent-uploads list alone, because those reads are `GET`s a read-only session may make.
+  (It disabled and guarded a second write, the pending-XML action, until issue #1237 retired that
+  import.)
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -7773,9 +7774,10 @@ import went rather than implying it still runs here.
 
 **And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
 is now a short **Reimbursement Report** card whose control is a `routerLink` to
-`/admin/imports/reimbursement-report`, where #1149's ZIP upload, its job status list and that same
-pending-XML action now live; this page runs no reimbursement import of its own and
-`AdminImportsComponent.importXml` is gone. The link is neither hidden nor disabled during a support
+`/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
+page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
+pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
+so the upload is the only way in. The link is neither hidden nor disabled during a support
 session, for the reason the Import products link is not. See
 [The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
 card description names that destination too.
@@ -8872,11 +8874,18 @@ A machine refill is an internal location transfer: it changes physical storage b
 
 Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
-Historical sale cost precedence is:
+Historical sale cost precedence is four steps, not three (`AGENTS.md` § Inventory and historical
+costing invariants holds the authoritative wording):
 
 1. persisted internal AVCO/ledger cost when reliable;
-2. transaction-level Nayax Product Cost Price captured on that sale;
-3. uncosted/unknown.
+2. in the cost replay, when the ledger has no known cost before the sale, the unit cost of the latest
+   costed purchase (restock) replayed before it, stored as `Costed` with `CostSource = Estimated`;
+3. the transaction-level Nayax Product Cost Price captured on that sale;
+4. otherwise the sale is left uncosted, which the replay reports as the **non-fatal**
+   `UncostedSale` issue (issue #1239).
+
+The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -8909,10 +8918,26 @@ sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` is
 as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
 it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
 fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
-before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
-earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+before the sale makes the next replay cost it from the ledger again.
 A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
 purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
+
+**A sale with no known cost at all is left uncosted, and that does not block a stock write**
+(repository owner's decision of 13 November 2026, issue #1239). A completed sale that steps 1 to 3
+cannot cost - no ledger cost, no earlier costed purchase and no valid Nayax cost, which is the state a
+business that connects Nayax with machines already stocked starts in - is reported as the non-fatal
+`UncostedSale` issue, consumes no costing quantity or value, and stages no sale cost. Because it is not
+fatal, `RebuildProductCost` no longer throws for it: a purchase dated *after* such a sale, a pick-list
+refill, a manual adjustment and a Take Inventory apply all commit, where every one of them used to be
+rolled back with `InventoryCostDataQualityException` and the only way out was to backdate a purchase
+before the sale (`UncostedSaleLaterStockWritesTests` walks those four writes). The sale stays uncosted
+and keeps being reported - in the `InventoryCostRebuildResult` issues and in the costing-repair
+preview's `remainingUncostedSaleIssues`, each naming the product, the transaction and the sale time -
+until a purchase or a costing repair before it is recorded, which is what makes the next replay cost it
+from the ledger. The sale is still listed in the replay's `UncostableSales`, so a costing repair is
+still previewed and placed against it. Everything else the replay calls fatal stays fatal: an uncosted
+positive `Restock`, a correction or write-off with no known cost, physically or cost-negative stock, and
+the end-of-replay opening reconciliation.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -8923,7 +8948,7 @@ source ID - and returns the physical/costing quantity, inventory value, unrounde
 the cost assigned to each movement and sale, the position each repair landed on, the completed sales
 it could not cost, and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
 (`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
-`LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
+`CostFallback`, `UncostedSale` and `LegacyUnlinkedCostedRestock` are not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
 quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
 physical stock with `InsufficientStockException`. Neither takes an
@@ -8974,7 +8999,10 @@ in behaviour:
   `EfProductStore`, `EfLatestNayaxSalesStore`, the sale-costing use cases (issue #297), the
   inventory-cost transition apply use cases (issue #298), and the uploaded sales import (issue #301) -
   keep their existing transaction around a movement and the rebuild it triggers, so both still
-  commit or roll back together.
+  commit or roll back together. Where the decision to record the movement is made from a read, that
+  transaction is the `BEGIN IMMEDIATE` write lock and it is opened before that read: inside
+  `EfStockAdjustmentStore.ApplyAsync` for a manual adjustment, and in the `ApplyInventoryCount` use
+  case for Take Inventory, whose comparison happens before the movement is staged (issue #1241).
 
 Sale costing and its backfills are Application use cases since issue #297; see
 [Sale import and costing](#sale-import-and-costing).
@@ -8995,6 +9023,29 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   `DomainValidationException` with the message the API has always returned.
   `Inventory.Domain.Costing.InventoryCostBaselineSource` mirrors the persisted
   `Inventory.Infrastructure.Models.InventoryCostBaselineSource` value-for-value (a parity test enforces this).
+- **A machine slot is matched to a product through the provider link, and an unlinked slot is counted
+  for nobody (issue #1256).** A slot's `NayaxProductID` is the Lynx contract's "unique identifier of
+  the product in the Nayax system" (`GET /v1/machines/{MachineID}/machineProducts`,
+  `integer<int64>`, nullable), so `InventoryCostTransitionPreviewBuilder` resolves it to a local
+  product id through `INayaxProductLinkStore` — the same lookup
+  [the live machine readers use](#resolving-a-nayax-product-id-to-a-local-product-issue-733), awaited
+  after the Nayax fan-out — and never compares it with `Product.Id`. Comparing them worked only while
+  the local key happened to *be* the Nayax id; since [issue #735](#the-local-key-is-the-databases-own-issue-735)
+  that is a coincidence, and here it decided a costing baseline: a product whose ids differed recorded
+  an opening quantity with **no** machine stock at all, and one whose Nayax id equalled another
+  product's local key recorded **that** product's units. A slot this business holds no link for is an
+  unknown product and is added to no product's machine stock. The same builder serves all four use
+  cases, so the single-product and all-products preview and apply resolve identically; recorded
+  baselines are not changed by this and a human decides, from a read-only check, which of them were
+  taken while a product's ids differed.
+- **A product the provider does not name says so.** Machine stock is looked up *through* the
+  product's recorded provider id (`Product.ExternalProductId`, travelling on
+  `InventoryCostTransitionProduct`), so a product carrying none can be matched to no slot in any
+  machine. Its opening quantity is home stock alone and its preview carries
+  `InventoryCostTransitionPolicy.UnresolvedMachineStockNote` in front of the legacy note, in the
+  single-product preview and in each row of the all-products preview, because an empty machine stock
+  that was never measured must not read as a measured zero. The slot side cannot answer that on its
+  own: a linked product that is in no machine and an unlinked product both match no slot.
 - `Inventory.Application.Costing.PreviewInventoryCostTransition`, `ApplyInventoryCostTransition`,
   `PreviewAllInventoryCostTransitions` and `ApplyAllInventoryCostTransitions` orchestrate them, and own
   the request/response contracts moved unchanged in name and shape from the removed
@@ -9028,9 +9079,11 @@ releases exactly the one unit of costing inventory it consumed.
 
 A costing repair is the one supported way to restore costing history that was never recorded. It
 exists for a single situation: physical stock the business genuinely held was never valued in the
-ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` reports
-`UnknownCost`/`MissingOpening` for the completed sales that depend on it, and every later write to
-that product (purchase, count, refill apply, sales sync) fails on the same fatal issue. Restock,
+ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` cannot cost the
+completed sales that depend on it and reports each of them as the non-fatal `UncostedSale` (since
+issue #1239; before that they were fatal and every later write to the product - purchase, count,
+refill apply, sales sync - failed on the same issue, which is why a repair was the only way to unblock
+the product rather than only the way to value its history). Restock,
 Correction, Damaged, Expired and MachineRefill are physical movements and keep their meanings, so
 none of them can express "the costing history was incomplete" without misstating physical stock; a
 repair is the explicit, auditable, costing-only alternative. It is never inferred - not from
@@ -9081,8 +9134,12 @@ and it never substitutes for a real purchase, correction or write-off.
   It replays the ledger twice through the shared `InventoryCostRepairProjection` - as it stands, and
   with the proposed repair - and reports the costing quantity/value immediately before the repair,
   the quantity/value it adds, the resulting average unit cost, the first completed sale the ledger
-  cannot cost today, whether the repair replays before it, the projected costing quantity/value, and
-  the fatal issues a partial repair would leave behind.
+  cannot cost today, whether the repair replays before it, the projected costing quantity/value,
+  the fatal issues a partial repair would leave behind, and - since issue #1239 - the completed sales
+  a partial repair would leave **uncosted** (`remainingUncostedSaleIssues`, each naming the product,
+  the transaction and the sale time). The second list does not block the apply: a repair too small to
+  reach those sales is recorded and they stay uncosted and flagged, so the operator has to be able to
+  see which ones before approving it.
 - **`ApplyInventoryCostRepair`** runs in one transaction, and in one order deliberately: the
   authoritative ledger read, the expected-state comparison and the write are a single operation.
   Because the preview stores nothing, the stale-preview model of
@@ -9093,8 +9150,11 @@ and it never substitutes for a real purchase, correction or write-off.
   the apply recomputes and requires to match. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
-  fatal data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a
-  product.
+  fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
+  with no known cost - fails and persists nothing at all. A completed sale the repair does not reach
+  is no longer such an issue (issue #1239): that repair is recorded, the sales it does reach are
+  costed from the ledger, and the ones it does not stay uncosted and flagged, which the preview
+  reported before it was approved.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by
   `Inventory.Infrastructure.Persistence.EfInventoryCostRepairStore`; it moved to
@@ -9108,7 +9168,7 @@ and it never substitutes for a real purchase, correction or write-off.
 
   | Endpoint | Request | Success response |
   | --- | --- | --- |
-  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues`, `remainingUncostedSaleIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
   | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
   | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
 
@@ -10007,6 +10067,49 @@ size from one key press alone, and hands focus on into the pager. Its captures a
 `reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
 (the focus ring on the selector).
 
+#### Restockroo logo (issue #1272)
+
+Issue #1272 puts the owner-approved Restockroo logo (teal kangaroo with a stock box, navy
+wordmark, transparent background) everywhere the app already showed its brand. It is a
+presentation change: no navigation label, destination, order, grouping, permission, route,
+account or business control, homepage copy or colour theme changed.
+
+**Source and files.** The approved original is kept, unchanged, at
+`docs/brand/restockroo-logo-original.png` (1600 x 533 PNG). It is the only source and is not part
+of the Angular build. Two files are made from it by trimming transparent canvas and resizing only
+(no recolouring, redrawing or effects) and ship as ordinary bundled assets under
+`frontend/inventory-app/src/assets/brand/`:
+
+| File | Content | Pixels | Displayed at |
+| --- | --- | --- | --- |
+| `restockroo-logo.png` | Full logo: symbol and navy wordmark | 404 x 108 | 32-36px high |
+| `restockroo-symbol.png` | Kangaroo-and-box symbol alone | 81 x 96 | 32px high |
+
+Both are PNG, not SVG, and are exported at about three times their largest display height so they
+stay sharp on high-density screens. There is no white-wordmark variant, because no surface that
+shows the brand is dark; one would be made from the same original if a dark surface is added. No
+image, font or logo is loaded from Stitch, Google or any other remote host.
+
+**`BrandLogoComponent`** (`components/shared/brand-logo.component.ts`) is the one place the logo is
+rendered. Its `variant` input picks the file (`full` or `symbol`) and its `height` input sets the
+visible height in CSS pixels; the width follows the file's own aspect ratio, and the `<img>` carries
+the file's `width`/`height` attributes so the box is reserved before it loads. Its `alt` is
+"Restockroo" and callers put no visible "Restockroo" text beside it, so the brand is announced once.
+It renders no link: a caller that links the brand wraps it in its own anchor.
+
+**Where it appears.**
+
+- Landing header, legal pages and sign-in page: the full logo, 36px, inside the existing brand link
+  to `/home` (unchanged destination, `min-h-11` target and focus style).
+- Landing footer: the full logo, 32px, not a link.
+- Sidebar, expanded, and the narrow-layout More sheet: the full logo, 32px, in the header row
+  beside the collapse or Close control, not a link.
+- Sidebar collapsed to the `w-16` rail: the symbol alone, 32px, stacked and centred above the
+  expand control, which keeps its 44px target; not a link.
+- The authenticated top bar on a narrow layout has no logo, as before.
+
+The favicon, page titles and any social, PWA or email branding are unchanged.
+
 #### Shared help toggletip (issues #1015 and #1016)
 
 `components/shared/help-toggletip/` is the one help toggletip the application has, built once on the
@@ -10732,12 +10835,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Reports keep the calendar-date `Handle` overload with their own date filters unchanged: `FeeDate` is null there, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
 
 What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks in the report facts adapters.
-- The Transaction Sales report filters its requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter.
+- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
+- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -10916,7 +11019,8 @@ changed.
 
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
-([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
+([the dashboard rule above](#time)), the money reports select their sales between the same kind of
+boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -10928,19 +11032,64 @@ its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays
 row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
 business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
 status counts and fee estimate all describe the same business day. Imported reimbursement coverage
-dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
-shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
-them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
+dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted.
+Before issue #380 the daily report bucketed and
 filtered by the UTC date of the instant, so a sale in the first 10–11 hours of a Sydney day landed on
 the previous day's row; the owner decided on PR #392 that this belongs to #380's acceptance
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
+**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
+(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
+business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
+`Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
+in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
+COGS, fees and GST on sales disagreed between reports for the same dates. The conversion is now made
+once, by `EfReportingSharedQueries.SalesWindow`, into a `BusinessDateSalesWindow` - the two requested
+business dates and the UTC instants of business-day midnight at the start of the first and at the
+start of the day after the last - and every shared helper that selects *sales* takes that window:
+the completed-sale and all-status queries, the cost projection, the commission calculation and total,
+and the provider-coverage query. Four things follow it:
+
+- The **fee rates and imported fee days** come from the same window (`HandleBusinessPeriod` over
+  `BusinessDateSalesWindow.FeePeriod`), so a sale is charged a fee, and estimated at the rate
+  effective, on the business date whose revenue counted it.
+- **Recorded provider coverage is judged over those instants**, not the calendar range: the
+  bookkeeping facts now carry the one `ReportCoverageFacts` record every other sales-based report
+  already carried (issue #730/#731), and `GetBookkeepingReport` decides both availability states from
+  it instead of re-deriving the period from the request. A coverage range may only be compared with
+  the window the figures were measured over.
+- **Reconciliation attributes a sale to the reimbursement period covering its business date**
+  (`ToBusinessDate`), not the UTC date of its instant.
+- The **site commission these reports subtract is calculated over the same window**
+  (`IGetSiteCommissionReport.HandleBusinessPeriod` over `BusinessDateSalesWindow.CommissionPeriod`).
+  The first fix moved only the window the commission was *gated* on — which machines had a completed
+  sale — and left the dollar `CommissionDue` coming from the calendar-date `Handle`, so bookkeeping
+  counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
+  net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
+  separates the two questions the calculation asks: its two UTC instants select the completed sales,
+  and its two business dates resolve the effective-dated agreement, the recorded payments and the
+  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
+  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
+  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+
+Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
+and purchase dates keep their plain calendar-date bounds in these reports too.
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
+daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
+date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
+on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
+the standalone Commission report still answering $0.35 for the 4th. Figures for past
+ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
+anyone who has exported or lodged figures from these reports.
+
 Transaction Sales still filters its `from`/`to` by the UTC date of the instant
 (`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
 on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
 outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and is an open follow-up.
+inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -11367,15 +11516,48 @@ which offer both of the line's prices as linked inputs: type the amount paid for
 it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
+**A create with opening stock has an initial unit cost, and that is now a rule rather than a
+description (issue #1238).** `POST api/products` records opening stock above zero as a costed
+opening `Restock` movement, and `WeightedAverageCostReplay` treats a positive `Restock` with no unit
+cost as a fatal data-quality fault (`UnknownCost`). While the cost was optional, a create that left
+it empty produced a product whose *every* later stock write — a pick-list refill, a manual
+adjustment, a Take Inventory apply, a new purchase — ended in a rebuild that refused the opening
+movement with "Restock adjustment … has no valid unit cost", and no ordinary screen could repair it.
+So `Inventory.Domain.Products.ProductInitialCostPolicy` is a rule about two fields: **opening stock
+above zero requires an initial unit cost**, refused with
+`ProductInitialCostPolicy.InitialUnitCostRequiredMessage` as `400`. `0` is a cost — stock that was
+free — and is accepted; a negative one is still refused with the existing message; and opening stock
+of zero or absent records no movement and keeps the cost optional, exactly as before. `CreateProduct`
+applies it before anything is saved and `EfProductStore.CreateAsync` applies it again at the write,
+the same way the name and unit-label rules are applied twice, so neither the product nor the opening
+movement is written. Making an uncosted `Restock` non-fatal in the replay, and repairing products
+created before this rule, are deliberately *not* part of it.
+
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
 (`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
 their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
 create/update/delete (`EfPurchaseStore`, whose purchase-linked restock movements still come from
-`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`)
+`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`,
+whose initial stock carries a cost because issue #1238 requires one)
 write their movements as before. All five then rebuild the affected product's cost through
 `Inventory.Application.Costing.IRebuildProductCost` inside the same transaction as before (issue
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
+
+**A manual adjustment's stock check runs inside the write lock** (issue #1241).
+`EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
+it stages the movement, because staging it is what reads the stored quantity that
+`StockMovementCostPolicy`'s "this would make physical stock negative" check is decided on. Read
+before the transaction opened, two simultaneous write-offs of 4 against a stock of 5 both read 5,
+both computed a new stock of 1, and the loser's movement was then refused by the cost replay as
+*becomes physically negative* — an `InventoryCostDataQualityException`, which no HTTP handler claims,
+so an operator whose adjustment simply no longer fitted got a `500`. Inside the lock the loser reads
+the quantity the winner left and is refused with the established `InsufficientStockException`
+(`400`, "Not enough products in stock. Available stock: 1"), and two adjustments that both fit are
+both recorded, the second against the quantity the first left.
+`ManualStockAdjustmentConcurrencyTests` holds both. Take Inventory's apply takes the same lock, in
+its use case rather than its adapter, because its comparison is decided before the movement is
+staged; see [Take Inventory](#take-inventory-issue-245).
 
 **A purchase write moves the stored physical stock with its movements, before the rebuild (issue
 #831).** Purchase create, update and delete add each product's net change to its purchase-linked
@@ -13583,13 +13765,29 @@ audit trail for Take Inventory.
 through the narrow `IInventoryCountAdjustmentStore` port (implemented by
 `Inventory.Infrastructure.Persistence.EfInventoryCountAdjustmentStore`, the same pattern as
 `EfMachineStockEventStore`). The request carries both the counted quantity and the current quantity
-the operator counted against (`ExpectedCurrentStock`); the use case re-reads the authoritative
-current quantity at the mutation boundary and throws `DomainConflictException` (409) when it no
-longer matches, instead of silently applying a delta against a quantity that has since changed
-underneath a stale UI row. An invalid count or a missing restock-cost suggestion throws
-`DomainValidationException` (400). Both map to a `ProblemDetails` response through the existing
-central `DomainExceptionHandler`, described under [Domain and application error
-mapping](#domain-and-application-error-mapping).
+the operator counted against (`ExpectedCurrentStock`).
+
+**The read, the comparison and the mutation are one write-locked operation** (issue #1241). The use
+case opens `IInventoryCountAdjustmentStore.BeginWriteTransactionAsync` — `SqliteWriteLockTransaction`,
+so SQLite's write lock is held from `BEGIN IMMEDIATE` until the commit — and only then reads the
+authoritative current quantity, compares it with `ExpectedCurrentStock`, resolves the difference and
+records the movement, all inside that one transaction. "Has this quantity changed since the operator
+counted it?" is a check-then-write rule, and reading it before the transaction opened left a gap
+another writer could commit in: stock 10, the operator counts 8, a refill of 4 commits, and the
+stale -2 was applied to 14, leaving storage reporting 12. A competing change can now only land
+*before* that read, where it is answered with `DomainConflictException` (409) and **no movement is
+recorded**; a count that arrives while another writer holds the lock waits, re-reads the committed
+quantity and is answered the same way, never with a provider lock error. The zero-difference
+`Confirmed` outcome reads under the same lock and writes nothing, so it commits nothing. An invalid
+count or a missing restock-cost suggestion throws `DomainValidationException` (400). Both map to a
+`ProblemDetails` response through the existing central `DomainExceptionHandler`, described under
+[Domain and application error mapping](#domain-and-application-error-mapping).
+
+`InventoryCountApplyConcurrencyTests` is what holds that: a competing restock driven at the instant
+the count has read its quantity cannot even begin and the count applies exactly what was counted; a
+change that commits while the count waits for the lock is answered `409` with no movement; two
+simultaneous counts of one product apply exactly one; and a zero-difference count is refused the
+same way when the quantity changed first.
 
 ### Sale import and costing
 
@@ -13659,8 +13857,7 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
 - **Workbook/CSV parsing** sits behind the `INayaxSalesWorkbookReader` port, implemented by
   `Inventory.Infrastructure.Imports.ClosedXmlNayaxSalesWorkbookReader` - a real Infrastructure
   adapter from the start - unlike the EF adapters of the time, which were still API-owned - for the
-  same reason as
-  `FileSystemPendingReimbursementXmlSource`: it needs no `AppDbContext`, only the uploaded bytes.
+  same reason the reimbursement XML adapter was: it needs no `AppDbContext`, only the uploaded bytes.
   ClosedXML therefore moved to `Inventory.Infrastructure`, and the former
   `InventoryApi.Services.NayaxSalesWorkbook` CSV-to-worksheet conversion moved into the adapter with
   it. The adapter keeps the parsing decisions imported financial data depends on: headers matched on
@@ -13669,8 +13866,8 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception
   being an absent settlement value, which the legacy import read as `0`), and an instant taken from
   a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
-  left `null` so the row is skipped. Unlike the pending-XML source, a read failure is deliberately
-  *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
+  left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
+  deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
   `FileFormatException`, which the controller's `InvalidOperationException` handling does not claim,
   so it reaches `GlobalExceptionHandler` as a generic `500` exactly as before) rather than being
   reported to the operator as an import of zero rows. A CSV, by contrast, is always readable, so
@@ -13758,72 +13955,56 @@ child 3 of #149), moved unchanged in behaviour from the removed
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
-The import side of that flow (`POST api/imports/pending-xml`) is the
-`Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case (issue #299, child 1 of
-3 of #151), moved unchanged in behaviour from the removed
-`InventoryApi.Services.ImportService.ImportPendingXmlFilesAsync`:
+**A reimbursement report enters the application one way: the upload on the Reimbursement Report page**
+(issue #1149, described in full [below](#reimbursement-report-zip-upload-and-background-import-issue-1149)).
+Issue #299's second route — `POST api/imports/pending-xml`, which imported whatever XML somebody with
+server access had left in `{WebRootPath}/ImportedFiles` — was **retired by issue #1237**: it was the
+one import that did not take its input from the signed-in business's own upload, and the endpoint,
+the use case, the port and the filesystem adapter behind it are gone. No application code reads,
+lists, creates or deletes anything under that folder any more. (The `ImportedFiles` *table* is
+unrelated to it and stays: it is where an imported reimbursement file is recorded.)
 
-- **The use case** walks the pending queue and, per file, reads it, skips it when this business has
-  already imported the same bytes, otherwise persists it, and removes it from the queue either way.
-  It owns the reported counts (`ImportedFileImportResult`, moved here from
-  `InventoryApi.Services.Interfaces` with no JSON change): a file that could not be read, parsed or
-  removed is counted as failed and stays in the queue rather than being silently dropped, a file
-  whose hash is already present is counted as skipped, and the reimbursement rows of a file that was
-  persisted but then could not be removed are still counted as imported - the same counter order the
-  legacy loop had. A persistence failure is deliberately not caught and still propagates.
-- **Discovery and parsing** sit behind the `IPendingReimbursementXmlSource` port, implemented by
-  `Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource` - a real Infrastructure
-  adapter from the start - unlike the EF adapters of the time, which were still API-owned - because
-  it needs no `AppDbContext`. It resolves
-  `{WebRootPath}/ImportedFiles` from the `PendingReimbursementXmlOptions` host paths the composition
-  root supplies through `AddPendingReimbursementXmlSource()` (the same arrangement
-  [Document storage](#document-storage) uses, so no filesystem path reaches the Application layer),
-  and keeps the parsing decisions imported financial data depends on: invariant-culture numbers and
-  dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
-  parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
-  attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
-  `row` fragment retried wrapped in a root element. Since issue #1149's review one further decision
-  joins them: a file whose element names one attribute *twice* — the same local name in two
-  namespaces — is refused as unreadable rather than recorded with one of the two values dropped,
-  because nothing here may decide which half of a settlement figure to keep. Filesystem and XML
-  failures are translated here
-  and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
-  by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
-  "translated to a plain answer at that layer's own boundary" rule in the
-  [exception ownership table](#exception-ownership-table). Caller cancellation is excluded from that
-  translation and stays cancellation.
+The rules the remaining route follows, each in the type that owns it:
+
+- **Parsing** is `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, the one parser of
+  reimbursement XML in the application, and it keeps the decisions imported financial data depends on
+  unchanged since issue #299: invariant-culture numbers and dates, a date without an offset assumed
+  to be UTC, a numeric attribute read as a boolean when it parses to a non-zero integer, an
+  unparsable number or date left `null` rather than zero, every attribute preserved as raw JSON, a
+  root `row` element treated as the single row, and a bare `row` fragment retried wrapped in a root
+  element. Since issue #1149's review one further decision joins them: a file whose element names one
+  attribute *twice* — the same local name in two namespaces — is refused as unreadable rather than
+  recorded with one of the two values dropped, because nothing here may decide which half of a
+  settlement figure to keep. The parser **throws** rather than deciding what a failure means;
+  `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader` translates that into one entry's
+  own recorded failure at its own boundary, matching the "translated to a plain answer at that
+  layer's own boundary" rule in the [exception ownership table](#exception-ownership-table).
+- **Per-file import** is `Inventory.Application.Imports.ImportReimbursementXmlFile`: skip the file
+  whose bytes this business has already imported, otherwise persist its reimbursement graph, then
+  record the settlement coverage the committed file proves. A persistence failure is deliberately not
+  caught and propagates, so a database problem is never reported as a handful of failed files.
 - **Persistence** sits behind the narrow `IImportedReimbursementStore` port (the hash question plus
   one atomic write of the file with its reimbursement/device/device-payment/fee/payment-method
   graph), implemented by
   `Inventory.Infrastructure.Persistence.EfImportedReimbursementStore`, which moved there with the
-  rest of the adapter family in issue #309. The duplicate lookup is the same
-  tenant-filtered `ImportedFiles` query as before, with no business predicate of its own, so
+  rest of the adapter family in issue #309. The duplicate lookup is a
+  tenant-filtered `ImportedFiles` query with no business predicate of its own, so
   file-hash idempotency stays per business: two businesses may legitimately import the same file and
   neither is told its own first import is a duplicate. Ownership is stamped centrally on save.
-- `ImportsController.ImportPendingXmlFiles` calls the use case directly; the route, the
-  `ImportedFileImportResult` response shape and the status codes are unchanged. The action now also
-  binds the request's `CancellationToken` and passes it through both ports, which the legacy
-  signature did not. This was the first of the three import endpoints to leave `IImportService`; the
-  product catalogue import followed under issue #300 (see [Nayax product catalogue
-  import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
-  (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
-  deleted `ImportService`/`IImportService` entirely.
-- Since issue #1149 the **per-file steps** — the hash dedupe, the atomic write and the coverage the
-  committed file proves — are `Inventory.Application.Imports.ImportReimbursementXmlFile`, shared with
-  the uploaded-archive import below. Nothing about this use case's behaviour changed: the same
-  counters move in the same order, a persistence failure still propagates rather than being reported
-  as a handful of failed files, and the pending folder is still the only place it looks. The parsing
-  moved the same way, into `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, which is now the
-  one parser of reimbursement XML in the application; every parsing decision listed above is
-  unchanged, and `FileSystemPendingReimbursementXmlSource` still owns discovery, the folder
-  confinement and removal, and still translates its own failures into `null`/`false` at the port.
+
+Issue #299 was also the first of the three import endpoints to leave `IImportService`; the product
+catalogue import followed under issue #300 (see [Nayax product catalogue
+import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
+(see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
+deleted `ImportService`/`IImportService` entirely.
 
 ### Reimbursement Report ZIP upload and background import (issue #1149)
 
 Nayax emails the reimbursement report as a ZIP, and until this issue the only way to import one was
-to unzip it twice by hand and get the XML files onto the server's own pending folder. This adds the
-second route: an authorised operator uploads the attachment exactly as it arrived, the upload is
-accepted in seconds, and the import happens in the background with the same pipeline.
+to unzip it twice by hand and get the XML files onto a folder on the server. This added the second
+route: an authorised operator uploads the attachment exactly as it arrived, the upload is accepted in
+seconds, and the import happens in the background with the same pipeline. Since issue #1237 retired
+the folder import it is the only route.
 
 **The HTTP surface, on `ImportsController` under the existing `Imports.Run` capability.**
 `POST api/imports/reimbursement-report` takes one multipart file, checks the archive, stores it as a
@@ -13835,8 +14016,8 @@ tenant-scoped centrally, so another business's job is not found. The business is
 resolved business: nothing in the request can choose one. A role preview and a read-only support
 session are refused on the upload centrally, because it is a `POST`, exactly as the two import writes
 beside it are; the two reads are `GET`s, so a support session may make them. None of the three
-carries a plan requirement, for the reason the pending-XML import carries none: a settlement
-statement the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
+carries a plan requirement, unlike the Nayax sales file import beside them: a settlement statement
+the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
 
 **Reading the archive: `Inventory.Application.Imports.IReimbursementArchiveReader`, implemented by
 `Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader`.** The real shape is
@@ -13858,11 +14039,9 @@ XLSX and an XML per report day, so the rules are:
   reduces a name to a label that is only recorded and displayed: both separators normalised, every
   `.`/`..` segment dropped, a leading separator and a drive prefix removed, control characters
   replaced, and the result capped. A name of nothing but traversal segments becomes a positional label
-  rather than a guess. The server's own pending import folder is not touched — this import has nothing
-  to do with it.
+  rather than a guess. No folder on the server is read, written or deleted at all.
 - A file that is not a readable reimbursement report is **that entry's own** failure, answered across
-  the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
-  unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
+  the port as a parsed `null`. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
   the whole upload. "Not readable" includes an XML that is *well-formed* and still ambiguous — one
   that names the same attribute twice on an element, in two namespaces — which the parser refuses as
   its own declared parse failure (issue #1149's review); it used to escape the walk as an
@@ -13970,17 +14149,18 @@ a key of its own — the shared-key rule of [Switchable Admin menu
 visibility](#switchable-admin-menu-visibility-issues-873-and-1148). Its breadcrumb is the first
 three-item trail in `breadcrumbs/breadcrumb-routes.ts`: `BreadcrumbParent` may now declare a parent of
 its own, so Admin › Imports › Reimbursement Report is that chain read outwards rather than a second
-way of writing a trail. `/admin/imports` keeps the `Import XML files` card's place with a short
-**Reimbursement Report** card that links here, and the Nayax sales upload and the sale timestamp
-repair are untouched.
+way of writing a trail. `/admin/imports` keeps the retired `Import XML files` card's place with a
+short **Reimbursement Report** card that links here, and the Nayax sales upload and the sale
+timestamp repair are untouched.
 
 **Composition.** Per [Page composition boundary](#page-composition-boundary-issue-191)
 `ReimbursementReportPageComponent` is the boundary: `ReimbursementReportUploadComponent` owns the
 chosen file, the in-flight upload and the refusal, and emits `(uploaded)` with the accepted job id;
 `ReimbursementImportJobsComponent` owns the list read, the refresh lifecycle, the per-row expansion
 and both reads' failures, and is told to read again through one `[reloadToken]`. The page itself keeps
-the support-session answer, that token, and the one-button pending-XML action that moved here
-unchanged — a single call with its own toast, which is not a workflow of its own.
+the support-session answer and that token. It also kept the one-button pending-XML action that moved
+here with it, until issue #1237 retired that import and the button with it; the upload is now the
+only way a reimbursement report enters the app.
 
 **What the page decides, which is nothing about an import.** Every state, count and reason on screen
 is the server's answer, counted there from its own per-file outcome rows;
@@ -14010,7 +14190,7 @@ before it makes the next one: the superseded request is cancelled outright, its 
 failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
 newest read.
 
-**Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
+**Support session.** The upload is withheld and the page says so; the two status reads are `GET`s a
 read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
 way — the page withholds the controls so no refusable request is sent.
 
@@ -14026,7 +14206,7 @@ row at 1440px, and that the longest file name stays inside its own row. Its capt
 end-to-end suite](#browser-level-end-to-end-suite-issue-46).
 
 **Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
-pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
+absent XML import button and the support session), `reimbursement-report-upload.component.spec.ts`
 (the picker and the note, the selection, the accepted upload and its emitted id, the server's `400`,
 a `ProblemDetails` body, the bodiless failure, the busy state and its second click, the withheld
 session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
@@ -14103,7 +14283,7 @@ nothing writes it (below): a transaction export declares neither.
   business-wide completeness for time nothing accounted for. The imported sales are reported in
   full and their period stays `Unverified` until a fully successful synchronization covers it.
   **Do not reintroduce a range derived from the instants a workbook happens to contain.**
-- `ImportPendingReimbursementXmlFiles` claims the periods the file **proves**, one coverage row per
+- `ImportReimbursementXmlFile` claims the periods the file **proves**, one coverage row per
   proven interval, immediately after that file's graph is committed. Each reimbursement row declares
   its own `[ReimbursementStartDate, the midnight after ReimbursementEndDate)` — the provider's own
   statement of what that row settles, never the payout date and never the import instant
@@ -14193,14 +14373,18 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report selects sales
-between business-day midnights; the others between plain calendar-date bounds. Its `Availability()`
-and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
+only be compared with the window the figures were measured over. The daily report, bookkeeping, the
+reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
+machine and product profitability still select between plain calendar-date bounds. Its
+`Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
 calls, including the bookkeeping one #730 introduced, so the reports cannot read coverage
 differently. It takes no machine predicate (coverage is about whether provider data was retrieved
-for the business at all) and no provider predicate (P5).
+for the business at all) and no provider predicate (P5). The bookkeeping facts carried that coverage
+as three loose fields, with the use case re-deriving the period from the request, until issue #1250
+moved them onto the same carrier: once that adapter selected its sales over business-day midnights,
+the requested calendar dates were no longer the window its figures had been measured over.
 
 **Two families or one, decided by what each report actually shows.** A figure is never labelled by
 evidence that does not feed it, so the contract differs by report on purpose:
@@ -15078,7 +15262,8 @@ than being read as the number inside it.
 
 The translation happens where Nayax data enters the application, so every persistence port
 downstream of it speaks local product ids only — `IMachineStockEventStore.GetStorageProductsAsync`
-changed from taking Nayax ids to taking local ones for exactly that reason. The six paths:
+changed from taking Nayax ids to taking local ones for exactly that reason. The eight paths (the
+last of them added by issue #1256, which found the transition preview still comparing the two ids):
 
 | Path | Where the id is resolved | What an unresolved Nayax id means |
 | --- | --- | --- |
@@ -15089,6 +15274,7 @@ changed from taking Nayax ids to taking local ones for exactly that reason. The 
 | Site summaries (`GetSiteSummaries`) | after the fan-out, before the completed-sales read | the stock fact carries no product id: it still counts toward the site's physical stock percentage, exactly as an unmapped selection always has, and raises no low/empty product alert |
 | Sync Restock (`SyncMachineStockFromNayax`) | after the machine-products read, before the storage read | the MDB position resolves to no local product, which is `NayaxMachineStockMatchPolicy`'s existing "no local product is mapped to Nayax product …" Needs Review branch, so no inventory ever moves for it |
 | Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
+| Inventory-cost transition preview and apply (`InventoryCostTransitionPreviewBuilder`, issue #1256) | after the fresh fleet and slot fan-out, before the legacy-replay read | the slot is an unknown product and is added to no product's opening machine stock; a *product* with no recorded id matches no slot at all, so its baseline is home stock alone and its preview says the machine stock could not be resolved (see [Historical inventory cost](#historical-inventory-cost)) |
 
 In every case an unresolved id is treated as an unknown product, never matched to the local product
 whose id happens to be the same number. That is the point of the change: since #735 a local key and
@@ -15148,6 +15334,12 @@ and left `NayaxProductId` holding only the provider's own id.
 
 The settlement (pending reimbursement XML) import carries no product or group identifier at all, so
 there is nothing in it to resolve.
+
+**The inventory-cost transition resolves the same way, and it is listed with the live readers rather
+than here (issue #1256).** It reads a machine's *live* selections through `INayaxLynxClient` rather
+than stored or uploaded Nayax data, so it belongs to the #733 table above: the row for
+`InventoryCostTransitionPreviewBuilder` records what it resolves and what an unresolved id means for
+an opening costing baseline.
 
 ### The sale's own product (issue #758)
 
@@ -15531,6 +15723,18 @@ rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a si
 transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
 persisted quantity whose ledger and costing position were never written — under a request the caller
 saw fail and would retry, which would otherwise create a second product beside the first.
+
+**And the movement is always costed, so the rebuild is always one the replay accepts** (issue
+#1238). The third write only exists because the second one does, and it can only succeed if the
+opening movement carries a unit cost: an uncosted positive `Restock` is a fatal `UnknownCost` to
+`WeightedAverageCostReplay`, which is why opening stock above zero now *requires* an initial unit
+cost rather than merely offering one. `ProductInitialCostPolicy` is that rule (`0` accepted,
+negative refused with its existing message, no opening stock leaving the cost optional), it is
+applied by `CreateProduct` before anything is saved and again by this adapter at the write, and a
+refusal is `400` with `ProductInitialCostPolicy.InitialUnitCostRequiredMessage` having written
+neither the product nor the movement. Before it, a create with stock and no cost produced a product
+whose every later stock write failed its rebuild. See [Product purchase and
+restock](#product-purchase-and-restock).
 
 **Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
 refusal points at, and a retired product is one the business has taken out of use: it must not be
@@ -19359,7 +19563,9 @@ files" as the historical record of that slice, not as a test to look for today.
        `IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` use cases (issue
        #296; formerly `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`)
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
-       transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
+       transaction shape - with the movement staged inside that transaction rather than before it
+       since issue #1241, so the stock its sufficiency check reads is read under the write lock - and
+       stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
        `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` mapped the Application record back
        onto the `StockAdjustment` entity shape `StockController`'s history/adjust
@@ -19692,13 +19898,14 @@ files" as the historical record of that slice, not as a test to look for today.
 
 10. **Imports slices done** (umbrella issue #151, three children; **this completes the #151 imports
     slice** - no import endpoint is served from `InventoryApi/Services` any more)
-    - **Pending reimbursement XML import done** (issue #299, child 1 of 3). `POST api/imports/pending-xml`
-      is now the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
+    - **Pending reimbursement XML import done** (issue #299, child 1 of 3; **the route itself was
+      retired by issue #1237** — a reimbursement report is uploaded on the Reimbursement Report page
+      and the server-folder import is gone, so everything below is history). `POST api/imports/pending-xml`
+      became the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
       `IPendingReimbursementXmlSource` discovery/parsing port and the narrow
-      `IImportedReimbursementStore` persistence port; see
+      `IImportedReimbursementStore` persistence port, which remains; see
       [Reimbursement import and reconciliation](#reimbursement-import-and-reconciliation) for the
-      full behaviour, including the preserved file-hash idempotency, parsing decisions and
-      imported/skipped/failed counting. Unlike every slice before it, its non-persistence adapter is a
+      file-hash idempotency and parsing decisions the upload route still follows. Unlike every slice before it, its non-persistence adapter was a
       real `Inventory.Infrastructure` resident (`Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource`,
       registered with `AddPendingReimbursementXmlSource()`) rather than a temporary API-owned one,
       because filesystem discovery and XML parsing need no `AppDbContext`; only
@@ -19952,7 +20159,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Hourly Nayax sales reconciliation — `Inventory.Application.NayaxReconciliation.ReconcileNayaxSalesWithProvider` | In-process, in a hosted loop: about five minutes after startup and then every 60 minutes it runs once for each business whose SQS sender is enabled and whose own lifecycle is active, one business at a time, in a service scope resolved to that business. Each run reuses `SyncLatestNayaxSales` with `force: true` under a shared per-business lock, then compares what `lastSales` returned with the sales SQS delivered and records the evidence | Implemented (#1104); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104) | No, for the queue reader's reasons exactly: it writes the `/home` SQLite file, so an out-of-process runner is outside the single-writer envelope, and it needs each business's own stored Nayax credentials, which the API already resolves per call. It is the **third** scheduled workload and the first that is scheduled *in-process* rather than by the WebJob of issue #333 — because unlike the backup and the connected-machine counts it has to serialise against request-driven synchronizations through an in-memory lock, which a separate process could not share. It is assessed explicitly under each criterion below. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
-| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files left in a folder on the server | Retired (#1237); the uploaded reimbursement report import below replaces it | No. |
 | Uploaded reimbursement report import — `Inventory.Application.Imports.ProcessReimbursementImportJob` | In-process, in a hosted loop: an operator uploads the ZIP Nayax emails and the endpoint stores it as a queued job; the worker takes the oldest job that is **due**, one at a time, in a service scope resolved to that job's own business, and commits each XML's rows, its coverage and its per-file outcome in one transaction | Implemented (#1149); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file for its whole duration, so an out-of-process importer is outside the single-writer envelope; it needs no credential at all; and it is **not scheduled** — it is work an operator started, moved off the request so a 1.3 MB archive is acknowledged in seconds and a database problem becomes a bounded retry instead of a failed upload. It is assessed explicitly under each criterion below. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |

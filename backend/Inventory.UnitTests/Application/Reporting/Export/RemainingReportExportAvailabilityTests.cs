@@ -53,9 +53,7 @@ public class RemainingReportExportAvailabilityTests
     {
         var bookkeepingFacts = FakeBookkeepingReportFactsProvider.Complete() with
         {
-            SalesCoverage = coverage.SalesCoverage,
-            SettlementCoverage = coverage.SettlementCoverage,
-            ContainsSalesRows = coverage.ContainsSalesRows,
+            Coverage = coverage,
             ImportedContainsRows = coverage.ContainsSettlementRows,
         };
         var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(bookkeepingFacts));

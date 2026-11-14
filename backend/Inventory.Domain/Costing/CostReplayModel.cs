@@ -88,6 +88,15 @@ public static class CostDataQualityIssueCodes
     /// </summary>
     public const string CostFallback = "CostFallback";
 
+    /// <summary>
+    /// Non-fatal: a completed sale that none of the historical sale-cost precedence steps could cost
+    /// (no ledger cost, no earlier costed purchase and no valid Nayax <c>Product Cost Price</c>), so
+    /// it is left uncosted - precedence step 4 of <c>AGENTS.md</c> § Inventory and historical costing
+    /// invariants. It consumes no costing quantity or value and, being non-fatal, never blocks the
+    /// product's later stock writes (issue #1239).
+    /// </summary>
+    public const string UncostedSale = "UncostedSale";
+
     /// <summary>Non-fatal: a costed restock that predates receipt-item linking.</summary>
     public const string LegacyUnlinkedCostedRestock = "LegacyUnlinkedCostedRestock";
 

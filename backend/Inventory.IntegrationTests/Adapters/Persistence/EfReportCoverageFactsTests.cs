@@ -45,8 +45,9 @@ public class EfReportCoverageFactsTests
     private static IGetSiteCommissionReport EmptyCommissions()
     {
         var mock = new Mock<IGetSiteCommissionReport>();
-        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
+        mock.Setup(x => x.HandleBusinessPeriod(It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate, []));
         return mock.Object;
     }
 
@@ -90,7 +91,7 @@ public class EfReportCoverageFactsTests
             .GetFactsAsync(From, To, null, CancellationToken.None);
         var transactions = await new EfTransactionSalesReportFactsProvider(db)
             .GetFactsAsync(From, To, null, CancellationToken.None);
-        var reconciliation = await new EfReconciliationReportFactsProvider(db)
+        var reconciliation = await new EfReconciliationReportFactsProvider(db, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
         var products = await new EfProductProfitabilityReportFactsProvider(db)
             .GetFactsAsync(From, To, null, CancellationToken.None);

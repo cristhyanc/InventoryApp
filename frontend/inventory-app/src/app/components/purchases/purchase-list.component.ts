@@ -30,9 +30,12 @@ export const PURCHASE_DEFAULT_PAGE_SIZE = 10;
  * error state out of the page.</p>
  *
  * <p>The list is paged in the browser (issue #1209): it is still read once per load, and a page or
- * size change only moves the window through `pageSlice`, so it re-requests no purchase. Thumbnails
- * are the one per-row download, so they are fetched only for the image documents on the page shown
- * and released when that page is left.</p>
+ * size change only moves the window through `pageSlice`, so it re-requests no purchase.</p>
+ *
+ * <p>The list never downloads a receipt itself (issue #1234): a row with a document shows an
+ * attachment control built from the list response's own metadata, and the file is fetched only
+ * when the operator activates it, through the same authenticated {@link openDocument} path
+ * already used from purchase details and edit.</p>
  */
 @Component({
   selector: 'app-purchase-list',
@@ -56,16 +59,12 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
-  // Purchase documents are protected by the API, so they are fetched through HttpClient (which
-  // attaches the bearer token) and rendered from a temporary object URL.
+  // Purchase documents are protected by the API, so an explicitly opened one is fetched through
+  // HttpClient (which attaches the bearer token) and rendered from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
-  private thumbnailUrls = new Map<number, string>();
-  // The thumbnail downloads for the page shown; cancelled when another page replaces it, so a late
-  // answer can never place a revoked or another page's image.
-  private thumbnailSubscription = new Subscription();
   // The page's lifetime (PR #1210 review): a list read or Delete answered after the page has been
-  // left must not start thumbnail downloads or create object URLs nobody will release. `destroyed`
-  // also covers work started after teardown, which a completed `destroy$` would no longer stop.
+  // left must not open a document or create an object URL nobody will release. `destroyed` also
+  // covers work started after teardown, which a completed `destroy$` would no longer stop.
   private readonly destroy$ = new Subject<void>();
   private destroyed = false;
   private readonly sessionActiveSubscription: Subscription;
@@ -85,7 +84,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     this.destroyed = true;
     this.destroy$.next();
     this.destroy$.complete();
-    this.thumbnailSubscription.unsubscribe();
     this.objectUrls.releaseAll();
     this.sessionActiveSubscription.unsubscribe();
   }
@@ -101,7 +99,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     this.purchaseService.getAll().pipe(takeUntil(this.destroy$)).subscribe((r) => {
       this.purchases = r;
       this.pageIndex = clampPageIndex(this.pageIndex, r.length, this.pageSize);
-      this.loadThumbnails();
     });
   }
 
@@ -116,7 +113,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
       return;
     }
     this.pageIndex = next;
-    this.loadThumbnails();
   }
 
   /** A new page size is a fresh view of the same list, so it returns to page 1. */
@@ -126,7 +122,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     }
     this.pageSize = size;
     this.pageIndex = 0;
-    this.loadThumbnails();
   }
 
   getValidation(purchase: Purchase): PurchaseValidation | null {
@@ -151,10 +146,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     return isChargePresent(amount);
   }
 
-  thumbnailUrl(purchase: Purchase): string | null {
-    return this.thumbnailUrls.get(purchase.id) ?? null;
-  }
-
   openDocument(purchase: Purchase): void {
     this.purchaseService.getFile(purchase.id).subscribe({
       next: (blob) => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
@@ -168,32 +159,6 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
    */
   hasDocument(purchase: Purchase): boolean {
     return purchase.storedFileName !== null && purchase.storedFileName !== undefined;
-  }
-
-  /** Downloads the thumbnails of the page shown only, releasing the previous page's object URLs. */
-  private loadThumbnails(): void {
-    if (this.destroyed) {
-      return;
-    }
-    this.thumbnailSubscription.unsubscribe();
-    this.thumbnailSubscription = new Subscription();
-    this.objectUrls.releaseAll();
-    this.thumbnailUrls = new Map<number, string>();
-    this.pagedPurchases
-      .filter((purchase) => this.isImage(purchase))
-      .forEach((purchase) =>
-        this.thumbnailSubscription.add(
-          this.purchaseService.getFile(purchase.id).subscribe({
-            next: (blob) => this.thumbnailUrls.set(purchase.id, this.objectUrls.create(blob)),
-            error: (err) => console.error('Failed to load purchase document', err)
-          })
-        )
-      );
-  }
-
-  isImage(purchase: Purchase): boolean {
-    // A purchase with no document has no content type either, and is no kind of image (issue #976).
-    return purchase.contentType?.startsWith('image/') ?? false;
   }
 
   remove(purchase: Purchase): void {

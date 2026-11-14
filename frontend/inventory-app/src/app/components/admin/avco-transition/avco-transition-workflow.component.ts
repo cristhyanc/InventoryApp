@@ -91,6 +91,7 @@ import { SupportSessionService } from '../../../support-session/support-session.
                             @for (machine of product.machineStocks; track machine.machineId) {
                               <div>{{ machine.machineName }}: {{ machine.stockQuantity }}</div>
                             }
+                            <p class="mt-2">{{ product.dataQualityNote }}</p>
                           </div>
                         </details>
                       </td>

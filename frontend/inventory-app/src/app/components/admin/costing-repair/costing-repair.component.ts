@@ -22,7 +22,8 @@ import { SupportSessionService } from '../../../support-session/support-session.
 
 /**
  * The Admin page's Costing Repair workflow (issue #361, the UI over #359/#360's repair API): the
- * operator selects a product with a fatal MissingOpening/UnknownCost costing issue, previews a
+ * operator selects a product whose cost history is incomplete - a fatal costing issue, or completed
+ * sales the ledger cannot cost and therefore leaves uncosted (issue #1239) - previews a
  * costing-only historical repair, applies it once satisfied, and reviews the product's repair
  * history. It owns the whole workflow's form, preview, apply and history state and its own API
  * calls and notifications, so `AdminComponent` only has to supply the product list - the same
@@ -53,8 +54,9 @@ import { SupportSessionService } from '../../../support-session/support-session.
       </div>
       <div class="card-body">
         <p class="text-sm value-muted">
-          A human-entered historical costing repair for a product whose cost history has a fatal
-          missing-opening or unknown-cost issue. It changes this product's historical cost of goods
+          A human-entered historical costing repair for a product whose cost history is incomplete:
+          a fatal missing-opening or unknown-cost issue, or completed sales left uncosted because no
+          costed stock was recorded before them. It changes this product's historical cost of goods
           sold from the effective time onward; it never changes physical stock, and applying it is
           not proof that the recorded history is correct - only an auditable correction for a
           specific, explained situation. Use a real purchase or stock correction instead when
@@ -157,6 +159,17 @@ import { SupportSessionService } from '../../../support-session/support-session.
               </div>
             } @else {
               <p class="mt-3 text-sm text-md-success-text">No fatal costing issues would remain after this repair.</p>
+            }
+
+            @if (preview.remainingUncostedSaleIssues.length) {
+              <div class="alert alert-warning mt-3">
+                <p class="alert-title">These completed sales would still have no known cost. The repair can be applied, and they stay reported as uncosted:</p>
+                <ul class="mt-1 list-disc pl-5">
+                  @for (issue of preview.remainingUncostedSaleIssues; track issue.message) {
+                    <li>{{ issue.message }}</li>
+                  }
+                </ul>
+              </div>
             }
 
             <button

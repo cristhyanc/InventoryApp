@@ -349,8 +349,9 @@ public class ProductsController : ControllerBase
     /// </summary>
     /// <response code="201">The created product, with its database-assigned id.</response>
     /// <response code="400">
-    /// A validation refusal with its message: no name, no unit label (issue #895), negative restock
-    /// settings, or a category this business does not own.
+    /// A validation refusal with its message: no name, no unit label (issue #895), opening stock
+    /// above zero with no initial unit cost (issue #1238), negative restock settings, or a category
+    /// this business does not own.
     /// </response>
     /// <response code="409">
     /// The selected master product does not stand (issue #1051): <c>master_product_unavailable</c>,

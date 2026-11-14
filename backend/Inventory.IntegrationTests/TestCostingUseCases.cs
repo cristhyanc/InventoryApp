@@ -33,13 +33,28 @@ internal static class TestCostingUseCases
     public static BackfillNayaxHistoricalSaleCosts BackfillNayaxHistoricalSaleCosts(AppDbContext db) =>
         new(new EfSaleCostingStore(db));
 
-    /// <summary>The inventory-cost transition use cases (issue #298), on the system clock unless one is given.</summary>
-    public static PreviewInventoryCostTransition PreviewTransition(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
-        new(new EfInventoryCostTransitionStore(db), nayax, clock ?? new SystemClock());
+    /// <summary>
+    /// The inventory-cost transition use cases (issue #298), on the system clock unless one is
+    /// given.
+    ///
+    /// <para><paramref name="productLinks"/> is how a machine slot's <c>NayaxProductID</c> becomes a
+    /// local product id (issue #1256). It is stated by every caller rather than defaulted, because a
+    /// link store that resolved nothing would silently leave every product's machine stock at zero -
+    /// the shape of the defect this parameter exists to prevent. A test over relational SQLite with
+    /// real business rows passes the production <see cref="EfNayaxProductLinkStore"/>; one over the
+    /// InMemory provider passes the explicit fake.</para>
+    /// </summary>
+    public static PreviewInventoryCostTransition PreviewTransition(
+        AppDbContext db, INayaxLynxClient nayax, INayaxProductLinkStore productLinks, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, productLinks, clock ?? new SystemClock());
 
     public static ApplyInventoryCostTransition ApplyTransition(
-        AppDbContext db, INayaxLynxClient nayax, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
-        new(new EfInventoryCostTransitionStore(db), nayax, rebuild ?? Rebuild(db), clock ?? new SystemClock());
+        AppDbContext db,
+        INayaxLynxClient nayax,
+        INayaxProductLinkStore productLinks,
+        IRebuildProductCost? rebuild = null,
+        IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, productLinks, rebuild ?? Rebuild(db), clock ?? new SystemClock());
 
     /// <summary>The costing-repair use cases (issue #359), on the system clock unless one is given.</summary>
     public static PreviewInventoryCostRepair PreviewRepair(AppDbContext db) =>
@@ -60,10 +75,15 @@ internal static class TestCostingUseCases
     public static GetInventoryCostRepairHistory RepairHistory(AppDbContext db) =>
         new(new EfInventoryCostRepairStore(db));
 
-    public static PreviewAllInventoryCostTransitions PreviewAllTransitions(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
-        new(new EfInventoryCostTransitionStore(db), nayax, clock ?? new SystemClock());
+    public static PreviewAllInventoryCostTransitions PreviewAllTransitions(
+        AppDbContext db, INayaxLynxClient nayax, INayaxProductLinkStore productLinks, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, productLinks, clock ?? new SystemClock());
 
     public static ApplyAllInventoryCostTransitions ApplyAllTransitions(
-        AppDbContext db, INayaxLynxClient nayax, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
-        new(new EfInventoryCostTransitionStore(db), nayax, rebuild ?? Rebuild(db), clock ?? new SystemClock());
+        AppDbContext db,
+        INayaxLynxClient nayax,
+        INayaxProductLinkStore productLinks,
+        IRebuildProductCost? rebuild = null,
+        IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, productLinks, rebuild ?? Rebuild(db), clock ?? new SystemClock());
 }

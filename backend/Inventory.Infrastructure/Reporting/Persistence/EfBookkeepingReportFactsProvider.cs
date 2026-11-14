@@ -1,6 +1,7 @@
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
@@ -30,21 +31,30 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
     private readonly AppDbContext _db;
     private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
     private readonly IGetSiteCommissionReport _siteCommissions;
+    private readonly IBusinessCalendar _businessCalendar;
 
     public EfBookkeepingReportFactsProvider(
-        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IGetSiteCommissionReport siteCommissions)
+        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IGetSiteCommissionReport siteCommissions,
+        IBusinessCalendar businessCalendar)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<BookkeepingReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
+        // Two different kinds of boundary (issue #1250). Sales are selected by instant, over the
+        // business days the requested dates name - business-day midnight at the start of the first
+        // date to, exclusively, business-day midnight at the start of the day after the last, which
+        // is 23, 24 or 25 hours per day. Reimbursement coverage, expense and purchase dates are
+        // date-only values, so they keep plain calendar-date bounds and are never timezone-shifted.
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
         var endExclusive = to.Date.AddDays(1);
         var isMachineFiltered = machineId.HasValue;
 
-        var paymentRows = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
+        var paymentRows = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
             .Select(x => new { x.PaymentMethod, x.SettlementValue })
             .ToListAsync(cancellationToken);
         var classified = paymentRows.GroupBy(x => PaymentMethodClassifier.Classify(x.PaymentMethod))
@@ -57,12 +67,12 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         // Read every status in the same business/date/machine scope before the completed-sale filter
         // removes them (issue #476), so the report can state what it excluded and why. The financial
         // queries above and below stay on the completed-sale predicate: this list only produces counts.
-        var statusRows = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId)
+        var statusRows = await EfReportingSharedQueries.AllSalesQuery(_db, window, machineId)
             .Select(x => new { x.TransactionStatusId, x.SqsVerification })
             .ToListAsync(cancellationToken);
         var statuses = statusRows.ConvertAll(x => x.TransactionStatusId);
 
-        var saleCosts = await EfReportingSharedQueries.CostQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
+        var saleCosts = await EfReportingSharedQueries.CostQuery(_db, window, machineId).ToListAsync(cancellationToken);
         var partialCost = saleCosts.Sum(x => x.CostOfGoodsSold ?? 0m);
         var uncosted = saleCosts.Where(x => !x.HasCost).ToList();
         var isCogsComplete = uncosted.Count == 0;
@@ -72,10 +82,14 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             : await ReceiptCostsAsync(from, endExclusive, cancellationToken);
 
         var imported = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
-        var processingFees = await _nayaxProcessingFees.Handle(from, to, machineId, cancellationToken);
+        // The fees are charged to exactly the sales this report's revenue counts, and each one is
+        // estimated at the rate effective on the business date that counted it: the fee use case is
+        // asked for a business-day period over the same instants, not for the whole UTC dates those
+        // instants fall on (issue #1250, on issue #310's contract).
+        var processingFees = await _nayaxProcessingFees.HandleBusinessPeriod(window.FeePeriod, machineId, cancellationToken);
         var operatingExpenses = await OperatingExpenseSummaryAsync(from, endExclusive, machineId, cancellationToken);
-        var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(_db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
-        var siteCommission = await EfReportingSharedQueries.GetSiteCommissionAsync(_db, from, endExclusive, machineId, commissions, cancellationToken);
+        var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(_db, _siteCommissions, window, machineId, cancellationToken);
+        var siteCommission = await EfReportingSharedQueries.GetSiteCommissionAsync(_db, window, machineId, commissions, cancellationToken);
 
         var commissionCompleteForScope = isMachineFiltered
             ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
@@ -84,9 +98,12 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         // Every stored sale in scope, whatever its status, counted from the same list the status
         // diagnostics below use rather than with a second query. A period holding only cancelled
         // rows has sales data and a gross total of zero, so this must not be derived from an
-        // amount (issue #730).
+        // amount (issue #730). Measured over the same business-day instants the sales above were
+        // selected between, never the plain calendar range (issue #1250): coverage may only be
+        // compared with the window the figures were measured over, and the carrier is what takes
+        // those instants to the use case that decides the two states.
         var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
-            _db, from, endExclusive, statuses.Count > 0, imported.ContainsRows, cancellationToken);
+            _db, window, statuses.Count > 0, imported.ContainsRows, cancellationToken);
 
         return new BookkeepingReportFacts(
             GrossSales: grossSales,
@@ -126,9 +143,7 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             UnknownStatusTransactionCount: statuses.Count(x => x is not null && NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Unknown),
             MissingStatusTransactionCount: statuses.Count(x => x is null))
         {
-            SalesCoverage = coverage.SalesCoverage,
-            SettlementCoverage = coverage.SettlementCoverage,
-            ContainsSalesRows = coverage.ContainsSalesRows,
+            Coverage = coverage,
             ExcludedByReviewTransactionCount = statusRows.Count(x =>
                 NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };

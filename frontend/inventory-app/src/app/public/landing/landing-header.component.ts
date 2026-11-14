@@ -1,11 +1,12 @@
 import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { BrandLogoComponent } from '../../components/shared/brand-logo.component';
 import { IconComponent } from '../../components/shared/icon.component';
 import { LANDING_SECTIONS, LandingSection } from './landing-content';
 import { APP_ENTRY_URL, PUBLIC_HOME_ROUTE } from './landing-routes';
 
 /**
- * The landing page's own header (issue #954): the Restockroo brand, the section links, and the
+ * The landing page's own header (issue #954): the Restockroo logo (issue #1272), the section links, and the
  * account actions - **Sign in** and **Start free** for a signed-out visitor, **Open app** for a
  * signed-in person.
  *
@@ -20,19 +21,16 @@ import { APP_ENTRY_URL, PUBLIC_HOME_ROUTE } from './landing-routes';
 @Component({
   selector: 'app-landing-header',
   standalone: true,
-  imports: [IconComponent, RouterLink],
+  imports: [BrandLogoComponent, IconComponent, RouterLink],
   template: `
     <header class="sticky top-0 z-30 border-b border-rr-line bg-white/95 backdrop-blur">
       <div class="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-8">
         <a
           [routerLink]="homeLink"
-          class="flex min-h-11 items-center gap-2 rounded-lg text-lg font-bold text-rr-navy no-underline"
+          class="flex min-h-11 shrink-0 items-center rounded-lg no-underline"
           data-testid="landing-brand"
         >
-          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
-            <app-icon name="inventory_2" [size]="18" />
-          </span>
-          Restockroo
+          <app-brand-logo variant="full" [height]="36" />
         </a>
 
         <nav class="ml-8 hidden items-center gap-1 lg:flex" aria-label="Page sections">

@@ -7,8 +7,10 @@
 // own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
 // claiming workflow step replacing the readiness label with `agent-working`, as
 // github-actions[bot]) names the label that was consumed, and the label must have been applied by
-// a person (GitHub actor type User, never any bot) before that. Agents cannot change issue labels (their tool lists deny `gh issue edit`
-// and `gh api`), so they cannot fake a claim. Every boundary (architecture dispatch,
+// a person (GitHub actor type User, never any bot) before that. The agents' tool lists deny `gh issue edit` and `gh api`, which
+// discourages, but does not prevent, an agent changing labels: the tool allowlist is not a security boundary (docs/automation.md
+// § Untrusted text and the tool allowlist). A readiness label added by an agent would still be refused, because it is applied
+// by a bot, not a person. Every boundary (architecture dispatch,
 // validation, review, publication and repair) re-derives the route from that history and
 // checks that the pull request was opened after the newest claim, so a pull request left over
 // from an earlier claim is refused instead of re-routed.

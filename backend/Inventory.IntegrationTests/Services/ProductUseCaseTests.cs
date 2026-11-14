@@ -169,8 +169,12 @@ public class ProductUseCaseTests
             FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
+        // The opening stock carries a unit cost since issue #1238: the five units are recorded as a
+        // costed opening movement, and the create refuses an uncosted one. What this test is about -
+        // the create/update/delete round trip and the movement that opening stock leaves - is
+        // unchanged.
         var created = await useCases.Create.Handle(
-            new ProductCreateFields("p1", null, null, 5, 1, 10, "unit", null, true, null),
+            new ProductCreateFields("p1", null, null, 5, 1, 10, "unit", null, true, 1.25m),
             CancellationToken.None);
 
         Assert.True(created.IsValid);
