@@ -8993,6 +8993,29 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   `DomainValidationException` with the message the API has always returned.
   `Inventory.Domain.Costing.InventoryCostBaselineSource` mirrors the persisted
   `Inventory.Infrastructure.Models.InventoryCostBaselineSource` value-for-value (a parity test enforces this).
+- **A machine slot is matched to a product through the provider link, and an unlinked slot is counted
+  for nobody (issue #1256).** A slot's `NayaxProductID` is the Lynx contract's "unique identifier of
+  the product in the Nayax system" (`GET /v1/machines/{MachineID}/machineProducts`,
+  `integer<int64>`, nullable), so `InventoryCostTransitionPreviewBuilder` resolves it to a local
+  product id through `INayaxProductLinkStore` — the same lookup
+  [the live machine readers use](#resolving-a-nayax-product-id-to-a-local-product-issue-733), awaited
+  after the Nayax fan-out — and never compares it with `Product.Id`. Comparing them worked only while
+  the local key happened to *be* the Nayax id; since [issue #735](#the-local-key-is-the-databases-own-issue-735)
+  that is a coincidence, and here it decided a costing baseline: a product whose ids differed recorded
+  an opening quantity with **no** machine stock at all, and one whose Nayax id equalled another
+  product's local key recorded **that** product's units. A slot this business holds no link for is an
+  unknown product and is added to no product's machine stock. The same builder serves all four use
+  cases, so the single-product and all-products preview and apply resolve identically; recorded
+  baselines are not changed by this and a human decides, from a read-only check, which of them were
+  taken while a product's ids differed.
+- **A product the provider does not name says so.** Machine stock is looked up *through* the
+  product's recorded provider id (`Product.ExternalProductId`, travelling on
+  `InventoryCostTransitionProduct`), so a product carrying none can be matched to no slot in any
+  machine. Its opening quantity is home stock alone and its preview carries
+  `InventoryCostTransitionPolicy.UnresolvedMachineStockNote` in front of the legacy note, in the
+  single-product preview and in each row of the all-products preview, because an empty machine stock
+  that was never measured must not read as a measured zero. The slot side cannot answer that on its
+  own: a linked product that is in no machine and an unlinked product both match no slot.
 - `Inventory.Application.Costing.PreviewInventoryCostTransition`, `ApplyInventoryCostTransition`,
   `PreviewAllInventoryCostTransitions` and `ApplyAllInventoryCostTransitions` orchestrate them, and own
   the request/response contracts moved unchanged in name and shape from the removed
@@ -15058,7 +15081,8 @@ than being read as the number inside it.
 
 The translation happens where Nayax data enters the application, so every persistence port
 downstream of it speaks local product ids only — `IMachineStockEventStore.GetStorageProductsAsync`
-changed from taking Nayax ids to taking local ones for exactly that reason. The six paths:
+changed from taking Nayax ids to taking local ones for exactly that reason. The eight paths (the
+last of them added by issue #1256, which found the transition preview still comparing the two ids):
 
 | Path | Where the id is resolved | What an unresolved Nayax id means |
 | --- | --- | --- |
@@ -15069,6 +15093,7 @@ changed from taking Nayax ids to taking local ones for exactly that reason. The 
 | Site summaries (`GetSiteSummaries`) | after the fan-out, before the completed-sales read | the stock fact carries no product id: it still counts toward the site's physical stock percentage, exactly as an unmapped selection always has, and raises no low/empty product alert |
 | Sync Restock (`SyncMachineStockFromNayax`) | after the machine-products read, before the storage read | the MDB position resolves to no local product, which is `NayaxMachineStockMatchPolicy`'s existing "no local product is mapped to Nayax product …" Needs Review branch, so no inventory ever moves for it |
 | Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
+| Inventory-cost transition preview and apply (`InventoryCostTransitionPreviewBuilder`, issue #1256) | after the fresh fleet and slot fan-out, before the legacy-replay read | the slot is an unknown product and is added to no product's opening machine stock; a *product* with no recorded id matches no slot at all, so its baseline is home stock alone and its preview says the machine stock could not be resolved (see [Historical inventory cost](#historical-inventory-cost)) |
 
 In every case an unresolved id is treated as an unknown product, never matched to the local product
 whose id happens to be the same number. That is the point of the change: since #735 a local key and
@@ -15128,6 +15153,12 @@ and left `NayaxProductId` holding only the provider's own id.
 
 The settlement (pending reimbursement XML) import carries no product or group identifier at all, so
 there is nothing in it to resolve.
+
+**The inventory-cost transition resolves the same way, and it is listed with the live readers rather
+than here (issue #1256).** It reads a machine's *live* selections through `INayaxLynxClient` rather
+than stored or uploaded Nayax data, so it belongs to the #733 table above: the row for
+`InventoryCostTransitionPreviewBuilder` records what it resolves and what an unresolved id means for
+an opening costing baseline.
 
 ### The sale's own product (issue #758)
 

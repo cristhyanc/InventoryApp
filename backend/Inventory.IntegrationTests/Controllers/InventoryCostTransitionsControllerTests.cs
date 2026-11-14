@@ -2,6 +2,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -75,7 +76,7 @@ public class InventoryCostTransitionsControllerTests
     {
         var store = new Mock<IInventoryCostTransitionStore>();
         store.Setup(x => x.GetProductAsync(10, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new InventoryCostTransitionProduct(10, "Snack", 3, 1m));
+            .ReturnsAsync(new InventoryCostTransitionProduct(10, "Snack", 3, 1m, "5001"));
         store.Setup(x => x.SumPhysicalMovementsAsync(It.IsAny<IReadOnlyCollection<long>>(), Now, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<long, int> { [10] = 3 });
         var controller = Controller(store);
@@ -104,10 +105,13 @@ public class InventoryCostTransitionsControllerTests
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var rebuild = new Mock<IRebuildProductCost>(MockBehavior.Strict);
         var clock = new FakeClock(Now);
+        // The fleet is empty here, so no slot is read and nothing is resolved; the link store is the
+        // explicit fake because the use cases take one since issue #1256.
+        var productLinks = FakeNayaxProductLinkStore.Linking();
         return new InventoryCostTransitionsController(
-            new PreviewInventoryCostTransition(store.Object, nayax.Object, clock),
-            new ApplyInventoryCostTransition(store.Object, nayax.Object, rebuild.Object, clock),
-            new PreviewAllInventoryCostTransitions(store.Object, nayax.Object, clock),
-            new ApplyAllInventoryCostTransitions(store.Object, nayax.Object, rebuild.Object, clock));
+            new PreviewInventoryCostTransition(store.Object, nayax.Object, productLinks, clock),
+            new ApplyInventoryCostTransition(store.Object, nayax.Object, productLinks, rebuild.Object, clock),
+            new PreviewAllInventoryCostTransitions(store.Object, nayax.Object, productLinks, clock),
+            new ApplyAllInventoryCostTransitions(store.Object, nayax.Object, productLinks, rebuild.Object, clock));
     }
 }

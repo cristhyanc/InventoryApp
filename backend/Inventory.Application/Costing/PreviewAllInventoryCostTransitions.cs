@@ -16,10 +16,14 @@ public sealed class PreviewAllInventoryCostTransitions
     private readonly IInventoryCostTransitionStore _store;
     private readonly InventoryCostTransitionPreviewBuilder _builder;
 
-    public PreviewAllInventoryCostTransitions(IInventoryCostTransitionStore store, INayaxLynxClient nayax, IClock clock)
+    public PreviewAllInventoryCostTransitions(
+        IInventoryCostTransitionStore store,
+        INayaxLynxClient nayax,
+        INayaxProductLinkStore productLinks,
+        IClock clock)
     {
         _store = store;
-        _builder = new InventoryCostTransitionPreviewBuilder(store, nayax, clock);
+        _builder = new InventoryCostTransitionPreviewBuilder(store, nayax, productLinks, clock);
     }
 
     public async Task<InventoryCostTransitionBatchPreview> Handle(

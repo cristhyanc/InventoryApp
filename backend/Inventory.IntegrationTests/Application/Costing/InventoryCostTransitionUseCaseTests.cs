@@ -3,6 +3,7 @@ using Inventory.Domain.Exceptions;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -22,13 +23,25 @@ public class InventoryCostTransitionUseCaseTests
 {
     private static readonly DateTime Now = new(2026, 9, 1, 2, 0, 0, DateTimeKind.Utc);
 
+    private const long SnackNayaxId = 5001;
+    private const long DrinkNayaxId = 5002;
+
+    /// <summary>
+    /// Local product 10 is Nayax 5001 and local product 20 is Nayax 5002 (issue #1256). The ids
+    /// differ deliberately: while they were equal, a preview that matched a machine slot against
+    /// <c>Product.Id</c> and one that resolved it through the provider link produced the same
+    /// numbers, so none of these orchestration cases could tell them apart.
+    /// </summary>
+    private static readonly INayaxProductLinkStore Links =
+        FakeNayaxProductLinkStore.Linking((SnackNayaxId, 10L), (DrinkNayaxId, 20L));
+
     [Fact]
     public async Task Preview_stores_a_single_product_draft_that_expires_after_thirty_minutes()
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
 
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualEstimated));
 
         var draft = await db.InventoryCostTransitionPreviewDrafts.SingleAsync();
@@ -51,7 +64,7 @@ public class InventoryCostTransitionUseCaseTests
         await using var db = await SeedAsync();
         db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline { ProductId = 20, CutoffAt = Now });
         await db.SaveChangesAsync();
-        var preview = TestCostingUseCases.PreviewTransition(db, new NayaxStock().Client, new FakeClock(Now));
+        var preview = TestCostingUseCases.PreviewTransition(db, new NayaxStock().Client, Links, new FakeClock(Now));
 
         var source = await Assert.ThrowsAsync<DomainValidationException>(() =>
             preview.Handle(new(10, 1m, (DomainBaselineSource)99)));
@@ -72,11 +85,11 @@ public class InventoryCostTransitionUseCaseTests
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
         var clock = new FakeClock(Now);
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, clock)
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, clock)
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
         clock.UtcNow = Now.AddMinutes(10);
 
-        var applied = await TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: clock)
+        var applied = await TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: clock)
             .Handle(new(preview.PreviewId, Confirmed: true));
 
         Assert.Equivalent(preview, applied, strict: true);
@@ -101,9 +114,9 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
-        var apply = TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now));
+        var apply = TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now));
         await apply.Handle(new(preview.PreviewId, Confirmed: true));
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
@@ -118,11 +131,11 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now.AddMinutes(31)))
+            TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now.AddMinutes(31)))
                 .Handle(new(preview.PreviewId, Confirmed: true)));
 
         Assert.Equal("The transition preview expired. Run the preview again.", exception.Message);
@@ -134,16 +147,16 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var single = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var single = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
-        var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualAuthoritative));
 
         var singleAsBatch = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now))
                 .Handle(new(single.PreviewId, Confirmed: true)));
         var batchAsSingle = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now))
                 .Handle(new(batch.PreviewId, Confirmed: true)));
 
         Assert.Equal("The all-products transition preview does not exist. Run the preview again.", singleAsBatch.Message);
@@ -156,12 +169,12 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
         (await db.Products.SingleAsync(x => x.Id == 10)).QuantityInStock = 18;
         await db.SaveChangesAsync();
 
-        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now))
+        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now))
             .Handle(new(preview.PreviewId, Confirmed: true)));
         Assert.Empty(db.InventoryCostTransitionBaselines);
         Assert.Null((await db.InventoryCostTransitionPreviewDrafts.SingleAsync()).AppliedAt);
@@ -172,7 +185,7 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
         db.StockAdjustments.Add(new StockAdjustment
         {
@@ -183,7 +196,7 @@ public class InventoryCostTransitionUseCaseTests
         });
         await db.SaveChangesAsync();
 
-        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now))
+        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now))
             .Handle(new(preview.PreviewId, Confirmed: true)));
         Assert.Empty(db.InventoryCostTransitionBaselines);
     }
@@ -193,11 +206,11 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
         nayax.MissingInMachineA = 5;
 
-        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now))
+        await AssertStaleAsync(() => TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now))
             .Handle(new(preview.PreviewId, Confirmed: true)));
         Assert.Empty(db.InventoryCostTransitionBaselines);
     }
@@ -206,7 +219,7 @@ public class InventoryCostTransitionUseCaseTests
     public async Task Preview_all_rejects_an_invalid_source_no_eligible_product_and_a_negative_average_cost()
     {
         await using var db = await SeedAsync();
-        var previewAll = TestCostingUseCases.PreviewAllTransitions(db, new NayaxStock().Client, new FakeClock(Now));
+        var previewAll = TestCostingUseCases.PreviewAllTransitions(db, new NayaxStock().Client, Links, new FakeClock(Now));
 
         var source = await Assert.ThrowsAsync<DomainValidationException>(() => previewAll.Handle(new((DomainBaselineSource)0)));
         (await db.Products.SingleAsync(x => x.Id == 20)).AverageUnitCost = -1m;
@@ -232,7 +245,7 @@ public class InventoryCostTransitionUseCaseTests
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
 
-        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualEstimated));
 
         Assert.Equal(["Drink", "Snack"], preview.Products.Select(x => x.ProductName));
@@ -250,9 +263,9 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualAuthoritative));
-        var applyAll = TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now));
+        var applyAll = TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now));
 
         var applied = await applyAll.Handle(new(preview.PreviewId, Confirmed: true));
         var repeat = await Assert.ThrowsAsync<DomainValidationException>(() =>
@@ -270,7 +283,7 @@ public class InventoryCostTransitionUseCaseTests
         await using var db = await SeedAsync();
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.ApplyAllTransitions(db, new NayaxStock().Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyAllTransitions(db, new NayaxStock().Client, Links, clock: new FakeClock(Now))
                 .Handle(new(Guid.NewGuid(), Confirmed: false)));
 
         Assert.Equal("Explicit confirmation is required to save all transition baselines.", exception.Message);
@@ -281,13 +294,13 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualAuthoritative));
         (await db.Products.SingleAsync(x => x.Id == 10)).AverageUnitCost = 1.30m;
         await db.SaveChangesAsync();
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now))
                 .Handle(new(preview.PreviewId, Confirmed: true)));
 
         Assert.Equal("The average unit cost for Snack changed after the preview. Run it again.", exception.Message);
@@ -299,11 +312,11 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualAuthoritative));
         nayax.MissingInMachineA = 0;
 
-        await AssertStaleAsync(() => TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now))
+        await AssertStaleAsync(() => TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now))
             .Handle(new(preview.PreviewId, Confirmed: true)));
         Assert.Empty(db.InventoryCostTransitionBaselines);
         Assert.Null((await db.InventoryCostTransitionPreviewDrafts.SingleAsync()).AppliedAt);
@@ -314,8 +327,8 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var previewAll = TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now));
-        var applyAll = TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now));
+        var previewAll = TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now));
+        var applyAll = TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now));
         var first = await previewAll.Handle(new(DomainBaselineSource.ManualAuthoritative));
         var second = await previewAll.Handle(new(DomainBaselineSource.ManualAuthoritative));
         db.Products.Remove(await db.Products.SingleAsync(x => x.Id == 20));
@@ -340,10 +353,10 @@ public class InventoryCostTransitionUseCaseTests
         var nayax = new NayaxStock { Failing = true };
 
         await Assert.ThrowsAsync<NayaxUpstreamException>(() =>
-            TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+            TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
                 .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative)));
         await Assert.ThrowsAsync<NayaxUpstreamException>(() =>
-            TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+            TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
                 .Handle(new(DomainBaselineSource.ManualAuthoritative)));
 
         Assert.Empty(db.InventoryCostTransitionPreviewDrafts);
@@ -354,17 +367,17 @@ public class InventoryCostTransitionUseCaseTests
     {
         await using var db = await SeedAsync();
         var nayax = new NayaxStock();
-        var single = await TestCostingUseCases.PreviewTransition(db, nayax.Client, new FakeClock(Now))
+        var single = await TestCostingUseCases.PreviewTransition(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative));
-        var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, new FakeClock(Now))
+        var batch = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Client, Links, new FakeClock(Now))
             .Handle(new(DomainBaselineSource.ManualAuthoritative));
         nayax.Failing = true;
 
         await Assert.ThrowsAsync<NayaxUpstreamException>(() =>
-            TestCostingUseCases.ApplyTransition(db, nayax.Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyTransition(db, nayax.Client, Links, clock: new FakeClock(Now))
                 .Handle(new(single.PreviewId, Confirmed: true)));
         await Assert.ThrowsAsync<NayaxUpstreamException>(() =>
-            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, clock: new FakeClock(Now))
+            TestCostingUseCases.ApplyAllTransitions(db, nayax.Client, Links, clock: new FakeClock(Now))
                 .Handle(new(batch.PreviewId, Confirmed: true)));
 
         Assert.Empty(db.InventoryCostTransitionBaselines);
@@ -383,8 +396,8 @@ public class InventoryCostTransitionUseCaseTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
         db.Products.AddRange(
-            new Product { Id = 10, Name = "Snack", QuantityInStock = 4, AverageUnitCost = 1.25m },
-            new Product { Id = 20, Name = "Drink", QuantityInStock = 6, AverageUnitCost = 2m });
+            new Product { Id = 10, Name = "Snack", ExternalProductId = "5001", QuantityInStock = 4, AverageUnitCost = 1.25m },
+            new Product { Id = 20, Name = "Drink", ExternalProductId = "5002", QuantityInStock = 6, AverageUnitCost = 2m });
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10,
@@ -427,11 +440,11 @@ public class InventoryCostTransitionUseCaseTests
             _mock.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => new List<NayaxMachineProduct>
                 {
-                    new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = MissingInMachineA },
-                    new() { NayaxProductID = 20, PAR = 6, MissingStockByMDB = 1 }
+                    new() { NayaxProductID = SnackNayaxId, PAR = 10, MissingStockByMDB = MissingInMachineA },
+                    new() { NayaxProductID = DrinkNayaxId, PAR = 6, MissingStockByMDB = 1 }
                 });
             _mock.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 } });
+                .ReturnsAsync(() => new List<NayaxMachineProduct> { new() { NayaxProductID = SnackNayaxId, PAR = 8, MissingStockByMDB = 3 } });
         }
 
         public bool Failing { get; set; }
