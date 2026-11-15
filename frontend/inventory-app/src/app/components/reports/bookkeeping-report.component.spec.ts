@@ -116,14 +116,17 @@ describe('BookkeepingReportComponent conditional data quality and calculation he
     expect(help.textContent).toContain('effective-dated site commission agreement');
   });
 
-  it('keeps the GST-on-sales estimate visible beside the figure, not only inside the collapsed help', async () => {
+  it('keeps the GST-on-sales rule visible beside the figure, not only inside the collapsed help', async () => {
     const host = await render();
 
     const estimate = host.querySelector('[data-testid="gst-on-sales-estimate"]');
     expect(estimate).not.toBeNull();
     expect(estimate!.closest('details')).toBeNull();
-    expect(estimate!.textContent).toContain('Estimated GST on sales');
-    expect(estimate!.textContent).toContain('taxable at 10% (GST-inclusive)');
+    // Issue #1255 replaced "assumes all included sales are taxable" with the actual rule.
+    expect(estimate!.textContent).not.toContain('assumes all included sales are taxable');
+    expect(estimate!.textContent).toContain('one eleventh of taxable sales');
+    expect(estimate!.textContent).toContain('GST rule is GST-free are left out');
+    expect(estimate!.textContent).toContain('a product with no GST rule is taxable');
   });
 
   it('lists excluded non-completed transactions as neutral scope information, never as a warning', async () => {
@@ -334,6 +337,48 @@ describe('BookkeepingReportComponent expected-versus-actual reimbursement (issue
       // A responsive token's colon is escaped in the compiled stylesheet's own selector.
       expect(css).toContain(`.${token.replace(/:/g, '\\:')}`);
     }
+  });
+});
+
+/**
+ * Issue #1255: GST on sales follows each product's GST rule, so the GST card has to show which
+ * sales the figure was taken from - and, as its own line, how much of the taxable total is taxable
+ * only because nobody has given those products a rule.
+ */
+describe('BookkeepingReportComponent GST on sales by product rule (issue #1255)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the taxable, GST-free and no-rule sales the API decided, beside the GST figure', async () => {
+    const host = await render({ sales: 36, taxableSales: 33, gstFreeSales: 3, noGstRuleSales: 22, gstOnSales: 3 });
+
+    expect(host.querySelector('[data-testid="taxable-sales"]')!.textContent).toContain('$33.00');
+    expect(host.querySelector('[data-testid="gst-free-sales"]')!.textContent).toContain('$3.00');
+    expect(host.querySelector('[data-testid="no-gst-rule-sales"]')!.textContent).toContain('$22.00');
+    expect(host.textContent).toContain('Sales of products with no GST rule');
+  });
+
+  it('shows the sales state instead of a zero nothing measured, as every other provider figure does', async () => {
+    const host = await render({
+      sales: 0, taxableSales: 0, gstFreeSales: 0, noGstRuleSales: 0, gstOnSales: 0,
+      providerAvailability: {
+        sales: { state: 'Missing', asOfUtc: null, isComplete: false },
+        fees: { state: 'Complete', asOfUtc: null, isComplete: true },
+        combined: { state: 'Missing', asOfUtc: null, isComplete: false }
+      }
+    });
+
+    expect(host.querySelector('[data-testid="taxable-sales"]')!.textContent).not.toContain('$0.00');
+    expect(host.querySelector('[data-testid="no-gst-rule-sales"]')!.textContent).not.toContain('$0.00');
+  });
+
+  it('states in the calculation help that the rule is read as it stands today, with no per-sale classification', async () => {
+    const host = await render();
+
+    const help = host.querySelector('[data-testid="calculation-help"]')!.textContent ?? '';
+    expect(help).toContain("each product's own GST rule");
+    expect(help).toContain('as it stands today');
+    expect(help).toContain('no GST classification is recorded per sale');
+    expect(help).not.toContain('assumed taxable at 10%');
   });
 });
 

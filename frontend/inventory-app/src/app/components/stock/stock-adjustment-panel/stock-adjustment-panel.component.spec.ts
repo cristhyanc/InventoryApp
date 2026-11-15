@@ -98,7 +98,8 @@ describe('StockAdjustmentPanelComponent (issue #1156)', () => {
     quantity.value = '-3';
     quantity.dispatchEvent(new Event('input'));
     const reason = host.querySelector<HTMLSelectElement>('#adjustment-reason')!;
-    reason.value = reason.options[2].value; // Damaged
+    // Option 0 is the "Select a reason…" placeholder the form opens on (issue #1242).
+    reason.value = reason.options[3].value; // Damaged
     reason.dispatchEvent(new Event('change'));
     fixture.detectChanges();
     host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')!.click();

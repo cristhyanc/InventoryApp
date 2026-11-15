@@ -12,12 +12,17 @@ namespace InventoryApi.Tests.Application.Reporting.Gst;
 public class GetGstAccountingAidTests
 {
     private static BookkeepingReportDto CompleteBookkeeping(decimal sales = 110m, decimal gstOnSales = 10m,
-        decimal nayaxFeesExGst = 5m, decimal gstOnFees = 1m, decimal operatingExpenseGst = 0m) => new(
+        decimal nayaxFeesExGst = 5m, decimal gstOnFees = 1m, decimal operatingExpenseGst = 0m,
+        decimal? taxableSales = null, decimal gstFreeSales = 0m, decimal noGstRuleSales = 0m) => new(
         From: new DateTime(2025, 8, 1), To: new DateTime(2025, 8, 31), FinancialYear: "FY2025-26",
         Sales: sales, CostOfGoods: 40m, GrossProfit: sales - 40m,
         Fees: nayaxFeesExGst, NetSettlement: sales - nayaxFeesExGst, GstOnSales: gstOnSales, GstOnFees: gstOnFees,
         DataQuality: new ReportingDataQualityDto(), NayaxFeesExGst: nayaxFeesExGst)
         {
+            // Every sale a taxable product's unless a test about issue #1255's split says otherwise.
+            TaxableSales = taxableSales ?? sales,
+            GstFreeSales = gstFreeSales,
+            NoGstRuleSales = noGstRuleSales,
             OperatingExpenseGst = operatingExpenseGst,
             // A complete bookkeeping result is one whose provider coverage accounted for the whole
             // period (issue #730), so these tests stay about the GST derivation rather than about
@@ -51,6 +56,28 @@ public class GetGstAccountingAidTests
         Assert.False(report.DataQuality.GstClassificationMissing);
         Assert.True(report.DataQuality.CommissionNotPersisted);
         Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Publishes_the_bookkeeping_reports_sales_split_by_product_gst_rule()
+    {
+        // Issue #1255's fixture: $11 of a taxable product, $3 of a GST-free product and $22 of a
+        // product with no rule. The aid shows the taxable sales ex GST ($33 - $3), the GST-free
+        // sales, and the no-rule sales inside the taxable total - and it derives none of them a
+        // second time: the bookkeeping report decided the split once.
+        var bookkeeping = CompleteBookkeeping(sales: 36m, gstOnSales: 3m, nayaxFeesExGst: 0m, gstOnFees: 0m,
+            taxableSales: 33m, gstFreeSales: 3m, noGstRuleSales: 22m);
+        var useCase = new GetGstAccountingAid(
+            new FakeGetBookkeepingReport(bookkeeping),
+            new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.Equal(30m, report.TaxableSales);
+        Assert.Equal(3m, report.GstFreeSales);
+        Assert.Equal(22m, report.NoGstRuleSales);
+        Assert.Equal(3m, report.GstOnSales);
+        Assert.Equal(3m, report.NetGst);
     }
 
     [Fact]

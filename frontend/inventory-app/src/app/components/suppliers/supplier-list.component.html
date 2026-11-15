@@ -354,7 +354,7 @@
     [message]="`Delete the supplier '${deleting.name}'? This cannot be undone.`"
     confirmLabel="Delete supplier"
     cancelLabel="Cancel"
-    (confirmed)="confirmDelete()"
+    (confirmed)="confirmDelete($event)"
     (canceled)="cancelDelete()"
   ></app-confirmation-dialog>
 }

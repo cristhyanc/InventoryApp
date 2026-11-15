@@ -11,15 +11,38 @@ export const ADJUSTMENT_MACHINES_ERROR =
   'The machine list could not be loaded, so an adjustment cannot be attributed to a machine.';
 
 /**
+ * The reasons that may only remove stock (issue #1242). The operator types a positive quantity for
+ * each of them and the form sends it negative, the way Correction alone used to.
+ */
+export const REMOVAL_REASONS: readonly StockAdjustmentReason[] = [
+  StockAdjustmentReason.Correction,
+  StockAdjustmentReason.Damaged,
+  StockAdjustmentReason.Expired,
+  StockAdjustmentReason.Sale
+];
+
+/**
+ * What the operator is told when a Restock would remove stock (issue #1242). The same sentence
+ * `ManualStockAdjustmentPolicy.RestockAddsStockMessage` answers the request with, so the form
+ * refuses it in the same words the endpoint would.
+ */
+export const RESTOCK_ADDS_STOCK_MESSAGE =
+  'A Restock adjustment must add stock: enter a positive quantity. ' +
+  'Use Correction, Damaged or Expired to remove stock.';
+
+/** What the operator is told when Apply is reached with no reason chosen (issue #1242). */
+export const REASON_REQUIRED_MESSAGE = 'Select a reason for this adjustment.';
+
+/**
  * The manual stock-adjustment workflow for one selected product (issue #384), moved out of the
  * former `/products/:id/stock` page component unchanged.
  *
  * It is a dedicated feature component rather than markup on the Stock History page because it is a
  * distinct workflow with its own state, its own validation and its own API calls - the restock-cost
- * suggestion lookup, the correction sign handling, the required restock unit cost and the server's
- * validation errors (see docs/architecture.md § Page composition boundary). The page supplies the
- * product and the machine list through inputs and only learns that an adjustment was applied, so it
- * can refresh the history. Since issue #1156 it is shown inside `StockAdjustmentPanelComponent`, the
+ * suggestion lookup, each reason's own sign handling (issue #1242), the required restock unit cost
+ * and the server's validation errors (see docs/architecture.md § Page composition boundary). The
+ * page supplies the product and the machine list through inputs and only learns that an adjustment
+ * was applied, so it can refresh the history. Since issue #1156 it is shown inside `StockAdjustmentPanelComponent`, the
  * Adjust stock drawer (a full-screen form on a phone), and carries that panel's Cancel and Apply
  * adjustment actions.
  *
@@ -93,9 +116,14 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
 
   private readonly sessionActiveSubscription: Subscription;
 
+  /**
+   * The form opens with **no reason chosen** (issue #1242): a default of Restock made the reason a
+   * field an operator could leave alone, so a quantity typed for a write-off was recorded as a
+   * restock of that many units.
+   */
   form = {
     quantityChange: null as number | null,
-    reason: StockAdjustmentReason.Restock,
+    reason: null as StockAdjustmentReason | null,
     machineId: null as number | null,
     notes: '',
     EatBefore: null as string | null,
@@ -175,8 +203,46 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     return this.form.reason === StockAdjustmentReason.Restock && (this.form.quantityChange ?? 0) > 0;
   }
 
-  get isCorrection(): boolean {
-    return this.form.reason === StockAdjustmentReason.Correction;
+  /**
+   * Whether the chosen reason may only remove stock (issue #1242): the quantity is then typed as a
+   * positive number of units and submitted negative.
+   */
+  get removesStock(): boolean {
+    return this.form.reason !== null && REMOVAL_REASONS.includes(this.form.reason);
+  }
+
+  /** Whether the chosen reason may only add stock; a Restock is the one that does (issue #1242). */
+  get addsStock(): boolean {
+    return this.form.reason === StockAdjustmentReason.Restock;
+  }
+
+  /** `1` while the reason fixes the quantity's direction, so the field itself refuses a wrong sign. */
+  get quantityMinimum(): number | null {
+    return this.removesStock || this.addsStock ? 1 : null;
+  }
+
+  get quantityPlaceholder(): string {
+    return this.removesStock || this.addsStock ? 'e.g. 4' : 'e.g. 12 or -3';
+  }
+
+  /**
+   * What the operator is told when the quantity is missing or zero: the chosen reason decides which
+   * direction is being asked for (issue #1242), so the sentence belongs with the direction getters
+   * above rather than inside {@link adjust}.
+   */
+  private get quantityRequiredMessage(): string {
+    if (this.removesStock) {
+      return 'Enter a positive quantity to remove.';
+    }
+    if (this.addsStock) {
+      return 'Enter a positive quantity to add.';
+    }
+    return 'Enter a non-zero quantity (a negative number moves stock into a machine).';
+  }
+
+  /** A reason is required before anything can be saved (issue #1242). */
+  get reasonChosen(): boolean {
+    return this.form.reason !== null;
   }
 
   get restockCostHelp(): string {
@@ -189,12 +255,33 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     return 'No previous purchase cost is available. Enter the actual unit cost.';
   }
 
+  /**
+   * Why the staged unit cost is refused, or `''` when the movement may be sent: a positive Restock
+   * needs a present, non-negative cost and every other movement carries none. The endpoint remains
+   * the authority; this keeps the rule in one place instead of nested inside {@link adjust}.
+   */
+  private get restockCostError(): string {
+    if (!this.requiresRestockCost) {
+      return '';
+    }
+    const unitCost = this.form.unitCost;
+    if (unitCost === null || unitCost === undefined) {
+      return 'Unit cost is required for a positive Restock adjustment.';
+    }
+    if (unitCost < 0) {
+      return 'Unit cost cannot be negative for a positive Restock adjustment.';
+    }
+    return '';
+  }
+
   onAdjustmentInputsChanged(): void {
     if (!this.machineApplicable) {
       this.form.machineId = null;
     }
 
-    if (this.isCorrection && this.form.quantityChange !== null) {
+    // A reason that removes stock takes the quantity as a positive number of units, so the field
+    // shows what was typed without its sign and the submission applies the direction (issue #1242).
+    if (this.removesStock && this.form.quantityChange !== null) {
       this.form.quantityChange = Math.abs(this.form.quantityChange);
     }
 
@@ -231,31 +318,36 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     if (this.saving) {
       return;
     }
-    const quantityChange = this.isCorrection
+    // Checked here as well as disabled in the template, for the same reason the session is.
+    const reason = this.form.reason;
+    if (reason === null) {
+      this.error = REASON_REQUIRED_MESSAGE;
+      return;
+    }
+    const quantityChange = this.removesStock
       ? -(Math.abs(this.form.quantityChange ?? 0))
       : this.form.quantityChange;
     if (quantityChange === null || quantityChange === 0) {
-      this.error = this.isCorrection
-        ? 'Enter a positive quantity to remove.'
-        : 'Enter a non-zero quantity (use negative numbers to remove stock).';
+      this.error = this.quantityRequiredMessage;
       return;
     }
-    const unitCost = this.form.unitCost;
-    if (this.requiresRestockCost) {
-      if (unitCost === null || unitCost === undefined) {
-        this.error = 'Unit cost is required for a positive Restock adjustment.';
-        return;
-      }
-      if (unitCost < 0) {
-        this.error = 'Unit cost cannot be negative for a positive Restock adjustment.';
-        return;
-      }
+    // A Restock only ever adds stock, and the endpoint refuses one that does not in these words
+    // (issue #1242).
+    if (this.addsStock && quantityChange < 0) {
+      this.error = RESTOCK_ADDS_STOCK_MESSAGE;
+      return;
+    }
+    const restockCostError = this.restockCostError;
+    if (restockCostError !== '') {
+      this.error = restockCostError;
+      return;
     }
     this.error = '';
     this.setSaving(true);
 
     const payload = {
       ...this.form,
+      reason,
       quantityChange,
       machineId: this.machineApplicable ? this.form.machineId : null,
       unitCost: this.requiresRestockCost ? this.form.unitCost : null
@@ -294,7 +386,7 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   private reset(): void {
     this.form = {
       quantityChange: null,
-      reason: StockAdjustmentReason.Restock,
+      reason: null,
       machineId: null,
       notes: '',
       EatBefore: '',

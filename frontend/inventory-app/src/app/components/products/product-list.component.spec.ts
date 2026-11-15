@@ -872,6 +872,96 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 });
 
 /**
+ * Keyboard focus across a confirmed delete (issue #1277). Delete is reached through the row's own
+ * overflow menu, so the control the shared dialog captures is the one the menu hands focus back to
+ * as it closes - the row's menu trigger. The dialog returns focus there the instant it closes,
+ * which is what a cancelled or a refused delete needs, while the delete is still in flight; the
+ * refreshed list then drops that row, so focus is handed on rather than left on a removed button,
+ * where it would fall to the document body and Tab would start again at the top of the page.
+ */
+describe('ProductListComponent focus after a confirmed delete (issue #1277)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  /**
+   * The page's own `<h1>`, which the routed `ProductsShellComponent` renders around this list; this
+   * spec renders the list on its own, so the heading the handoff falls back to is added here.
+   */
+  let heading: HTMLHeadingElement;
+
+  beforeEach(() => {
+    heading = document.createElement('h1');
+    heading.textContent = 'Products';
+    document.body.prepend(heading);
+  });
+
+  afterEach(() => heading.remove());
+
+  async function render(getAll: jest.Mock, deleteFn: jest.Mock) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ProductService,
+          useValue: { getAll, delete: deleteFn, getTrackedProducts: noTrackedProducts }
+        },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  it('hands focus to the page heading once the delete succeeds and the refreshed list drops the row', async () => {
+    const deleted = new Subject<void>();
+    // A catalogue read that answers differently per call: the refresh after the delete has no row.
+    const answers = [[product({ id: 1, name: 'Widget', canDelete: true, providerManagedFields: [] })], [] as Product[]];
+    const { fixture, host } = await render(
+      jest.fn(() => of(answers.shift() ?? [])),
+      jest.fn(() => deleted.asObservable())
+    );
+
+    const trigger = host.querySelector<HTMLButtonElement>('tbody [data-testid="product-row-menu"]')!;
+    const menu = openRowMenu(fixture, host);
+    const deleteItem = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.trim() === 'Delete'
+    )!;
+    deleteItem.click();
+
+    // Choosing the item closed the menu onto its trigger, so that - not the menu item the menu has
+    // just removed - is what has focus as the dialog opens, and so is the opener it captures.
+    expect(document.activeElement).toBe(trigger);
+
+    fixture.detectChanges();
+
+    (host.querySelector('.confirm-modal .btn-danger') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    // The delete has not answered yet: the row is still listed and focus is back on its menu
+    // trigger, which is where a refusal needs it.
+    expect(host.textContent).toContain('Widget');
+    expect(document.activeElement).toBe(trigger);
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Widget');
+    expect(document.activeElement).toBe(heading);
+    // Given a tabindex only because a heading carries none, so it can be focused at all.
+    expect(heading.getAttribute('tabindex')).toBe('-1');
+  });
+});
+
+/**
  * The Status filter (issue #791, E of #786, replacing the "Show retired" checkbox issue #737
  * added): "Only active" (the default) so the catalogue page still answers the working catalogue,
  * and "All" on demand so a product just deactivated through the Active/Inactive toggle stays

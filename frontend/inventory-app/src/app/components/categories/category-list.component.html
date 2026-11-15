@@ -87,5 +87,5 @@
   *ngIf="confirmingCategory"
   title="Confirm delete"
   [message]="`Delete category '${confirmingCategory.name}'?`"
-  (confirmed)="deleteConfirmed()"
+  (confirmed)="deleteConfirmed($event)"
   (canceled)="cancelDelete()"></app-confirmation-dialog>

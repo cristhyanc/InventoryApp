@@ -193,6 +193,8 @@ test.describe('Stock History redesign (issue #1156)', () => {
     expect(box.height).toBeGreaterThanOrEqual(843);
     expect(await minHeight(page, '[data-testid="apply-adjustment"]')).toBeGreaterThanOrEqual(44);
     expect(await minHeight(page, '[data-testid="cancel-adjustment"]')).toBeGreaterThanOrEqual(44);
+    // A reason is chosen first: the form opens on none since issue #1242.
+    await page.locator('#adjustment-reason').selectOption({ label: 'Restock' });
     await page.locator('#adjustment-quantity-change').fill('12');
     await expect(page.locator('#adjustment-unit-cost')).toHaveValue('3.49');
     await capture(page, 'stock-history-mobile-form-390', false);

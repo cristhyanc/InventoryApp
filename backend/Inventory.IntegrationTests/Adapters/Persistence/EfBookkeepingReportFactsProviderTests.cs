@@ -1,6 +1,9 @@
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Application.Commissions;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Gst;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -118,6 +121,134 @@ public class EfBookkeepingReportFactsProviderTests
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
         Assert.Equal(10m, facts.GrossSales);
+    }
+
+    /// <summary>
+    /// Issue #1255's fixture, end to end over SQLite: the adapter groups the period's completed
+    /// sales by the GST rule stored on the product each one is attributed to, and the report takes
+    /// one eleventh of the taxable part of that. Only the explicitly GST-free product's sales leave
+    /// the taxable total; the product nobody has given a rule stays taxable and is reported on its
+    /// own. The whole report is asserted rather than only the facts, because the figure the owner
+    /// reads is what this rule is about.
+    /// </summary>
+    [Fact]
+    public async Task Gst_on_sales_follows_each_products_gst_rule_and_a_product_with_no_rule_stays_taxable()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var taxable = new Product { Name = "Chips", GstRule = GstClassification.Taxable };
+        var gstFree = new Product { Name = "Bottled water", GstRule = GstClassification.GstFree };
+        var noRule = new Product { Name = "Never configured" };
+        db.Products.AddRange(taxable, gstFree, noRule);
+        await db.SaveChangesAsync();
+        db.NayaxSales.AddRange(
+            Sale(1, NayaxTransactionStatusIds.Completed, 11m, productId: taxable.Id),
+            Sale(2, NayaxTransactionStatusIds.Completed, 3m, productId: gstFree.Id),
+            Sale(3, NayaxTransactionStatusIds.Completed, 22m, productId: noRule.Id));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
+        var report = await new GetBookkeepingReport(provider).Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        // The groups are summed from the same rows as the gross total, so they add up to it.
+        Assert.Equal(36m, facts.GrossSales);
+        Assert.Equal(36m, facts.SalesByProductGstRule.Sum(x => x.Sales));
+        Assert.Equal(36m, report.Sales);
+        Assert.Equal(33m, report.TaxableSales);
+        Assert.Equal(3m, report.GstFreeSales);
+        Assert.Equal(22m, report.NoGstRuleSales);
+        Assert.Equal(3.00m, report.GstOnSales);
+    }
+
+    /// <summary>
+    /// A sale the writer could not attribute to a local product has no rule to read, so it stays
+    /// taxable and is counted in the no-rule figure. Nothing here re-derives a product from a
+    /// provider id or a name (issue #758): the sale's own <c>ProductId</c> is the association.
+    /// </summary>
+    [Fact]
+    public async Task A_sale_with_no_resolved_product_is_taxable_and_counted_as_having_no_gst_rule()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var gstFree = new Product { Name = "Bottled water", GstRule = GstClassification.GstFree };
+        db.Products.Add(gstFree);
+        await db.SaveChangesAsync();
+        db.NayaxSales.AddRange(
+            Sale(1, NayaxTransactionStatusIds.Completed, 11m),
+            Sale(2, NayaxTransactionStatusIds.Completed, 3m, productId: gstFree.Id));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var report = await new GetBookkeepingReport(provider).Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.Equal(11m, report.TaxableSales);
+        Assert.Equal(11m, report.NoGstRuleSales);
+        Assert.Equal(3m, report.GstFreeSales);
+        Assert.Equal(1m, report.GstOnSales);
+    }
+
+    /// <summary>
+    /// The rule is read at report time and no history of it is kept (issue #1255), so configuring a
+    /// product's rule changes what every period's report says about that product's past sales. That
+    /// is the documented behaviour, stated on the report help, and this pins it.
+    /// </summary>
+    [Fact]
+    public async Task The_rule_stored_when_the_report_runs_is_the_one_used()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var product = new Product { Name = "Bottled water" };
+        db.Products.Add(product);
+        await db.SaveChangesAsync();
+        db.NayaxSales.Add(Sale(1, NayaxTransactionStatusIds.Completed, 11m, productId: product.Id));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+        var useCase = new GetBookkeepingReport(provider);
+
+        var beforeTheRule = await useCase.Handle(filter, CancellationToken.None);
+        product.GstRule = GstClassification.GstFree;
+        await db.SaveChangesAsync();
+        var afterTheRule = await useCase.Handle(filter, CancellationToken.None);
+
+        Assert.Equal(1m, beforeTheRule.GstOnSales);
+        Assert.Equal(11m, beforeTheRule.NoGstRuleSales);
+        Assert.Equal(0m, afterTheRule.GstOnSales);
+        Assert.Equal(11m, afterTheRule.GstFreeSales);
+        Assert.Equal(0m, afterTheRule.NoGstRuleSales);
+    }
+
+    /// <summary>
+    /// Issue #1255's second fixture: a thousand small sales across a taxable and a no-rule product.
+    /// The GST is taken once from the period's taxable total, so there is no per-sale rounding to
+    /// accumulate - a rounded eleventh per sale would drift by up to half a cent each time.
+    /// </summary>
+    [Fact]
+    public async Task A_thousand_small_sales_report_the_gst_of_the_period_total_with_no_rounding_drift()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var taxable = new Product { Name = "Chips", GstRule = GstClassification.Taxable };
+        var noRule = new Product { Name = "Never configured" };
+        db.Products.AddRange(taxable, noRule);
+        await db.SaveChangesAsync();
+        for (var transaction = 1; transaction <= 1000; transaction++)
+            db.NayaxSales.Add(Sale(transaction, NayaxTransactionStatusIds.Completed, 1.10m,
+                productId: transaction % 2 == 0 ? taxable.Id : noRule.Id));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var report = await new GetBookkeepingReport(provider).Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.Equal(1100m, report.Sales);
+        Assert.Equal(1100m, report.TaxableSales);
+        Assert.Equal(550m, report.NoGstRuleSales);
+        Assert.Equal(0m, report.GstFreeSales);
+        Assert.Equal(100.00m, report.GstOnSales);
     }
 
     [Fact]
@@ -275,7 +406,8 @@ public class EfBookkeepingReportFactsProviderTests
 
     private static NayaxSales Sale(
         long transactionId, int? transactionStatusId, decimal settlementValue,
-        long machineId = 10, DateTime? authorizationTime = null, decimal? costOfGoodsSold = null) =>
+        long machineId = 10, DateTime? authorizationTime = null, decimal? costOfGoodsSold = null,
+        long? productId = null) =>
         new()
         {
             TransactionID = transactionId,
@@ -284,7 +416,10 @@ public class EfBookkeepingReportFactsProviderTests
             SettlementValue = settlementValue,
             MachineAuthorizationTime = authorizationTime ?? new DateTime(2025, 8, 1),
             TransactionStatusId = transactionStatusId,
-            CostOfGoodsSold = costOfGoodsSold
+            CostOfGoodsSold = costOfGoodsSold,
+            // The local product the sale is attributed to (issue #758); null is unresolved, which is
+            // a real state and the one every other test here leaves it in.
+            ProductId = productId
         };
 
     /// <summary>
