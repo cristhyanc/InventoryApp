@@ -87,7 +87,10 @@ public sealed class GetGstBasSummary
                 OperatingExpenseGstCredits: summary.OperatingExpenseGstCredits,
                 NayaxFeeGstCredits: summary.NayaxFeeGstCredits,
                 NetGst: summary.NetGst,
-                NetGstOutcome: summary.Outcome.ToString(),
+                // The outcome the Domain policy decided, or nothing at all: it withholds the
+                // payable/credit/nil answer for a net amount this period's coverage never measured,
+                // and this projection must not invent a name for an answer that does not exist.
+                NetGstOutcome: summary.Outcome?.ToString(),
                 IsIncomplete: summary.IsIncomplete,
                 GstFreeSales: report.GstFreeSales,
                 NoGstRuleSales: report.NoGstRuleSales,

@@ -6,7 +6,8 @@ namespace InventoryApi.Tests.Domain.Reporting.Gst;
 /// <summary>
 /// The BAS-labelled summary of issue #1318. It renames the GST accounting aid's own figures onto the
 /// labels a BAS reader looks for and decides one thing of its own - whether the estimated net GST is
-/// payable, a credit or nil - so no presentation has to decide it.
+/// payable, a credit or nil, or whether that question has no answer because nothing measured the
+/// amount - so no presentation has to decide it.
 /// </summary>
 public class BasGstSummaryPolicyTests
 {
@@ -144,5 +145,47 @@ public class BasGstSummaryPolicyTests
     public void Complete_classifications_coverage_and_fee_evidence_leave_the_estimate_complete()
     {
         Assert.False(Summary(gstOnSales: 30m, purchaseInputGst: 8m).IsIncomplete);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void A_net_amount_no_coverage_measured_has_no_payable_credit_or_nil_answer(
+        bool salesIncomplete, bool feesIncomplete)
+    {
+        // A period whose sales or fee coverage never accounted for it has nothing but an internal
+        // zero here, and every presentation shows the coverage state in place of that zero
+        // (issue #730). "Nil" beside "No provider data" would announce a nil BAS nobody measured,
+        // so there is no outcome to spell at all.
+        var result = Summary(totalSales: 0m, gstOnSales: 0m,
+            salesIncomplete: salesIncomplete, feesIncomplete: feesIncomplete);
+
+        Assert.Equal(0m, result.NetGst);
+        Assert.Null(result.Outcome);
+        Assert.True(result.IsIncomplete);
+    }
+
+    [Fact]
+    public void An_incomplete_period_that_measured_a_real_net_amount_keeps_its_answer()
+    {
+        // Partial provider data is real data: the figure stays visible beside the state that says
+        // it may not be all of it, so it keeps the answer that names which way it falls.
+        var payable = Summary(gstOnSales: 30m, purchaseInputGst: 8m, salesIncomplete: true);
+        var credit = Summary(gstOnSales: 10m, purchaseInputGst: 12m, feesIncomplete: true);
+
+        Assert.Equal(BasNetGstOutcome.Payable, payable.Outcome);
+        Assert.Equal(BasNetGstOutcome.Credit, credit.Outcome);
+    }
+
+    [Fact]
+    public void A_covered_period_that_genuinely_owed_nothing_is_still_nil()
+    {
+        // The valid zero: coverage accounted for the whole period, so the zero is a measurement and
+        // nil is the right answer. Only the unmeasured zero above loses its outcome.
+        var result = Summary(totalSales: 0m, gstOnSales: 0m, purchaseGstIncomplete: true);
+
+        Assert.Equal(0m, result.NetGst);
+        Assert.Equal(BasNetGstOutcome.Nil, result.Outcome);
     }
 }

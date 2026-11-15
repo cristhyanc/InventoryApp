@@ -676,6 +676,38 @@ public class GetReportExportRowsTests
     }
 
     [Fact]
+    public async Task Bookkeeping_export_states_no_bas_outcome_for_a_net_amount_nothing_measured()
+    {
+        // The amount cell already substitutes the coverage state for an unmeasured zero. An outcome
+        // cell reading "Nil" beside it would put a nil BAS in the file anyway - the one thing these
+        // columns must never say about a period nobody measured.
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(NoProviderData()));
+
+        var row = await BookkeepingRowAsync(Sut(bookkeeping: bookkeeping));
+
+        Assert.Equal("Missing", row["BasEstimatedNetGst"]);
+        Assert.Equal(string.Empty, row["BasNetGstOutcome"]);
+        Assert.Equal("True", row["BasEstimateIncomplete"]);
+        // The business's own credits are a measured zero and stay exact beside it.
+        Assert.Equal("0", row["BasGstCreditsFromPurchases"]);
+        Assert.Equal("0", row["BasGstCreditsFromOperatingExpenses"]);
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_keeps_the_bas_outcome_of_a_real_amount_in_an_incomplete_period()
+    {
+        // Partial provider data is real data: the amount is printed, so its outcome is too.
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete() with { Coverage = TestReportCoverage.Unverified() }));
+
+        var row = await BookkeepingRowAsync(Sut(bookkeeping: bookkeeping));
+
+        Assert.Equal("8.59", row["BasEstimatedNetGst"]);
+        Assert.Equal("Payable", row["BasNetGstOutcome"]);
+        Assert.Equal("True", row["BasEstimateIncomplete"]);
+    }
+
+    [Fact]
     public async Task Bookkeeping_export_reports_the_machine_filter_instead_of_a_machine_scoped_bas_estimate()
     {
         var table = await Sut().Handle("bookkeeping", new ReportingFilterDto(MachineId: 10), CancellationToken.None);

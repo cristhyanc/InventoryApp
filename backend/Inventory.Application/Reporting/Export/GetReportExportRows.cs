@@ -374,6 +374,11 @@ public sealed class GetReportExportRows
     /// like every other figure in the file; 1B carries the settlement state because the Nayax fee
     /// GST is one of the three credits inside it, while the purchase and operating-expense credits
     /// are this business's own records and stay exact.</para>
+    ///
+    /// <para><c>BasNetGstOutcome</c> is empty whenever the net amount is one nothing measured,
+    /// because the Domain policy withholds the payable/credit/nil answer with the amount. A cell
+    /// reading <c>Nil</c> beside an amount cell reading <c>Missing</c> is the nil BAS this rule
+    /// exists to prevent, and it is worst in a file somebody pastes into a working paper.</para>
     /// </summary>
     private static List<string> BookkeepingBasCells(GstBasSummaryDto summary)
     {
@@ -393,7 +398,7 @@ public sealed class GetReportExportRows
             figures.OperatingExpenseGstCredits.ToString(CultureInfo.InvariantCulture),
             AvailabilityExportCells.Amount(figures.NayaxFeeGstCredits, fees),
             AvailabilityExportCells.Amount(figures.NetGst, figures.NetGstAvailability),
-            figures.NetGstOutcome,
+            figures.NetGstOutcome ?? string.Empty,
             figures.IsIncomplete.ToString()
         ];
     }

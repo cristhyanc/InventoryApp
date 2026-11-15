@@ -1,9 +1,9 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { GstBasSummaryComponent } from './gst-bas-summary.component';
-import { ReportingService } from '../../../services/reporting.service';
+import { ReportingFilter, ReportingService } from '../../../services/reporting.service';
 import { GstBasSummary, GstBasSummaryFigures } from './models/gst-bas-summary.model';
 import { ReportAvailability } from '../shared/models/reporting.models';
 
@@ -147,7 +147,7 @@ describe('GstBasSummaryComponent (issue #1318)', () => {
     const { host } = await render(summary({
       figures: figures({
         totalSales: 0, gstOnSales: 0, gstCredits: 0, nayaxFeeGstCredits: 0, netGst: 0,
-        netGstOutcome: 'Nil', isIncomplete: true,
+        netGstOutcome: null, isIncomplete: true,
         providerAvailability: { sales: missing, fees: missing, combined: missing },
         netGstAvailability: missing
       })
@@ -162,6 +162,41 @@ describe('GstBasSummaryComponent (issue #1318)', () => {
     // The figures the business records itself stay exact however incomplete the provider data is.
     expect(text(host, 'bas-1b-purchases')).toBe('$8.00');
     expect(text(host, 'bas-1b-expenses')).toBe('$4.00');
+  });
+
+  it('names the net figure without an outcome when the server reported no outcome for it', async () => {
+    // The server withholds the payable/credit/nil answer with an amount nothing measured, so the
+    // row must not read "Estimated net GST (nil)" beside "No provider data": that announces a nil
+    // BAS section for a period nobody calculated.
+    const { host } = await render(summary({
+      figures: figures({
+        totalSales: 0, gstOnSales: 0, gstCredits: 0, nayaxFeeGstCredits: 0, netGst: 0,
+        netGstOutcome: null, isIncomplete: true,
+        providerAvailability: { sales: missing, fees: missing, combined: missing },
+        netGstAvailability: missing
+      })
+    }));
+
+    expect(host.textContent).toContain('Estimated net GST');
+    expect(host.textContent).not.toContain('(nil)');
+    expect(host.textContent).not.toContain('Estimated GST payable');
+    expect(host.textContent).not.toContain('Estimated GST credit');
+    expect(text(host, 'bas-net-gst')).toBe('No provider data');
+  });
+
+  it('keeps the outcome of a real net amount the server did report in an incomplete period', async () => {
+    // The partial-estimate behaviour the rule above must not take with it: the amount is shown, so
+    // the answer that names which way it falls is shown too.
+    const { host } = await render(summary({
+      figures: figures({
+        netGst: 15, netGstOutcome: 'Payable', isIncomplete: true,
+        providerAvailability: { sales: complete, fees: missing, combined: missing },
+        netGstAvailability: missing
+      })
+    }));
+
+    expect(text(host, 'bas-net-gst')).toBe('$15.00');
+    expect(host.textContent).toContain('Estimated GST payable');
   });
 
   it('explains the period, the date basis, the scope and that the figures need reconciling', async () => {
@@ -206,6 +241,48 @@ describe('GstBasSummaryComponent (issue #1318)', () => {
 
     expect(tokens.size).toBeGreaterThan(0);
     for (const token of tokens) expect(css).toContain(`.${token}`);
+  });
+
+  it('ignores a superseded period, however late it answers', async () => {
+    // Two requests in flight at once, answering out of order: the one the page has moved off must
+    // never arrive last and leave this summary describing a period the figures beside it do not.
+    const answers = new Map<string, Subject<GstBasSummary>>();
+    const gstBasSummary = jest.fn((filter: ReportingFilter) => {
+      const answer = new Subject<GstBasSummary>();
+      answers.set(filter.from ?? '', answer);
+      return answer;
+    });
+    await TestBed.configureTestingModule({
+      imports: [GstBasSummaryComponent],
+      providers: [{ provide: ReportingService, useValue: { gstBasSummary } as unknown as ReportingService }]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(GstBasSummaryComponent);
+    fixture.componentRef.setInput('filter', { from: '2025-08-01', to: '2025-08-31', machineId: null });
+    fixture.detectChanges();
+    fixture.componentRef.setInput('filter', { from: '2025-09-01', to: '2025-09-30', machineId: null });
+    fixture.detectChanges();
+
+    // The newer period answers first.
+    answers.get('2025-09-01')!.next(summary({
+      from: '2025-09-01T00:00:00', to: '2025-09-30T00:00:00', figures: figures({ netGst: 15 })
+    }));
+    fixture.detectChanges();
+
+    // The superseded August request was cancelled when September replaced it, so answering it now
+    // reaches nothing at all.
+    expect(answers.get('2025-08-01')!.observed).toBe(false);
+    answers.get('2025-08-01')!.next(summary({
+      from: '2025-08-01T00:00:00', to: '2025-08-31T00:00:00',
+      figures: figures({ totalSales: 999, netGst: 999 })
+    }));
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    expect(text(host, 'bas-scope')).toContain('1 Sep 2025');
+    expect(text(host, 'bas-scope')).not.toContain('Aug 2025');
+    expect(text(host, 'bas-g1')).toBe('$330.00');
+    expect(text(host, 'bas-net-gst')).toBe('$15.00');
   });
 
   it('reports a failed request as an error rather than as an empty estimate', async () => {

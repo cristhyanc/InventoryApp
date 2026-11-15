@@ -86,7 +86,10 @@ public sealed record GstBasSummaryDto(
 /// </param>
 /// <param name="NetGstOutcome">
 /// <c>Payable</c>, <c>Credit</c> or <c>Nil</c> - the name of the <see cref="BasNetGstOutcome"/> the
-/// Domain policy decided, so no presentation reads the sign itself.
+/// Domain policy decided, so no presentation reads the sign itself. It is <see langword="null"/>
+/// when <paramref name="NetGst"/> is an amount no presentation may show - the internal zero of a
+/// period whose provider coverage never measured it - because there is no payable, credit or nil
+/// answer about an amount nobody has. A presentation names the figure without an outcome then.
 /// </param>
 /// <param name="IsIncomplete">
 /// Whether the estimate rests on something missing or estimated. The notes say which; the figures
@@ -123,7 +126,7 @@ public sealed record GstBasSummaryFiguresDto(
     decimal OperatingExpenseGstCredits,
     decimal NayaxFeeGstCredits,
     decimal NetGst,
-    string NetGstOutcome,
+    string? NetGstOutcome,
     bool IsIncomplete,
     decimal GstFreeSales,
     decimal NoGstRuleSales,

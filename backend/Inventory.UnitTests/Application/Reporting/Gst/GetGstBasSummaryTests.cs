@@ -269,6 +269,38 @@ public class GetGstBasSummaryTests
     }
 
     [Fact]
+    public async Task A_net_amount_no_provider_data_measured_is_published_without_an_outcome()
+    {
+        // Missing sales and fee data leave the subtraction at an internal zero, which every
+        // presentation replaces with the coverage state. Publishing "Nil" beside it would say this
+        // period's BAS GST section balances, which nothing established.
+        var missing = new ReportAvailabilityDto(nameof(ReportAvailabilityState.Missing), null);
+        var summary = Summary(Aid(Bookkeeping(sales: 0m, gstOnSales: 0m, gstOnFees: 0m,
+            operatingExpenseGst: 0m, salesAvailability: missing, feesAvailability: missing)));
+
+        var figures = (await summary.Handle(WholeBusinessAugust, CancellationToken.None)).Figures!;
+
+        Assert.Equal(0m, figures.NetGst);
+        Assert.Null(figures.NetGstOutcome);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), figures.NetGstAvailability.State);
+        Assert.True(figures.IsIncomplete);
+    }
+
+    [Fact]
+    public async Task An_incomplete_period_that_measured_a_real_net_amount_still_reports_its_outcome()
+    {
+        // The partial-estimate behaviour the rule above must not take with it: the amount is shown,
+        // so the answer that names which way it falls is shown too.
+        var missing = new ReportAvailabilityDto(nameof(ReportAvailabilityState.Missing), null);
+        var summary = Summary(Aid(Bookkeeping(feesAvailability: missing), [TaxablePurchase(88m)]));
+
+        var figures = (await summary.Handle(WholeBusinessAugust, CancellationToken.None)).Figures!;
+
+        Assert.Equal(15m, figures.NetGst);
+        Assert.Equal(nameof(BasNetGstOutcome.Payable), figures.NetGstOutcome);
+    }
+
+    [Fact]
     public async Task The_summary_reports_only_this_periods_own_notes_and_no_standing_disclaimer()
     {
         var result = await Summary(Aid(Bookkeeping())).Handle(WholeBusinessAugust, CancellationToken.None);

@@ -46,6 +46,10 @@ public readonly record struct BasGstSummaryInputs(
 /// Which way the estimated net GST falls. It is an answer rather than a sign a presentation works
 /// out for itself, so the screen, the export and any later surface describe the same period the same
 /// way.
+///
+/// <para>There is deliberately no "unknown" member: a period whose net amount is unavailable has
+/// <b>no</b> outcome, which <see cref="BasGstSummaryResult.Outcome"/> says by being
+/// <see langword="null"/>. A fourth member would be a label a presentation could print.</para>
 /// </summary>
 public enum BasNetGstOutcome
 {
@@ -70,6 +74,10 @@ public enum BasNetGstOutcome
 /// unclassified purchase component, sales or fee coverage that does not account for the whole
 /// period, fee GST partly estimated from a rate, or sales taxable only by the no-rule default. It
 /// never hides a figure; it says the total is not a final balance.</para>
+///
+/// <para><c>Outcome</c> is <see langword="null"/> when the net amount is one no presentation may
+/// show - the internal zero of a period whose provider coverage never measured it. There is no
+/// payable, credit or nil answer about an amount nobody has.</para>
 /// </summary>
 public readonly record struct BasGstSummaryResult(
     decimal TotalSales,
@@ -79,14 +87,15 @@ public readonly record struct BasGstSummaryResult(
     decimal OperatingExpenseGstCredits,
     decimal NayaxFeeGstCredits,
     decimal NetGst,
-    BasNetGstOutcome Outcome,
+    BasNetGstOutcome? Outcome,
     bool IsIncomplete);
 
 /// <summary>
 /// The BAS-labelled view of a period's GST (issue #1318), for a business that is registered for GST.
 ///
-/// <para>It owns exactly two rules of its own: which way the net figure falls, and whether the
-/// estimate rests on evidence that is missing or estimated. Every amount comes from
+/// <para>It owns exactly two rules of its own: which way the net figure falls - including when that
+/// question has no answer at all - and whether the estimate rests on evidence that is missing or
+/// estimated. Every amount comes from
 /// <see cref="GstAccountingAidPolicy"/>, which this policy calls rather than re-deriving: 1B is that
 /// policy's <see cref="GstAccountingAidResult.GstCredits"/> and the net figure its
 /// <see cref="GstAccountingAidResult.NetGst"/>, so the Bookkeeping summary and the GST accounting
@@ -116,7 +125,7 @@ public static class BasGstSummaryPolicy
             OperatingExpenseGstCredits: inputs.OperatingExpenseGst,
             NayaxFeeGstCredits: inputs.GstOnFees,
             NetGst: aid.NetGst,
-            Outcome: OutcomeOf(aid.NetGst),
+            Outcome: OutcomeOf(aid.NetGst, inputs),
             IsIncomplete: inputs.PurchaseGstIncomplete
                 || inputs.SalesIncomplete
                 || inputs.FeesIncomplete
@@ -124,10 +133,29 @@ public static class BasGstSummaryPolicy
                 || inputs.HasSalesAssumedTaxable);
     }
 
-    private static BasNetGstOutcome OutcomeOf(decimal netGst) => netGst switch
+    /// <summary>
+    /// The payable/credit/nil answer, or none at all.
+    ///
+    /// <para>A zero net figure is only an answer while something measured it. When the period's
+    /// sales or fee coverage is not <c>Complete</c>, a net figure of zero is the internal zero of
+    /// figures nobody read - which is exactly the zero every presentation replaces with the
+    /// coverage state instead of showing (issue #730, and <c>AGENTS.md</c> § Nayax processing fees
+    /// and GST: only <c>Complete</c> may present a zero as a real zero). Calling that "nil" beside
+    /// "No provider data" would publish a finished BAS balance nobody measured, so the outcome is
+    /// withheld with the amount and the surfaces that render it say nothing about which way the
+    /// period falls. A <b>non-zero</b> net figure in an incomplete period is real partial data,
+    /// stays visible, and keeps its answer.</para>
+    /// </summary>
+    private static BasNetGstOutcome? OutcomeOf(decimal netGst, BasGstSummaryInputs inputs)
     {
-        > 0m => BasNetGstOutcome.Payable,
-        < 0m => BasNetGstOutcome.Credit,
-        _ => BasNetGstOutcome.Nil
-    };
+        if (netGst == 0m && (inputs.SalesIncomplete || inputs.FeesIncomplete))
+            return null;
+
+        return netGst switch
+        {
+            > 0m => BasNetGstOutcome.Payable,
+            < 0m => BasNetGstOutcome.Credit,
+            _ => BasNetGstOutcome.Nil
+        };
+    }
 }

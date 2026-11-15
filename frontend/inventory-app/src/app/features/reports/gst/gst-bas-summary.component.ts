@@ -1,9 +1,16 @@
-import { Component, Input, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, Input, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Observable, Subject, Subscription, catchError, map, of, switchMap, tap } from 'rxjs';
 import { ReportingFilter, ReportingService } from '../../../services/reporting.service';
 import { availabilityBadge, money, moneyOrState } from '../../../components/reports/report-formatting';
 import { ReportAvailability } from '../shared/models/reporting.models';
 import { GstBasSummary, GstBasSummaryFigures } from './models/gst-bas-summary.model';
+
+/**
+ * One finished summary request: the answer, or `null` for one that failed. Both outcomes travel
+ * through the same stream, so a failure cannot end it and leave later periods unloadable.
+ */
+type GstBasSummaryLoad = { summary: GstBasSummary | null };
 
 /**
  * The GST and BAS summary shown inside Bookkeeping for a business registered for GST (issue #1318).
@@ -12,7 +19,8 @@ import { GstBasSummary, GstBasSummaryFigures } from './models/gst-bas-summary.mo
  * distinct workflow with its own request, loading and error lifecycle (AGENTS.md § Frontend rules:
  * page components are composition boundaries). The page hands it the filter it actually reported
  * on - never the live filter controls - so the summary always describes the same period as the
- * figures beside it.</p>
+ * figures beside it. A new filter also cancels the request in flight, so a period the page has
+ * moved off cannot answer last and describe itself beside another period's figures.</p>
  *
  * <p>It calculates nothing. Every amount, the credit total, the net estimate, its
  * payable/credit/nil answer, whether the estimate is incomplete and whether there is a summary at
@@ -80,7 +88,7 @@ import { GstBasSummary, GstBasSummaryFigures } from './models/gst-bas-summary.mo
   }
   `
 })
-export class GstBasSummaryComponent implements OnChanges {
+export class GstBasSummaryComponent implements OnChanges, OnDestroy {
   /**
    * The period and scope the page reported on. The parent sets it when a report loads, never from
    * the filter controls as they are edited, so this summary and the figures beside it can never
@@ -92,21 +100,45 @@ export class GstBasSummaryComponent implements OnChanges {
   loading = false;
   error = '';
 
-  constructor(private reports: ReportingService) {}
+  private readonly requested = new Subject<ReportingFilter | null>();
+  private readonly loads: Subscription;
 
-  ngOnChanges(changes: SimpleChanges): void {
-    if (changes['filter']) this.load();
+  constructor(private readonly reports: ReportingService) {
+    // `switchMap` is what makes a superseded answer unreachable: a new period or machine scope
+    // cancels the request in flight, so the summary of the period the page has moved off can never
+    // arrive afterwards and describe a different period from the figures beside it. It is the same
+    // latest-request pattern the product GST rule and the machine latest-sales reads use.
+    this.loads = this.requested
+      .pipe(
+        tap(() => { this.summary = null; this.error = ''; this.loading = false; }),
+        switchMap((filter): Observable<GstBasSummaryLoad | null> => {
+          // Written as a null comparison rather than a negation on purpose: `!` followed by a
+          // utility name is a Tailwind important-modifier class, and the stylesheet build would
+          // compile one from this line.
+          if (filter == null) return of(null);
+
+          this.loading = true;
+          return this.reports.gstBasSummary(filter).pipe(
+            map((summary): GstBasSummaryLoad => ({ summary })),
+            catchError(() => of<GstBasSummaryLoad>({ summary: null }))
+          );
+        })
+      )
+      .subscribe(result => {
+        if (result === null) return;
+
+        this.loading = false;
+        if (result.summary === null) this.error = 'Unable to load the GST summary.';
+        else this.summary = result.summary;
+      });
   }
 
-  private load(): void {
-    this.summary = null;
-    this.error = '';
-    if (!this.filter) return;
-    this.loading = true;
-    this.reports.gstBasSummary(this.filter).subscribe({
-      next: value => { this.summary = value; this.loading = false; },
-      error: () => { this.error = 'Unable to load the GST summary.'; this.loading = false; }
-    });
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['filter']) this.requested.next(this.filter);
+  }
+
+  ngOnDestroy(): void {
+    this.loads.unsubscribe();
   }
 
   /** The figures, or nothing at all - which is what a business that is not registered sees. */
@@ -145,6 +177,11 @@ export class GstBasSummaryComponent implements OnChanges {
   /**
    * The name of the net figure, from the answer the server decided. Nothing here looks at the
    * sign: payable, credit and nil are its three answers and this only spells them.
+   *
+   * <p>A response with no answer at all is a period whose net amount nothing measured - the figure
+   * beside this label is its availability state, not a number - so the row is named without an
+   * outcome. "Estimated net GST (nil)" next to "No provider data" would announce a nil BAS nobody
+   * calculated.</p>
    */
   netGstLabel(figures: GstBasSummaryFigures): string {
     switch (figures.netGstOutcome) {
@@ -152,8 +189,10 @@ export class GstBasSummaryComponent implements OnChanges {
         return 'Estimated GST payable';
       case 'Credit':
         return 'Estimated GST credit (shown as a negative amount)';
-      default:
+      case 'Nil':
         return 'Estimated net GST (nil)';
+      default:
+        return 'Estimated net GST';
     }
   }
 

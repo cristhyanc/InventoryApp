@@ -29,7 +29,13 @@ export interface GstBasSummaryFigures {
   nayaxFeeGstCredits: number;
   /** 1A less 1B, signed. Governed by `netGstAvailability`. */
   netGst: number;
-  netGstOutcome: 'Payable' | 'Credit' | 'Nil';
+  /**
+   * Which way the estimate falls, as the server decided it - or `null`/absent when `netGst` is an
+   * amount no presentation may show, the internal zero of a period whose coverage never measured
+   * it. There is no payable, credit or nil answer about an amount nobody has, so the figure is
+   * named without one.
+   */
+  netGstOutcome?: 'Payable' | 'Credit' | 'Nil' | null;
   /** Whether the estimate rests on something missing or estimated. The notes say which. */
   isIncomplete: boolean;
   gstFreeSales: number;

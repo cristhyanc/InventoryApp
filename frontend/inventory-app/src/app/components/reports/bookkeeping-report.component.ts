@@ -116,6 +116,10 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
    * The period and scope the GST summary child reports on (issue #1318). It is set from the filter
    * this page submits, not from the filter controls as they are edited, so the summary can never
    * describe a different period from the figures beside it.
+   *
+   * Both sides are also on the *latest* applied filter whatever order the two requests answer in:
+   * `ReportPageBase` cancels the report request this one supersedes, so a slower earlier response
+   * can no longer arrive last and leave the figures on one period while the summary shows another.
    */
   gstSummaryFilter: ReportingFilter | null = null;
 

@@ -2,9 +2,9 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ActivatedRoute } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { Subject, of } from 'rxjs';
 import { BookkeepingReportComponent } from './bookkeeping-report.component';
-import { ReportingService } from '../../services/reporting.service';
+import { ReportingFilter, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
 import { BookkeepingReport } from '../../features/reports/bookkeeping/models/bookkeeping-report.model';
 import { ReportProviderAvailability } from '../../features/reports/shared/models/reporting.models';
@@ -509,6 +509,72 @@ describe('BookkeepingReportComponent GST and BAS summary (issue #1318)', () => {
     expect(host.querySelector('[data-testid="gst-bas-summary"]')).toBeNull();
     expect(host.querySelector('[data-testid="gst-bas-summary-machine-filtered"]')?.textContent)
       .toContain('All machines');
+  });
+
+  /**
+   * The repair of the review finding on this composition: the page and its summary must stay on the
+   * same applied filter even when two report requests are in flight and the earlier one answers
+   * last. `ReportPageBase` now cancels the request a new filter supersedes, so the figures can no
+   * longer fall back to the period the summary beside them has already moved off.
+   */
+  it('keeps the figures and the GST summary on the same filter when responses finish out of order', async () => {
+    const reportAnswers = new Map<number | null, Subject<BookkeepingReport>>();
+    const bookkeeping = jest.fn((filter: ReportingFilter) => {
+      const answer = new Subject<BookkeepingReport>();
+      reportAnswers.set(filter.machineId ?? null, answer);
+      return answer;
+    });
+    const summaryAnswers = new Map<number | null, Subject<unknown>>();
+    const gstBasSummary = jest.fn((filter: ReportingFilter) => {
+      const answer = new Subject<unknown>();
+      summaryAnswers.set(filter.machineId ?? null, answer);
+      return answer;
+    });
+
+    await TestBed.configureTestingModule({
+      imports: [BookkeepingReportComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: {} as unknown as ActivatedRoute },
+        { provide: ReportingService, useValue: { bookkeeping, gstBasSummary } as unknown as ReportingService },
+        { provide: MachineService, useValue: { getAll: () => of([]) } as unknown as MachineService },
+        provideNayaxConnectionStatus()
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(BookkeepingReportComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    // The whole-business request is still in flight when the reader narrows to one machine.
+    component.machineId = 7;
+    component.load();
+    fixture.detectChanges();
+
+    // The machine-scoped request answers first, and the summary it then asks for refuses that scope.
+    reportAnswers.get(7)!.next({ ...REPORT, sales: 7000 });
+    fixture.detectChanges();
+    summaryAnswers.get(7)!.next({
+      from: REPORT.from, to: REPORT.to, status: 'MachineFiltered', figures: null,
+      dataQuality: {
+        missingStatus: false, historicalCostUnavailable: false, gstClassificationMissing: false,
+        commissionNotPersisted: false, containsUnmappedProducts: false, notes: []
+      }
+    });
+    fixture.detectChanges();
+
+    // Only now does the superseded whole-business request answer. It was cancelled, so it reaches
+    // nothing: it cannot put whole-business figures on screen beside a machine-scoped summary.
+    expect(reportAnswers.get(null)!.observed).toBe(false);
+    reportAnswers.get(null)!.next({ ...REPORT, sales: 1000 });
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    expect(component.report!.sales).toBe(7000);
+    expect(host.querySelector('[data-testid="gross-sales"]')!.textContent).toContain('$7,000.00');
+    expect(component.gstSummaryFilter).toEqual({ from: component.from, to: component.to, machineId: 7 });
+    expect(gstBasSummary).toHaveBeenCalledTimes(1);
+    expect(gstBasSummary).toHaveBeenCalledWith({ from: component.from, to: component.to, machineId: 7 });
+    expect(host.querySelector('[data-testid="gst-bas-summary-machine-filtered"]')).not.toBeNull();
   });
 
   it('asks for the summary with the period and scope the page itself reported on', async () => {
