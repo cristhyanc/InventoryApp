@@ -1,4 +1,5 @@
 using Inventory.Application.Expenses;
+using Inventory.Domain.Expenses;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
@@ -293,6 +294,62 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var updated = Assert.IsType<OperatingExpenseResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.NotNull(updated.Supplier);
         Assert.Equal("Acme", updated.Supplier!.Name);
+    }
+
+    /// <summary>
+    /// Issue #1257: the three amounts have to describe one expense, and the endpoint is what says
+    /// so - a caller gets 400 with the rule's own sentence and nothing is recorded.
+    /// </summary>
+    [Fact]
+    public async Task Create_refuses_amounts_that_do_not_add_up_to_the_total()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+
+        var result = await controller.Create(
+            CreateDto() with { AmountExGst = 100m, GstAmount = 50m, TotalAmount = 110m },
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(OperatingExpenseDetails.AmountsMustAddUpMessage, badRequest.Value);
+        Assert.Empty(db.OperatingExpenses);
+    }
+
+    [Fact]
+    public async Task Update_refuses_amounts_that_do_not_add_up_to_the_total_and_keeps_the_stored_expense()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+        var created = Assert.IsType<OperatingExpenseResponse>(
+            Assert.IsType<CreatedAtActionResult>((await controller.Create(CreateDto(), CancellationToken.None)).Result).Value);
+
+        var result = await controller.Update(
+            created.Id,
+            CreateDto(description: "Updated") with { AmountExGst = 100m, GstAmount = 50m, TotalAmount = 110m },
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(OperatingExpenseDetails.AmountsMustAddUpMessage, badRequest.Value);
+        var stored = await db.OperatingExpenses.AsNoTracking().SingleAsync();
+        Assert.Equal("Monthly insurance", stored.Description);
+        Assert.Equal(10m, stored.AmountExGst);
+        Assert.Equal(1m, stored.GstAmount);
+        Assert.Equal(11m, stored.TotalAmount);
+    }
+
+    /// <summary>A cent of rounding is accepted, because a supplier's document legitimately has one.</summary>
+    [Fact]
+    public async Task Create_accepts_amounts_a_cent_away_from_the_total()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+
+        var result = await controller.Create(
+            CreateDto() with { AmountExGst = 10m, GstAmount = 1m, TotalAmount = 11.01m },
+            CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Equal(11.01m, (await db.OperatingExpenses.AsNoTracking().SingleAsync()).TotalAmount);
     }
 
     public void Dispose()

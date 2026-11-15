@@ -12,6 +12,82 @@ import { OPERATING_EXPENSE_CATEGORIES, expenseCategoryLabel } from './expense-ca
 export const EXPENSE_ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf';
 
 /**
+ * The server's own sentence for an expense whose three amounts do not describe one expense
+ * (issue #1257, `OperatingExpenseDetails.AmountsMustAddUpMessage`). It is repeated here rather than
+ * waited for so the operator is told before the request; the API refuses the same thing either way.
+ */
+export const EXPENSE_AMOUNTS_MISMATCH_MESSAGE = 'Amount ex GST plus GST must equal the total, within $0.01.';
+
+/**
+ * An amount held exactly, as `units` of `10^-decimals`: `1.006` is `1006` units of a thousandth.
+ * It is the decimal value itself rather than the double that carries it, which is what lets the
+ * tolerance be compared as integers.
+ */
+interface ExactAmount {
+  readonly units: bigint;
+  readonly decimals: number;
+}
+
+/**
+ * How far ex GST plus GST may sit from the total and still be the same expense, written exactly as
+ * the server writes it (`OperatingExpenseDetails.AmountTolerance`, `0.01m`).
+ */
+const EXPENSE_AMOUNT_TOLERANCE: ExactAmount = { units: 1n, decimals: 2 };
+
+/**
+ * The amount exactly as entered, read from the decimal text the number prints - which is the text
+ * the payload sends and therefore the decimal the API compares. A cleared number input is `null`
+ * through `ngModel`, which is an amount of nothing rather than a reason to refuse.
+ */
+function exactAmount(value: number | null | undefined): ExactAmount {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return { units: 0n, decimals: 0 };
+  }
+
+  // `toString` is the shortest text that reads back as this double, so it is exactly the number
+  // `JSON.stringify` puts in the request: `1.006`, or `1e-7` for a very small one.
+  const [significand, exponentText] = amount.toString().split('e');
+  const exponent = exponentText === undefined ? 0 : Number(exponentText);
+  const [whole, fraction = ''] = significand.split('.');
+  const units = BigInt(whole + fraction);
+  const decimals = fraction.length - exponent;
+  // A positive exponent (`1e+21`) is a large whole amount, not a negative number of decimals.
+  return decimals < 0 ? { units: units * 10n ** BigInt(-decimals), decimals: 0 } : { units, decimals };
+}
+
+/**
+ * Whether ex GST plus GST is more than the tolerance from the total (issue #1257), judged on the
+ * three values actually submitted. The three amounts and the tolerance are put on one shared
+ * decimal scale and compared as integers, so the boundary is the API's exactly:
+ *
+ * - it is off binary floating point, which cannot hold the boundary - `1.4 + 0 - 1.39` is
+ *   `0.010000000000000009` as a double, a cent the API accepts that a direct comparison refuses;
+ * - and nothing is rounded to cents first, which would refuse `1.006 + 0.006` against `1.003` (a
+ *   difference of `0.009`, which the API accepts) and accept `1.004 + 0.004` against `0.993` (a
+ *   difference of `0.015`, which the API refuses).
+ */
+function amountsFurtherApartThanTolerance(
+  amountExGst: number | null | undefined,
+  gstAmount: number | null | undefined,
+  totalAmount: number | null | undefined
+): boolean {
+  const amounts = [
+    exactAmount(amountExGst),
+    exactAmount(gstAmount),
+    exactAmount(totalAmount),
+    EXPENSE_AMOUNT_TOLERANCE
+  ];
+  const decimals = Math.max(...amounts.map((amount) => amount.decimals));
+  const [exGst, gst, total, tolerance] = amounts.map(
+    (amount) => amount.units * 10n ** BigInt(decimals - amount.decimals)
+  );
+
+  const difference = exGst + gst - total;
+  return (difference < 0n ? -difference : difference) > tolerance;
+}
+
+/**
  * The expense the form opens with (issue #1167): the fields it submits, plus the two things about a
  * stored expense the form shows but never changes.
  */
@@ -82,9 +158,12 @@ export function newExpenseFormValue(timeZoneId: string | null = null, now: Date 
  * business behaviour exactly:
  *
  * - **The three amounts stay three independent inputs.** Amount ex GST, GST and Total are typed and
- *   submitted exactly as entered - no auto-calculation, no rounding, no assumed GST rate and no
- *   mismatch warning - because the amounts on a supplier's document are the record, and the API
- *   refuses only a negative one.
+ *   submitted exactly as entered - no auto-calculation, no rounding and no assumed GST rate -
+ *   because the amounts on a supplier's document are the record. Since issue #1257 they must add
+ *   up: ex GST plus GST more than a cent from the total is refused here with the API's own
+ *   sentence, and nothing is calculated or corrected for the operator. The refusal is decided on
+ *   the values as entered, down to their last decimal, so it is exactly the API's refusal rather
+ *   than a stricter or a looser one.
  * - **The fields the form has no control for survive an edit.** `siteId`, `servicePeriodStart` and
  *   `servicePeriodEnd` are carried in {@link ExpenseFormValue.payload} and submitted exactly as
  *   loaded, so editing a description can never silently clear an expense's service period.
@@ -103,9 +182,10 @@ export function newExpenseFormValue(timeZoneId: string | null = null, now: Date 
  *   quota are its refusals, and choosing a new file on Edit replaces the stored one, which is the
  *   only thing the API offers - there is no remove.
  *
- * Validation here is the one check the register's card already made - a blank Description is not
- * submitted - except that the refusal is now visible beside the field instead of silent. Every other
- * rule is the server's, and its sentence is shown by the page that owns the request.
+ * Validation here is the check the register's card already made - a blank Description is not
+ * submitted - except that the refusal is now visible beside the field instead of silent, plus the
+ * amounts rule of issue #1257 beside the Amounts section. Every other rule is the server's, and its
+ * sentence is shown by the page that owns the request.
  */
 @Component({
   selector: 'app-expense-form',
@@ -159,6 +239,9 @@ export class ExpenseFormComponent {
 
   readonly categoryLabel = expenseCategoryLabel;
   readonly accept = EXPENSE_ATTACHMENT_ACCEPT;
+
+  /** The sentence an operator reads when the three amounts do not add up (issue #1257). */
+  readonly amountsMismatchMessage = EXPENSE_AMOUNTS_MISMATCH_MESSAGE;
 
   form: OperatingExpensePayload = newExpenseFormValue().payload;
 
@@ -226,6 +309,19 @@ export class ExpenseFormComponent {
     return this.submitAttempted && this.descriptionMissing;
   }
 
+  /**
+   * Whether ex GST plus GST is more than a cent away from the total (issue #1257), decided on the
+   * values as entered so the form refuses exactly what the API refuses.
+   */
+  get amountsMismatched(): boolean {
+    return amountsFurtherApartThanTolerance(this.form.amountExGst, this.form.gstAmount, this.form.totalAmount);
+  }
+
+  /** Whether that refusal is being shown, which it is only once the operator has pressed Save. */
+  get amountsInvalid(): boolean {
+    return this.submitAttempted && this.amountsMismatched;
+  }
+
   /** The primary action's label, which names the write it would actually make. */
   get submitLabel(): string {
     if (this.saving) {
@@ -237,8 +333,8 @@ export class ExpenseFormComponent {
   /**
    * Whether the primary action is unavailable: while a request is in flight, so a double press
    * sends one request, and while a chosen photo is still being prepared, because the file this
-   * would upload does not exist yet. A blank Description does **not** disable it - pressing it is
-   * what shows the refusal beside the field.
+   * would upload does not exist yet. A blank Description or amounts that do not add up do **not**
+   * disable it - pressing it is what shows the refusal beside the field.
    */
   get submitDisabled(): boolean {
     return this.saving || this.attachmentPreparing;
@@ -258,7 +354,7 @@ export class ExpenseFormComponent {
     this.submitAttempted = true;
     // Checked here as well as disabled or hidden in the template, so the write is actually
     // unavailable rather than merely inert - the endpoint refuses it either way.
-    if (this.readOnly || this.submitDisabled || this.descriptionMissing) {
+    if (this.readOnly || this.submitDisabled || this.descriptionMissing || this.amountsMismatched) {
       return;
     }
 

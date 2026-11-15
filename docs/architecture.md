@@ -8868,6 +8868,75 @@ the same way rather than only logged. Rendered evidence:
 `docs/screenshots/issue-1170/`; like every visual run it is human-invoked and runs in neither
 `scripts/validate.sh` nor CI.
 
+### Expense and fee GST amounts add up (issue #1257)
+
+Two bookkeeping figures used to be able to disagree with the amounts they were derived from, in the
+same way and for the same reason: an ex-GST amount and a GST amount were each derived on their own,
+so nothing held them to the total beside them. Issue #1257 (audit #1223, findings REP-09 and REP-10)
+closed both. Neither half changes the schema, and neither repairs data that already exists —
+listing existing inconsistent expenses is explicitly a person's job, out of scope here.
+
+**An expense's three amounts have to describe one expense.**
+`Inventory.Domain.Expenses.OperatingExpenseDetails.TryCreate` — the one rule create and update
+share — refuses a submission whose ex GST plus GST is more than `$0.01` from its total, with
+`OperatingExpenseDetails.AmountsMustAddUpMessage`, and `POST`/`PUT api/operating-expenses` answer
+that sentence as a `400` with nothing stored. The tolerance is `OperatingExpenseDetails.AmountTolerance`
+(`0.01m`, the same cent a reimbursement period is reconciled to): a difference of exactly a cent is
+accepted, because a supplier's own document legitimately carries that rounding, and two cents is
+refused. It matters because the bookkeeping report reads the **total** for profit and the **GST
+amount** for the GST credit, so ex GST `100`, GST `50`, total `110` — accepted before this change —
+reported a `110` cost and a `50` credit from one expense that could only be one of them. The rule is
+deliberately a cross-check and not a calculation: nothing is rounded, derived or filled in, so what
+is stored is still what the document says. A negative amount keeps its own, more specific refusal.
+`ExpenseFormComponent` applies the same rule before it submits, with the server's own sentence
+beside the Amounts section and `aria-invalid`/`aria-describedby` on all three inputs, so an operator
+is told by the form rather than by the request, and reads a cleared input as nothing rather than as a
+reason to refuse. It judges **the three values as entered**, to their last decimal: each amount and
+the tolerance are put on one shared decimal scale and compared as integers (`exactAmount`,
+`amountsFurtherApartThanTolerance`), which keeps the boundary off binary floating point — `1.4 + 0 -
+1.39` is `0.010000000000000009` as a double, a cent the API accepts — and keeps it the API's own
+boundary rather than a stricter or a looser one. Rounding each input to cents first, which the form
+did when the rule arrived, did both: it refused `1.006 + 0.006` against `1.003` (`0.009`, which the
+API accepts) and accepted `1.004 + 0.004` against `0.993` (`0.015`, which the API refuses). The
+`step="0.01"` on the three number inputs is a stepper convenience and never a cent-only contract for
+what is submitted. The form's copy of the rule is a courtesy and never the enforcement: the endpoint
+refuses the same submission whatever a client does with it.
+
+**A processing fee's GST is the GST of the total it was imported with.**
+`Inventory.Domain.FinancialConfiguration.NayaxProcessingFeePolicy` derives one imported fee row's
+ex-GST amount from its GST rather than beside it, so the two always add back up to the amount the
+import recorded. The GST comes from the strongest evidence the row carries — both amounts (their
+difference), then the row's own VAT percentage, and otherwise the inclusive amount through the
+central `ReportingCalculations.GstFromInclusive` — and a row that records neither amount is still
+nothing, never a zero-GST fee. The **inclusive-only** case is what was wrong: the ex-GST half
+already removed one eleventh while the GST half answered `0`, so an `11.00` fee was reported as
+`10.00` ex GST, `0.00` GST and `10.00` including GST, losing a dollar of the business's own fee GST
+credit and stating a total Nayax never sent. It is now `10.00`, `1.00` and `11.00`. A fee that
+states its VAT percentage, and one that records both amounts, are unchanged, and nothing recalculates
+a fee total from the configured estimate rate. The per-machine branch, which has only a device-level
+ex-GST figure and adds `GstFromExcluding` to it, is untouched. See AGENTS.md § Nayax processing fees
+and GST for the invariant.
+
+**What proves it.** `OperatingExpenseDetailsTests` covers the rule itself with both boundaries (a
+cent accepted, two cents refused, in both directions), the two sub-cent submissions the form is held
+to the same way (`1.006/0.006/1.003` accepted, `1.004/0.004/0.993` refused) and the negative amount
+keeping its own message; `OperatingExpensesControllerTests` covers the `400` on create and on update
+with the stored expense left exactly as it was, and the cent that is accepted;
+`expense-form.component.spec.ts` covers the form's refusal, its wiring to the three inputs, both
+boundaries, the same two sub-cent submissions, the cent that binary floating point puts just over
+the boundary, that it says nothing before the primary action is pressed, and the cleared input.
+`NayaxProcessingFeePolicyTests` covers the inclusive-only fee's three figures and the two shapes
+that are unchanged.
+
+**The fee report's own field semantics are not Nayax-documented.** The fee rows come from an
+uploaded Nayax reimbursement XML file (`Inventory.Infrastructure.Imports.ReimbursementXmlParser`,
+attributes `total_sum`, `total_sum_with_vat` and `vat_percentage`), not from a Nayax API response,
+and the Nayax developer portal documents no such report — a search of it for those attribute names
+and for a reimbursement report returned nothing. That contract is therefore **unverified** and is
+treated as such: issue #1257 defined, renamed and accepted no field, and added no assumption about
+the provider. The only rule it applies is this application's own existing Australian GST
+calculation, which the ex-GST half was already using for exactly these rows.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
@@ -19727,7 +19796,9 @@ files" as the historical record of that slice, not as a test to look for today.
      port before this slice, and keeps doing so unchanged - this slice did not introduce a second
      storage boundary.
    - `Inventory.Domain.Expenses.OperatingExpenseDetails` validates an expense's descriptive/financial
-     fields (required description, non-negative amounts, service-period ordering) and
+     fields (required description, non-negative amounts, ex GST plus GST equal to the total within
+     `$0.01` since issue #1257 — see [Expense and fee GST amounts add
+     up](#expense-and-fee-gst-amounts-add-up-issue-1257) — and service-period ordering) and
      `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` validates a candidate attachment's size and
      extension and resolves its content type - the two deterministic rules the controller used to
      enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
