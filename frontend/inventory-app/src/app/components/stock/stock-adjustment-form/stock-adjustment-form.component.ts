@@ -225,6 +225,21 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     return this.removesStock || this.addsStock ? 'e.g. 4' : 'e.g. 12 or -3';
   }
 
+  /**
+   * What the operator is told when the quantity is missing or zero: the chosen reason decides which
+   * direction is being asked for (issue #1242), so the sentence belongs with the direction getters
+   * above rather than inside {@link adjust}.
+   */
+  private get quantityRequiredMessage(): string {
+    if (this.removesStock) {
+      return 'Enter a positive quantity to remove.';
+    }
+    if (this.addsStock) {
+      return 'Enter a positive quantity to add.';
+    }
+    return 'Enter a non-zero quantity (a negative number moves stock into a machine).';
+  }
+
   /** A reason is required before anything can be saved (issue #1242). */
   get reasonChosen(): boolean {
     return this.form.reason !== null;
@@ -238,6 +253,25 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       return `Using current average cost: $${this.restockCostSuggestion.unitCost.toFixed(2)} - verify before saving`;
     }
     return 'No previous purchase cost is available. Enter the actual unit cost.';
+  }
+
+  /**
+   * Why the staged unit cost is refused, or `''` when the movement may be sent: a positive Restock
+   * needs a present, non-negative cost and every other movement carries none. The endpoint remains
+   * the authority; this keeps the rule in one place instead of nested inside {@link adjust}.
+   */
+  private get restockCostError(): string {
+    if (!this.requiresRestockCost) {
+      return '';
+    }
+    const unitCost = this.form.unitCost;
+    if (unitCost === null || unitCost === undefined) {
+      return 'Unit cost is required for a positive Restock adjustment.';
+    }
+    if (unitCost < 0) {
+      return 'Unit cost cannot be negative for a positive Restock adjustment.';
+    }
+    return '';
   }
 
   onAdjustmentInputsChanged(): void {
@@ -294,11 +328,7 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       ? -(Math.abs(this.form.quantityChange ?? 0))
       : this.form.quantityChange;
     if (quantityChange === null || quantityChange === 0) {
-      this.error = this.removesStock
-        ? 'Enter a positive quantity to remove.'
-        : this.addsStock
-          ? 'Enter a positive quantity to add.'
-          : 'Enter a non-zero quantity (a negative number moves stock into a machine).';
+      this.error = this.quantityRequiredMessage;
       return;
     }
     // A Restock only ever adds stock, and the endpoint refuses one that does not in these words
@@ -307,16 +337,10 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       this.error = RESTOCK_ADDS_STOCK_MESSAGE;
       return;
     }
-    const unitCost = this.form.unitCost;
-    if (this.requiresRestockCost) {
-      if (unitCost === null || unitCost === undefined) {
-        this.error = 'Unit cost is required for a positive Restock adjustment.';
-        return;
-      }
-      if (unitCost < 0) {
-        this.error = 'Unit cost cannot be negative for a positive Restock adjustment.';
-        return;
-      }
+    const restockCostError = this.restockCostError;
+    if (restockCostError !== '') {
+      this.error = restockCostError;
+      return;
     }
     this.error = '';
     this.setSaving(true);

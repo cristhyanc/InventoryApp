@@ -216,6 +216,16 @@ describe('StockAdjustmentFormComponent reason directions (issue #1242)', () => {
     expect(component.error).toContain('Correction, Damaged or Expired');
   });
 
+  it('asks for a positive quantity to add when a Restock has none', () => {
+    const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.Restock;
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toBe('Enter a positive quantity to add.');
+  });
+
   it('asks for a positive quantity to remove when a removal reason has none', () => {
     const { component, adjust } = createHarness();
     component.form.reason = StockAdjustmentReason.Expired;
