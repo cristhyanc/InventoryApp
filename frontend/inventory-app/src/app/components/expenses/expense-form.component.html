@@ -54,7 +54,10 @@
       </div>
     </section>
 
-    <!-- Amounts: three independent inputs, submitted exactly as entered. -->
+    <!--
+      Amounts: three independent inputs, submitted exactly as entered. Since issue #1257 they must
+      add up to within a cent, which is checked and refused here - never calculated or corrected.
+    -->
     <section
       class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
       aria-labelledby="expense-amounts-heading"
@@ -64,26 +67,60 @@
         <h2 id="expense-amounts-heading" class="m-0 text-base font-semibold text-rr-navy">Amounts</h2>
         <p class="m-0 mt-0.5 text-xs text-rr-muted">
           Enter the three amounts exactly as the supplier's document states them. Nothing here is
-          calculated for you.
+          calculated for you, but Amount ex GST plus GST must equal the Total.
         </p>
       </div>
 
       <div class="grid items-start gap-4 sm:grid-cols-3">
         <label class="field">
           <span class="field-label">Amount ex GST</span>
-          <input id="expense-amount-ex-gst" class="min-h-11" type="number" step="0.01" name="amountExGst" [(ngModel)]="form.amountExGst" />
+          <input
+            id="expense-amount-ex-gst"
+            class="min-h-11"
+            type="number"
+            step="0.01"
+            name="amountExGst"
+            [(ngModel)]="form.amountExGst"
+            [attr.aria-invalid]="amountsInvalid"
+            [attr.aria-describedby]="amountsInvalid ? 'expense-amounts-error' : null"
+          />
         </label>
 
         <label class="field">
           <span class="field-label">GST</span>
-          <input id="expense-gst" class="min-h-11" type="number" step="0.01" name="gstAmount" [(ngModel)]="form.gstAmount" />
+          <input
+            id="expense-gst"
+            class="min-h-11"
+            type="number"
+            step="0.01"
+            name="gstAmount"
+            [(ngModel)]="form.gstAmount"
+            [attr.aria-invalid]="amountsInvalid"
+            [attr.aria-describedby]="amountsInvalid ? 'expense-amounts-error' : null"
+          />
         </label>
 
         <label class="field">
           <span class="field-label">Total</span>
-          <input id="expense-total" class="min-h-11" type="number" step="0.01" name="totalAmount" [(ngModel)]="form.totalAmount" />
+          <input
+            id="expense-total"
+            class="min-h-11"
+            type="number"
+            step="0.01"
+            name="totalAmount"
+            [(ngModel)]="form.totalAmount"
+            [attr.aria-invalid]="amountsInvalid"
+            [attr.aria-describedby]="amountsInvalid ? 'expense-amounts-error' : null"
+          />
         </label>
       </div>
+
+      @if (amountsInvalid) {
+        <!-- Not colour alone: the sentence states the rule, and all three inputs name it. -->
+        <p id="expense-amounts-error" class="field-error m-0 mt-3" data-testid="expense-amounts-error">
+          {{ amountsMismatchMessage }}
+        </p>
+      }
     </section>
 
     <!-- Supporting details -->

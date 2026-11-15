@@ -178,8 +178,10 @@ describe("newExpenseFormValue's default date (issue #1171)", () => {
 });
 
 /**
- * The three amounts are independent inputs (issue #1167): the amounts on a supplier's document are
- * the record, so nothing here calculates, rounds or warns, and what is typed is what is submitted.
+ * The three amounts stay three independent inputs (issue #1167): the amounts on a supplier's
+ * document are the record, so nothing here calculates, rounds or fills one in from the other two,
+ * and what is typed is what is submitted. Since issue #1257 they do have to add up, which is
+ * checked rather than corrected.
  */
 describe('ExpenseFormComponent amounts (issue #1167)', () => {
   it('leaves the other two amounts alone when one is typed', async () => {
@@ -191,19 +193,106 @@ describe('ExpenseFormComponent amounts (issue #1167)', () => {
     expect(component.form.totalAmount).toBe(0);
   });
 
-  it('submits the three amounts exactly as entered, mismatch and all', async () => {
+  it('submits the three amounts exactly as entered', async () => {
     const { component, saved } = await render();
 
     component.form.description = 'Repair call-out';
     component.form.amountExGst = 100;
     component.form.gstAmount = 3.33;
-    component.form.totalAmount = 120;
+    component.form.totalAmount = 103.33;
     component.submit();
 
     expect(saved).toHaveLength(1);
     expect(saved[0].payload.amountExGst).toBe(100);
     expect(saved[0].payload.gstAmount).toBe(3.33);
-    expect(saved[0].payload.totalAmount).toBe(120);
+    expect(saved[0].payload.totalAmount).toBe(103.33);
+  });
+});
+
+/**
+ * Issue #1257: the same rule the API enforces, shown here so an operator is told before the
+ * request rather than by it. Nothing is calculated for them - the refusal names what is wrong and
+ * the three amounts stay exactly as typed.
+ */
+describe('ExpenseFormComponent amounts that do not add up (issue #1257)', () => {
+  it('shows the refusal beside the amounts, linked to them, and submits nothing', async () => {
+    const { fixture, component, host, saved } = await render();
+
+    component.form.description = 'Repair call-out';
+    component.form.amountExGst = 100;
+    component.form.gstAmount = 50;
+    component.form.totalAmount = 110;
+    submitButton(host)!.click();
+    fixture.detectChanges();
+
+    const error = host.querySelector('[data-testid="expense-amounts-error"]');
+    expect(error?.textContent?.trim()).toBe('Amount ex GST plus GST must equal the total, within $0.01.');
+    for (const id of ['#expense-amount-ex-gst', '#expense-gst', '#expense-total']) {
+      const input = host.querySelector(id) as HTMLInputElement;
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      expect(input.getAttribute('aria-describedby')).toBe(error?.id);
+    }
+    expect(saved).toEqual([]);
+    expect(component.form.totalAmount).toBe(110);
+  });
+
+  it('accepts a difference of exactly one cent and refuses two', async () => {
+    const { component, saved } = await render();
+
+    component.form.description = 'Insurance';
+    component.form.amountExGst = 10;
+    component.form.gstAmount = 1;
+    component.form.totalAmount = 11.01;
+    component.submit();
+    component.form.totalAmount = 11.02;
+    component.submit();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].payload.totalAmount).toBe(11.01);
+  });
+
+  it('says nothing before the primary action has been pressed', async () => {
+    const { fixture, component, host } = await render();
+
+    component.form.amountExGst = 100;
+    component.form.gstAmount = 50;
+    component.form.totalAmount = 110;
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="expense-amounts-error"]')).toBeNull();
+    expect((host.querySelector('#expense-total') as HTMLInputElement).getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('clears the refusal once the amounts agree', async () => {
+    const { fixture, component, host, saved } = await render();
+
+    component.form.description = 'Insurance';
+    component.form.amountExGst = 100;
+    component.form.gstAmount = 50;
+    component.form.totalAmount = 110;
+    submitButton(host)!.click();
+    component.form.totalAmount = 150;
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="expense-amounts-error"]')).toBeNull();
+    component.submit();
+    expect(saved).toHaveLength(1);
+  });
+
+  /**
+   * A cleared numeric input is `null` through `ngModel`, which is an amount of nothing rather than
+   * a reason to refuse three untouched zeros.
+   */
+  it('reads a cleared amount as nothing', async () => {
+    const { component, saved } = await render();
+
+    component.form.description = 'Insurance';
+    component.form.amountExGst = null as unknown as number;
+    component.form.gstAmount = null as unknown as number;
+    component.form.totalAmount = null as unknown as number;
+    component.submit();
+
+    expect(saved).toHaveLength(1);
   });
 });
 

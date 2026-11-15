@@ -12,6 +12,27 @@ import { OPERATING_EXPENSE_CATEGORIES, expenseCategoryLabel } from './expense-ca
 export const EXPENSE_ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf';
 
 /**
+ * The server's own sentence for an expense whose three amounts do not describe one expense
+ * (issue #1257, `OperatingExpenseDetails.AmountsMustAddUpMessage`). It is repeated here rather than
+ * waited for so the operator is told before the request; the API refuses the same thing either way.
+ */
+export const EXPENSE_AMOUNTS_MISMATCH_MESSAGE = 'Amount ex GST plus GST must equal the total, within $0.01.';
+
+/** How many cents ex GST plus GST may sit from the total and still be the same expense. */
+const EXPENSE_AMOUNT_TOLERANCE_CENTS = 1;
+
+/**
+ * An amount in whole cents. A cleared number input is `null` through `ngModel`, which is an amount
+ * of nothing rather than a reason to refuse. Comparing in cents is what keeps the check off binary
+ * floating point: `10 + 1 - 11.01` is not exactly `-0.01` as a double, and a form that refused a
+ * total an operator had typed correctly would be worse than the inconsistency it is guarding.
+ */
+function amountCents(value: number | null | undefined): number {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+}
+
+/**
  * The expense the form opens with (issue #1167): the fields it submits, plus the two things about a
  * stored expense the form shows but never changes.
  */
@@ -82,9 +103,10 @@ export function newExpenseFormValue(timeZoneId: string | null = null, now: Date 
  * business behaviour exactly:
  *
  * - **The three amounts stay three independent inputs.** Amount ex GST, GST and Total are typed and
- *   submitted exactly as entered - no auto-calculation, no rounding, no assumed GST rate and no
- *   mismatch warning - because the amounts on a supplier's document are the record, and the API
- *   refuses only a negative one.
+ *   submitted exactly as entered - no auto-calculation, no rounding and no assumed GST rate -
+ *   because the amounts on a supplier's document are the record. Since issue #1257 they must add
+ *   up: ex GST plus GST more than a cent from the total is refused here with the API's own
+ *   sentence, and nothing is calculated or corrected for the operator.
  * - **The fields the form has no control for survive an edit.** `siteId`, `servicePeriodStart` and
  *   `servicePeriodEnd` are carried in {@link ExpenseFormValue.payload} and submitted exactly as
  *   loaded, so editing a description can never silently clear an expense's service period.
@@ -103,9 +125,10 @@ export function newExpenseFormValue(timeZoneId: string | null = null, now: Date 
  *   quota are its refusals, and choosing a new file on Edit replaces the stored one, which is the
  *   only thing the API offers - there is no remove.
  *
- * Validation here is the one check the register's card already made - a blank Description is not
- * submitted - except that the refusal is now visible beside the field instead of silent. Every other
- * rule is the server's, and its sentence is shown by the page that owns the request.
+ * Validation here is the check the register's card already made - a blank Description is not
+ * submitted - except that the refusal is now visible beside the field instead of silent, plus the
+ * amounts rule of issue #1257 beside the Amounts section. Every other rule is the server's, and its
+ * sentence is shown by the page that owns the request.
  */
 @Component({
   selector: 'app-expense-form',
@@ -159,6 +182,9 @@ export class ExpenseFormComponent {
 
   readonly categoryLabel = expenseCategoryLabel;
   readonly accept = EXPENSE_ATTACHMENT_ACCEPT;
+
+  /** The sentence an operator reads when the three amounts do not add up (issue #1257). */
+  readonly amountsMismatchMessage = EXPENSE_AMOUNTS_MISMATCH_MESSAGE;
 
   form: OperatingExpensePayload = newExpenseFormValue().payload;
 
@@ -226,6 +252,18 @@ export class ExpenseFormComponent {
     return this.submitAttempted && this.descriptionMissing;
   }
 
+  /** Whether ex GST plus GST is more than a cent away from the total (issue #1257). */
+  get amountsMismatched(): boolean {
+    const difference =
+      amountCents(this.form.amountExGst) + amountCents(this.form.gstAmount) - amountCents(this.form.totalAmount);
+    return Math.abs(difference) > EXPENSE_AMOUNT_TOLERANCE_CENTS;
+  }
+
+  /** Whether that refusal is being shown, which it is only once the operator has pressed Save. */
+  get amountsInvalid(): boolean {
+    return this.submitAttempted && this.amountsMismatched;
+  }
+
   /** The primary action's label, which names the write it would actually make. */
   get submitLabel(): string {
     if (this.saving) {
@@ -237,8 +275,8 @@ export class ExpenseFormComponent {
   /**
    * Whether the primary action is unavailable: while a request is in flight, so a double press
    * sends one request, and while a chosen photo is still being prepared, because the file this
-   * would upload does not exist yet. A blank Description does **not** disable it - pressing it is
-   * what shows the refusal beside the field.
+   * would upload does not exist yet. A blank Description or amounts that do not add up do **not**
+   * disable it - pressing it is what shows the refusal beside the field.
    */
   get submitDisabled(): boolean {
     return this.saving || this.attachmentPreparing;
@@ -258,7 +296,7 @@ export class ExpenseFormComponent {
     this.submitAttempted = true;
     // Checked here as well as disabled or hidden in the template, so the write is actually
     // unavailable rather than merely inert - the endpoint refuses it either way.
-    if (this.readOnly || this.submitDisabled || this.descriptionMissing) {
+    if (this.readOnly || this.submitDisabled || this.descriptionMissing || this.amountsMismatched) {
       return;
     }
 

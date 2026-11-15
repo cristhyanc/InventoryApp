@@ -42,6 +42,59 @@ public class OperatingExpenseDetailsTests
         Assert.Equal(OperatingExpenseDetails.NegativeAmountsMessage, error);
     }
 
+    /// <summary>
+    /// Issue #1257: the three amounts have to describe one expense, because profit uses the total
+    /// and the GST credit uses the GST. A cent of rounding either way is the tolerance a supplier's
+    /// own document legitimately needs; two cents is a typo.
+    /// </summary>
+    [Theory]
+    [InlineData(10, 1, 11)]
+    [InlineData(10, 1, 11.01)]
+    [InlineData(10, 1, 10.99)]
+    [InlineData(100, 10, 110.01)]
+    [InlineData(0, 0, 0)]
+    public void TryCreate_amounts_within_a_cent_of_the_total_succeed(
+        decimal amountExGst, decimal gstAmount, decimal totalAmount)
+    {
+        var created = OperatingExpenseDetails.TryCreate(
+            "Insurance", amountExGst, gstAmount, totalAmount, null, null, out var details, out var error);
+
+        Assert.True(created);
+        Assert.Null(error);
+        Assert.NotNull(details);
+    }
+
+    [Theory]
+    [InlineData(10, 1, 11.02)]
+    [InlineData(10, 1, 10.98)]
+    [InlineData(100, 50, 110)]
+    [InlineData(10, 0, 11)]
+    public void TryCreate_amounts_more_than_a_cent_from_the_total_fail(
+        decimal amountExGst, decimal gstAmount, decimal totalAmount)
+    {
+        var created = OperatingExpenseDetails.TryCreate(
+            "Insurance", amountExGst, gstAmount, totalAmount, null, null, out var details, out var error);
+
+        Assert.False(created);
+        Assert.Null(details);
+        Assert.Equal(OperatingExpenseDetails.AmountsMustAddUpMessage, error);
+    }
+
+    /// <summary>
+    /// A negative amount keeps its own refusal: it is the more specific thing wrong with the
+    /// submission, and the sentence a caller already receives for it does not change.
+    /// </summary>
+    [Fact]
+    public void TryCreate_negative_amount_keeps_its_own_message_even_when_the_amounts_disagree()
+    {
+        var created = OperatingExpenseDetails.TryCreate(
+            "Insurance", -10m, 1m, 11m, null, null, out var details, out var error);
+
+        Assert.False(created);
+        Assert.Null(details);
+        Assert.Equal(OperatingExpenseDetails.NegativeAmountsMessage, error);
+    }
+
     [Fact]
     public void TryCreate_service_period_end_before_start_fails()
     {
