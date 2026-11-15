@@ -22,7 +22,8 @@ public class GetReportExportRowsTests
     private static GetReportExportRows Sut(GetBookkeepingReport? bookkeeping = null, GetTransactionSalesReport? transactions = null,
         Inventory.Application.Reporting.Daily.GetDailyReport? daily = null,
         Inventory.Application.Reporting.Gst.GetGstAccountingAid? gstAccountingAid = null,
-        Inventory.Application.Reporting.Reconciliation.GetReconciliationReport? reconciliationReport = null)
+        Inventory.Application.Reporting.Reconciliation.GetReconciliationReport? reconciliationReport = null,
+        bool? gstRegistered = true)
     {
         bookkeeping ??= new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         transactions ??= new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
@@ -49,7 +50,16 @@ public class GetReportExportRowsTests
                 InventoryApi.Tests.Application.Reporting.Dashboard.FakeDashboardReportFactsProvider.Complete()));
 
         return new GetReportExportRows(bookkeeping, daily, reconciliation, machineProfitability,
-            productProfitability, gst, dashboard, transactions);
+            productProfitability, gst,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(gst, gstRegistered),
+            dashboard, transactions);
+    }
+
+    /// <summary>The bookkeeping export's one data row, by column name (issue #1318).</summary>
+    private static async Task<Dictionary<string, string>> BookkeepingRowAsync(GetReportExportRows sut)
+    {
+        var table = await sut.Handle("bookkeeping", new ReportingFilterDto(), CancellationToken.None);
+        return table.Rows[0].Zip(table.Rows[1]).ToDictionary(pair => pair.First, pair => pair.Second);
     }
 
     [Fact]
@@ -609,5 +619,69 @@ public class GetReportExportRowsTests
         Assert.Equal("78", totalsRow[header.IndexOf("NetReimbursement")]);
         Assert.Equal("4.4", totalsRow[header.IndexOf("NayaxFeeIncGST")]);
         Assert.Equal("4", totalsRow[header.IndexOf("NayaxFeeExGst")]);
+    }
+
+    /// <summary>
+    /// Issue #1318: the bookkeeping download carries the BAS summary its own screen shows, from the
+    /// same shared calculation, so the file and the page cannot say different things about a period.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_bas_summary_for_a_gst_registered_business()
+    {
+        var row = await BookkeepingRowAsync(Sut());
+
+        Assert.Equal("Available", row["BasSummaryStatus"]);
+        Assert.Equal("100", row["BasG1TotalSales"]);
+        Assert.Equal("9.09", row["Bas1AGstOnSales"]);
+        Assert.Equal("0.5", row["Bas1BGstCredits"]);
+        Assert.Equal("0", row["BasGstCreditsFromPurchases"]);
+        Assert.Equal("0.1", row["BasGstCreditsFromOperatingExpenses"]);
+        Assert.Equal("0.4", row["BasGstCreditsFromNayaxFees"]);
+        Assert.Equal("8.59", row["BasEstimatedNetGst"]);
+        Assert.Equal("Payable", row["BasNetGstOutcome"]);
+        Assert.Equal("False", row["BasEstimateIncomplete"]);
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_states_the_bas_figures_agree_with_the_gst_accounting_aid_export()
+    {
+        var sut = Sut();
+        var bookkeepingRow = await BookkeepingRowAsync(sut);
+        var gstTable = await sut.Handle("gst", new ReportingFilterDto(), CancellationToken.None);
+        var gstRow = gstTable.Rows[0].Zip(gstTable.Rows[1]).ToDictionary(pair => pair.First, pair => pair.Second);
+
+        Assert.Equal(gstRow["GstOnSales"], bookkeepingRow["Bas1AGstOnSales"]);
+        Assert.Equal(gstRow["GstOnFees"], bookkeepingRow["BasGstCreditsFromNayaxFees"]);
+        Assert.Equal(gstRow["PurchaseInputGst"], bookkeepingRow["BasGstCreditsFromPurchases"]);
+        Assert.Equal(gstRow["NetGst"], bookkeepingRow["BasEstimatedNetGst"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Bookkeeping_export_writes_no_bas_figure_at_all_for_a_business_that_is_not_registered(bool? registered)
+    {
+        // Empty cells, never zeros: a downloaded zero in a BAS column would be read as a nil BAS by
+        // exactly the reader this file is dangerous for.
+        var row = await BookkeepingRowAsync(Sut(gstRegistered: registered));
+
+        Assert.Equal("NotGstRegistered", row["BasSummaryStatus"]);
+        foreach (var column in new[]
+        {
+            "BasG1TotalSales", "Bas1AGstOnSales", "Bas1BGstCredits", "BasGstCreditsFromPurchases",
+            "BasGstCreditsFromOperatingExpenses", "BasGstCreditsFromNayaxFees", "BasEstimatedNetGst",
+            "BasNetGstOutcome", "BasEstimateIncomplete"
+        })
+            Assert.Equal(string.Empty, row[column]);
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_reports_the_machine_filter_instead_of_a_machine_scoped_bas_estimate()
+    {
+        var table = await Sut().Handle("bookkeeping", new ReportingFilterDto(MachineId: 10), CancellationToken.None);
+        var row = table.Rows[0].Zip(table.Rows[1]).ToDictionary(pair => pair.First, pair => pair.Second);
+
+        Assert.Equal("MachineFiltered", row["BasSummaryStatus"]);
+        Assert.Equal(string.Empty, row["BasEstimatedNetGst"]);
     }
 }

@@ -323,6 +323,9 @@ public class EndpointPlanRequirementTests
         new("ReportsController.Dashboard", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/dashboard
         new("ReportsController.Export", PlanRequirementKind.PerReport), // GET api/reports/{report}/export
         new("ReportsController.Gst", PlanRequirementKind.Declared, PlanFeature.BookkeepingAndGstReports), // GET api/reports/gst
+        // The BAS summary Bookkeeping shows (issue #1318) is a projection of the aid's own run, so
+        // it belongs to the same feature as both reports it draws on.
+        new("ReportsController.GstBasSummary", PlanRequirementKind.Declared, PlanFeature.BookkeepingAndGstReports), // GET api/reports/gst/bas-summary
         new("ReportsController.MachineProfitability", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/machine-profitability
         new("ReportsController.ProductProfitability", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/product-profitability
         new("ReportsController.Reconciliation", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/reconciliation
@@ -583,6 +586,7 @@ public class EndpointPlanRequirementTests
     [Theory]
     [InlineData("ReportsController.Bookkeeping", SubscriptionPlan.Starter)]
     [InlineData("ReportsController.Gst", SubscriptionPlan.Starter)]
+    [InlineData("ReportsController.GstBasSummary", SubscriptionPlan.Starter)]
     [InlineData("ReportsController.Daily", SubscriptionPlan.Pro)]
     [InlineData("ReportsController.Transactions", SubscriptionPlan.Pro)]
     [InlineData("ReportsController.Reconciliation", SubscriptionPlan.Pro)]

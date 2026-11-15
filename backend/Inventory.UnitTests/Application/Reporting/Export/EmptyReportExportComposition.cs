@@ -72,6 +72,8 @@ internal static class EmptyReportExportComposition
         var transactions = new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(
             FakeTransactionSalesReportFactsProvider.Empty(coverage)));
 
-        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst, dashboard, transactions);
+        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(gst),
+            dashboard, transactions);
     }
 }

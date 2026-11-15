@@ -42,10 +42,10 @@ public class ReportsControllerTransactionsTests
             new FakeGetProductProfitabilityReport(new ProductProfitabilityReportDto(default, default, [], new ReportingDataQualityDto())),
             new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete()));
         var getReportExportRows = new GetReportExportRows(bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
         var controller = new ReportsController(getReportExportRows, new ReportExportFileWriter(),
             bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Transactions(new TransactionSalesFilterDto(), CancellationToken.None);
 

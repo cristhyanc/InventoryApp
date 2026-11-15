@@ -78,7 +78,9 @@ public class RemainingReportExportAvailabilityTests
                 [FakeTransactionSalesReportFactsProvider.CompletedCardRow(transactionDate: From.AddDays(1))],
                 coverage: coverage)));
 
-        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst, dashboard, transactions);
+        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(gst),
+            dashboard, transactions);
     }
 
     [Fact]
@@ -285,6 +287,8 @@ public class RemainingReportExportAvailabilityTests
         var transactions = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
 
-        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst, dashboard, transactions);
+        return new GetReportExportRows(bookkeeping, daily, reconciliation, machines, products, gst,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(gst),
+            dashboard, transactions);
     }
 }

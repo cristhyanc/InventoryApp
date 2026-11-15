@@ -513,7 +513,9 @@ public class MoneyReportSydneyBusinessDayTests
         new(Bookkeeping(db), Daily(db), Reconciliation(db),
             new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(
                 db, TestFinancialUseCases.ProcessingFees(db, Sydney), EmptyCommissions())),
-            Products(db), Gst(db), Dashboard(db),
+            Products(db), Gst(db),
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(Gst(db)),
+            Dashboard(db),
             new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db)));
 
     private static async Task<SqliteConnection> CreateSqliteAsync()

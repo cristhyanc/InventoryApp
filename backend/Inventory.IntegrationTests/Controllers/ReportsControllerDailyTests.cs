@@ -42,10 +42,10 @@ public class ReportsControllerDailyTests
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
         var controller = new ReportsController(getReportExportRows, new ReportExportFileWriter(),
             bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Daily(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);

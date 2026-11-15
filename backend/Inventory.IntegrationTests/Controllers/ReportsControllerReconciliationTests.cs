@@ -44,10 +44,10 @@ public class ReportsControllerReconciliationTests
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
         var controller = new ReportsController(getReportExportRows, new ReportExportFileWriter(),
             bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Reconciliation(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);

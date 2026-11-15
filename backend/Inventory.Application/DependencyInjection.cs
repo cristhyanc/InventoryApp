@@ -552,6 +552,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetProductProfitabilityReport>();
         services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<GetGstAccountingAid>();
+        services.AddScoped<IGetGstAccountingAid>(sp => sp.GetRequiredService<GetGstAccountingAid>());
+        // The Bookkeeping BAS summary (issue #1318), a second projection of the aid's one run.
+        services.AddScoped<GetGstBasSummary>();
         services.AddScoped<GetDashboardReport>();
         services.AddScoped<GetInventoryValuationSummary>();
         services.AddScoped<GetDashboardSummary>();

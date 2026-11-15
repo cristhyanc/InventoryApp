@@ -4,6 +4,7 @@ using Inventory.Application;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Sites;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -131,7 +132,8 @@ public class ReportingRegressionTests
             _getDashboardReport = getDashboardReport;
             _getTransactionSalesReport = getTransactionSalesReport;
             _getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
-                getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+                getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid,
+                InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(getGstAccountingAid), getDashboardReport,
                 getTransactionSalesReport);
         }
 
@@ -406,6 +408,16 @@ public class ReportingRegressionTests
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+        // IAuthenticatedActorAccessor is implemented at the InventoryApi boundary (claims parsing
+        // stays there), so a host that composes this graph owes it - exactly as it owes the
+        // per-request business time zone above. The export graph needs it since issue #1318: the
+        // bookkeeping export carries the BAS summary, which resolves the caller's own business
+        // through ICurrentBusinessProvider to read that business's GST registration. Registering
+        // the in-memory fake is what keeps this assertion reading as "every port this use case
+        // graph needs is present" without standing up an HTTP pipeline.
+        services.AddScoped<IAuthenticatedActorAccessor>(
+            _ => InventoryApi.Tests.Application.Tenancy.FakeAuthenticatedActorAccessor.NotAuthenticated());
+        services.AddScoped(_ => TestAppDbContext.DeniedScope());
         services.AddApplicationServices();
         services.AddInfrastructureServices();
 

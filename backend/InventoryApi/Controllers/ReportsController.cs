@@ -51,6 +51,7 @@ public sealed class ReportsController : ControllerBase
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
+    private readonly GetGstBasSummary _getGstBasSummary;
     private readonly GetDashboardReport _getDashboardReport;
     private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
@@ -60,9 +61,11 @@ public sealed class ReportsController : ControllerBase
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
         GetGstAccountingAid getGstAccountingAid,
+        GetGstBasSummary getGstBasSummary,
         GetDashboardReport getDashboardReport,
         GetTransactionSalesReport getTransactionSalesReport)
     {
+        _getGstBasSummary = getGstBasSummary;
         _getReportExportRows = getReportExportRows;
         _reportExportFileWriter = reportExportFileWriter;
         _getBookkeepingReport = getBookkeepingReport;
@@ -93,6 +96,16 @@ public sealed class ReportsController : ControllerBase
     [HttpGet("gst")]
     [RequirePlan(PlanFeature.BookkeepingAndGstReports)]
     public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getGstAccountingAid.Handle(filter, ct);
+    /// <summary>
+    /// The GST and BAS summary Bookkeeping shows for a GST-registered business (issue #1318). It is
+    /// a second projection of the GST accounting aid's own calculation, so it belongs to the same
+    /// plan feature and the same <c>Reports.View</c> capability as the report above; a business that
+    /// is not registered for GST, and a machine-filtered request, are answered <c>200</c> with a
+    /// status and no figures rather than an error.
+    /// </summary>
+    [HttpGet("gst/bas-summary")]
+    [RequirePlan(PlanFeature.BookkeepingAndGstReports)]
+    public Task<GstBasSummaryDto> GstBasSummary([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getGstBasSummary.Handle(filter, ct);
     [HttpGet("dashboard")]
     [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDashboardReport.Handle(filter, ct);
