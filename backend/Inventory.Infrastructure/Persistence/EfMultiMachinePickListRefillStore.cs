@@ -147,8 +147,22 @@ public sealed class EfMultiMachinePickListRefillStore : IMultiMachinePickListRef
             // Saved and replayed per allocation, so the next allocation of the same product is costed
             // against the state this one left rather than the state the batch started from.
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            await _rebuild.RebuildAsync(allocation.ProductId, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                await _rebuild.RebuildAsync(allocation.ProductId, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InventoryCostDataQualityException refusal)
+            {
+                // Re-raised naming this allocation's own machine beside the product the replay
+                // named, so the operator is told which cell of the matrix to repair (issue #1240).
+                // Nothing is committed: the caller owns the transaction and the refusal leaves it
+                // uncommitted, so the allocations before this one are discarded with it.
+                throw await PickListRefillCostRefusal
+                    .NamingMachineAsync(_db, allocation.MachineId, refusal, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
             refill.Lines.Add(new PickListRefillLine

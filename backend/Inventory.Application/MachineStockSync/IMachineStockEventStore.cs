@@ -81,11 +81,33 @@ public sealed record MachineStockRefillRequest(
 public sealed record AppliedMachineRefill(int EventId, int StockAdjustmentId);
 
 /// <summary>
-/// The outcome of one product's batch of refills. A failed batch has recorded nothing at all:
-/// neither any inventory movement nor any event's processed state, and
-/// <see cref="Applied"/> is empty.
+/// Why one product's batch of refills could not be recorded (issue #1240).
+///
+/// <para><see cref="FailureType"/> is a short code for the diagnostic log line - an exception's type
+/// name, or one of the constants here - and never an arbitrary message: a provider exception's own
+/// text can quote what it failed on, and that belongs in neither a log nor a response.</para>
+///
+/// <para><see cref="CostDataQualityMessage"/> is the one failure whose reason is published to the
+/// operator, and it is non-<see langword="null"/> only for that one: the cost replay's refusal is
+/// composed from the caller's own product names and movement ids, says exactly what to repair, and
+/// cannot be repaired by retrying. Every other failure keeps the established generic sentence,
+/// because nothing else here has a message written for a caller.</para>
 /// </summary>
-public sealed record MachineRefillApplication(bool Succeeded, IReadOnlyList<AppliedMachineRefill> Applied);
+public sealed record MachineRefillFailure(string FailureType, string? CostDataQualityMessage)
+{
+    /// <summary>The batch named an event this machine does not have, so nothing was staged.</summary>
+    public const string EventNotFound = "EventNotFound";
+}
+
+/// <summary>
+/// The outcome of one product's batch of refills. A failed batch has recorded nothing at all:
+/// neither any inventory movement nor any event's processed state, <see cref="Applied"/> is empty,
+/// and <see cref="Failure"/> says why (issue #1240). A successful one carries no failure.
+/// </summary>
+public sealed record MachineRefillApplication(
+    bool Succeeded,
+    IReadOnlyList<AppliedMachineRefill> Applied,
+    MachineRefillFailure? Failure = null);
 
 /// <summary>
 /// The write transaction one product's batch of refills runs in (issue #1127). Disposing it without

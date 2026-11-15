@@ -35,14 +35,30 @@ namespace Inventory.Application.MachineStockSync;
 /// outcome - including <c>InsufficientStock</c>, which was decided against the storage left at the
 /// time of the check and stays in the response even when the rollback restores that stock; the event
 /// is still <c>Unprocessed</c> and can simply be retried.</para>
+///
+/// <para><strong>Every failed apply is logged, and one failure explains itself</strong> (issue
+/// #1240). Each event of a rolled-back batch leaves one <c>Warning</c> through
+/// <see cref="IMachineStockSyncLog"/> with its event id and the failure's short code, so a restock
+/// that never lands is no longer invisible to whoever is asked about it. The operator's own result
+/// still carries the established generic sentence, with one exception: a fatal cost data-quality
+/// refusal names the product and what is wrong with its history, because that is a repair the
+/// operator can actually make and a retry cannot.</para>
 /// </summary>
 public sealed class ApplyMachineStockSync
 {
-    private readonly IMachineStockEventStore _store;
+    /// <summary>The established sentence for an event whose write was attempted but not committed.</summary>
+    public const string FailedMessage = "Failed to apply this event; no inventory movement was recorded.";
 
-    public ApplyMachineStockSync(IMachineStockEventStore store)
+    /// <summary>The log's code for a failure the store did not describe at all.</summary>
+    internal const string UnreportedFailure = "Unreported";
+
+    private readonly IMachineStockEventStore _store;
+    private readonly IMachineStockSyncLog _log;
+
+    public ApplyMachineStockSync(IMachineStockEventStore store, IMachineStockSyncLog log)
     {
         _store = store;
+        _log = log;
     }
 
     /// <summary>
@@ -174,7 +190,7 @@ public sealed class ApplyMachineStockSync
         {
             // Returned without committing: the transaction's disposal is what discards every write
             // this batch staged, so each of them reports the same failure and no movement id.
-            ReportFailed(accepted, results);
+            ReportFailed(accepted, results, application.Failure);
             return;
         }
 
@@ -182,12 +198,14 @@ public sealed class ApplyMachineStockSync
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             // A commit that fails is the same failure as a write that fails: nothing this batch
             // staged was committed, the transaction's disposal rolls it back, and the next product
             // is still applied. A cancelled request is not caught here and stops the whole apply.
-            ReportFailed(accepted, results);
+            // Only the exception's type name is carried: a provider's own message can quote the
+            // statement or the data it failed on.
+            ReportFailed(accepted, results, new MachineRefillFailure(exception.GetType().Name, null));
             return;
         }
 
@@ -201,18 +219,36 @@ public sealed class ApplyMachineStockSync
         }
     }
 
-    private static void ReportFailed(
-        IEnumerable<MachineStockRefillRequest> accepted, Dictionary<int, NayaxStockEventApplyResultDto> results)
+    /// <summary>
+    /// Every event whose write this batch staged: one log line each, and the per-event result the
+    /// operator sees. <paramref name="failure"/> is absent only for a store that reports no reason
+    /// at all, which is then logged as <see cref="UnreportedFailure"/> rather than not logged.
+    /// </summary>
+    private void ReportFailed(
+        IEnumerable<MachineStockRefillRequest> accepted,
+        Dictionary<int, NayaxStockEventApplyResultDto> results,
+        MachineRefillFailure? failure)
     {
         foreach (var eventId in accepted.Select(refill => refill.EventId))
         {
-            results[eventId] = Failed(eventId);
+            _log.ApplyFailed(
+                eventId, failure?.FailureType ?? UnreportedFailure, failure?.CostDataQualityMessage);
+            results[eventId] = Failed(eventId, failure?.CostDataQualityMessage);
         }
     }
 
-    /// <summary>The established outcome for an event whose write was attempted but not committed.</summary>
-    internal static NayaxStockEventApplyResultDto Failed(int eventId) =>
-        new(eventId, NayaxStockEventApplyOutcome.Error, "Failed to apply this event; no inventory movement was recorded.", null);
+    /// <summary>
+    /// The established outcome for an event whose write was attempted but not committed, with the
+    /// one reason that is published to the operator appended when there is one (issue #1240). The
+    /// first sentence is unchanged, so what the operator already knows this result means - nothing
+    /// was recorded, the event can be retried - still reads first.
+    /// </summary>
+    internal static NayaxStockEventApplyResultDto Failed(int eventId, string? reason = null) =>
+        new(
+            eventId,
+            NayaxStockEventApplyOutcome.Error,
+            string.IsNullOrWhiteSpace(reason) ? FailedMessage : $"{FailedMessage} {reason}",
+            null);
 
     private static NayaxStockEventApplyResultDto NotFound(int eventId) =>
         new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
