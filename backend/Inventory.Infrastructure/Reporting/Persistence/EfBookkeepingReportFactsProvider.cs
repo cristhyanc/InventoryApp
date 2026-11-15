@@ -3,7 +3,9 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Gst;
 using Inventory.Domain.NayaxSqs;
+using Inventory.Domain.Reporting.Gst;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,8 +22,9 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// resolution are shared with <see cref="EfDailyReportFactsProvider"/>,
 /// <see cref="EfReconciliationReportFactsProvider"/>, and
 /// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.
-/// Its remaining private EF query helpers (receipts, operating expenses) compute the business-wide
-/// delivery/package cost and operating-expense totals bookkeeping's net-profit rule needs; audited
+/// Its remaining private EF query helpers compute the business-wide
+/// delivery/package cost and operating-expense totals bookkeeping's net-profit rule needs, and the
+/// GST rule stored on each sold product, which issue #1255's GST-on-sales rule reads; audited
 /// against every other migrated adapter (issue #92), they have no equivalent to share: machine
 /// profitability's own operating-expense query is a per-machine breakdown with different grouping,
 /// not the same shape (see the reporting migration track in docs/architecture.md).
@@ -55,7 +58,7 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         var isMachineFiltered = machineId.HasValue;
 
         var paymentRows = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
-            .Select(x => new { x.PaymentMethod, x.SettlementValue })
+            .Select(x => new { x.PaymentMethod, x.SettlementValue, x.ProductId })
             .ToListAsync(cancellationToken);
         var classified = paymentRows.GroupBy(x => PaymentMethodClassifier.Classify(x.PaymentMethod))
             .ToDictionary(x => x.Key, x => new { Sales = x.Sum(y => y.SettlementValue), Count = x.Count() });
@@ -63,6 +66,8 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         var cash = classified.GetValueOrDefault(NayaxPaymentType.Cash);
         var unknown = classified.GetValueOrDefault(NayaxPaymentType.Unknown);
         var grossSales = paymentRows.Sum(x => x.SettlementValue);
+        var salesByProductGstRule = await SalesByProductGstRuleAsync(paymentRows
+            .Select(x => (x.ProductId, x.SettlementValue)), cancellationToken);
 
         // Read every status in the same business/date/machine scope before the completed-sale filter
         // removes them (issue #476), so the report can state what it excluded and why. The financial
@@ -107,6 +112,7 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
 
         return new BookkeepingReportFacts(
             GrossSales: grossSales,
+            SalesByProductGstRule: salesByProductGstRule,
             CardSales: card?.Sales ?? 0m,
             CardTransactions: card?.Count ?? 0,
             CashSales: cash?.Sales ?? 0m,
@@ -147,6 +153,41 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             ExcludedByReviewTransactionCount = statusRows.Count(x =>
                 NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };
+    }
+
+    /// <summary>
+    /// The period's completed sales grouped by the GST rule stored on the product each one is
+    /// attributed to (issue #1255), summed from exactly the rows the gross, card and cash totals
+    /// were summed from, so the groups cannot disagree with <c>GrossSales</c>.
+    ///
+    /// <para>The sale's own <c>ProductId</c> is the association, as everywhere else since issue
+    /// #758: nothing is re-derived from a provider product id or a product name. A sale with no
+    /// association has no rule (<c>null</c>), which <c>SalesGstPolicy</c> treats as taxable and
+    /// reports separately - the rule is read from the product, and an unresolved sale has no product
+    /// to read it from.</para>
+    ///
+    /// <para>The rules are read once for the distinct products that actually sold, through the
+    /// ordinary tenant query filters, and the grouping is done in memory for the reason the
+    /// card/cash split already is. The rule is the one stored now: this report tracks no history of
+    /// a product's rule, which the report help states.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<SalesByGstRule>> SalesByProductGstRuleAsync(
+        IEnumerable<(long? ProductId, decimal SettlementValue)> sales, CancellationToken cancellationToken)
+    {
+        var rows = sales.ToList();
+        var productIds = rows.Where(x => x.ProductId.HasValue).Select(x => x.ProductId!.Value).Distinct().ToList();
+        var rules = productIds.Count == 0
+            ? []
+            : await _db.Products.AsNoTracking()
+                .Where(product => productIds.Contains(product.Id))
+                .ToDictionaryAsync(product => product.Id, product => product.GstRule, cancellationToken);
+
+        return rows
+            .GroupBy(x => x.ProductId.HasValue && rules.TryGetValue(x.ProductId.Value, out var rule)
+                ? rule
+                : (GstClassification?)null)
+            .Select(group => new SalesByGstRule(group.Key, group.Sum(x => x.SettlementValue)))
+            .ToList();
     }
 
     private async Task<(decimal Delivery, decimal Package)> ReceiptCostsAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken)

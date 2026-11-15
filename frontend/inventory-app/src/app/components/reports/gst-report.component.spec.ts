@@ -78,6 +78,35 @@ describe('GstReportComponent purchase input GST (issue #432)', () => {
     expect(netGstCard!.value).toBe(-1.23);
   });
 
+  it('shows the GST-free and no-rule sales cards beside taxable sales, exactly as the API returned them', async () => {
+    // Issue #1255's fixture as the aid presents it: $33 of taxable sales inclusive, so $30 ex GST,
+    // $3 of GST-free sales and $22 of sales of products with no rule inside the taxable total.
+    const { host, component } = await render(report({
+      taxableSales: 30, gstFreeSales: 3, noGstRuleSales: 22, gstOnSales: 3, netGst: 1
+    }));
+
+    const cards = component.cards(component.report!);
+    expect(cards.find(card => card.key === 'gst-free-sales')!.value).toBe(3);
+    expect(cards.find(card => card.key === 'no-gst-rule-sales')!.value).toBe(22);
+    expect(cards.find(card => card.key === 'no-gst-rule-sales')!.label)
+      .toBe('Sales of products with no GST rule');
+    const text = host.textContent ?? '';
+    expect(text).toContain('GST-free sales');
+    expect(text).toContain('Sales of products with no GST rule');
+    expect(text).toContain('$22.00');
+  });
+
+  it('states the GST-on-sales rule on the page, including that the rule is read as it stands today', async () => {
+    const { host } = await render(report());
+
+    const rule = host.querySelector('[data-testid="gst-on-sales-rule"]');
+    expect(rule).not.toBeNull();
+    expect(rule!.textContent).toContain('one eleventh of taxable sales');
+    expect(rule!.textContent).toContain('GST rule is GST-free are left out');
+    expect(rule!.textContent).toContain('a product with no GST rule is taxable');
+    expect(rule!.textContent).toContain('as it stands today');
+  });
+
   it('renders the data-quality notes the API supplied', async () => {
     const { host } = await render(report({
       purchaseGstIncomplete: true, purchaseUnresolvedComponentCount: 1, purchaseUnresolvedAmount: 22,

@@ -52,6 +52,29 @@ public record BookkeepingReportDto(
     public decimal AverageSale { get; init; }
 
     /// <summary>
+    /// The GST-inclusive sales <see cref="GstOnSales"/> was taken from: every completed sale in
+    /// scope except those of products whose GST rule is explicitly GST-free (issue #1255). A product
+    /// with no rule at all, and a sale whose product could not be resolved, are taxable and are in
+    /// here. It is a provider-sourced figure and carries
+    /// <see cref="ReportProviderAvailabilityDto.Sales"/>, like <see cref="Sales"/> itself.
+    /// </summary>
+    public decimal TaxableSales { get; init; }
+
+    /// <summary>
+    /// Sales of products whose GST rule is explicitly GST-free, which contribute no GST at all.
+    /// <see cref="TaxableSales"/> plus this is <see cref="Sales"/>.
+    /// </summary>
+    public decimal GstFreeSales { get; init; }
+
+    /// <summary>
+    /// The part of <see cref="TaxableSales"/> that is taxable only because nobody has given those
+    /// products a GST rule - the default every product starts at - plus any sale whose product could
+    /// not be resolved. It is reported on its own so the GST figure never rests invisibly on that
+    /// default: setting those products' rules is what makes it fall.
+    /// </summary>
+    public decimal NoGstRuleSales { get; init; }
+
+    /// <summary>
     /// The reimbursement this period's card sales and Nayax fees say to expect - card sales less
     /// fees including GST, calculated by <c>DashboardReimbursementPolicy</c> (issue #805). It is a
     /// calculation, never an imported amount, and it is deliberately not
@@ -121,7 +144,8 @@ public record BookkeepingReportDto(
     /// (issue #730, parent #329 decision P9). <see cref="ReportProviderAvailabilityDto.Sales"/>
     /// governs <see cref="Sales"/>, <see cref="CardSales"/>, <see cref="CashSales"/>, their
     /// transaction counts, <see cref="CostOfGoods"/>/<see cref="PartialCostOfGoods"/>,
-    /// <see cref="GstOnSales"/>, <see cref="SiteCommission"/> and <see cref="GrossProfit"/>;
+    /// <see cref="GstOnSales"/>, <see cref="TaxableSales"/>, <see cref="GstFreeSales"/>,
+    /// <see cref="NoGstRuleSales"/>, <see cref="SiteCommission"/> and <see cref="GrossProfit"/>;
     /// <see cref="ReportProviderAvailabilityDto.Fees"/> governs
     /// <see cref="Fees"/>, <see cref="NayaxFeesExGst"/>, <see cref="NayaxFeesIncludingGst"/>,
     /// <see cref="GstOnFees"/> and <see cref="ActualReimbursement"/>; and

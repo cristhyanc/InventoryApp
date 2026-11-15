@@ -6,6 +6,12 @@ namespace Inventory.Application.Reporting.Gst;
 /// The GST accounting-aid report contract, shared by <c>GET api/reports/gst</c> and the CSV/XLSX
 /// export so both present identical figures.
 ///
+/// <c>TaxableSales</c> is the GST-<em>exclusive</em> value of the period's taxable sales, and since
+/// issue #1255 "taxable" is each sold product's own GST rule: sales of products whose rule is
+/// explicitly GST-free are in <c>GstFreeSales</c> instead and bear no GST, while a product with no
+/// rule and a sale whose product could not be resolved stay taxable and are also reported, as the
+/// GST-inclusive <see cref="NoGstRuleSales"/>, in <c>TaxableSales</c>.
+///
 /// <c>InventoryPurchaseGst</c> is the period's total purchase input GST: <see cref="PurchaseLineGst"/>
 /// plus <see cref="PurchaseChargeGst"/>. It contains only GST that an explicit classification
 /// resolved (issue #432); unclassified components are reported by
@@ -24,6 +30,16 @@ public record GstAccountingAidDto(
     decimal GstFreeSales = 0m,
     decimal InventoryPurchaseGst = 0m)
 {
+    /// <summary>
+    /// The part of <see cref="TaxableSales"/> that is taxable only because those products carry no
+    /// GST rule - the default every product starts at - plus any sale whose product could not be
+    /// resolved (issue #1255). It is GST-inclusive, like the sales figures bookkeeping shows, and is
+    /// reported on its own so the aid never presents that default as a settled classification.
+    /// Governed by <see cref="ReportProviderAvailabilityDto.Sales"/>, like the taxable and GST-free
+    /// sales it describes.
+    /// </summary>
+    public decimal NoGstRuleSales { get; init; }
+
     public decimal OperatingExpenseGst { get; init; }
 
     /// <summary>Input GST from taxable purchase product lines in the period.</summary>
@@ -56,7 +72,8 @@ public record GstAccountingAidDto(
     /// <summary>
     /// How well recorded provider coverage accounts for this period's provider-sourced GST figures
     /// (issue #730, parent #329 decision P9). <see cref="ReportProviderAvailabilityDto.Sales"/>
-    /// governs <see cref="TaxableSales"/> and <see cref="GstOnSales"/>;
+    /// governs <see cref="TaxableSales"/>, <see cref="GstFreeSales"/>,
+    /// <see cref="NoGstRuleSales"/> and <see cref="GstOnSales"/>;
     /// <see cref="ReportProviderAvailabilityDto.Fees"/> governs <see cref="TaxableFees"/> and
     /// <see cref="GstOnFees"/>.
     ///

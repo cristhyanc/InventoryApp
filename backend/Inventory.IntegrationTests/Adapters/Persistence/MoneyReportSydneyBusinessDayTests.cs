@@ -95,10 +95,11 @@ public class MoneyReportSydneyBusinessDayTests
         var monday = await Gst(db).Handle(Filter(Monday), CancellationToken.None);
         var sunday = await Gst(db).Handle(Filter(Sunday), CancellationToken.None);
 
-        // The aid reports the GST-inclusive sale split into its two parts, so the $3.50 sale is
-        // 3.50/11 of GST on 3.50 - 3.50/11 of taxable sales.
-        Assert.Equal(3.5m / 11m, monday.GstOnSales);
-        Assert.Equal(3.5m - 3.5m / 11m, monday.TaxableSales);
+        // The aid reports the GST-inclusive sale split into its two parts. The sale's product is
+        // unresolved, so it is taxable (issue #1255), and GST on sales is one eleventh of the $3.50
+        // rounded to cents - $0.32 - leaving $3.18 of taxable sales ex GST.
+        Assert.Equal(0.32m, monday.GstOnSales);
+        Assert.Equal(3.18m, monday.TaxableSales);
         Assert.Equal(0m, sunday.TaxableSales);
         Assert.Equal(0m, sunday.GstOnSales);
     }
@@ -290,9 +291,11 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.True(6m == bookkeeping.Sales, $"{scenario}: bookkeeping counted {bookkeeping.Sales}.");
         Assert.Equal(2, bookkeeping.TransactionCount);
         Assert.Equal(1m, bookkeeping.CostOfGoods);
-        Assert.True(6m - 6m / 11m == gst.TaxableSales,
+        // $6 of taxable sales (unresolved products are taxable, issue #1255): $0.55 of GST on sales
+        // rounded to cents, and $5.45 of taxable sales ex GST.
+        Assert.True(5.45m == gst.TaxableSales,
             $"{scenario}: the GST aid counted {gst.TaxableSales} of taxable sales.");
-        Assert.True(6m / 11m == gst.GstOnSales, $"{scenario}: the GST aid counted {gst.GstOnSales} of GST on sales.");
+        Assert.True(0.55m == gst.GstOnSales, $"{scenario}: the GST aid counted {gst.GstOnSales} of GST on sales.");
         Assert.True(6m == dashboard.Sales, $"{scenario}: the dashboard counted {dashboard.Sales}.");
         Assert.True(6m == reconciliation.TotalVendingSales,
             $"{scenario}: reconciliation counted {reconciliation.TotalVendingSales}.");
@@ -425,7 +428,7 @@ public class MoneyReportSydneyBusinessDayTests
         var exports = Exports(db);
 
         Assert.Equal("3.5", await CellAsync(exports, "bookkeeping", Monday, "GrossSales"));
-        Assert.Equal(Invariant(3.5m / 11m), await CellAsync(exports, "gst", Monday, "GstOnSales"));
+        Assert.Equal("0.32", await CellAsync(exports, "gst", Monday, "GstOnSales"));
         Assert.Equal("3.5", await CellAsync(exports, "dashboard", Monday, "Sales"));
         Assert.Equal("3.5", await CellAsync(exports, "reconciliation", Monday, "TotalVendingSales"));
         Assert.Equal("0", await CellAsync(exports, "bookkeeping", Sunday, "GrossSales"));
@@ -439,9 +442,6 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.True(index >= 0, $"The {report} export has no '{column}' column.");
         return table.Rows[1][index];
     }
-
-    private static string Invariant(decimal value) =>
-        value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     private static ReportingFilterDto Filter(DateTime businessDate) => new(From: businessDate, To: businessDate);
 

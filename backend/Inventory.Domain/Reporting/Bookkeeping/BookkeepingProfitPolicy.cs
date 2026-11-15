@@ -1,9 +1,9 @@
 namespace Inventory.Domain.Reporting.Bookkeeping;
 
 /// <summary>
-/// Inputs required to determine bookkeeping profit, margin, net settlement, and GST-on-sales.
-/// All amounts are already-aggregated facts for the reporting period/machine scope; this type
-/// carries no query or persistence behavior.
+/// Inputs required to determine bookkeeping profit, margin and net settlement. All amounts are
+/// already-aggregated facts for the reporting period/machine scope; this type carries no query or
+/// persistence behavior.
 /// </summary>
 public readonly record struct BookkeepingProfitInputs(
     decimal Sales,
@@ -27,14 +27,17 @@ public readonly record struct BookkeepingProfitResult(
     decimal? DirectMarginPercent,
     decimal? NetProfit,
     decimal? NetMarginPercent,
-    decimal NetSettlement,
-    decimal GstOnSales);
+    decimal NetSettlement);
 
 /// <summary>
 /// Direct profit applies when a machine filter is active; net (whole-business) profit applies
 /// otherwise, because shared overhead (receipt delivery/package costs) is not allocated per machine.
 /// Both are gated on complete COGS, no missing Nayax fee rates, and complete commission coverage
 /// for the requested scope.
+///
+/// <para>GST on sales is deliberately not here: since issue #1255 it follows each product's own GST
+/// rule, so it is <c>Inventory.Domain.Reporting.Gst.SalesGstPolicy</c>'s one calculation over the
+/// period's sales split by rule, not a figure this profit policy can derive from a sales total.</para>
 /// </summary>
 public static class BookkeepingProfitPolicy
 {
@@ -68,9 +71,7 @@ public static class BookkeepingProfitPolicy
                 inputs.PartialCostOfGoods + inputs.FeesIncludingGst + inputs.SiteCommission + inputs.ReceiptCosts + inputs.OperatingExpensesTotal)
             : null;
 
-        var gstOnSales = ReportingCalculations.GstFromInclusive(inputs.Sales);
-
         return new BookkeepingProfitResult(grossProfit, isProfitComplete, directProfit, directMarginPercent,
-            netProfit, netMarginPercent, netSettlement, gstOnSales);
+            netProfit, netMarginPercent, netSettlement);
     }
 }
