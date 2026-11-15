@@ -7,6 +7,7 @@ import { Category } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ToastService } from '../../services/toast.service';
 import { apiErrorMessage } from '../shared/api-error-message';
+import { handOffFocusFromRemovedOpener } from '../shared/confirmation-focus';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
@@ -123,7 +124,13 @@ export class CategoryListComponent implements OnInit, OnDestroy {
     this.confirmingCategory = null;
   }
 
-  deleteConfirmed(): void {
+  /**
+   * `opener` is the control the confirmation returned focus to as it closed - this row's own Delete
+   * button. It keeps focus while the delete is in flight, so a refusal leaves it where the user put
+   * it; a success re-reads the list without that row, so focus is handed on to the page heading
+   * rather than dropped on the document body (issue #1277).
+   */
+  deleteConfirmed(opener: HTMLElement | null = null): void {
     if (!this.confirmingCategory) {
       return;
     }
@@ -136,6 +143,7 @@ export class CategoryListComponent implements OnInit, OnDestroy {
           this.startCreate();
         }
         this.load();
+        handOffFocusFromRemovedOpener(opener);
       },
       // Delete is offered unconditionally (issue #737): the API is the only place that knows
       // whether any product still uses the category, so a refusal is explained here rather than
