@@ -11762,6 +11762,40 @@ write their movements as before. All five then rebuild the affected product's co
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
 
+**Each manual adjustment reason moves stock in one direction only (issue #1242).**
+`Inventory.Domain.Stock.ManualStockAdjustmentPolicy` is the one rule, applied by `AdjustStock`
+before anything is written, so a refused combination is a `400` through `DomainExceptionHandler`
+that records no movement and changes no quantity:
+
+| Reason | Allowed quantity change | Refusal |
+| --- | --- | --- |
+| `Restock` | positive, with a non-negative unit cost | `RestockAddsStockMessage` - names the sign and points at Correction, Damaged or Expired for removing stock |
+| `Damaged`, `Expired`, `Sale` | negative | `RemovesStockMessage(reason)` - names the reason and the sign it expects |
+| `Correction` | negative, as it always had to | `CorrectionRemovesStockMessage`, the sentence this policy has always thrown |
+| `MachineRefill` | either sign, including zero | none; see below |
+
+`MachineRefill` is deliberately the one reason that keeps both signs: it is an internal transfer
+whose sign is storage's point of view - negative out to a machine, positive for units returned - and
+it is costing-neutral in both directions (`AGENTS.md` § Inventory and historical costing
+invariants). The direction of the others is a financial rule rather than a form convenience,
+because `WeightedAverageCostReplay` gives a *positive* write-off and a *negative*
+`Restock` no costing effect at all: "Damaged 5", the natural way to type it, added 5 units to
+storage and recorded no loss, and "Restock -4" lowered physical stock while `CostingQuantity` and
+`InventoryValue` stayed where they were, so storage and costing quantities drifted apart from a
+mistyped sign. The replay's treatment of the rows already stored is **unchanged** - re-valuing a
+historical negative `Restock` or positive write-off is a separate decision after a read-only count -
+and the rule binds only what is recorded from now on.
+
+**The Adjust stock form applies the same direction** (`stock-adjustment-form.component.ts`). It
+opens with **no reason chosen** (`Select a reason…`, and Apply is disabled until one is picked), it
+takes a **positive** quantity for every reason that removes stock - Damaged, Expired, Sale and
+Correction - and submits it negative the way Correction alone used to, and for a Restock it requires
+a positive quantity and a unit cost, refusing a negative one in the same sentence the endpoint
+would. The quantity hint follows the chosen reason and no longer offers a negative number as the way
+to remove stock: it names Correction, Damaged and Expired instead. The form still creates no
+movement of its own and the endpoint stays the sole authority (see [Page composition
+boundary](#page-composition-boundary-issue-191)).
+
 **A manual adjustment's stock check runs inside the write lock** (issue #1241).
 `EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
 it stages the movement, because staging it is what reads the stored quantity that
@@ -13939,9 +13973,11 @@ out on the Products list's `rr` scale and changes no request, rule or contract a
   adjustment is saving, and the form ignores a second Apply while the first is in flight. A failed
   save keeps everything entered and shows the server's message. Since this issue the **Machine field
   is enabled only for Machine refill**: changing the reason away from it drops the chosen machine,
-  and the form never submits a machine with another reason. After a successful save the panel
-  closes, a status message is announced, and the product list and the history are re-read with the
-  filters unchanged, so a new movement outside them stays outside the results.
+  and the form never submits a machine with another reason. Since issue #1242 the form opens with
+  **no reason chosen** and each reason moves stock in one direction only; see [Product purchase and
+  restock](#product-purchase-and-restock). After a successful save the panel closes, a status
+  message is announced, and the product list and the history are re-read with the filters
+  unchanged, so a new movement outside them stays outside the results.
 
 Tenant isolation is the central query filter's, as everywhere else: the query adds no `BusinessId`
 predicate of its own, and `EfStockHistoryQueryTests` proves with two synthetic businesses (plus an
@@ -19853,6 +19889,8 @@ files" as the historical record of that slice, not as a test to look for today.
        unchanged. `ManualStockAdjustmentPolicy` validates a manual adjustment request - a Correction
        must remove stock, and a positive Restock must carry a non-negative unit cost - reusing the
        exact messages the former `InventoryApi.Services.StockService.Adjust` inline checks threw.
+       (Issue #1242 later gave **every** reason a fixed direction in that same policy; see
+       [Product purchase and restock](#product-purchase-and-restock).)
        `RestockCostSuggestionPolicy` is the one authoritative restock-cost-suggestion priority (the
        latest purchase unit cost, else the product's average unit cost when valid, else none), given
        already-queried facts; its three `Source` string constants (`"LastPurchase"`/`"AverageUnitCost"`/`"None"`)

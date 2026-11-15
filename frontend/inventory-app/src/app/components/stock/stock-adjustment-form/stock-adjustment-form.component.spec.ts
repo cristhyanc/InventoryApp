@@ -41,6 +41,7 @@ describe('StockAdjustmentFormComponent restock cost', () => {
   it('asks the existing suggestion endpoint once a positive restock quantity is entered', () => {
     const { component, restockCostSuggestion } = createHarness();
 
+    component.form.reason = StockAdjustmentReason.Restock;
     component.form.quantityChange = 12;
     component.onAdjustmentInputsChanged();
 
@@ -53,6 +54,7 @@ describe('StockAdjustmentFormComponent restock cost', () => {
   it('explains that no previous cost is available when the suggestion fails', () => {
     const { component } = createHarness({ suggestion: null });
 
+    component.form.reason = StockAdjustmentReason.Restock;
     component.form.quantityChange = 12;
     component.onAdjustmentInputsChanged();
 
@@ -62,6 +64,7 @@ describe('StockAdjustmentFormComponent restock cost', () => {
 
   it('drops the cost again when the movement stops being a positive restock', () => {
     const { component } = createHarness();
+    component.form.reason = StockAdjustmentReason.Restock;
     component.form.quantityChange = 12;
     component.onAdjustmentInputsChanged();
 
@@ -74,6 +77,7 @@ describe('StockAdjustmentFormComponent restock cost', () => {
 
   it('refuses a positive restock with no unit cost, and a negative one, without calling the API', () => {
     const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.Restock;
     component.form.quantityChange = 12;
     component.onAdjustmentInputsChanged();
     component.form.unitCost = null;
@@ -103,6 +107,9 @@ describe('StockAdjustmentFormComponent restock cost', () => {
 describe('StockAdjustmentFormComponent validation', () => {
   it('refuses a missing or zero quantity', () => {
     const { component, adjust } = createHarness();
+    // A machine refill is the one reason that keeps both directions, so a missing quantity is the
+    // only thing wrong with this submission.
+    component.form.reason = StockAdjustmentReason.MachineRefill;
 
     component.adjust();
     expect(adjust).not.toHaveBeenCalled();
@@ -140,9 +147,167 @@ describe('StockAdjustmentFormComponent validation', () => {
   });
 });
 
+/**
+ * Each reason moves stock in one direction only (issue #1242). The form takes a positive quantity
+ * for every reason that removes stock and sends it negative, the way Correction already did, and a
+ * Restock may only add stock. Nothing steers the operator to a negative Restock any more, and the
+ * form opens with no reason chosen, so "Damaged 5" cannot be recorded as a Restock of 5.
+ */
+describe('StockAdjustmentFormComponent reason directions (issue #1242)', () => {
+  it('opens with no reason selected', () => {
+    const { component } = createHarness();
+
+    expect(component.form.reason).toBeNull();
+  });
+
+  it('cannot be saved until a reason is chosen', () => {
+    const { component, adjust } = createHarness();
+    component.form.quantityChange = 5;
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toBe('Select a reason for this adjustment.');
+  });
+
+  it.each([
+    ['Damaged', StockAdjustmentReason.Damaged],
+    ['Expired', StockAdjustmentReason.Expired],
+    ['Sale', StockAdjustmentReason.Sale],
+    ['Correction', StockAdjustmentReason.Correction]
+  ])('sends a quantity of 5 typed under %s as -5', (_label, reason) => {
+    const { component, adjust } = createHarness();
+    component.form.reason = reason;
+    component.form.quantityChange = 5;
+    component.onAdjustmentInputsChanged();
+
+    // The field keeps the positive number the operator typed.
+    expect(component.form.quantityChange).toBe(5);
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -5, reason, unitCost: null }));
+  });
+
+  it.each([
+    ['Damaged', StockAdjustmentReason.Damaged],
+    ['Expired', StockAdjustmentReason.Expired],
+    ['Sale', StockAdjustmentReason.Sale]
+  ])('keeps a negative quantity typed under %s negative rather than flipping it', (_label, reason) => {
+    const { component, adjust } = createHarness();
+    component.form.reason = reason;
+    component.form.quantityChange = -5;
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -5, reason }));
+  });
+
+  it('refuses a negative Restock and points at the reasons that remove stock', () => {
+    const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.Restock;
+    component.form.quantityChange = -4;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toContain('must add stock');
+    expect(component.error).toContain('Correction, Damaged or Expired');
+  });
+
+  it('asks for a positive quantity to remove when a removal reason has none', () => {
+    const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.Expired;
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toBe('Enter a positive quantity to remove.');
+  });
+
+  it('keeps both directions of a machine refill', () => {
+    const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.form.quantityChange = -3;
+    component.onAdjustmentInputsChanged();
+    component.adjust();
+
+    expect(adjust).toHaveBeenLastCalledWith(7, expect.objectContaining({ quantityChange: -3 }));
+
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.form.quantityChange = 3;
+    component.onAdjustmentInputsChanged();
+    component.adjust();
+
+    expect(adjust).toHaveBeenLastCalledWith(7, expect.objectContaining({ quantityChange: 3 }));
+  });
+
+  describe('rendered', () => {
+    async function render(): Promise<{ host: HTMLElement; component: StockAdjustmentFormComponent; detect: () => void }> {
+      await TestBed.configureTestingModule({
+        imports: [StockAdjustmentFormComponent],
+        providers: [
+          {
+            provide: StockService,
+            useValue: {
+              adjust: jest.fn(() => of({})),
+              restockCostSuggestion: jest.fn(() => of({ unitCost: 1, source: 'LastPurchase', purchaseDate: null }))
+            }
+          },
+          { provide: SupportSessionService, useValue: { active$: of(false) } }
+        ]
+      }).compileComponents();
+
+      const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
+      fixture.componentRef.setInput('productId', 7);
+      fixture.detectChanges();
+      return {
+        host: fixture.nativeElement as HTMLElement,
+        component: fixture.componentInstance,
+        detect: () => fixture.detectChanges()
+      };
+    }
+
+    afterEach(() => TestBed.resetTestingModule());
+
+    it('offers no reason until one is picked, and refuses to save before then', async () => {
+      const { host, component, detect } = await render();
+      const reason = host.querySelector<HTMLSelectElement>('#adjustment-reason')!;
+
+      expect(reason.value).toBe(reason.options[0].value);
+      expect(reason.options[0].textContent?.trim()).toBe('Select a reason…');
+      expect(component.form.reason).toBeNull();
+      expect(host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')?.disabled).toBe(true);
+
+      reason.value = reason.options[1].value; // Restock
+      reason.dispatchEvent(new Event('change'));
+      detect();
+
+      expect(component.form.reason).toBe(StockAdjustmentReason.Restock);
+      expect(host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')?.disabled).toBe(false);
+    });
+
+    it('never suggests a negative Restock and points at the removal reasons instead', async () => {
+      const { host, component, detect } = await render();
+      const hint = () => host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent ?? '';
+
+      component.form.reason = StockAdjustmentReason.Restock;
+      detect();
+      expect(hint()).not.toContain('negative');
+      expect(hint()).toContain('Correction, Damaged or Expired');
+
+      component.form.reason = StockAdjustmentReason.Damaged;
+      detect();
+      expect(hint()).toContain('quantity to remove');
+    });
+  });
+});
+
 describe('StockAdjustmentFormComponent apply outcome', () => {
   it('clears the form and notifies the page on success', () => {
     const { component, adjust, applied } = createHarness();
+    component.form.reason = StockAdjustmentReason.Restock;
     component.form.quantityChange = 5;
     component.onAdjustmentInputsChanged();
     component.form.notes = 'restocked';
@@ -156,7 +321,8 @@ describe('StockAdjustmentFormComponent apply outcome', () => {
     expect(applied).toHaveBeenCalledTimes(1);
     expect(component.form.quantityChange).toBeNull();
     expect(component.form.notes).toBe('');
-    expect(component.form.reason).toBe(StockAdjustmentReason.Restock);
+    // Cleared to no reason, not back to a default one (issue #1242).
+    expect(component.form.reason).toBeNull();
     expect(component.error).toBe('');
     expect(component.saving).toBe(false);
   });
@@ -230,6 +396,10 @@ describe('StockAdjustmentFormComponent write control during a support session (i
     expect(component.sessionActive).toBe(false);
   });
 
+  /**
+   * A reason is chosen in both cases, so the session is the only difference between them: since
+   * issue #1242 Apply is also disabled while no reason is chosen.
+   */
   async function render(sessionActive: Observable<boolean>): Promise<HTMLElement> {
     await TestBed.configureTestingModule({
       imports: [StockAdjustmentFormComponent],
@@ -241,6 +411,7 @@ describe('StockAdjustmentFormComponent write control during a support session (i
 
     const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
     fixture.componentRef.setInput('productId', 7);
+    fixture.componentInstance.form.reason = StockAdjustmentReason.Damaged;
     fixture.detectChanges();
 
     return fixture.nativeElement as HTMLElement;
@@ -404,7 +575,10 @@ describe('StockAdjustmentFormComponent machine applies only to a machine refill 
   it('treats the machine as applicable only while the reason is Machine refill', () => {
     const { component } = createHarness();
 
-    expect(component.form.reason).toBe(StockAdjustmentReason.Restock);
+    expect(component.form.reason).toBeNull();
+    expect(component.machineApplicable).toBe(false);
+
+    component.form.reason = StockAdjustmentReason.Restock;
     expect(component.machineApplicable).toBe(false);
 
     component.form.reason = StockAdjustmentReason.MachineRefill;
@@ -464,7 +638,8 @@ describe('StockAdjustmentFormComponent machine applies only to a machine refill 
       expect(host.querySelector('[data-testid="adjustment-machine-hint"]')?.textContent).toContain('Only a Machine refill');
 
       const reason = host.querySelector<HTMLSelectElement>('#adjustment-reason')!;
-      reason.value = reason.options[5].value;
+      // Option 0 is the "Select a reason…" placeholder (issue #1242), so the six reasons follow it.
+      reason.value = reason.options[6].value;
       reason.dispatchEvent(new Event('change'));
       detect();
       await stable();
@@ -474,10 +649,14 @@ describe('StockAdjustmentFormComponent machine applies only to a machine refill 
       expect(field().disabled).toBe(false);
     });
 
-    it('explains signed quantities', async () => {
-      const { host } = await render();
+    it('explains both directions of a machine refill', async () => {
+      const { host, component, detect } = await render();
+      component.form.reason = StockAdjustmentReason.MachineRefill;
+      detect();
 
-      expect(host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent).toContain('negative number removes');
+      const hint = host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent;
+      expect(hint).toContain('negative number moves units from storage into the machine');
+      expect(hint).toContain('positive number returns them to storage');
     });
   });
 });
