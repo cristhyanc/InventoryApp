@@ -14,6 +14,14 @@
  */
 
 /**
+ * What a list renders one record in: a table row, or a card in a list of cards. Every control of
+ * the record a confirmed delete removes is inside the opener's own one, which is how the handoff
+ * tells "the user moved to Edit on the row that is about to go" from "the user moved somewhere that
+ * will still be there".
+ */
+const RECORD_CONTAINERS = 'tr,li';
+
+/**
  * The page's own heading, as the last place focus can land. A heading carries no tabindex by
  * default, so it is not programmatically focusable until one is added - the same `tabindex="-1"`
  * the landing page's own `#main-content` already uses to be a focus target without joining the tab
@@ -36,18 +44,14 @@ export function focusPageHeading(): void {
  * page's heading.
  *
  * Call it only from such an action's success path, because that is what says the opener is doomed;
- * a refusal leaves focus on the opener, which is still on the row. Focus the user moved somewhere
- * else while the request was in flight is theirs to keep and is left alone.
+ * a refusal leaves focus on the opener, which is still on the row. Focus the user moved outside the
+ * record being removed while the request was in flight is theirs to keep and is left alone.
  */
 export function handOffFocusFromRemovedOpener(
   opener: HTMLElement | null,
   fallback: HTMLElement | null = null
 ): void {
-  const focused = document.activeElement;
-  // Already dropped (the row was removed before this ran), or still on the control that is about to
-  // be removed - the two cases where nobody but this handoff decides where focus ends up.
-  const dropped = !(focused instanceof HTMLElement) || focused === document.body || !focused.isConnected;
-  if (!dropped && focused !== opener) {
+  if (!focusIsThisHandoffsToMove(opener)) {
     return;
   }
 
@@ -57,4 +61,25 @@ export function handOffFocusFromRemovedOpener(
   }
 
   focusPageHeading();
+}
+
+/**
+ * Whether where focus is right now is this handoff's to move. It is in three cases: focus was
+ * already dropped (the row went before this ran); it is still on the opener the dialog returned it
+ * to; or the user moved it to another control of the same record - the row being deleted takes its
+ * Edit button with it just as surely as the Delete button the dialog returned focus to, so leaving
+ * focus there would drop it on the document body a moment later. Focus the user moved outside that
+ * record lands on something that is still there, so it is left exactly where they put it.
+ */
+function focusIsThisHandoffsToMove(opener: HTMLElement | null): boolean {
+  const focused = document.activeElement;
+  if (!(focused instanceof HTMLElement) || focused === document.body || !focused.isConnected) {
+    return true;
+  }
+  if (focused === opener) {
+    return true;
+  }
+
+  const record = opener?.closest(RECORD_CONTAINERS) ?? null;
+  return record !== null && record.contains(focused);
 }

@@ -197,6 +197,13 @@ describe('CategoryListComponent delete vs refusal (issue #737)', () => {
  * document body, where Tab would start again at the top of the page.
  */
 describe('CategoryListComponent focus after a confirmed delete (issue #1277)', () => {
+  /** A control on the one row, by its label: the Delete button the dialog captures, or Edit beside it. */
+  const rowButton = (host: HTMLElement, label: string) =>
+    Array.from(host.querySelectorAll<HTMLButtonElement>('tbody button')).find((b) => b.textContent?.trim() === label)!;
+
+  /** The confirmation's own destructive button, not the row's. */
+  const confirmDelete = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.confirm-modal .btn-danger')!;
+
   it('keeps focus on the row while the delete is in flight, then hands it to the page heading once the reloaded list drops the row', async () => {
     const deleted = new Subject<void>();
     const answers = [[category({ id: 3, name: 'Snacks' })], []];
@@ -205,15 +212,12 @@ describe('CategoryListComponent focus after a confirmed delete (issue #1277)', (
       deleteFn: jest.fn(() => deleted.asObservable())
     });
 
-    const rowDelete = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
+    const rowDelete = rowButton(host, 'Delete');
     rowDelete.focus();
     rowDelete.click();
     fixture.detectChanges();
 
-    const confirmButton = Array.from(host.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Delete' && b.className.includes('btn-danger') && b.closest('.confirm-modal')
-    ) as HTMLButtonElement;
-    confirmButton.click();
+    confirmDelete(host).click();
     fixture.detectChanges();
 
     // The delete has not answered yet: the row is still there, and so is the focus a refusal needs.
@@ -239,16 +243,12 @@ describe('CategoryListComponent focus after a confirmed delete (issue #1277)', (
       deleteFn: jest.fn(() => deleted.asObservable())
     });
 
-    const rowDelete = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
+    const rowDelete = rowButton(host, 'Delete');
     rowDelete.focus();
     rowDelete.click();
     fixture.detectChanges();
 
-    (
-      Array.from(host.querySelectorAll('button')).find(
-        (b) => b.textContent?.trim() === 'Delete' && b.className.includes('btn-danger') && b.closest('.confirm-modal')
-      ) as HTMLButtonElement
-    ).click();
+    confirmDelete(host).click();
     fixture.detectChanges();
 
     deleted.error(new HttpErrorResponse({ status: 409, error: 'Nothing was deleted.' }));
@@ -256,6 +256,69 @@ describe('CategoryListComponent focus after a confirmed delete (issue #1277)', (
 
     expect(host.textContent).toContain('Snacks');
     expect(document.activeElement).toBe(rowDelete);
+  });
+
+  /**
+   * The user confirms and then, while the request is still in flight, Tabs on to Edit on the same
+   * row. That row is about to go, so its Edit button is as doomed as the Delete button the dialog
+   * returned focus to: leaving focus there drops it on the document body a moment later.
+   */
+  it('hands focus to the page heading when the user moved it to another control in the row being deleted', async () => {
+    const deleted = new Subject<void>();
+    const answers = [[category({ id: 3, name: 'Snacks' })], []];
+    const { fixture, host } = await render({
+      getAll: jest.fn(() => of(answers.shift() ?? [])),
+      deleteFn: jest.fn(() => deleted.asObservable())
+    });
+
+    const rowDelete = rowButton(host, 'Delete');
+    rowDelete.focus();
+    rowDelete.click();
+    fixture.detectChanges();
+
+    confirmDelete(host).click();
+    fixture.detectChanges();
+
+    const rowEdit = rowButton(host, 'Edit');
+    rowEdit.focus();
+    expect(document.activeElement).toBe(rowEdit);
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Snacks');
+    const focused = document.activeElement as HTMLElement;
+    expect(focused.tagName).toBe('H1');
+    expect(focused.getAttribute('tabindex')).toBe('-1');
+  });
+
+  /** Focus the user moved outside that row lands on something that stays, so it is theirs to keep. */
+  it('leaves focus the user moved outside the row being deleted where they put it', async () => {
+    const deleted = new Subject<void>();
+    const answers = [[category({ id: 3, name: 'Snacks' })], []];
+    const { fixture, host } = await render({
+      getAll: jest.fn(() => of(answers.shift() ?? [])),
+      deleteFn: jest.fn(() => deleted.asObservable())
+    });
+
+    const rowDelete = rowButton(host, 'Delete');
+    rowDelete.focus();
+    rowDelete.click();
+    fixture.detectChanges();
+
+    confirmDelete(host).click();
+    fixture.detectChanges();
+
+    const nameField = host.querySelector<HTMLInputElement>('#categoryName')!;
+    nameField.focus();
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Snacks');
+    expect(document.activeElement).toBe(nameField);
   });
 });
 

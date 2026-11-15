@@ -980,3 +980,57 @@ describe('SupplierListComponent state kept across the dialog, and the filtered-o
     expect(toasts.success).toHaveBeenCalledWith('Supplier saved. It is hidden by your current search or usage filter.');
   });
 });
+
+/**
+ * Keyboard focus across a confirmed delete (issue #1277). Delete is reached through the row's own
+ * overflow menu, so the control the shared confirmation captures is the one the menu hands focus
+ * back to as it closes - the row's menu trigger. The dialog returns focus there the instant it
+ * closes, which is what a cancelled or a refused delete needs, while the delete is still in flight;
+ * the reloaded register then drops that row, so focus is handed on to the page's own heading rather
+ * than left on a removed trigger, where it would fall to the document body and Tab would start
+ * again at the top of the page.
+ */
+describe('SupplierListComponent focus after a confirmed delete (issue #1277)', () => {
+  it('hands focus to the page heading once the delete succeeds and the reloaded register drops the row', async () => {
+    const deleted = new Subject<void>();
+    // A register read that answers differently per subscription: the reload has no row left.
+    const answers = [[supplier({ id: 1, name: 'Acme Supplies' })], [] as Supplier[]];
+    const listed = new Observable<Supplier[]>((subscriber) => {
+      subscriber.next(answers.shift() ?? []);
+      subscriber.complete();
+    });
+    const { fixture, host } = await renderWith({ listed });
+    const service = TestBed.inject(SupplierService) as unknown as { delete: jest.Mock };
+    service.delete = jest.fn(() => deleted.asObservable());
+
+    const trigger = host.querySelector<HTMLButtonElement>('[data-testid="supplier-actions-1"]')!;
+    const menu = openSupplierMenu(fixture, host, 1);
+    (menu!.querySelector('[data-testid="supplier-delete-1"]') as HTMLButtonElement).click();
+
+    // Choosing the item closed the menu onto its trigger, so that - not the menu item the menu has
+    // just removed - is what has focus as the dialog opens, and so is the opener it captures.
+    expect(document.activeElement).toBe(trigger);
+
+    fixture.detectChanges();
+
+    (host.querySelector('.confirm-modal .btn-danger') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    // The delete has not answered yet: the row is still listed and focus is back on its menu
+    // trigger, which is where a refusal needs it.
+    expect(service.delete).toHaveBeenCalledWith(1);
+    expect(host.querySelector('[data-testid="supplier-actions-1"]')).not.toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="supplier-actions-1"]')).toBeNull();
+    const heading = host.querySelector('h1') as HTMLElement;
+    expect(heading.textContent).toContain('Suppliers');
+    expect(document.activeElement).toBe(heading);
+    // Given a tabindex only because a heading carries none, so it can be focused at all.
+    expect(heading.getAttribute('tabindex')).toBe('-1');
+  });
+});
