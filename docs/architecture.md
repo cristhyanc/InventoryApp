@@ -8886,10 +8886,17 @@ deliberately a cross-check and not a calculation: nothing is rounded, derived or
 is stored is still what the document says. A negative amount keeps its own, more specific refusal.
 `ExpenseFormComponent` applies the same rule before it submits, with the server's own sentence
 beside the Amounts section and `aria-invalid`/`aria-describedby` on all three inputs, so an operator
-is told by the form rather than by the request; it compares in whole cents, which keeps the check off
-binary floating point, and reads a cleared input as nothing rather than as a reason to refuse. The
-form's copy of the rule is a courtesy and never the enforcement: the endpoint refuses the same
-submission whatever a client does with it.
+is told by the form rather than by the request, and reads a cleared input as nothing rather than as a
+reason to refuse. It judges **the three values as entered**, to their last decimal: each amount and
+the tolerance are put on one shared decimal scale and compared as integers (`exactAmount`,
+`amountsFurtherApartThanTolerance`), which keeps the boundary off binary floating point — `1.4 + 0 -
+1.39` is `0.010000000000000009` as a double, a cent the API accepts — and keeps it the API's own
+boundary rather than a stricter or a looser one. Rounding each input to cents first, which the form
+did when the rule arrived, did both: it refused `1.006 + 0.006` against `1.003` (`0.009`, which the
+API accepts) and accepted `1.004 + 0.004` against `0.993` (`0.015`, which the API refuses). The
+`step="0.01"` on the three number inputs is a stepper convenience and never a cent-only contract for
+what is submitted. The form's copy of the rule is a courtesy and never the enforcement: the endpoint
+refuses the same submission whatever a client does with it.
 
 **A processing fee's GST is the GST of the total it was imported with.**
 `Inventory.Domain.FinancialConfiguration.NayaxProcessingFeePolicy` derives one imported fee row's
@@ -8907,11 +8914,13 @@ ex-GST figure and adds `GstFromExcluding` to it, is untouched. See AGENTS.md § 
 and GST for the invariant.
 
 **What proves it.** `OperatingExpenseDetailsTests` covers the rule itself with both boundaries (a
-cent accepted, two cents refused, in both directions) and the negative amount keeping its own
-message; `OperatingExpensesControllerTests` covers the `400` on create and on update with the
-stored expense left exactly as it was, and the cent that is accepted;
+cent accepted, two cents refused, in both directions), the two sub-cent submissions the form is held
+to the same way (`1.006/0.006/1.003` accepted, `1.004/0.004/0.993` refused) and the negative amount
+keeping its own message; `OperatingExpensesControllerTests` covers the `400` on create and on update
+with the stored expense left exactly as it was, and the cent that is accepted;
 `expense-form.component.spec.ts` covers the form's refusal, its wiring to the three inputs, both
-boundaries, that it says nothing before the primary action is pressed, and the cleared input.
+boundaries, the same two sub-cent submissions, the cent that binary floating point puts just over
+the boundary, that it says nothing before the primary action is pressed, and the cleared input.
 `NayaxProcessingFeePolicyTests` covers the inclusive-only fee's three figures and the two shapes
 that are unchanged.
 

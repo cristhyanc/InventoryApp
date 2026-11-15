@@ -251,6 +251,60 @@ describe('ExpenseFormComponent amounts that do not add up (issue #1257)', () => 
     expect(saved[0].payload.totalAmount).toBe(11.01);
   });
 
+  /**
+   * The API compares the three submitted values: `1.006 + 0.006 - 1.003` is `0.009`, inside the
+   * cent, so the request succeeds. Rounding each input to cents on its own made the form refuse it
+   * (`101 + 1 - 100` cents) and block a save the API would have accepted.
+   */
+  it('accepts sub-cent amounts the API accepts', async () => {
+    const { component, saved } = await render();
+
+    component.form.description = 'Bank fee';
+    component.form.amountExGst = 1.006;
+    component.form.gstAmount = 0.006;
+    component.form.totalAmount = 1.003;
+    component.submit();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].payload.amountExGst).toBe(1.006);
+    expect(saved[0].payload.gstAmount).toBe(0.006);
+    expect(saved[0].payload.totalAmount).toBe(1.003);
+  });
+
+  /**
+   * The other direction, which matters more: `1.004 + 0.004 - 0.993` is `0.015`, which the API
+   * refuses. Rounded to cents one by one it read as `100 + 0 - 99`, a single cent, so the form let
+   * a real discrepancy through to be refused by the request instead.
+   */
+  it('refuses sub-cent amounts the API refuses', async () => {
+    const { component, saved } = await render();
+
+    component.form.description = 'Bank fee';
+    component.form.amountExGst = 1.004;
+    component.form.gstAmount = 0.004;
+    component.form.totalAmount = 0.993;
+    component.submit();
+
+    expect(saved).toEqual([]);
+  });
+
+  /**
+   * The boundary itself has to be the decimal one, not the double one: `1.4 + 0 - 1.39` is
+   * `0.010000000000000009` in binary floating point, so comparing the sum directly would refuse a
+   * cent the API accepts.
+   */
+  it('accepts a cent that binary floating point puts just over it', async () => {
+    const { component, saved } = await render();
+
+    component.form.description = 'Insurance';
+    component.form.amountExGst = 1.4;
+    component.form.gstAmount = 0;
+    component.form.totalAmount = 1.39;
+    component.submit();
+
+    expect(saved).toHaveLength(1);
+  });
+
   it('says nothing before the primary action has been pressed', async () => {
     const { fixture, component, host } = await render();
 

@@ -18,18 +18,73 @@ export const EXPENSE_ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.pdf,.webp,.heic,image
  */
 export const EXPENSE_AMOUNTS_MISMATCH_MESSAGE = 'Amount ex GST plus GST must equal the total, within $0.01.';
 
-/** How many cents ex GST plus GST may sit from the total and still be the same expense. */
-const EXPENSE_AMOUNT_TOLERANCE_CENTS = 1;
+/**
+ * An amount held exactly, as `units` of `10^-decimals`: `1.006` is `1006` units of a thousandth.
+ * It is the decimal value itself rather than the double that carries it, which is what lets the
+ * tolerance be compared as integers.
+ */
+interface ExactAmount {
+  readonly units: bigint;
+  readonly decimals: number;
+}
 
 /**
- * An amount in whole cents. A cleared number input is `null` through `ngModel`, which is an amount
- * of nothing rather than a reason to refuse. Comparing in cents is what keeps the check off binary
- * floating point: `10 + 1 - 11.01` is not exactly `-0.01` as a double, and a form that refused a
- * total an operator had typed correctly would be worse than the inconsistency it is guarding.
+ * How far ex GST plus GST may sit from the total and still be the same expense, written exactly as
+ * the server writes it (`OperatingExpenseDetails.AmountTolerance`, `0.01m`).
  */
-function amountCents(value: number | null | undefined): number {
+const EXPENSE_AMOUNT_TOLERANCE: ExactAmount = { units: 1n, decimals: 2 };
+
+/**
+ * The amount exactly as entered, read from the decimal text the number prints - which is the text
+ * the payload sends and therefore the decimal the API compares. A cleared number input is `null`
+ * through `ngModel`, which is an amount of nothing rather than a reason to refuse.
+ */
+function exactAmount(value: number | null | undefined): ExactAmount {
   const amount = Number(value);
-  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+  if (!Number.isFinite(amount)) {
+    return { units: 0n, decimals: 0 };
+  }
+
+  // `toString` is the shortest text that reads back as this double, so it is exactly the number
+  // `JSON.stringify` puts in the request: `1.006`, or `1e-7` for a very small one.
+  const [significand, exponentText] = amount.toString().split('e');
+  const exponent = exponentText === undefined ? 0 : Number(exponentText);
+  const [whole, fraction = ''] = significand.split('.');
+  const units = BigInt(whole + fraction);
+  const decimals = fraction.length - exponent;
+  // A positive exponent (`1e+21`) is a large whole amount, not a negative number of decimals.
+  return decimals < 0 ? { units: units * 10n ** BigInt(-decimals), decimals: 0 } : { units, decimals };
+}
+
+/**
+ * Whether ex GST plus GST is more than the tolerance from the total (issue #1257), judged on the
+ * three values actually submitted. The three amounts and the tolerance are put on one shared
+ * decimal scale and compared as integers, so the boundary is the API's exactly:
+ *
+ * - it is off binary floating point, which cannot hold the boundary - `1.4 + 0 - 1.39` is
+ *   `0.010000000000000009` as a double, a cent the API accepts that a direct comparison refuses;
+ * - and nothing is rounded to cents first, which would refuse `1.006 + 0.006` against `1.003` (a
+ *   difference of `0.009`, which the API accepts) and accept `1.004 + 0.004` against `0.993` (a
+ *   difference of `0.015`, which the API refuses).
+ */
+function amountsFurtherApartThanTolerance(
+  amountExGst: number | null | undefined,
+  gstAmount: number | null | undefined,
+  totalAmount: number | null | undefined
+): boolean {
+  const amounts = [
+    exactAmount(amountExGst),
+    exactAmount(gstAmount),
+    exactAmount(totalAmount),
+    EXPENSE_AMOUNT_TOLERANCE
+  ];
+  const decimals = Math.max(...amounts.map((amount) => amount.decimals));
+  const [exGst, gst, total, tolerance] = amounts.map(
+    (amount) => amount.units * 10n ** BigInt(decimals - amount.decimals)
+  );
+
+  const difference = exGst + gst - total;
+  return (difference < 0n ? -difference : difference) > tolerance;
 }
 
 /**
@@ -106,7 +161,9 @@ export function newExpenseFormValue(timeZoneId: string | null = null, now: Date 
  *   submitted exactly as entered - no auto-calculation, no rounding and no assumed GST rate -
  *   because the amounts on a supplier's document are the record. Since issue #1257 they must add
  *   up: ex GST plus GST more than a cent from the total is refused here with the API's own
- *   sentence, and nothing is calculated or corrected for the operator.
+ *   sentence, and nothing is calculated or corrected for the operator. The refusal is decided on
+ *   the values as entered, down to their last decimal, so it is exactly the API's refusal rather
+ *   than a stricter or a looser one.
  * - **The fields the form has no control for survive an edit.** `siteId`, `servicePeriodStart` and
  *   `servicePeriodEnd` are carried in {@link ExpenseFormValue.payload} and submitted exactly as
  *   loaded, so editing a description can never silently clear an expense's service period.
@@ -252,11 +309,12 @@ export class ExpenseFormComponent {
     return this.submitAttempted && this.descriptionMissing;
   }
 
-  /** Whether ex GST plus GST is more than a cent away from the total (issue #1257). */
+  /**
+   * Whether ex GST plus GST is more than a cent away from the total (issue #1257), decided on the
+   * values as entered so the form refuses exactly what the API refuses.
+   */
   get amountsMismatched(): boolean {
-    const difference =
-      amountCents(this.form.amountExGst) + amountCents(this.form.gstAmount) - amountCents(this.form.totalAmount);
-    return Math.abs(difference) > EXPENSE_AMOUNT_TOLERANCE_CENTS;
+    return amountsFurtherApartThanTolerance(this.form.amountExGst, this.form.gstAmount, this.form.totalAmount);
   }
 
   /** Whether that refusal is being shown, which it is only once the operator has pressed Save. */

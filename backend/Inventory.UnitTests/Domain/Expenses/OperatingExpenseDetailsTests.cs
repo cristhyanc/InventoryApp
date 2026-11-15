@@ -45,13 +45,16 @@ public class OperatingExpenseDetailsTests
     /// <summary>
     /// Issue #1257: the three amounts have to describe one expense, because profit uses the total
     /// and the GST credit uses the GST. A cent of rounding either way is the tolerance a supplier's
-    /// own document legitimately needs; two cents is a typo.
+    /// own document legitimately needs; two cents is a typo. The sub-cent row is the one the
+    /// expense form is held to as well: the rule reads the submitted values, so a difference of
+    /// `0.009` spread over three decimals is inside the tolerance and is accepted here and there.
     /// </summary>
     [Theory]
     [InlineData(10, 1, 11)]
     [InlineData(10, 1, 11.01)]
     [InlineData(10, 1, 10.99)]
     [InlineData(100, 10, 110.01)]
+    [InlineData(1.006, 0.006, 1.003)]
     [InlineData(0, 0, 0)]
     public void TryCreate_amounts_within_a_cent_of_the_total_succeed(
         decimal amountExGst, decimal gstAmount, decimal totalAmount)
@@ -69,6 +72,8 @@ public class OperatingExpenseDetailsTests
     [InlineData(10, 1, 10.98)]
     [InlineData(100, 50, 110)]
     [InlineData(10, 0, 11)]
+    // A sub-cent discrepancy that is still more than a cent (`0.015`), refused here and by the form.
+    [InlineData(1.004, 0.004, 0.993)]
     public void TryCreate_amounts_more_than_a_cent_from_the_total_fail(
         decimal amountExGst, decimal gstAmount, decimal totalAmount)
     {
