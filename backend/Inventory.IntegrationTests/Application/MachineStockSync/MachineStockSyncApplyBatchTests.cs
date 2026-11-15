@@ -48,6 +48,9 @@ public class MachineStockSyncApplyBatchTests
     private const long Water = 201;
     private const long Jerky = 202;
 
+    /// <summary>How <c>ProductLabel</c> names Water in a refusal the operator reads.</summary>
+    private const string WaterLabel = "Nu Pure Spring Water 600mL (201)";
+
     #region One rebuild per product
 
     [Fact]
@@ -293,16 +296,27 @@ public class MachineStockSyncApplyBatchTests
         await db.SaveChangesAsync();
 
         var ids = await EventIdsAsync(db);
-        var result = await Apply(db, ObservedRebuild.Over(db, failingProductId: Water))
+        var log = new RecordingMachineStockSyncLog();
+        var result = await Apply(db, log, ObservedRebuild.Over(db, failingProductId: Water))
             .Handle(Machine, ids, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Results[0].Outcome);
+
+        // Issue #1240 changed what the two refused events are told, and this assertion with it: the
+        // established sentence is kept and the cost replay's own reason is appended to it, because a
+        // fatal history is a repair the operator can make and a retry cannot. Every failed apply is
+        // also logged with its event id and that reason, which was previously written nowhere.
+        var reason = $"Simulated fatal history for product {Water}.";
         Assert.All(result.Results.Skip(1), refused =>
         {
             Assert.Equal(NayaxStockEventApplyOutcome.Error, refused.Outcome);
-            Assert.Equal("Failed to apply this event; no inventory movement was recorded.", refused.Message);
+            Assert.Equal($"{ApplyMachineStockSync.FailedMessage} {reason}", refused.Message);
             Assert.Null(refused.StockAdjustmentId);
         });
+
+        Assert.Equal(
+            [(ids[1], nameof(InventoryCostDataQualityException), reason), (ids[2], nameof(InventoryCostDataQualityException), reason)],
+            log.Failures);
 
         await using var verify = TestAppDbContext.For(options, SellerBusinessId);
         Assert.Equal(7, (await verify.Products.FindAsync(Coke))!.QuantityInStock);
@@ -316,6 +330,52 @@ public class MachineStockSyncApplyBatchTests
                 .Where(x => x.Reason == StockAdjustmentReason.MachineRefill)
                 .Select(x => x.ProductId)
                 .ToListAsync());
+    }
+
+    /// <summary>
+    /// The same failure over a real fatal history rather than a simulated one (issue #1240): the
+    /// blocked product's opening restock carries no unit cost, which is what the field case looks
+    /// like. What the operator is told has to name that product - "something failed" sends them to
+    /// a machine with nothing to look at - and the line in the log has to say the same thing.
+    /// </summary>
+    [Fact]
+    public async Task A_real_cost_refusal_names_the_blocked_product_to_the_operator_and_in_the_log()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
+
+        SeedCostedProduct(db, Coke, "Coke 375mL", 10);
+        SeedUncostableProduct(db, Water, "Nu Pure Spring Water 600mL", 10);
+        SeedEvent(db, 1, Coke, 3);
+        SeedEvent(db, 2, Water, 2);
+        await db.SaveChangesAsync();
+
+        var ids = await EventIdsAsync(db);
+        var log = new RecordingMachineStockSyncLog();
+        var result = await Apply(db, log).Handle(Machine, ids, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Results[0].Outcome);
+
+        var refused = result.Results[1];
+        Assert.Equal(NayaxStockEventApplyOutcome.Error, refused.Outcome);
+        Assert.StartsWith(ApplyMachineStockSync.FailedMessage, refused.Message, StringComparison.Ordinal);
+        Assert.Contains(WaterLabel, refused.Message, StringComparison.Ordinal);
+        Assert.Null(refused.StockAdjustmentId);
+
+        var logged = Assert.Single(log.Failures);
+        Assert.Equal(ids[1], logged.EventId);
+        Assert.Equal(nameof(InventoryCostDataQualityException), logged.FailureType);
+        Assert.Contains(WaterLabel, logged.Reason!, StringComparison.Ordinal);
+
+        // The healthy product beside it is applied and committed; the blocked one keeps its storage
+        // and its event, so recording the missing cost and retrying is all the repair needs to be.
+        await using var verify = TestAppDbContext.For(options, SellerBusinessId);
+        Assert.Equal(7, (await verify.Products.FindAsync(Coke))!.QuantityInStock);
+        Assert.Equal(10, (await verify.Products.FindAsync(Water))!.QuantityInStock);
+        Assert.Equal(
+            [NayaxStockEventProcessingStatus.Applied, NayaxStockEventProcessingStatus.Unprocessed],
+            await verify.NayaxMachineStockEvents.OrderBy(e => e.Id).Select(e => e.ProcessingStatus).ToListAsync());
     }
 
     [Fact]
@@ -488,8 +548,15 @@ public class MachineStockSyncApplyBatchTests
         (result.Outcome, result.Message, result.StockAdjustmentId);
 
     private static ApplyMachineStockSync Apply(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfMachineStockEventStore(
-            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
+        Apply(db, new RecordingMachineStockSyncLog(), rebuild);
+
+    /// <summary>The same use case with the log a test wants to read back (issue #1240).</summary>
+    private static ApplyMachineStockSync Apply(
+        AppDbContext db, RecordingMachineStockSyncLog log, IRebuildProductCost? rebuild = null) =>
+        new(
+            new EfMachineStockEventStore(
+                db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)),
+            log);
 
     private static async Task<List<int>> EventIdsAsync(AppDbContext db) =>
         await db.NayaxMachineStockEvents.AsNoTracking()
@@ -550,6 +617,33 @@ public class MachineStockSyncApplyBatchTests
             QuantityAfter = quantityInStock,
             Reason = StockAdjustmentReason.Restock,
             UnitCost = unitCost,
+            EffectiveAt = EventTime.AddDays(-2),
+        });
+    }
+
+    /// <summary>
+    /// A product whose stock is real but whose cost history is not: a positive opening restock with
+    /// no unit cost at all, which the replay reports as the fatal <c>UnknownCost</c> and refuses to
+    /// rebuild over. It is the history issue #1240 is about, and the one the audit found in the
+    /// field.
+    /// </summary>
+    private static void SeedUncostableProduct(AppDbContext db, long id, string name, int quantityInStock)
+    {
+        db.Products.Add(new Product
+        {
+            Id = id,
+            ExternalProductId = NayaxExternalId.From(id),
+            Name = name,
+            QuantityInStock = quantityInStock,
+        });
+
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = id,
+            QuantityChange = quantityInStock,
+            QuantityAfter = quantityInStock,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = null,
             EffectiveAt = EventTime.AddDays(-2),
         });
     }

@@ -7,6 +7,7 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.MachineStockSync;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -142,7 +143,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            var response = await new ApplyMachineStockSync(Store(db))
+            var response = await new ApplyMachineStockSync(Store(db), new RecordingMachineStockSyncLog())
                 .Handle(Machine, [eventId], CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, response.Results[0].Outcome);
@@ -171,7 +172,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            var result = await new ResolveMachineStockDuplicate(Store(db)).Handle(
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
                 Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
@@ -320,7 +321,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
         await using var db = TestAppDbContext.For(options, BusinessA);
         try
         {
-            var response = await new ApplyMachineStockSync(Store(db))
+            var response = await new ApplyMachineStockSync(Store(db), new RecordingMachineStockSyncLog())
                 .Handle(Machine, [eventId], CancellationToken.None);
             return new ApplyAnswer(response.Results[0], null);
         }
@@ -336,7 +337,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
         await using var db = TestAppDbContext.For(options, BusinessA);
         try
         {
-            var result = await new ResolveMachineStockDuplicate(Store(db)).Handle(
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
                 Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
             return new ApplyAnswer(result, null);
         }

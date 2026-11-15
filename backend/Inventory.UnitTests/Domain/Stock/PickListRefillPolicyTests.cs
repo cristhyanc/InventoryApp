@@ -1,3 +1,4 @@
+using Inventory.Domain.Machines;
 using Inventory.Domain.Stock;
 using Xunit;
 
@@ -321,6 +322,44 @@ public class PickListRefillPolicyTests
         Assert.Single(rejection.Request);
         Assert.Single(rejection.Rows);
         Assert.False(rejection.IsEmpty);
+    }
+
+    #endregion
+
+    #region A row whose product cannot be costed (issue #1240)
+
+    /// <summary>
+    /// The outcome first, then what to repair, then where: a batch is all-or-nothing, so "none of it
+    /// was recorded" is what the operator most needs, and the replay's own sentence - which names
+    /// the product - plus the machine identify the row.
+    /// </summary>
+    [Fact]
+    public void A_cost_history_refusal_states_the_outcome_the_product_and_the_machine()
+    {
+        var message = PickListRefillPolicy.CostHistoryRefusalMessage(
+            "Restock adjustment 12 for product Coke (7) has no valid unit cost.",
+            MachineLabel.Phrase(4, "Front Lobby"));
+
+        Assert.Equal(
+            "Nothing in this pick was recorded. Restock adjustment 12 for product Coke (7) has no "
+                + "valid unit cost. That row was being picked for machine Front Lobby (4).",
+            message);
+    }
+
+    /// <summary>
+    /// A refill that names no machine at all is a refill this contract allows, so the sentence names
+    /// the product alone rather than inventing a machine for it.
+    /// </summary>
+    [Fact]
+    public void A_refill_with_no_machine_names_the_product_alone()
+    {
+        var message = PickListRefillPolicy.CostHistoryRefusalMessage(
+            "Product Coke (7) becomes cost-negative at adjustment 12.", machineLabel: null);
+
+        Assert.Equal(
+            "Nothing in this pick was recorded. Product Coke (7) becomes cost-negative at adjustment 12.",
+            message);
+        Assert.DoesNotContain("machine", message, StringComparison.OrdinalIgnoreCase);
     }
 
     #endregion

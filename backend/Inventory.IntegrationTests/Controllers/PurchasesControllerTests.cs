@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Gst;
@@ -348,6 +349,27 @@ public class PurchasesControllerTests
         Assert.Equal(
             "One or more purchase products do not exist.",
             Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+    }
+
+    /// <summary>
+    /// Issue #1240 mapped <c>InventoryCostDataQualityException</c> centrally to a <c>409</c>, and
+    /// this controller's contract is deliberately unaffected: its own
+    /// <c>catch (InvalidOperationException)</c> runs before any <c>IExceptionHandler</c> does, so a
+    /// purchase refused by a product's fatal cost history keeps the <c>400</c> with that message it
+    /// has always answered with.
+    /// </summary>
+    [Fact]
+    public async Task Update_still_returns_bad_request_for_a_cost_data_quality_refusal()
+    {
+        const string Refusal = "Restock adjustment 12 for product Coke (7) has no valid unit cost.";
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.UpdateAsync(7, It.IsAny<PurchaseFields>(), It.IsAny<IReadOnlyList<PurchaseItemInput>?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InventoryCostDataQualityException(Refusal));
+
+        var result = await CreateController(store.Object)
+            .Update(7, "Updated", null, null, null, null, null, null, null, null, null, null);
+
+        Assert.Equal(Refusal, Assert.IsType<BadRequestObjectResult>(result.Result).Value);
     }
 
     /// <summary>

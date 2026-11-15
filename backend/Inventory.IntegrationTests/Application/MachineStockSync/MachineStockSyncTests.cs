@@ -135,13 +135,15 @@ public class MachineStockSyncTests
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
                 new FakeMachineRestockSyncCoverageStore(),
                 new FakeBusinessCalendar(EventTime)),
-            new ApplyMachineStockSync(store));
+            new ApplyMachineStockSync(store, new RecordingMachineStockSyncLog()));
     }
 
     private static ResolveMachineStockDuplicate ResolveUseCase(
         AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfMachineStockEventStore(
-            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
+        new(
+            new EfMachineStockEventStore(
+                db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)),
+            new RecordingMachineStockSyncLog());
 
     private static ResolveMachineStockEventsAsAlreadyRecorded BulkResolveUseCase(
         AppDbContext db, IRebuildProductCost? rebuild = null) =>

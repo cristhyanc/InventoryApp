@@ -15,10 +15,12 @@ namespace Inventory.Application.MachineStockSync;
 public sealed class ResolveMachineStockDuplicate
 {
     private readonly IMachineStockEventStore _store;
+    private readonly IMachineStockSyncLog _log;
 
-    public ResolveMachineStockDuplicate(IMachineStockEventStore store)
+    public ResolveMachineStockDuplicate(IMachineStockEventStore store, IMachineStockSyncLog log)
     {
         _store = store;
+        _log = log;
     }
 
     public async Task<NayaxStockEventApplyResultDto> Handle(
@@ -166,19 +168,27 @@ public sealed class ResolveMachineStockDuplicate
         if (!application.Succeeded)
         {
             // Returned without committing: the transaction's disposal discards the movement and the
-            // resolution state together, exactly as they would have been written together.
-            return ApplyMachineStockSync.Failed(locked.Id);
+            // resolution state together, exactly as they would have been written together. The
+            // override writes the same refill as an ordinary apply, so it is logged and explains a
+            // cost data-quality refusal in exactly the same way (issue #1240).
+            _log.ApplyFailed(
+                locked.Id,
+                application.Failure?.FailureType ?? ApplyMachineStockSync.UnreportedFailure,
+                application.Failure?.CostDataQualityMessage);
+            return ApplyMachineStockSync.Failed(locked.Id, application.Failure?.CostDataQualityMessage);
         }
 
         try
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             // A failed commit wrote nothing either: the disposal rolls the movement and the
             // resolution back together and the event stays unresolved, so it reports the same
-            // failure. A cancelled request is not caught here.
+            // failure. A cancelled request is not caught here. Only the exception's type name is
+            // carried: a provider's own message can quote the statement or the data it failed on.
+            _log.ApplyFailed(locked.Id, exception.GetType().Name, null);
             return ApplyMachineStockSync.Failed(locked.Id);
         }
 
