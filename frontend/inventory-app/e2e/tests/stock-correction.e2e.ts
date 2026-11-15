@@ -22,7 +22,9 @@ test('a positive correction quantity is persisted as a negative stock movement',
   // The operator chooses Correction and types the quantity to remove as a positive number; the
   // form says so, and must not require a minus sign.
   await page.locator('#adjustment-reason').selectOption({ label: 'Correction' });
-  await expect(page.getByText('It will be recorded as a negative stock correction.')).toBeVisible();
+  await expect(page.getByTestId('adjustment-quantity-hint')).toContainText(
+    'It is recorded as a negative movement'
+  );
   await page.locator('#adjustment-quantity-change').fill('4');
   await page.locator('#adjustment-notes').fill('E2E stock count correction');
   await page.getByTestId('apply-adjustment').click();
