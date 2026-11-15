@@ -8,12 +8,13 @@ import { ProviderAvailabilityService } from '../../provider/provider-availabilit
 import { ReportingFilter, ReportingService, BookkeepingReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
+import { GstBasSummaryComponent } from '../../features/reports/gst/gst-bas-summary.component';
 import { IconComponent } from '../shared/icon.component';
 
 @Component({
   selector: 'app-bookkeeping-report',
   standalone: true,
-  imports: [CommonModule, ReportFiltersComponent, IconComponent],
+  imports: [CommonModule, ReportFiltersComponent, GstBasSummaryComponent, IconComponent],
   template: `
   <div class="page">
     <header class="page-header">
@@ -72,6 +73,12 @@ import { IconComponent } from '../shared/icon.component';
         <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Taxable Sales</span><strong data-testid="taxable-sales">{{ moneyOrState(report.taxableSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>GST-free Sales</span><strong data-testid="gst-free-sales">{{ moneyOrState(report.gstFreeSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Sales of products with no GST rule</span><strong data-testid="no-gst-rule-sales">{{ moneyOrState(report.noGstRuleSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3"><span>GST on Sales</span><strong>{{ moneyOrState(report.gstOnSales, salesAvailability(report)) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">GST on sales is one eleventh of taxable sales (GST-inclusive), taken once from the period total. Sales of products whose GST rule is GST-free are left out; a product with no GST rule is taxable, and those sales are shown above so you can see how much of the total rests on it.</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ moneyOrState(report.gstOnFees, feesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Cash Reconciliation</h2></div><div class="card-body"><div class="flex justify-between"><span>Cash Sales</span><strong data-testid="reconciliation-cash-sales">{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div></div><div class="card-footer">Cash collection data is not currently recorded.</div></section>
       </div>
+      <!--
+        The GST and BAS summary, for a business registered for GST (issue #1318). It owns its own
+        request, so it is a child component and is handed the filter this page actually reported on;
+        a business that is not registered for GST is shown nothing at all, which the server decides.
+      -->
+      <app-gst-bas-summary [filter]="gstSummaryFilter" />
       @if (excludedTransactions(report).length) {
         <section class="card" data-testid="excluded-transactions">
           <div class="card-header"><h2 class="card-title">Transactions excluded from sales</h2></div>
@@ -93,6 +100,7 @@ import { IconComponent } from '../shared/icon.component';
           <p>The expected reimbursement is calculated from this period's card sales less those Nayax fees including GST. The actual reimbursement is not calculated at all: it is the amount an imported Nayax settlement recorded for the period, matched on the transaction period that settlement covers rather than on the date it was paid out or imported. A period with no imported settlement yet is shown as pending rather than compared against a zero.</p>
           <p>GST on sales follows each product's own GST rule. Sales of products whose rule is GST-free are left out of taxable sales; a product with no GST rule yet is taxable, as is a sale whose product could not be matched, and those sales are reported separately so you can see how much of the figure rests on products nobody has classified. GST on sales is then one eleventh of taxable sales, taken once from the period total rather than per sale, so a month of small sales carries no rounding drift.</p>
           <p>Each product's GST rule as it stands today is used: no GST classification is recorded per sale and no history of a product's rule is kept, so changing a product's rule changes what this report says about its past sales. GST on Nayax fees and operating-expense GST come from imported and recorded amounts and are not derived this way.</p>
+          <p>If your business is set to <strong>Registered for GST</strong> in Business Settings, the GST summary above restates these figures under the BAS labels G1, 1A and 1B and shows the estimated net GST for the dates selected. It is the same server calculation the GST / BAS Accounting Aid report uses, so both pages report the same period identically, and it covers the whole business — select all machines to see it. It is an estimate for reviewing the GST section of a BAS, not a lodgement figure: where the figures rest on records that are missing, unclassified or estimated the summary says so.</p>
         </div>
       </details>
     }
@@ -103,6 +111,19 @@ import { IconComponent } from '../shared/icon.component';
 export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport> {
   constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
   request(filter: ReportingFilter): Observable<BookkeepingReport> { return this.reports.bookkeeping(filter); }
+
+  /**
+   * The period and scope the GST summary child reports on (issue #1318). It is set from the filter
+   * this page submits, not from the filter controls as they are edited, so the summary can never
+   * describe a different period from the figures beside it.
+   */
+  gstSummaryFilter: ReportingFilter | null = null;
+
+  override load(): void {
+    this.gstSummaryFilter = { from: this.from, to: this.to, machineId: this.machineId };
+    super.load();
+  }
+
   margin(sales: number, profit: number | null | undefined): number { return sales && profit != null ? profit / sales * 100 : 0; }
   categoryEntries(report: BookkeepingReport): [string, number][] { return Object.entries(report.operatingExpensesByCategory ?? {}); }
   /**

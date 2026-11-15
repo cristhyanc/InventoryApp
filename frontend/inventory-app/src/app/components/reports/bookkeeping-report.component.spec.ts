@@ -31,7 +31,19 @@ const REPORT: BookkeepingReport = {
 
 async function render(overrides: Partial<BookkeepingReport> = {}) {
   const route = {} as unknown as ActivatedRoute;
-  const reports = { bookkeeping: () => of({ ...REPORT, ...overrides }) } as unknown as ReportingService;
+  const reports = {
+    bookkeeping: () => of({ ...REPORT, ...overrides }),
+    // The GST summary child (issue #1318) asks for its own report. These tests are about the
+    // bookkeeping page's own notes and help, so the business is not registered for GST here; the
+    // summary's own spec covers what a registered one sees.
+    gstBasSummary: () => of({
+      from: REPORT.from, to: REPORT.to, status: 'NotGstRegistered', figures: null,
+      dataQuality: {
+        missingStatus: false, historicalCostUnavailable: false, gstClassificationMissing: false,
+        commissionNotPersisted: false, containsUnmappedProducts: false, notes: []
+      }
+    })
+  } as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
 
   await TestBed.configureTestingModule({
@@ -390,7 +402,16 @@ describe('BookkeepingReportComponent GST on sales by product rule (issue #1255)'
 describe('BookkeepingReportComponent stat-card icon tile position (issue #453)', () => {
   it('renders the label/value content before the icon tile in every summary stat card, so the icon sits at the right', async () => {
     const route = {} as unknown as ActivatedRoute;
-    const reports = { bookkeeping: () => of(REPORT) } as unknown as ReportingService;
+    const reports = {
+      bookkeeping: () => of(REPORT),
+      gstBasSummary: () => of({
+        from: REPORT.from, to: REPORT.to, status: 'NotGstRegistered', figures: null,
+        dataQuality: {
+          missingStatus: false, historicalCostUnavailable: false, gstClassificationMissing: false,
+          commissionNotPersisted: false, containsUnmappedProducts: false, notes: []
+        }
+      })
+    } as unknown as ReportingService;
     const machines = { getAll: () => of([]) } as unknown as MachineService;
 
     await TestBed.configureTestingModule({
@@ -415,5 +436,91 @@ describe('BookkeepingReportComponent stat-card icon tile position (issue #453)',
       expect(children[0].classList.contains('stat-card-content')).toBe(true);
       expect(children[children.length - 1].classList.contains('icon-tile')).toBe(true);
     }
+  });
+});
+
+/**
+ * Issue #1318: Bookkeeping composes the GST and BAS summary as a child component and hands it the
+ * period it actually reported on. These tests are about that composition; what the summary itself
+ * renders is `gst-bas-summary.component.spec.ts`.
+ */
+describe('BookkeepingReportComponent GST and BAS summary (issue #1318)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function renderWithSummary(status: 'Available' | 'NotGstRegistered' | 'MachineFiltered') {
+    const gstBasSummary = jest.fn(() => of({
+      from: '2026-01-01T00:00:00',
+      to: '2026-01-31T00:00:00',
+      status,
+      figures: status === 'Available' ? {
+        totalSales: 1000, gstOnSales: 90, gstCredits: 12, purchaseGstCredits: 8,
+        operatingExpenseGstCredits: 2, nayaxFeeGstCredits: 2, netGst: 78, netGstOutcome: 'Payable',
+        isIncomplete: false, gstFreeSales: 0, noGstRuleSales: 0,
+        purchaseUnresolvedComponentCount: 0, purchaseUnresolvedAmount: 0,
+        estimatedFeeGst: 0, feeGstIncludesEstimates: false,
+        providerAvailability: {
+          sales: { state: 'Complete', asOfUtc: null },
+          fees: { state: 'Complete', asOfUtc: null },
+          combined: { state: 'Complete', asOfUtc: null }
+        },
+        netGstAvailability: { state: 'Complete', asOfUtc: null }
+      } : null,
+      dataQuality: {
+        missingStatus: false, historicalCostUnavailable: false, gstClassificationMissing: false,
+        commissionNotPersisted: false, containsUnmappedProducts: false, notes: []
+      }
+    }));
+    const reports = { bookkeeping: () => of(REPORT), gstBasSummary } as unknown as ReportingService;
+
+    await TestBed.configureTestingModule({
+      imports: [BookkeepingReportComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: {} as unknown as ActivatedRoute },
+        { provide: ReportingService, useValue: reports },
+        { provide: MachineService, useValue: { getAll: () => of([]) } as unknown as MachineService },
+        provideNayaxConnectionStatus()
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(BookkeepingReportComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, gstBasSummary };
+  }
+
+  it('shows the GST summary on the page for a GST-registered business', async () => {
+    const { host } = await renderWithSummary('Available');
+
+    expect(host.querySelector('[data-testid="gst-bas-summary"]')).not.toBeNull();
+    expect(host.textContent).toContain('G1 — Total sales');
+    expect(host.textContent).toContain('1A — GST on sales');
+    expect(host.textContent).toContain('1B — GST credits');
+  });
+
+  it('hides the GST summary entirely when the business is not registered for GST', async () => {
+    const { host } = await renderWithSummary('NotGstRegistered');
+
+    expect(host.querySelector('[data-testid="gst-bas-summary"]')).toBeNull();
+    expect(host.textContent).not.toContain('G1 — Total sales');
+  });
+
+  it('prompts for all machines instead of a machine-scoped estimate when a machine filter is active', async () => {
+    const { host } = await renderWithSummary('MachineFiltered');
+
+    expect(host.querySelector('[data-testid="gst-bas-summary"]')).toBeNull();
+    expect(host.querySelector('[data-testid="gst-bas-summary-machine-filtered"]')?.textContent)
+      .toContain('All machines');
+  });
+
+  it('asks for the summary with the period and scope the page itself reported on', async () => {
+    const { fixture, gstBasSummary } = await renderWithSummary('Available');
+    const component = fixture.componentInstance;
+
+    component.from = '2026-02-01';
+    component.to = '2026-02-28';
+    component.machineId = 7;
+    component.load();
+    fixture.detectChanges();
+
+    expect(gstBasSummary).toHaveBeenLastCalledWith({ from: '2026-02-01', to: '2026-02-28', machineId: 7 });
   });
 });

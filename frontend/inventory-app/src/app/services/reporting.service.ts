@@ -14,6 +14,7 @@ import {
 import { MachineReport, MachineRow } from '../features/reports/machine-profitability/models/machine-report.model';
 import { ProductReport, ProductRow } from '../features/reports/product-profitability/models/product-report.model';
 import { GstReport } from '../features/reports/gst/models/gst-report.model';
+import { GstBasSummary } from '../features/reports/gst/models/gst-bas-summary.model';
 import {
   TransactionSalesFilter, TransactionSalesFilterOption, TransactionSalesReport,
   TransactionSalesRow, TransactionSalesTotals,
@@ -26,7 +27,7 @@ export {
   ReportingFilter, ReportQuality, NayaxProcessingFeeResult,
   BookkeepingReport, DashboardReport, DailyRow, DailyTotals, DailyReport,
   ReconciliationPeriod, ReconciliationTotals, ReconciliationReport,
-  MachineRow, MachineReport, ProductRow, ProductReport, GstReport,
+  MachineRow, MachineReport, ProductRow, ProductReport, GstReport, GstBasSummary,
   TransactionSalesFilter, TransactionSalesFilterOption, TransactionSalesRow, TransactionSalesTotals, TransactionSalesReport,
 };
 
@@ -99,6 +100,14 @@ export class ReportingService {
     return this.http.get<SiteCommissionAgreement[]>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`);
   }
   gst(filter: ReportingFilter): Observable<GstReport> { return this.http.get<GstReport>(`${this.baseUrl}/gst`, { params: this.params(filter) }); }
+  /**
+   * The GST and BAS summary Bookkeeping shows for a GST-registered business (issue #1318). The
+   * registration gate and the machine-filter rule are both the server's, so this is called for
+   * every period and the response's own `status` says what to render.
+   */
+  gstBasSummary(filter: ReportingFilter): Observable<GstBasSummary> {
+    return this.http.get<GstBasSummary>(`${this.baseUrl}/gst/bas-summary`, { params: this.params(filter) });
+  }
 
   backfillSaleCosts(dryRun = true, force = false): Observable<SaleCostingBackfillResult> {
     const url = `${this.config.apiBaseUrl.replace(/\/$/, '')}/sale-costing/backfill`;
