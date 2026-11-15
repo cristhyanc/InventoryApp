@@ -1,7 +1,10 @@
+using System.Globalization;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.Gst;
+using Inventory.Domain.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
 using InventoryApi.Tests.Application.Reporting.Shared;
 using InventoryApi.Tests.Application.Reporting.Transactions;
@@ -103,7 +106,7 @@ public class GetReportExportRowsTests
     }
 
     [Fact]
-    public async Task Bookkeeping_export_states_the_gst_on_sales_estimate_basis_even_for_a_clean_period()
+    public async Task Bookkeeping_export_states_the_actual_gst_on_sales_rule_even_for_a_clean_period()
     {
         var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
             FakeBookkeepingReportFactsProvider.Complete()));
@@ -112,10 +115,58 @@ public class GetReportExportRowsTests
         var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
 
         Assert.Equal(string.Empty, Cell(table, "DataQualityNotes"));
-        Assert.Equal(
-            "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).",
-            Cell(table, "GstOnSalesBasis"));
+        // Issue #1255 replaced the "assumes all included sales are taxable" note with the rule the
+        // figure actually follows: one eleventh of taxable sales, GST-free products excluded, no
+        // rule still taxable, and each product's rule as it stands today.
+        var basis = Cell(table, "GstOnSalesBasis");
+        Assert.DoesNotContain("assumes all included sales are taxable", basis);
+        Assert.Contains("one eleventh of taxable sales", basis);
+        Assert.Contains("GST rule is GST-free are excluded", basis);
+        Assert.Contains("products with no GST rule", basis);
+        Assert.Contains("as it stands today", basis);
     }
+
+    /// <summary>
+    /// Issue #1255: both GST-bearing exports carry the sales split the screens show, so a
+    /// downloaded file says which sales the GST figure was taken from. The bookkeeping columns are
+    /// GST-inclusive like every other sales figure in that report; the aid's taxable sales stays the
+    /// ex-GST figure it has always been, with the GST-free and no-rule sales beside it.
+    /// </summary>
+    [Fact]
+    public async Task Gst_bearing_exports_carry_the_taxable_gst_free_and_no_rule_sales_split()
+    {
+        // Issue #1255's fixture: $11 of a taxable product, $3 of a GST-free product and $22 of a
+        // product with no rule.
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 36m, salesByProductGstRule:
+        [
+            new SalesByGstRule(GstClassification.Taxable, 11m),
+            new SalesByGstRule(GstClassification.GstFree, 3m),
+            new SalesByGstRule(GstRules.None, 22m),
+        ]);
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+        var gstAccountingAid = new Inventory.Application.Reporting.Gst.GetGstAccountingAid(bookkeeping,
+            new InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider(
+                InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var sut = Sut(bookkeeping: bookkeeping, gstAccountingAid: gstAccountingAid);
+
+        var bookkeepingTable = await sut.Handle("bookkeeping", filter, CancellationToken.None);
+        var gstTable = await sut.Handle("gst", filter, CancellationToken.None);
+
+        Assert.Equal(33m, Money(bookkeepingTable, "TaxableSales"));
+        Assert.Equal(3m, Money(bookkeepingTable, "GstFreeSales"));
+        Assert.Equal(22m, Money(bookkeepingTable, "SalesWithNoGstRule"));
+        Assert.Equal(3m, Money(bookkeepingTable, "GstOnSales"));
+        // The aid's taxable sales is the ex-GST figure it has always been, over the taxable sales
+        // alone: $33 inclusive less its $3 of GST.
+        Assert.Equal(30m, Money(gstTable, "TaxableSales"));
+        Assert.Equal(3m, Money(gstTable, "GstFreeSales"));
+        Assert.Equal(22m, Money(gstTable, "SalesWithNoGstRule"));
+        Assert.Equal(3m, Money(gstTable, "GstOnSales"));
+    }
+
+    private static decimal Money(ReportExportTable table, string column) =>
+        decimal.Parse(Cell(table, column), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Issue #477: the reconciliation export carries the same scoped diagnostics the API report

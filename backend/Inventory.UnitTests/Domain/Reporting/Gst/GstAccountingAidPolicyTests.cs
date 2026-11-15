@@ -6,19 +6,33 @@ namespace InventoryApi.Tests.Domain.Reporting.Gst;
 public class GstAccountingAidPolicyTests
 {
     [Fact]
-    public void Taxable_sales_is_sales_minus_gst_on_sales()
+    public void Taxable_sales_is_the_inclusive_taxable_sales_minus_gst_on_sales()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 0.5m, OperatingExpenseGst: 0m));
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 0.5m, OperatingExpenseGst: 0m));
 
         Assert.Equal(100m, result.TaxableSales);
+    }
+
+    [Fact]
+    public void Gst_free_sales_are_outside_taxable_sales_because_the_input_is_already_the_taxable_figure()
+    {
+        // Issue #1255's fixture: $11 taxable, $3 GST-free and $22 of a product with no rule. The
+        // bookkeeping report hands the aid the $33 that is taxable, not the $36 that was sold, so a
+        // GST-free product's revenue is in neither the inclusive nor the ex-GST taxable figure.
+        var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
+            TaxableSalesIncludingGst: 33m, GstOnSales: 3m, NayaxFeesExGst: 0m, GstOnFees: 0m,
+            OperatingExpenseGst: 0m));
+
+        Assert.Equal(30m, result.TaxableSales);
+        Assert.Equal(3m, result.NetGst);
     }
 
     [Fact]
     public void Taxable_fees_passes_through_the_bookkeeping_reports_ex_gst_fee_figure()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 0.5m, OperatingExpenseGst: 0m));
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 0.5m, OperatingExpenseGst: 0m));
 
         Assert.Equal(5m, result.TaxableFees);
     }
@@ -27,7 +41,7 @@ public class GstAccountingAidPolicyTests
     public void Net_gst_subtracts_fee_gst_and_operating_expense_gst_from_gst_on_sales()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 2m));
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 2m));
 
         Assert.Equal(7m, result.NetGst);
     }
@@ -36,7 +50,7 @@ public class GstAccountingAidPolicyTests
     public void Net_gst_also_subtracts_purchase_input_gst()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 2m,
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 2m,
             PurchaseInputGst: 3m));
 
         Assert.Equal(4m, result.NetGst);
@@ -47,9 +61,9 @@ public class GstAccountingAidPolicyTests
     {
         // The unresolved amount is reported separately; it never contributes an inferred 1/11.
         var withoutPurchases = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m));
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m));
         var withUnresolvedOnly = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m,
+            TaxableSalesIncludingGst: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m,
             PurchaseInputGst: 0m));
 
         Assert.Equal(withoutPurchases.NetGst, withUnresolvedOnly.NetGst);
@@ -59,7 +73,7 @@ public class GstAccountingAidPolicyTests
     public void Zero_sales_and_zero_gst_figures_produce_zero_taxable_sales_and_zero_net_gst()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 0m, GstOnSales: 0m, NayaxFeesExGst: 0m, GstOnFees: 0m, OperatingExpenseGst: 0m));
+            TaxableSalesIncludingGst: 0m, GstOnSales: 0m, NayaxFeesExGst: 0m, GstOnFees: 0m, OperatingExpenseGst: 0m));
 
         Assert.Equal(0m, result.TaxableSales);
         Assert.Equal(0m, result.TaxableFees);
@@ -70,7 +84,7 @@ public class GstAccountingAidPolicyTests
     public void Fee_and_operating_expense_gst_exceeding_sales_gst_produce_a_negative_net_gst()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: 10m, GstOnSales: 1m, NayaxFeesExGst: 20m, GstOnFees: 2m, OperatingExpenseGst: 3m));
+            TaxableSalesIncludingGst: 10m, GstOnSales: 1m, NayaxFeesExGst: 20m, GstOnFees: 2m, OperatingExpenseGst: 3m));
 
         Assert.Equal(-4m, result.NetGst);
     }

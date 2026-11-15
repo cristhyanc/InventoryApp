@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Reporting.Gst;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
 
@@ -9,6 +10,12 @@ namespace Inventory.Application.Reporting.Bookkeeping;
 /// </summary>
 public sealed record BookkeepingReportFacts(
     decimal GrossSales,
+    // The same completed sales as GrossSales, aggregated by the GST rule stored on the product each
+    // one is attributed to (issue #1255). It is the raw input to SalesGstPolicy, which decides which
+    // rules are taxable; an adapter groups rows and decides nothing. The groups add up to GrossSales
+    // by construction, because they are summed from the same rows, and a group whose rule is null is
+    // one whose product could not be resolved.
+    IReadOnlyList<SalesByGstRule> SalesByProductGstRule,
     decimal CardSales,
     int CardTransactions,
     decimal CashSales,

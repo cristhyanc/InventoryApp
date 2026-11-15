@@ -54,6 +54,11 @@ public class ReportingContractJsonSerializationTests
                 // Added by issue #804, additively: the completed-transaction count behind the
                 // sales total and the average sale over it.
                 "transactionCount", "averageSale",
+                // Added by issue #1255, additively: the sales GST on sales was taken from, the
+                // GST-free sales that bear none, and the part of the taxable total that is taxable
+                // only because those products have no GST rule yet. `sales` above keeps its own
+                // name, type and meaning: it is still every completed sale of the period.
+                "taxableSales", "gstFreeSales", "noGstRuleSales",
                 // Added by issue #805, additively: the calculated expectation, the imported actual,
                 // the signed difference between them and the status/tolerance they were decided
                 // with. `netSettlement` above keeps its own name, type and meaning.
@@ -95,7 +100,12 @@ public class ReportingContractJsonSerializationTests
             new[]
             {
                 "from", "to", "taxableSales", "gstOnSales", "taxableFees", "gstOnFees", "netGst",
-                "dataQuality", "gstFreeSales", "inventoryPurchaseGst", "operatingExpenseGst",
+                "dataQuality", "gstFreeSales", "inventoryPurchaseGst",
+                // Added by issue #1255, additively: the GST-inclusive part of taxable sales that is
+                // taxable only because those products have no GST rule. `gstFreeSales` above was a
+                // reserved, always-zero contract field that the same issue populates.
+                "noGstRuleSales",
+                "operatingExpenseGst",
                 "purchaseLineGst", "purchaseChargeGst", "purchaseUnresolvedComponentCount",
                 "purchaseUnresolvedAmount", "purchaseGstIncomplete",
                 "providerAvailability", "netGstAvailability",

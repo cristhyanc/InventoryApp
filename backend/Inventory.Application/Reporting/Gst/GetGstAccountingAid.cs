@@ -9,7 +9,9 @@ namespace Inventory.Application.Reporting.Gst;
 
 /// <summary>
 /// The GST accounting-aid report use case: reuses the already-migrated bookkeeping report's
-/// GST-on-sales/GST-on-fees figures through <see cref="IGetBookkeepingReport"/>, retrieves the
+/// taxable/GST-free/no-rule sales split and its GST-on-sales/GST-on-fees figures through
+/// <see cref="IGetBookkeepingReport"/> (issue #1255 - one GST-on-sales rule, never a second one
+/// here), retrieves the
 /// imported-summary data-quality facts and the period's purchase GST components through the narrow
 /// <see cref="IGstReportFactsProvider"/> port, applies the Domain GST-derivation policies, and
 /// builds the authoritative <see cref="GstAccountingAidDto"/> consumed by both the API response and
@@ -41,8 +43,11 @@ public sealed class GetGstAccountingAid
 
         var purchases = PurchaseInputGstPolicy.Calculate(facts.Purchases);
 
+        // The sales side comes from bookkeeping's own split by product GST rule (issue #1255), not
+        // from its gross sales: a GST-free product's revenue is neither taxable sales nor part of
+        // the figure GST on sales was taken from.
         var derived = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: bookkeeping.Sales,
+            TaxableSalesIncludingGst: bookkeeping.TaxableSales,
             GstOnSales: bookkeeping.GstOnSales,
             NayaxFeesExGst: bookkeeping.NayaxFeesExGst,
             GstOnFees: bookkeeping.GstOnFees,
@@ -60,7 +65,7 @@ public sealed class GetGstAccountingAid
                 $"{purchases.UnresolvedComponentCount} purchase component(s) totalling {purchases.UnresolvedAmount:0.00} have no GST classification; purchase input GST and net GST are incomplete."));
         if (isMachineFiltered)
             notes.Add("Purchase input GST is a whole-business figure and is not allocated to individual machines, so it is excluded from a machine-filtered report; net GST is incomplete.");
-        AddAvailabilityNote(notes, availability.Sales, "Taxable sales and GST on sales");
+        AddAvailabilityNote(notes, availability.Sales, "Taxable sales, GST-free sales and GST on sales");
         AddAvailabilityNote(notes, availability.Fees, "Taxable Nayax fees and the GST on them");
 
         var quality = Quality(
@@ -77,8 +82,13 @@ public sealed class GetGstAccountingAid
 
         return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
             bookkeeping.GstOnSales, derived.TaxableFees, bookkeeping.GstOnFees, derived.NetGst, quality,
+            GstFreeSales: bookkeeping.GstFreeSales,
             InventoryPurchaseGst: purchases.TotalGst)
         {
+            // The part of the taxable sales above that is taxable only because those products have
+            // no GST rule yet (issue #1255), reported on its own so the aid never presents that
+            // default as a settled classification.
+            NoGstRuleSales = bookkeeping.NoGstRuleSales,
             OperatingExpenseGst = bookkeeping.OperatingExpenseGst,
             PurchaseLineGst = purchases.LineGst,
             PurchaseChargeGst = purchases.ChargeGst,

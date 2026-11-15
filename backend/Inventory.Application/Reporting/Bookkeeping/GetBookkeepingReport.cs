@@ -3,6 +3,7 @@ using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Bookkeeping;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Reporting.Gst;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
 
@@ -45,6 +46,14 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             OperatingExpensesTotal: facts.OperatingExpensesTotal,
             ImportedHasNetSettlement: facts.ImportedHasNetSettlement,
             ImportedNetSettlement: facts.ImportedNetSettlement));
+
+        // GST on sales, from each sold product's own GST rule (issue #1255). Only an explicitly
+        // GST-free product reduces it; a product with no rule and a sale whose product could not be
+        // resolved stay taxable, and the sales that rest on that default are reported separately so
+        // the figure is not silently built on it. The Domain policy is the one place that decides
+        // which rules are taxable and the one place the eleventh is taken, once, from the period's
+        // taxable total.
+        var salesGst = SalesGstPolicy.Calculate(facts.SalesByProductGstRule);
 
         // The expected-versus-actual reimbursement comparison (issue #805), from the same imported
         // settlement facts this report already reads for its fees and net settlement. The policy is
@@ -113,7 +122,7 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
 
         return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
             facts.GrossSales, facts.IsCogsComplete ? facts.PartialCostOfGoods : null, profit.GrossProfit,
-            fees, profit.NetSettlement, profit.GstOnSales, facts.ProcessingFees.TotalFeeGst, quality,
+            fees, profit.NetSettlement, salesGst.GstOnSales, facts.ProcessingFees.TotalFeeGst, quality,
             facts.SiteCommission, profit.NetProfit, profit.NetMarginPercent,
             fees, feesIncludingGst, facts.ReceiptDeliveryCost, facts.ReceiptPackageCost, facts.OperatingExpensesTotal,
             facts.CardSales, facts.CashSales, facts.CardTransactions, facts.CashTransactions,
@@ -128,6 +137,13 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             // rather than dividing by zero. Both are provider-sourced and carry the sales state.
             TransactionCount = facts.TransactionCount,
             AverageSale = ReportingCalculations.Average(facts.GrossSales, facts.TransactionCount),
+            // The sales behind GstOnSales, so a reader can see which part of gross sales it was
+            // taken from (issue #1255). TaxableSales and GstFreeSales add up to Sales, and
+            // NoGstRuleSales is the part of TaxableSales that is taxable only because nobody has
+            // given those products a rule.
+            TaxableSales = salesGst.TaxableSales,
+            GstFreeSales = salesGst.GstFreeSales,
+            NoGstRuleSales = salesGst.NoGstRuleSales,
             // The calculated expectation, the imported actual and the signed difference between
             // them (issue #805). NetSettlement above keeps its own established meaning and is not
             // one of these: it prefers the imported amount when the period has one.
