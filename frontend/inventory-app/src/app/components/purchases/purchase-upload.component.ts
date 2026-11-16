@@ -13,7 +13,8 @@ import {
   SupplierOrder,
   SupplierOrderCompletionPreview
 } from '../../models/models';
-import { PurchaseItemPayload } from '../../services/purchase.service';
+import { PurchaseDuplicateMatch, PurchaseItemPayload } from '../../services/purchase.service';
+import { generateIdempotencyKey } from '../pick-list/idempotency-key';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { isChargePresent } from './gst-classification-options';
@@ -59,6 +60,34 @@ const STORAGE_ALLOWANCE_REFUSAL = 'attachment storage allowance';
 /** Whether a refused save was refused because the receipt does not fit the storage allowance. */
 export function isAttachmentStorageRefusal(message: unknown): boolean {
   return typeof message === 'string' && message.includes(STORAGE_ALLOWANCE_REFUSAL);
+}
+
+/** What is shown when a save is refused and nothing more specific was returned. */
+const SAVE_REFUSED_MESSAGE = 'Failed to add purchase.';
+
+/**
+ * The refusal to show for a failed save. The create endpoint answers its own refusals as a plain
+ * `400` sentence, and the reused-key conflict of issue #1247 as a `409` ProblemDetails document
+ * whose `detail` is the sentence written for the person - so both are shown verbatim, and anything
+ * else falls back to the generic message rather than rendering an object.
+ */
+export function refusalMessage(error: unknown): string {
+  const body = (error as { error?: unknown } | null)?.error;
+  if (typeof body === 'string' && body.trim().length > 0) {
+    return body;
+  }
+
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  return typeof detail === 'string' && detail.trim().length > 0 ? detail : SAVE_REFUSED_MESSAGE;
+}
+
+/**
+ * The sentence shown when the server reports a purchase that already records this supplier, this
+ * invoice number and this date (issue #1247). It names the purchase so the person can go and look,
+ * and says nothing about what they should do: saving anyway is allowed and sometimes right.
+ */
+export function possibleDuplicateMessage(match: PurchaseDuplicateMatch): string {
+  return `A purchase with this supplier, invoice number and date is already recorded: "${match.title}" (#${match.purchaseId}).`;
 }
 
 // Draft item representation where the quantity and either price may be null
@@ -169,6 +198,25 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
    */
   private titleEdited = false;
 
+  /**
+   * The key this form's save is claimed under (issue #1247). It is created when the form opens and
+   * kept through every failed or timed-out attempt, which is what makes a retry safe: if the first
+   * attempt did save the purchase, the server answers with it and nothing is recorded twice; if it
+   * did not, the retry records it. A new key is created only after a save actually succeeds and
+   * whenever the form is reset, because by then the next save is a different purchase.
+   */
+  private idempotencyKey = generateIdempotencyKey();
+
+  /**
+   * The "this looks like a purchase you already recorded" sentence (issue #1247), or `null`. It is
+   * the server's answer, formatted: this page decides nothing about what counts as a duplicate and
+   * never blocks the save.
+   */
+  duplicateWarning: string | null = null;
+
+  /** The in-flight duplicate lookup, cancelled whenever a newer one starts or the form is reset. */
+  private duplicateLookup: Subscription | null = null;
+
   form = {
     title: '',
     notes: '',
@@ -197,6 +245,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+    this.duplicateLookup?.unsubscribe();
   }
 
   ngOnInit(): void {
@@ -254,6 +303,12 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.storageRefusedReceipt = false;
     this.error = '';
     this.saving = false;
+    // A reset form is a different purchase, so it is saved under a key of its own (issue #1247),
+    // and nothing is yet known about whether it looks like one already recorded.
+    this.idempotencyKey = generateIdempotencyKey();
+    this.duplicateLookup?.unsubscribe();
+    this.duplicateLookup = null;
+    this.duplicateWarning = null;
 
     this.form = {
       title: '',
@@ -280,11 +335,50 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.refreshSuggestedTitle();
   }
 
+  /**
+   * The supplier or the purchase date changed. Both feed a title the person has not typed, and both
+   * are part of what makes this purchase look like one already recorded (issue #1247).
+   */
+  onDetailsChange(): void {
+    this.refreshSuggestedTitle();
+    this.checkForPossibleDuplicate();
+  }
+
   /** The supplier or the date changed, so a title the person has not typed follows them. */
   refreshSuggestedTitle(): void {
     if (this.titleEdited) return;
     const supplier = this.suppliers.find((s) => s.id === this.form.supplierId);
     this.form.title = purchaseTitleSuggestion(supplier?.name ?? null, this.form.purchaseDate);
+  }
+
+  /**
+   * Asks the server whether a purchase with this supplier, this invoice number and this date is
+   * already recorded (issue #1247), and shows what it answers.
+   *
+   * It is a warning and nothing else: it never blocks Save, it is never waited for, and a failed
+   * lookup simply shows nothing - a purchase must be recordable when this question cannot be asked.
+   * The server decides what counts as a match, including which day the date falls on in the
+   * business's own calendar.
+   */
+  checkForPossibleDuplicate(): void {
+    this.duplicateLookup?.unsubscribe();
+    this.duplicateWarning = null;
+
+    const supplierId = this.form.supplierId === '' ? null : this.form.supplierId;
+    const invoiceNumber = this.form.invoiceNumber.trim() || null;
+    const purchaseDate = this.purchaseTimestamp();
+    if (supplierId === null || invoiceNumber === null || purchaseDate === null) {
+      return;
+    }
+
+    this.duplicateLookup = this.purchaseService
+      .possibleDuplicate(supplierId, invoiceNumber, purchaseDate)
+      .subscribe({
+        next: (match) => {
+          this.duplicateWarning = match === null ? null : possibleDuplicateMessage(match);
+        },
+        error: () => (this.duplicateWarning = null)
+      });
   }
 
   /** The person typed a title of their own, which no suggestion may replace from now on. */
@@ -378,6 +472,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     // The supplier and the date may both have moved, and a title nobody typed follows them.
     this.refreshSuggestedTitle();
+
+    // The same receipt scanned twice is exactly what the duplicate warning is for (issue #1247),
+    // and a scan fills the supplier, the invoice number and the date without anybody typing - so
+    // the question is asked here rather than waiting for a field to be left.
+    this.checkForPossibleDuplicate();
 
     // The lines are not the ones any completion projection was made against, so the question is
     // asked again rather than a stale fingerprint being resubmitted (issue #974).
@@ -503,10 +602,18 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
         items: validItems,
         completeSupplierOrderId: this.completionDecision?.supplierOrderId ?? null,
-        completeSupplierOrderFingerprint: this.completionDecision?.fingerprint ?? null
+        completeSupplierOrderFingerprint: this.completionDecision?.fingerprint ?? null,
+        // The same key for every attempt at this purchase (issue #1247), so a retry after a
+        // timeout is answered with the purchase the first attempt saved rather than saving a
+        // second one.
+        idempotencyKey: this.idempotencyKey
       })
       .subscribe({
         next: () => {
+          // The purchase is saved, so the key is spent: the next save this form makes - after a
+          // reset, or on a page it navigates back to - is a different purchase and gets its own.
+          this.idempotencyKey = generateIdempotencyKey();
+
           // Only now, after the server stored it, is a completion reported as having happened.
           if (this.completionDecision) {
             this.toastService.success('Purchase created and the supplier order completed.');
@@ -520,7 +627,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
           }
         },
         error: (err) => {
-          this.error = err?.error ?? 'Failed to add purchase.';
+          // The endpoint answers most refusals as a plain sentence and the reused-key conflict as a
+          // ProblemDetails document (issue #1247); both are shown as they were written. The key is
+          // deliberately left alone: a refused save recorded nothing, so the same key is still the
+          // right one for the next attempt at this purchase.
+          this.error = refusalMessage(err);
           this.saving = false;
           // The receipt is what was refused, not the purchase (issue #968): everything entered stays
           // on screen and the purchase is offered without the document, which it is allowed to have

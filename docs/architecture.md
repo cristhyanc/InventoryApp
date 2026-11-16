@@ -11942,6 +11942,84 @@ client-side filter/paging.
    same transaction and without recording anything for the goods that never arrived (see
    [Completing a partially delivered supplier order](#completing-a-partially-delivered-supplier-order-issue-974)).
 
+**A purchase create may carry an idempotency key, and a retry under one saves nothing twice (issue
+#1247).** Create records the purchase, its lines, one restock movement per line and the cost rebuild
+those movements cause, so a phone that lost the response and retried - or an operator who pressed
+Save twice on one receipt - used to record all of it again and double the stock and inventory value
+of every product on it. The form now sends an opaque `idempotencyKey` form field with the create,
+following the pick list's pattern (`PickListRefillPolicy`, `PickListRefillFingerprint`):
+
+- **Same key, same content** answers `201` with the purchase the first request saved and writes
+  nothing at all - no purchase, no line, no movement, no cost rebuild and no document.
+- **Same key, different content** is `409` with
+  `Inventory.Domain.Purchases.PurchaseIdempotencyPolicy.KeyReusedMessage` ("This purchase was
+  already saved with different details. Reload the page.", the repository owner's decision of 14
+  November 2026), also writing nothing. Returning the first purchase instead would hide a purchase
+  the operator believes they saved.
+- **No key** is the create that always existed, which is what every client that predates the issue
+  sends. The column is nullable and its unique index is filtered to the rows that carry one.
+
+What "the same content" means is `Inventory.Domain.Purchases.PurchaseCreateFingerprint`: a SHA-256
+over the request **as submitted** - title, notes, invoice number, the receipt total and both
+charges with their classifications, the purchase date, the supplier, the document's name, length and
+digest, the supplier-order completion decision, and every line's product, quantity, unit cost and
+classification in the order they were sent. It renders no value this server resolved (the clock's
+default purchase date, the file-name title fallback), because a default would make two identical
+retries render differently and turn the second into a conflict. Lines are *not* sorted: a purchase
+may legitimately hold two lines for one product, so there is no total ordering to sort into.
+
+**The document is compared by its own bytes.** A name and a byte count do not identify a receipt -
+a phone that names every photo the same way submits two different ones of the same size as a matter
+of course - so `UploadPurchase` hashes the upload (SHA-256) and renders that digest into the
+fingerprint, and a *different* receipt under a spent key is refused rather than replayed as the
+first purchase. The hash is read through a stream of its own and that stream is closed again, so the
+bytes storage writes are read from a stream opened fresh and nothing the document needs is consumed;
+it is computed **only when the request carries a key**, because a digest exists to be compared with
+one stored beside a key, so a create with no key never opens the upload a second time.
+
+**The claim is taken inside the write transaction, and that is the point.** `UploadPurchase` reads
+the key first, before storage is reserved and before a byte of the document is written, so an
+ordinary retry costs no storage - but that read is only the cheap half. `EfPurchaseStore.CreateAsync`
+opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) whenever a key is present and re-reads the key
+inside it, so two copies of one submission arriving together are serialised: the loser waits, reads
+the winner's committed purchase and is answered with it, having written nothing. The filtered
+per-business unique index on `(BusinessId, IdempotencyKey)` is the backstop under that claim, and
+`EfPurchaseStore` translates its violation into the same `409` rather than a `500`. When the store
+replays, the use case removes the bytes and the storage reservation its own attempt had staged, the
+same way a failed save does. Keys are tenant-owned: two businesses may choose the same string, and
+one business's key never finds another's purchase. `PurchaseCreateConcurrencyTests` proves the race
+on a real SQLite file with two connections; `PurchaseIdempotencyApiTests` proves the contract over
+HTTP.
+
+**A keyed create and its replay are one projection.** "The same response" has to hold as it is
+serialized, not merely as a row: a create answered from the entity the write built renders the
+purchase date as the instant the request handed over (a UTC value, with the `Z` SQLite's stored value
+does not carry) and carries whichever navigations the write happened to load, while a replay is an
+ordinary read of the stored row. `EfPurchaseStore.CreateAsync` therefore reads a keyed create's
+purchase back through the same includes every read uses and answers with that, so an unchanged
+request receives the same purchase from both paths - a purchase dated exactly on a business-day
+boundary included. A create with **no** key is projected exactly as it always was, which is the
+backwards-compatible behaviour that criterion asks for.
+
+**The form keeps one key per purchase.** `PurchaseUploadComponent` creates a key when it opens, sends
+it with every attempt at that purchase - so a failed or timed-out attempt is retried under the same
+key, which is what makes the retry safe - and creates a new one after a save succeeds and whenever
+the form is reset. A refused save leaves the key alone, because it recorded nothing.
+
+**And before saving, the form warns when the purchase looks like one already recorded (issue
+#1247).** `GET api/purchases/possible-duplicate?supplierId=&invoiceNumber=&purchaseDate=` answers
+with the caller's own most recent purchase that has the same supplier, the same non-empty invoice
+number and the same business date, or no match. It is a **warning and never a block**: the operator
+saves anyway or does not, the create endpoint is unaffected by what it says, and blocking a duplicate
+outright is explicitly out of the issue's scope. `Inventory.Domain.Purchases.PurchaseDuplicateWarningPolicy`
+is the rule - all three facts must be there, because warning on "same date" alone would fire on
+every second delivery of a normal day and teach an operator to ignore the warning - and the invoice
+number is matched exactly, on the value `PurchaseInvoiceNumberPolicy.Normalize` produces. The day is
+the **business's own**, through `IBusinessCalendar`, so the same receipt entered at 9am and at 11pm
+is the same question. The Add Purchase form asks when the supplier, the date or the invoice number
+is entered, and after a scan fills them; the warning it shows names the recorded purchase and
+nothing about what it cost. Duplicate checks on a purchase *edit* are out of scope.
+
 A purchase line is recorded as a quantity and a unit cost, and that contract is unchanged. How the
 operator *arrives* at that unit cost is theirs to decide per line on the Add and Edit purchase forms,
 which offer both of the line's prices as linked inputs: type the amount paid for the whole line and
@@ -12327,8 +12405,15 @@ section (`PurchaseFormLayoutComponent`), labelled "Invoice number (optional)" an
 the input itself; it is never validated in the browser, because the server is the only thing that decides what
 is too long. Both pages send what was typed rather than trimming it themselves, and send nothing for an empty
 field. The Purchases list has its own **Invoice number** column showing the number where there is one and the
-same muted dash the table already uses elsewhere where there is none. There is no search, no filter and no
-duplicate warning: those are explicitly out of this issue's scope.
+same muted dash the table already uses elsewhere where there is none. There is no search and no filter: those
+are explicitly out of this issue's scope.
+
+**A duplicate warning was left out of #1162 and was added by issue #1247**, which is the only thing
+that reads this number for anything but display: the Add Purchase form asks the server whether a
+purchase with the same supplier, the same non-empty invoice number and the same business date is
+already recorded, and shows what it answers. It is a warning and never a block, the number is still
+never made unique, and an edit is still never checked - see [Product purchase and
+restock](#product-purchase-and-restock).
 
 #### Reorder-alert machine-product fan-out (issue #47)
 

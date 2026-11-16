@@ -127,8 +127,9 @@ public sealed class ProductCostingVersionTests : IDisposable
                 file: null,
                 supplierOrderCompletion: null,
                 attachmentReservation: null,
+                idempotency: null,
                 CancellationToken.None);
-            purchaseId = created.Id;
+            purchaseId = created.Purchase.Id;
         }
 
         var afterCreate = await CostingVersionAsync();

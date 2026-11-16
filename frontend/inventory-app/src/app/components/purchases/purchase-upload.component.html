@@ -76,13 +76,15 @@
       [scannedReceipt]="scannedReceipt"
       [scannedLevies]="scannedLevies"
       [offerSaveWithoutReceipt]="storageRefusedReceipt"
+      [duplicateWarning]="duplicateWarning"
       (submitted)="upload()"
       (cancelled)="cancel()"
       (addLine)="addItem()"
       (removeLine)="removeItem($event)"
       (pendingFileChange)="onReceiptChange($event)"
       (saveWithoutReceipt)="saveWithoutReceipt()"
-      (detailsChange)="refreshSuggestedTitle()"
+      (detailsChange)="onDetailsChange()"
+      (invoiceNumberEntered)="checkForPossibleDuplicate()"
       (titleEdited)="onTitleEdited()"
     />
   }

@@ -302,6 +302,10 @@ public class EndpointPlanRequirementTests
         new("PurchasesController.Get", PlanRequirementKind.None), // GET api/purchases/{id:int}
         new("PurchasesController.GetAll", PlanRequirementKind.None), // GET api/purchases
         new("PurchasesController.GetFile", PlanRequirementKind.None), // GET api/purchases/{id:int}/file
+        // The duplicate warning (issue #1247) is on no plan for the reason the scan counter below
+        // is: it reads the caller's own purchases, makes no outbound call and spends nothing, and
+        // what it protects - recording the same receipt twice - is Free's own purchasing feature.
+        new("PurchasesController.PossibleDuplicate", PlanRequirementKind.None), // GET api/purchases/possible-duplicate
         new("PurchasesController.Update", PlanRequirementKind.None), // PUT api/purchases/{id:int}
         new("PurchasesController.Upload", PlanRequirementKind.None), // POST api/purchases
         // Reading a receipt is the one purchasing endpoint a plan decides (issue #1163, child of

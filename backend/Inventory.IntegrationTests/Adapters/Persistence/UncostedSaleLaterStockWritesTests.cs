@@ -194,9 +194,10 @@ public sealed class UncostedSaleLaterStockWritesTests : IDisposable
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
             supplierOrderCompletion: null,
             attachmentReservation: null,
+            idempotency: null,
             CancellationToken.None);
 
-        Assert.Single(purchase.Items);
+        Assert.Single(purchase.Purchase.Items);
     }
 
     private static async Task AssertSaleIsStillUncostedAsync(AppDbContext db)

@@ -7,7 +7,11 @@ import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
-import { PurchaseItemPayload, PurchaseUploadPayload } from '../../services/purchase.service';
+import {
+  PurchaseDuplicateMatch,
+  PurchaseItemPayload,
+  PurchaseUploadPayload
+} from '../../services/purchase.service';
 import {
   GstClassification,
   Product,
@@ -85,7 +89,10 @@ function createHarness(
   } as unknown as ActivatedRoute;
   const navigate = jest.fn();
   const upload = jest.fn(() => of({} as Purchase));
-  const purchaseService = { upload } as unknown as PurchaseService;
+  // Nothing already recorded looks like this purchase, which is what every test here but the
+  // duplicate-warning ones is about (issue #1247).
+  const possibleDuplicate = jest.fn(() => of(null as PurchaseDuplicateMatch | null));
+  const purchaseService = { upload, possibleDuplicate } as unknown as PurchaseService;
   const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
   const completionPreviewRequest = jest.fn(() => preview);
   const supplierOrderService = {
@@ -108,7 +115,15 @@ function createHarness(
   );
   component.ngOnInit();
 
-  return { component, navigate, purchaseService, toastService, upload, completionPreviewRequest };
+  return {
+    component,
+    navigate,
+    purchaseService,
+    toastService,
+    upload,
+    possibleDuplicate,
+    completionPreviewRequest
+  };
 }
 
 /** The payload the component handed to `PurchaseService.upload`. */
@@ -1286,5 +1301,212 @@ describe('PurchaseUploadComponent scanned receipt (issue #1166)', () => {
       expect(upload).not.toHaveBeenCalled();
       expect(component.selectedFile).not.toBeNull();
     });
+  });
+});
+
+describe('PurchaseUploadComponent idempotency key (issue #1247)', () => {
+  /** The key the component sent with the save it made. */
+  function sentKey(upload: jest.Mock, call = 0): string {
+    return (upload.mock.calls[call][0] as PurchaseUploadPayload).idempotencyKey as string;
+  }
+
+  it('creates a key when the form opens and sends it with the save', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    const key = sentKey(upload);
+    expect(typeof key).toBe('string');
+    expect(key.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the same key through a failed attempt, so the retry cannot save a second purchase', () => {
+    const { component, upload } = readyToUpload();
+    upload.mockImplementationOnce(() => throwError(() => ({ error: 'Network error.' })));
+
+    component.upload();
+    const firstAttempt = sentKey(upload, 0);
+    component.upload();
+
+    expect(sentKey(upload, 1)).toBe(firstAttempt);
+  });
+
+  it('keeps the same key however many attempts fail', () => {
+    const { component, upload } = readyToUpload();
+    upload.mockImplementation(() => throwError(() => ({ error: 'Network error.' })));
+
+    component.upload();
+    component.upload();
+    component.upload();
+
+    expect(new Set(upload.mock.calls.map((_, index) => sentKey(upload, index))).size).toBe(1);
+  });
+
+  it('creates a new key after a save succeeds, so the next purchase is its own', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+    const saved = sentKey(upload, 0);
+    component.upload();
+
+    expect(sentKey(upload, 1)).not.toBe(saved);
+  });
+
+  it('creates a new key when the form is reset', () => {
+    const harness = readyToUpload();
+    harness.component.upload();
+    const first = sentKey(harness.upload, 0);
+
+    // What a route change does: ngOnInit's query-parameter pipe resets the form.
+    harness.component.ngOnInit();
+    harness.component.form.title = 'Weekly restock';
+    harness.component.addItem();
+    const item = harness.component.items[0];
+    item.productId = 5;
+    harness.component.onLineQuantityChange(item, 3);
+    harness.component.onLineTotalChange(item, 6);
+    harness.component.upload();
+
+    expect(sentKey(harness.upload, 1)).not.toBe(first);
+  });
+
+  it('shows the reused-key refusal the server wrote and keeps the entered purchase on screen', () => {
+    const { component, upload } = readyToUpload();
+    upload.mockImplementation(() =>
+      throwError(() => ({
+        status: 409,
+        error: {
+          title: 'The request conflicts with the current state',
+          detail: 'This purchase was already saved with different details. Reload the page.'
+        }
+      }))
+    );
+
+    component.upload();
+
+    expect(component.error).toBe('This purchase was already saved with different details. Reload the page.');
+    expect(component.saving).toBe(false);
+    expect(component.items).toHaveLength(1);
+  });
+
+  it('still shows a plain refusal sentence as it always did', () => {
+    const { component, upload } = readyToUpload();
+    upload.mockImplementation(() => throwError(() => ({ error: 'One or more purchase products do not exist.' })));
+
+    component.upload();
+
+    expect(component.error).toBe('One or more purchase products do not exist.');
+  });
+
+  it('falls back to the generic message when a failure carries nothing to show', () => {
+    const { component, upload } = readyToUpload();
+    upload.mockImplementation(() => throwError(() => ({ status: 500 })));
+
+    component.upload();
+
+    expect(component.error).toBe('Failed to add purchase.');
+  });
+});
+
+describe('PurchaseUploadComponent duplicate warning (issue #1247)', () => {
+  const match: PurchaseDuplicateMatch = {
+    purchaseId: 12,
+    title: 'Weekly restock',
+    purchaseDate: '2026-04-01T10:00:00Z'
+  };
+
+  /** A form carrying everything the warning is keyed by: a supplier, an invoice number and a date. */
+  function formWithDuplicateFields(harness: ReturnType<typeof readyToUpload>) {
+    harness.component.form.supplierId = 4;
+    harness.component.form.invoiceNumber = ' INV-1 ';
+    harness.component.form.purchaseDate = '2026-04-01';
+    return harness;
+  }
+
+  it('shows the warning when the server reports a purchase that is already recorded', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.possibleDuplicate.mockImplementation(() => of(match));
+
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.component.duplicateWarning).toContain('already recorded');
+    expect(harness.component.duplicateWarning).toContain('Weekly restock');
+    expect(harness.component.duplicateWarning).toContain('#12');
+  });
+
+  it('asks with the invoice number trimmed, the supplier and the purchase instant', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+
+    harness.component.checkForPossibleDuplicate();
+
+    const [supplierId, invoiceNumber, purchaseDate] = harness.possibleDuplicate.mock.calls[0] as unknown as [
+      number,
+      string,
+      string
+    ];
+    expect(supplierId).toBe(4);
+    expect(invoiceNumber).toBe('INV-1');
+    expect(new Date(purchaseDate).getFullYear()).toBe(2026);
+  });
+
+  it('shows nothing when nothing matches', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.possibleDuplicate.mockImplementation(() => of(match));
+    harness.component.checkForPossibleDuplicate();
+    expect(harness.component.duplicateWarning).not.toBeNull();
+
+    harness.possibleDuplicate.mockImplementation(() => of(null));
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.component.duplicateWarning).toBeNull();
+  });
+
+  it('asks nothing at all without a supplier', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.component.form.supplierId = '';
+
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.possibleDuplicate).not.toHaveBeenCalled();
+    expect(harness.component.duplicateWarning).toBeNull();
+  });
+
+  it('asks nothing at all without an invoice number', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.component.form.invoiceNumber = '   ';
+
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.possibleDuplicate).not.toHaveBeenCalled();
+    expect(harness.component.duplicateWarning).toBeNull();
+  });
+
+  it('asks nothing at all without a purchase date', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.component.form.purchaseDate = '';
+
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.possibleDuplicate).not.toHaveBeenCalled();
+    expect(harness.component.duplicateWarning).toBeNull();
+  });
+
+  it('never blocks the save', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.possibleDuplicate.mockImplementation(() => of(match));
+    harness.component.checkForPossibleDuplicate();
+
+    harness.component.upload();
+
+    expect(harness.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows nothing when the lookup itself fails, because a purchase must still be recordable', () => {
+    const harness = formWithDuplicateFields(readyToUpload());
+    harness.possibleDuplicate.mockImplementation(() => throwError(() => new Error('offline')));
+
+    harness.component.checkForPossibleDuplicate();
+
+    expect(harness.component.duplicateWarning).toBeNull();
   });
 });
