@@ -2992,6 +2992,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<long?>("MachineId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("MachineLedgerEffectiveAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT");
 

@@ -13918,6 +13918,28 @@ count, which is the authority on its own instant, then source id) on top of a ba
    `AwaitingOpeningCount`. The refilled, returned and sold quantities are still reported, because
    they are facts; what cannot be derived from them is a physical level.
 
+**A Nayax-sourced refill is placed at the event's own time** (issue #1243, finding INV-06 of audit
+#1222). A Sync Restock event is applied by an operator days after the machine was physically
+refilled, and the apply used to be the only instant recorded, so a 10 November event for 20 units
+applied on 13 November was replayed *after* a 12 November count of 15: expected machine stock became
+35, and the next comparison reported 20 units of shrinkage that never happened. The apply now records
+the event's own `EventDateTimeGMT` on the movement as `StockAdjustment.MachineLedgerEffectiveAt`, and
+`EfMachineStockLedgerStore` - the only reader of that column - replays the refill there, falling back
+to `EffectiveAt` when it is `NULL`. **Only the machine ledger uses it**: the movement's `EffectiveAt`
+stays the apply instant, which is what the cost replay, Stock History and every storage-stock query
+read, so a late apply cannot take units out of storage at an earlier instant and drive physical stock
+negative there (see
+[the Sync Restock timestamp contract](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183)).
+The column is nullable with no backfill, so a manual refill - and every movement recorded before it
+existed - is replayed exactly where it always was; re-dating refills that were already applied is a
+separate repair.
+
+**The same-instant ordering is unchanged, and it is what makes the above safe.** `ReplayOrder` sorts
+by instant, then refill → return → sale → count, then source id, so a count is replayed last at its
+own instant and absorbs a refill that happened there: a Nayax refill whose event time equals a
+count's time leaves the expected level at the counted quantity. That rule was not relaxed for this
+change; it is pinned by its own test.
+
 A count supersedes rather than corrects: it sets the level from its own instant onward, resets the
 movement totals to "since the baseline", and reports the difference it absorbed as
 `unexplainedChangeAtLastCount` (positive means units were missing). That figure is **derived on
@@ -17806,6 +17828,27 @@ that meaning.
    (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
    documented meanings and are not substituted for one another. Only Event 501 rows are relevant
    to this feature.
+
+   **The timestamp contract: which instant each side uses** (issue #1243). `EventDateTimeGMT` is the
+   instant the machine was physically refilled, and `EventDateTimeVMC` - the machine's own clock - is
+   source data that drives nothing. An apply therefore records **two** instants, deliberately, and
+   each one has exactly one set of readers:
+
+   | Instant | Stored as | Read by |
+   | --- | --- | --- |
+   | The apply instant | `StockAdjustment.EffectiveAt` | the inventory-cost replay, Stock History, and every storage-stock query |
+   | The event's `EventDateTimeGMT` | `StockAdjustment.MachineLedgerEffectiveAt` (nullable, no backfill) | `EfMachineStockLedgerStore` alone, for the machine-stock ledger |
+
+   Storage and costing keep the apply instant because the units left the storeroom when the operator
+   applied the event, and dating that movement earlier could make physical stock negative at an
+   instant where the storeroom had not yet received the purchase. The machine ledger needs the other
+   answer, because a machine count sets the expected level from its own instant onward and a refill
+   the count already absorbed must not be added on top of it (see
+   [Machine stock ledger and shrinkage reconciliation](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56)).
+   A manual refill records no second instant and is unchanged. The event row itself keeps both
+   provider instants verbatim, and `NayaxMachineStockEvent.EventDateTimeGmt` is normalised to a UTC
+   instant on import and marked UTC on every read, so the instant the ledger replays at is the
+   instant the alert reported.
 2. **Parse.** `Inventory.Domain.Nayax.NayaxStockAdjustmentEventParser` is a deterministic, EF/HTTP-
    free parser for the alert's `EventData` text. It anchors on the literal `Product MDB:` marker
    rather than the free-text employee/user-name prefix that precedes it, so it does not depend on
@@ -17914,12 +17957,13 @@ that meaning.
    `IRebuildProductCost.RebuildAsync` for that product - replaying a product's whole movement and
    sale history is what an apply actually costs, so ten ticked events for one product mean one
    replay of it, not ten. Every event is still its own `StockAdjustmentReason.MachineRefill`
-   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note and
-   its own `StockAdjustmentId` on the event row, so each one stays individually auditable, and the
-   response still reports one result per distinct requested event id in request order. Entities the
-   batch left tracked - including the history its rebuild loaded - are dropped once its transaction
-   has ended, so what each later product's `SaveChanges` has to examine does not grow with the
-   products already applied.
+   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note, its
+   own `EventDateTimeGMT` recorded as the machine ledger's instant for it (the timestamp contract in
+   step 1) and its own `StockAdjustmentId` on the event row, so each one stays individually
+   auditable, and the response still reports one result per distinct requested event id in request
+   order. Entities the batch left tracked - including the history its rebuild loaded - are dropped
+   once its transaction has ended, so what each later product's `SaveChanges` has to examine does not
+   grow with the products already applied.
 
    `NayaxMachineStockApplyPolicy` is the deterministic Domain rule that decides each event, and it
    is applied **inside** that product's write lock: the transaction is `BEGIN IMMEDIATE` on SQLite

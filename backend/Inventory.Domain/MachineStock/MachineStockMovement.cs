@@ -65,6 +65,13 @@ public enum MachineStockMovementKind
 /// ledger reads it. <see cref="StorageQuantityChange"/> is signed exactly as
 /// <c>StockAdjustment.QuantityChange</c> is - from storage's point of view - so a refill into the
 /// machine is negative and a return to storage is positive.
+///
+/// <para><see cref="EffectiveAtUtc"/> is the instant the machine was physically refilled, which is
+/// not always the instant the movement was recorded (issue #1243): a refill applied from a Nayax
+/// Sync Restock event carries that event's own <c>EventDateTimeGMT</c>, so an event applied days
+/// late is still replayed where it happened and a count taken in between is not overridden by it.
+/// The storage movement itself keeps the apply instant, which is what the cost replay and Stock
+/// History read; choosing between the two is the store's, in one place.</para>
 /// </summary>
 public sealed record MachineRefillFact(
     int StockAdjustmentId, long ProductId, int StorageQuantityChange, DateTime EffectiveAtUtc);

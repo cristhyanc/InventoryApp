@@ -96,7 +96,18 @@ public class AddProductCostingVersionMigrationTests
             Assert.Equal(
                 (12, 12, 13.20m, 1.10m),
                 (product.QuantityInStock, product.CostingQuantity, product.InventoryValue, product.AverageUnitCost));
-            var movement = await after.StockAdjustments.AsNoTracking().SingleAsync();
+            // Projected rather than materialised: this test stops at this migration, and a column a
+            // later additive migration adds to StockAdjustments (issue #1243's
+            // MachineLedgerEffectiveAt) is in the model and not in this schema.
+            var movement = await after.StockAdjustments.AsNoTracking()
+                .Select(candidate => new
+                {
+                    candidate.QuantityChange,
+                    candidate.UnitCost,
+                    candidate.TotalCost,
+                    candidate.CostingQuantityAfter,
+                })
+                .SingleAsync();
             Assert.Equal(
                 (12, 1.10m, 13.20m, 12),
                 (movement.QuantityChange, movement.UnitCost, movement.TotalCost, movement.CostingQuantityAfter));

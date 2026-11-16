@@ -151,7 +151,18 @@ public class AddProviderIdentityLinksMigrationTests
             // And every foreign key into the rebuilt table still resolves to the same product.
             var item = await after.ReceiptItems.SingleAsync();
             Assert.Equal((100L, 12m, 1.10m), (item.ProductId, item.Quantity, item.UnitCost));
-            var movement = await after.StockAdjustments.SingleAsync();
+            // Projected rather than materialised: this test stops at an older schema, and a column a
+            // later additive migration adds to StockAdjustments (issue #1243's
+            // MachineLedgerEffectiveAt) is in the model and not here.
+            var movement = await after.StockAdjustments
+                .Select(candidate => new
+                {
+                    candidate.ProductId,
+                    candidate.QuantityChange,
+                    candidate.UnitCost,
+                    candidate.TotalCost,
+                })
+                .SingleAsync();
             Assert.Equal((100L, 12, 1.10m, 13.20m), (movement.ProductId, movement.QuantityChange, movement.UnitCost, movement.TotalCost));
         }
     }

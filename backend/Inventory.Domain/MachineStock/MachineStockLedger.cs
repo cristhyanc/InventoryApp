@@ -129,10 +129,12 @@ public sealed record MachineStockProductLedger(
 /// authority on what is physically there at that moment, so everything else at that instant is
 /// replayed before it.
 ///
-/// The instants come from different sources (a movement's <c>EffectiveAt</c>, a sale's
-/// authorization instant, a count's recorded instant), exactly as the costing replay's do, and are
-/// compared as UTC instants; the known sale-timestamp caveat recorded in <c>docs/architecture.md</c>
-/// § Nayax sale timestamps applies here unchanged and is not re-solved by this ledger.
+/// The instants come from different sources (a refill's own machine-ledger instant - the Nayax
+/// event's <c>EventDateTimeGMT</c> for a Sync Restock refill, otherwise the movement's
+/// <c>EffectiveAt</c>, chosen once by the store - a sale's authorization instant, and a count's
+/// recorded instant), exactly as the costing replay's do, and are compared as UTC instants; the
+/// known sale-timestamp caveat recorded in <c>docs/architecture.md</c> § Nayax sale timestamps
+/// applies here unchanged and is not re-solved by this ledger.
 /// </summary>
 public static class MachineStockLedger
 {

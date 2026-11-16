@@ -52,6 +52,10 @@ public sealed class EfInventoryMovementStore : IInventoryMovementStore
             UnitCost = movement.UnitCost,
             TotalCost = movement.TotalCost,
             Notes = movement.Notes,
+            // EffectiveAt keeps its own default - the instant the movement is recorded - which is
+            // what the cost replay and Stock History read. This second instant is set only by the
+            // Nayax Sync Restock apply, and only the machine-stock ledger reads it (issue #1243).
+            MachineLedgerEffectiveAt = movement.MachineLedgerEffectiveAt,
         };
         _db.StockAdjustments.Add(adjustment);
         return new StagedMovement(adjustment);
