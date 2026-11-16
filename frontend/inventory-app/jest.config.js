@@ -1,6 +1,9 @@
 /** @type {import('jest').Config} */
 module.exports = {
   preset: 'jest-preset-angular',
+  // Fixes the process time zone to UTC before any worker starts (issue #1292); see
+  // jest.global-setup.js for why this, not the invoking shell's TZ, is what every run tests.
+  globalSetup: '<rootDir>/jest.global-setup.js',
   setupFilesAfterEnv: ['<rootDir>/setup-jest.ts'],
   transform: {
     '^.+\\.(ts|mjs|js|html)$': [
