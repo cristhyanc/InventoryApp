@@ -845,7 +845,7 @@ InventoryApp/
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
 │   │   ├── DTOs/                    API-owned transport contracts
-│   │   ├── Http/                    Exception handlers (ProblemDetails mapping) and the liveness/readiness health checks
+│   │   ├── Http/                    Exception handlers (ProblemDetails mapping), the liveness/readiness health checks, and HealthChecks/BuildMetadata with BuildShaHeaderMiddleware (the X-Build-Sha header's commit, read once at startup, set on whichever responses the health registrations' BuildShaHeaderMetadata marker selects — issue #1308)
 │   │   ├── Observability/           Application Insights telemetry registration (issue #165)
 │   │   ├── Properties/              Launch and service-dependency settings
 │   │   ├── Swagger/                 OpenAPI configuration and the published-schema compatibility boundary
