@@ -223,6 +223,111 @@ public class ImportNayaxSalesBlankValueTests
     }
 
     /// <summary>
+    /// The row the kept count used to miss: its status and amount are both present and valid, and
+    /// it says nothing about the payment method, the product name and the machine name - as a blank
+    /// cell and as a file exported without those columns. All three stored values are preserved, so
+    /// the row kept a stored value and is counted, once for the three of them.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_row_that_states_a_status_and_amount_but_no_metadata_keeps_and_counts_the_metadata(
+        bool metadataColumnsPresent)
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedStoredSaleAsync(connection);
+
+        var file = metadataColumnsPresent
+            ? FullHeader + "\n" +
+                $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},4.25,,,,{GmtCell}"
+            : "TransactionID,TransactionStatusId,MachineID,SettlementValue,AuthorizationDateTimeGMT\n" +
+                $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},4.25,{GmtCell}";
+
+        NayaxSalesImportResult upload;
+        await using (var db = Context(connection))
+            upload = await Import(db).Handle(Csv(file));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 1), upload);
+        await using var read = Context(connection);
+        var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
+        // What the file states still wins.
+        Assert.Equal(NayaxTransactionStatusIds.Refunded, sale.TransactionStatusId);
+        Assert.Equal(4.25m, sale.SettlementValue);
+        // The three stored values the file said nothing about - the keeps the count now reports.
+        Assert.Equal("Credit Card", sale.PaymentMethod);
+        Assert.Equal("Water 600ml", sale.ProductName);
+        Assert.Equal("Machine A", sale.MachineName);
+        Assert.Equal(10, sale.ProductId);
+    }
+
+    /// <summary>
+    /// The count stays a count of rows when the kept fields are metadata: one row keeping two of
+    /// them counts once, and a row beside it that states every value keeps nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_row_that_keeps_two_metadata_values_counts_once_beside_a_row_that_keeps_none()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedStoredSaleAsync(connection);
+        await SeedStoredSaleAsync(connection, transactionId: NewTransactionId);
+
+        NayaxSalesImportResult upload;
+        await using (var db = Context(connection))
+            upload = await Import(db).Handle(Csv(
+                FullHeader + "\n" +
+                $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},4.25,,Water 600ml,,{GmtCell}\n" +
+                $"{NewTransactionId},{NayaxTransactionStatusIds.Completed},{MachineId},2.00,Cash,Water 600ml,Machine B,{GmtCell}"));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 2, 0, 1), upload);
+        await using var read = Context(connection);
+        var kept = await read.NayaxSales.AsNoTracking().SingleAsync(x => x.TransactionID == TransactionId);
+        Assert.Equal("Credit Card", kept.PaymentMethod);
+        Assert.Equal("Machine A", kept.MachineName);
+        var stated = await read.NayaxSales.AsNoTracking().SingleAsync(x => x.TransactionID == NewTransactionId);
+        Assert.Equal("Cash", stated.PaymentMethod);
+        Assert.Equal("Machine B", stated.MachineName);
+    }
+
+    /// <summary>
+    /// A column the file does not carry for a sale that holds nothing under it preserves nothing,
+    /// and is not counted: an export written without the payment-method, product-name and
+    /// machine-name columns is ordinary, and reporting a kept value where no value exists would
+    /// make the count unreadable. A stored blank is not a value either.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task A_missing_column_the_stored_sale_holds_no_value_under_is_not_counted(string? storedPaymentMethod)
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxSales.Add(new NayaxSales
+            {
+                TransactionID = TransactionId,
+                MachineID = MachineId,
+                PaymentMethod = storedPaymentMethod,
+                SettlementValue = 3.50m,
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = StoredInstant
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        NayaxSalesImportResult upload;
+        await using (var db = Context(connection))
+            upload = await Import(db).Handle(Csv(
+                "TransactionID,TransactionStatusId,MachineID,SettlementValue,AuthorizationDateTimeGMT\n" +
+                $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},4.25,{GmtCell}"));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 0), upload);
+        await using var read = Context(connection);
+        var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
+        Assert.Equal(NayaxTransactionStatusIds.Refunded, sale.TransactionStatusId);
+        Assert.Equal(4.25m, sale.SettlementValue);
+    }
+
+    /// <summary>
     /// The kept count is a count of rows, not of fields: a row that kept five stored values counts
     /// once, so the number an operator sees is "rows this file said nothing new about".
     /// </summary>

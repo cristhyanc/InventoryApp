@@ -32,9 +32,10 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
  * and no row was unreadable" is itself the answer an operator uploading a corrected export is
  * looking for.
  *
- * <p>A kept value means the file's cell was blank or its column was missing, so the stored status
- * or amount was left alone; an unreadable row means the file stated something nobody could read and
- * nothing of that row was applied. The server decides both - this only renders them.</p>
+ * <p>A kept value means the file's cell was blank or its column was missing, so a stored value -
+ * the status, the amount, the payment method, the product name or the machine name - was left
+ * alone; an unreadable row means the file stated something nobody could read and nothing of that
+ * row was applied. The server decides both - this only renders them.</p>
  */
 export function salesImportSummary(result: NayaxSalesImportResult): string {
   const rows = (count: number): string => (count === 1 ? 'row' : 'rows');
@@ -79,8 +80,8 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
  *
  * <p><strong>A finished import is reported with every count the server sends</strong> (issue
  * #1298), through {@link salesImportSummary}: the imported, updated and skipped counts as before,
- * plus how many rows kept a stored status or amount because the file's cell was blank or its column
- * was missing, and how many rows carried a value that could not be read at all. No rule about any
+ * plus how many rows kept a stored value because the file's cell was blank or its column was
+ * missing, and how many rows carried a value that could not be read at all. No rule about any
  * of them is decided here - the server owns which row is which, and this page only shows what it
  * answered.</p>
  *

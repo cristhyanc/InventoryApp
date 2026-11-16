@@ -140,9 +140,9 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
   });
 
   /**
-   * Issue #1298: the two facts the three counts could not say. A row that kept a stored status or
-   * amount because the file's cell was blank changed nothing an operator can see in a sale, and a
-   * row nobody could read was not applied at all - so both are reported rather than disappearing
+   * Issue #1298: the two facts the three counts could not say. A row that kept a stored value
+   * because the file's cell was blank changed nothing an operator can see in a sale, and a row
+   * nobody could read was not applied at all - so both are reported rather than disappearing
    * into "updated".
    */
   it('reports how many rows kept a stored value and how many could not be read', async () => {

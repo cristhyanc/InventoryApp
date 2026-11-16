@@ -15,9 +15,10 @@ export interface NayaxSalesImportInvalidRow {
 
 /**
  * What `POST api/imports/nayax-sales` answers with. The three original counts are unchanged; issue
- * #1298 added the two facts the counts alone could not say - how many rows kept a stored status or
- * amount because the file's cell was blank or its column was missing, and which rows carried a
- * value that could not be read at all. `invalid` is `invalidRows.length`, sent by the server.
+ * #1298 added the two facts the counts alone could not say - how many rows kept a stored value
+ * (status, amount, payment method, product name or machine name) because the file's cell was blank
+ * or its column was missing, counted once per row, and which rows carried a value that could not be
+ * read at all. `invalid` is `invalidRows.length`, sent by the server.
  */
 export interface NayaxSalesImportResult {
   imported: number;

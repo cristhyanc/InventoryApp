@@ -67,11 +67,14 @@ public class NayaxSaleMixedPathTimestampTests
         await using (var db = Context(connection))
             await SyncStore(db).PersistLatestSalesAsync(payload, CancellationToken.None);
 
-        Assert.Equal(new NayaxSalesImportResult(0, 1, 0), upload);
+        // The export carries no PaymentMethod column, so the payment method the synchronization
+        // stored is kept and the row is counted once as having kept a stored value (issue #1298).
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 1), upload);
         await using var read = Context(connection);
         var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
         Assert.Equal(AuthoritativeUtc, sale.MachineAuthorizationTime);
         Assert.Equal("Water 600ml", sale.ProductName);
+        Assert.Equal("Credit Card", sale.PaymentMethod);
         Assert.Equal(NayaxTransactionStatusIds.Completed, sale.TransactionStatusId);
     }
 
@@ -96,12 +99,14 @@ public class NayaxSaleMixedPathTimestampTests
                 "TransactionID,TransactionStatusId,MachineID,SettlementValue,ProductName,MachineAuthorizationTime,AuthorizationDateTimeGMT\n" +
                 $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},3.50,Water 600ml,{MachineLocalExportValue},{gmtCell}"));
 
-        Assert.Equal(new NayaxSalesImportResult(0, 1, 0), upload);
+        // As above: no PaymentMethod column, so one stored value is kept and counted (issue #1298).
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 1), upload);
         await using var read = Context(connection);
         var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
         Assert.Equal(AuthoritativeUtc, sale.MachineAuthorizationTime);
         Assert.Equal(NayaxTransactionStatusIds.Refunded, sale.TransactionStatusId);
         Assert.Equal("Water 600ml", sale.ProductName);
+        Assert.Equal("Credit Card", sale.PaymentMethod);
     }
 
     /// <summary>

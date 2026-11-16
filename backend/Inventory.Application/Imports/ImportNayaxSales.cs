@@ -30,10 +30,10 @@ public sealed record NayaxSalesImportInvalidRow(int RowNumber, long TransactionI
 /// <param name="Updated">Rows that updated a sale this business already held.</param>
 /// <param name="Skipped">Rows with no usable identity, instant, or - for a new sale - amount.</param>
 /// <param name="KeptStoredValues">
-/// Updated rows that kept the stored status or the stored amount because the file's cell was blank
-/// or its column was missing, counted once per row however many of its fields were kept. A kept
-/// payment method, product name or machine name is not counted; see
-/// <c>ImportNayaxSales.KeptAStoredValue</c> for why.
+/// Updated rows that kept a stored value because the file's cell was blank or its column was
+/// missing - the status, the amount, the payment method, the product name or the machine name -
+/// counted once per row however many of its fields were kept. See
+/// <c>ImportNayaxSales.KeptAStoredValue</c> for when a kept value is one.
 /// </param>
 public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipped, int KeptStoredValues = 0)
 {
@@ -308,7 +308,7 @@ public sealed class ImportNayaxSales
                             : facts.ProductId,
                     });
                 updated++;
-                if (KeptAStoredValue(row))
+                if (KeptAStoredValue(row, stored))
                     keptStoredValues++;
             }
 
@@ -332,19 +332,35 @@ public sealed class ImportNayaxSales
     }
 
     /// <summary>
-    /// Whether an updated row left a stored <em>status or amount</em> in place because the file
-    /// carried none for it (issue #1298).
+    /// Whether an updated row left a stored value in place because the file carried none for it
+    /// (issue #1298): every field the merge above keeps - the status, the amount, the payment
+    /// method, the product name and the machine name - so the number an operator reads is the
+    /// rows this file said nothing new about, whichever of those facts it said nothing about.
     ///
-    /// <para>It is a count of rows, not of fields: a row that kept both keeps counting once, which
-    /// is what makes the number "rows this file said nothing new about" rather than a total an
-    /// operator cannot act on. And it counts those two values only - the two that decide whether a
-    /// sale is money and how much of it, and the two this issue exists for. A payment method, a
-    /// product name and a machine name are kept exactly the same way, but an export has always
-    /// been written without those columns (the long-standing regression tests upload one), so
-    /// counting a row for them would report every such upload as having kept something.</para>
+    /// <para>It is a count of rows, not of fields: a row that kept four of them still counts once,
+    /// which is what makes that number one an operator can act on rather than a total of fields.</para>
+    ///
+    /// <para>A kept payment method, product name or machine name counts only where the stored sale
+    /// <em>holds</em> one. An export written without those columns is ordinary and long-standing,
+    /// and a column absent from the file for a sale that has nothing stored under it preserves
+    /// nothing - counting it would report a kept value where no value exists. The status and the
+    /// amount are decided from the file's cell alone, as this count always has: the stored amount
+    /// column is never null, so an absent amount always keeps one, and a stored status is the fact
+    /// a blank cell must never erase whatever it currently holds.</para>
     /// </summary>
-    private static bool KeptAStoredValue(NayaxSalesImportRow row) =>
-        row.TransactionStatusId is null || row.SettlementValue is null;
+    private static bool KeptAStoredValue(NayaxSalesImportRow row, StoredImportedSale stored) =>
+        row.TransactionStatusId is null
+        || row.SettlementValue is null
+        || KeptStoredText(row.PaymentMethod, stored.PaymentMethod)
+        || KeptStoredText(row.ProductName, stored.Sale.ProductName)
+        || KeptStoredText(row.MachineName, stored.MachineName);
+
+    /// <summary>
+    /// Whether the merge kept one stored text fact: the file carried none - exactly the condition
+    /// <c>row.X ?? stored.X</c> keeps the stored value on - and the stored sale holds one to keep.
+    /// </summary>
+    private static bool KeptStoredText(string? fromFile, string? storedValue) =>
+        fromFile is null && !string.IsNullOrWhiteSpace(storedValue);
 
     /// <summary>
     /// The instant a row is imported at (issue #380), or <c>null</c> when it has no trustworthy one

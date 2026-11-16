@@ -14422,12 +14422,14 @@ value it does not carry changes nothing.
 - **A new sale with a blank amount is skipped**, and counted as skipped: there is no stored amount
   to keep, and `$0` is not a reading of an empty cell.
 - **The result reports two more facts** and keeps its three original counts unchanged:
-  `KeptStoredValues`, the number of *rows* (not fields) that kept a stored status or amount because
-  the file said nothing about it, and `InvalidRows`, with `Invalid` as its count. A kept payment
-  method, product name or machine name is deliberately not counted: an export written without those
-  columns is ordinary and long-standing, so counting it would report every such upload as having
-  kept something. Admin → Imports shows both counts in the toast it already showed the three counts
-  in (`salesImportSummary`); the page decides none of them.
+  `KeptStoredValues`, the number of *rows* (not fields) that kept a stored value because the file
+  said nothing about it, and `InvalidRows`, with `Invalid` as its count. The count covers every
+  field the merge keeps - status, amount, payment method, product name and machine name - and a row
+  that kept four of them counts once, so the number is "rows this file said nothing new about". A
+  kept payment method, product name or machine name counts only where the stored sale holds one:
+  an export written without those columns is ordinary and long-standing, and a column absent for a
+  sale that has nothing stored under it preserves nothing. Admin → Imports shows both counts in the
+  toast it already showed the three counts in (`salesImportSummary`); the page decides none of them.
 
 Out of scope, and unchanged: nothing stops a file from changing a stored status (refunded,
 completed or queue-verified) - the file wins; no new number format is accepted; nothing detects an
