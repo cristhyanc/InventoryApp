@@ -268,7 +268,7 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
     {
         await using var db = TestAppDbContext.For(_options, BusinessA);
         var report = await new GetProductProfitabilityReport(
-                new EfProductProfitabilityReportFactsProvider(db),
+                new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
                 new EfProductPurchaseCostFactsProvider(db))
             .Handle(
                 new ReportingFilterDto(SaleInstant.Date.AddDays(-7), SaleInstant.Date.AddDays(7)),

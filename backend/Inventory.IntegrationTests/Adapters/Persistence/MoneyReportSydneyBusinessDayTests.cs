@@ -13,6 +13,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
@@ -27,10 +28,14 @@ using Xunit;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// Issue #1250 (the repository owner's decision of 13 November 2026): bookkeeping, the GST
-/// accounting aid, the reports dashboard and reconciliation count a sale on its <em>business</em>
-/// date - <c>Australia/Sydney</c> for this business - exactly as the daily report
-/// (<see cref="DailyReportSydneyBusinessDayTests"/>) and the Sites/Machines dashboards already do.
+/// Issues #1250 and #1252 (the repository owner's decision of 13 November 2026): <em>every</em>
+/// money report counts a sale on its <em>business</em> date - <c>Australia/Sydney</c> for this
+/// business - exactly as the daily report (<see cref="DailyReportSydneyBusinessDayTests"/>) and the
+/// Sites/Machines dashboards already do. Issue #1250 moved bookkeeping, the GST accounting aid, the
+/// reports dashboard and reconciliation; issue #1252 moved the four that were left: machine
+/// profitability, product profitability, the standalone Commission report and Transaction Sales,
+/// and made the effective-dated Nayax fee rate and commission agreement resolve by each sale's own
+/// business date.
 ///
 /// The requested <c>from</c>/<c>to</c> are inclusive business dates, so each report's sales run from
 /// the UTC instant of business-day midnight at the start of the first date up to, exclusively,
@@ -58,6 +63,14 @@ public class MoneyReportSydneyBusinessDayTests
     /// wrong period.
     /// </summary>
     private static readonly DateTime JustAfterSydneyMidnightUtc = new(2026, 10, 4, 13, 30, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// 23:59 on Sunday 4 October 2026 in Sydney (AEDT, +11), which is 12:59Z on the same UTC date as
+    /// <see cref="JustAfterSydneyMidnightUtc"/>. The pair is what the rate-change-at-midnight tests
+    /// need: one UTC date, two business dates, so an effective-dated rate resolved from the stored
+    /// instant cannot tell them apart.
+    /// </summary>
+    private static readonly DateTime LastMinuteOfSydneySundayUtc = new(2026, 10, 4, 12, 59, 0, DateTimeKind.Utc);
 
     [Fact]
     public async Task Bookkeeping_counts_a_sale_just_after_Sydney_midnight_on_the_Sydney_date()
@@ -212,13 +225,14 @@ public class MoneyReportSydneyBusinessDayTests
     }
 
     /// <summary>
-    /// The standalone Commission report is deliberately left on its calendar-date selection until
-    /// issue #1252 migrates it, so the same fixture still shows the sale's commission under its
-    /// <em>UTC</em> date - $0.35 asked for 4 October and nothing asked for the 5th, the mirror image
-    /// of the money reports above. This pins that the fix did not move the report #1252 owns.
+    /// The standalone Commission report selects its sales the same way since issue #1252 (this test
+    /// asserted the opposite before - $0.35 under the sale's <em>UTC</em> date - which is exactly
+    /// the behaviour the 13 November 2026 decision replaced). The same fixture now owes $0.35 on
+    /// Monday 5 October, the Sydney date of the 00:30 sale, and nothing on Sunday 4 October, so the
+    /// Commission report and bookkeeping finally agree about the same requested dates.
     /// </summary>
     [Fact]
-    public async Task The_standalone_commission_report_keeps_its_calendar_date_selection()
+    public async Task The_standalone_commission_report_counts_the_sale_on_its_Sydney_date()
     {
         await using var connection = await CreateSqliteAsync();
         await SeedTenPercentAgreementAndTheMondaySaleAsync(connection);
@@ -228,25 +242,244 @@ public class MoneyReportSydneyBusinessDayTests
         var sunday = await commissions.Handle(Sunday, Sunday, null, CancellationToken.None);
         var monday = await commissions.Handle(Monday, Monday, null, CancellationToken.None);
 
-        Assert.Equal(0.35m, Assert.Single(sunday.Rows).CommissionDue);
-        Assert.Equal(0m, Assert.Single(monday.Rows).CommissionDue);
+        Assert.Equal(0.35m, Assert.Single(monday.Rows).CommissionDue);
+        Assert.Equal(3.5m, Assert.Single(monday.Rows).GrossSales);
+        Assert.Equal(0m, Assert.Single(sunday.Rows).CommissionDue);
+        Assert.Equal(0m, Assert.Single(sunday.Rows).GrossSales);
+    }
+
+    [Fact]
+    public async Task Machine_profitability_counts_a_sale_just_after_Sydney_midnight_on_the_Sydney_date()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var monday = await Machines(db).Handle(Filter(Monday), CancellationToken.None);
+        var sunday = await Machines(db).Handle(Filter(Sunday), CancellationToken.None);
+
+        var row = Assert.Single(monday.Rows);
+        Assert.Equal(MachineId, row.MachineId);
+        Assert.Equal(3.5m, row.Sales);
+        Assert.Equal(3.5m, row.CardSales);
+        Assert.Equal(1m, row.CostOfGoods);
+        Assert.Equal(1, row.TransactionCount);
+        // No machine row at all on Sunday: the only sale of the fixture is Monday's.
+        Assert.Empty(sunday.Rows);
+    }
+
+    [Fact]
+    public async Task Product_profitability_counts_a_sale_just_after_Sydney_midnight_on_the_Sydney_date()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var monday = await Products(db).Handle(Filter(Monday), CancellationToken.None);
+        var sunday = await Products(db).Handle(Filter(Sunday), CancellationToken.None);
+
+        var row = Assert.Single(monday.Rows);
+        Assert.Equal(3.5m, row.Sales);
+        Assert.Equal(1m, row.CostOfGoods);
+        Assert.Equal(1, row.TransactionCount);
+        Assert.Empty(sunday.Rows);
+    }
+
+    [Fact]
+    public async Task Transaction_sales_counts_a_sale_just_after_Sydney_midnight_on_the_Sydney_date()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var monday = await Transactions(db).Handle(TransactionFilter(Monday), CancellationToken.None);
+        var sunday = await Transactions(db).Handle(TransactionFilter(Sunday), CancellationToken.None);
+
+        Assert.Equal(1, Assert.Single(monday.Rows).TransactionId);
+        Assert.Equal(3.5m, monday.Totals.Sales);
+        Assert.Empty(sunday.Rows);
+        Assert.Equal(0m, sunday.Totals.Sales);
+    }
+
+    /// <summary>
+    /// A commission agreement that changes at Sydney midnight is resolved by the <em>sale's</em>
+    /// business date (issue #1252 acceptance criterion 3): the 23:59 sale on Sunday takes the old
+    /// 10% agreement, the 00:01 sale on Monday the new 20% one. Both instants fall on the same UTC
+    /// date, so resolving the agreement from the stored instant charged both at 10%.
+    /// </summary>
+    [Fact]
+    public async Task A_commission_agreement_that_changes_at_Sydney_midnight_is_resolved_by_each_sales_business_date()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.SiteCommissionAgreements.AddRange(
+                Agreement(0.10m, new DateTime(2026, 1, 1), effectiveTo: Sunday),
+                Agreement(0.20m, Monday, effectiveTo: null));
+            seed.NayaxSales.AddRange(
+                Sale(1, LastMinuteOfSydneySundayUtc, 10m, cost: 1m),
+                Sale(2, JustAfterSydneyMidnightUtc, 10m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var commissions = SiteCommissions(db);
+        var both = Assert.Single((await commissions.Handle(Sunday, Monday, null, CancellationToken.None)).Rows);
+        var sunday = Assert.Single((await commissions.Handle(Sunday, Sunday, null, CancellationToken.None)).Rows);
+        var monday = Assert.Single((await commissions.Handle(Monday, Monday, null, CancellationToken.None)).Rows);
+
+        Assert.Equal(1.00m, sunday.CommissionDue);
+        Assert.Equal(2.00m, monday.CommissionDue);
+        Assert.Equal(3.00m, both.CommissionDue);
+        Assert.Equal(20m, both.GrossSales);
+        // Two rates in one requested range is a data-quality statement, not a silent choice.
+        Assert.True(both.UsesMultipleRates);
+        Assert.False(both.HasConfigurationGap);
+        Assert.False(both.HasOverlap);
+    }
+
+    /// <summary>
+    /// A Nayax fee rate that changes at Sydney midnight is resolved by the <em>sale's</em> business
+    /// date too (issue #1252 acceptance criterion 3), in Transaction Sales - which estimates a fee
+    /// per row - and in machine profitability, which asks the fee use case for the business-day
+    /// period its revenue counted.
+    /// </summary>
+    [Fact]
+    public async Task A_fee_rate_that_changes_at_Sydney_midnight_is_resolved_by_each_sales_business_date()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxProcessingFeeRates.AddRange(
+                new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = 0.10m },
+                new NayaxProcessingFeeRate { EffectiveFrom = Monday, FeeExGst = 0.50m });
+            seed.NayaxSales.AddRange(
+                Sale(1, LastMinuteOfSydneySundayUtc, 10m, cost: 1m),
+                Sale(2, JustAfterSydneyMidnightUtc, 10m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var transactions = await Transactions(db).Handle(
+            new TransactionSalesFilterDto(From: Sunday, To: Monday, SortBy: "date", SortDescending: false),
+            CancellationToken.None);
+
+        Assert.Equal([1L, 2L], transactions.Rows.Select(x => x.TransactionId).ToList());
+        Assert.Equal(0.10m, transactions.Rows[0].FeeExGst);
+        Assert.Equal(0.50m, transactions.Rows[1].FeeExGst);
+
+        var sunday = await Machines(db).Handle(Filter(Sunday), CancellationToken.None);
+        var monday = await Machines(db).Handle(Filter(Monday), CancellationToken.None);
+
+        Assert.Equal(0.10m, Assert.Single(sunday.Rows).NayaxProcessingFees.EstimatedFeeExGst);
+        Assert.Equal(0.50m, Assert.Single(monday.Rows).NayaxProcessingFees.EstimatedFeeExGst);
+    }
+
+    /// <summary>
+    /// Commission due for a month starts at local midnight (issue #1252 acceptance criterion 6): a
+    /// sale at 00:30 on 1 November Sydney - 13:30Z on 31 October - is November's, and a sale at 23:30
+    /// on 31 October Sydney is not.
+    /// </summary>
+    [Fact]
+    public async Task Commission_due_for_a_month_includes_a_sale_in_its_first_Sydney_morning()
+    {
+        var novemberFirst = new DateTime(2026, 11, 1);
+        var novemberLast = new DateTime(2026, 11, 30);
+        var firstSydneyMorningUtc = Utc(2026, 10, 31, 13, 30);
+        var lastSydneyEveningOfOctoberUtc = Utc(2026, 10, 31, 12, 30);
+
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.SiteCommissionAgreements.Add(Agreement(0.10m, new DateTime(2026, 1, 1), effectiveTo: null));
+            seed.NayaxSales.AddRange(
+                Sale(1, firstSydneyMorningUtc, 10m, cost: 1m),
+                Sale(2, lastSydneyEveningOfOctoberUtc, 100m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var november = Assert.Single(
+            (await SiteCommissions(db).Handle(novemberFirst, novemberLast, null, CancellationToken.None)).Rows);
+
+        Assert.Equal(10m, november.GrossSales);
+        Assert.Equal(1.00m, november.CommissionDue);
+    }
+
+    /// <summary>
+    /// Issue #1252 acceptance criterion 5: for one requested range, machine profitability, product
+    /// profitability and Transaction Sales (completed filter) total the same sales as bookkeeping.
+    /// The range spans the 23-hour daylight-saving start day and both of its midnight boundaries, so
+    /// a report still selecting by the UTC date would disagree here.
+    /// </summary>
+    [Fact]
+    public async Task Total_sales_agree_across_bookkeeping_both_profitability_reports_and_transaction_sales()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.NayaxSales.AddRange(
+                // 23:30 Saturday 3 October (AEST) - before the range.
+                Sale(1, Utc(2026, 10, 3, 13, 30), 100m, cost: 1m),
+                // 00:30 Sunday 4 October (AEST).
+                Sale(2, Utc(2026, 10, 3, 14, 30), 2m, cost: 1m),
+                // 23:59 Sunday 4 October (AEDT).
+                Sale(3, LastMinuteOfSydneySundayUtc, 3m, cost: 1.5m),
+                // 00:30 Monday 5 October (AEDT), paid in cash.
+                Sale(4, JustAfterSydneyMidnightUtc, 5m, cost: 2m, paymentMethod: "Cash"),
+                // 10:30 Monday 5 October (AEDT), still pending: counted by none of them.
+                Sale(5, Utc(2026, 10, 4, 23, 30), 7m, status: NayaxTransactionStatusIds.PendingSettlementNotFinal),
+                // 00:30 Tuesday 6 October (AEDT) - after the range.
+                Sale(6, Utc(2026, 10, 5, 13, 30), 100m, cost: 1m));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var filter = new ReportingFilterDto(From: Sunday, To: Monday);
+        var bookkeeping = await Bookkeeping(db).Handle(filter, CancellationToken.None);
+        var machines = await Machines(db).Handle(filter, CancellationToken.None);
+        var products = await Products(db).Handle(filter, CancellationToken.None);
+        var transactions = await Transactions(db).Handle(
+            new TransactionSalesFilterDto(From: Sunday, To: Monday), CancellationToken.None);
+
+        Assert.Equal(10m, bookkeeping.Sales);
+        Assert.Equal(bookkeeping.Sales, machines.Rows.Sum(x => x.Sales));
+        Assert.Equal(bookkeeping.Sales, products.Rows.Sum(x => x.Sales));
+        Assert.Equal(bookkeeping.Sales, transactions.Totals.Sales);
+        Assert.Equal(bookkeeping.TransactionCount, machines.Rows.Sum(x => x.TransactionCount));
+        Assert.Equal(bookkeeping.TransactionCount, products.Rows.Sum(x => x.TransactionCount));
+        Assert.Equal(bookkeeping.TransactionCount, transactions.Totals.CompletedTransactionCount);
     }
 
     private static async Task SeedTenPercentAgreementAndTheMondaySaleAsync(SqliteConnection connection)
     {
         await using var seed = Context(connection);
-        seed.SiteCommissionAgreements.Add(new SiteCommissionAgreement
-        {
-            SiteId = SiteId,
-            EffectiveFrom = new DateTime(2026, 1, 1),
-            EffectiveTo = null,
-            CommissionRate = 0.10m,
-            Frequency = CommissionFrequency.Monthly,
-            Basis = CommissionBasis.GrossSales
-        });
+        seed.SiteCommissionAgreements.Add(Agreement(0.10m, new DateTime(2026, 1, 1), effectiveTo: null));
         seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
         await seed.SaveChangesAsync();
     }
+
+    private static SiteCommissionAgreement Agreement(decimal rate, DateTime effectiveFrom, DateTime? effectiveTo) => new()
+    {
+        SiteId = SiteId,
+        EffectiveFrom = effectiveFrom,
+        EffectiveTo = effectiveTo,
+        CommissionRate = rate,
+        Frequency = CommissionFrequency.Monthly,
+        Basis = CommissionBasis.GrossSales
+    };
 
     public static TheoryData<string, DateTime, DateTime, DateTime, int> BusinessDays => new()
     {
@@ -287,6 +520,12 @@ public class MoneyReportSydneyBusinessDayTests
         var gst = await Gst(db).Handle(filter, CancellationToken.None);
         var dashboard = await Dashboard(db).Handle(filter, CancellationToken.None);
         var reconciliation = await Reconciliation(db).Handle(filter, 0.01m, CancellationToken.None);
+        var machines = await Machines(db).Handle(filter, CancellationToken.None);
+        var products = await Products(db).Handle(filter, CancellationToken.None);
+        var transactions = await Transactions(db).Handle(
+            TransactionFilter(businessDate), CancellationToken.None);
+        var commission = await SiteCommissions(db).Handle(
+            businessDate, businessDate, null, CancellationToken.None);
 
         Assert.True(6m == bookkeeping.Sales, $"{scenario}: bookkeeping counted {bookkeeping.Sales}.");
         Assert.Equal(2, bookkeeping.TransactionCount);
@@ -299,6 +538,16 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.True(6m == dashboard.Sales, $"{scenario}: the dashboard counted {dashboard.Sales}.");
         Assert.True(6m == reconciliation.TotalVendingSales,
             $"{scenario}: reconciliation counted {reconciliation.TotalVendingSales}.");
+        // The four reports issue #1252 moved see exactly the same two sales.
+        var machineSales = machines.Rows.Sum(x => x.Sales);
+        Assert.True(6m == machineSales, $"{scenario}: machine profitability counted {machineSales}.");
+        var productSales = products.Rows.Sum(x => x.Sales);
+        Assert.True(6m == productSales, $"{scenario}: product profitability counted {productSales}.");
+        Assert.True(6m == transactions.Totals.Sales,
+            $"{scenario}: Transaction Sales counted {transactions.Totals.Sales}.");
+        Assert.Equal(2, transactions.Totals.CompletedTransactionCount);
+        var commissionSales = Assert.Single(commission.Rows).GrossSales;
+        Assert.True(6m == commissionSales, $"{scenario}: the Commission report counted {commissionSales}.");
     }
 
     /// <summary>
@@ -401,6 +650,70 @@ public class MoneyReportSydneyBusinessDayTests
     }
 
     /// <summary>
+    /// Machine profitability's per-machine operating expenses stay on plain calendar-date bounds too
+    /// (issue #1252 acceptance criterion 7): only the sale instants were moved onto the business-day
+    /// window, so an expense dated 5 October is in the 5 October report and an expense dated the 4th
+    /// is not, however the sale that produced the machine row was selected.
+    /// </summary>
+    [Fact]
+    public async Task Machine_profitability_keeps_date_only_operating_expense_bounds()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using (var seed = Context(connection))
+        {
+            seed.Businesses.Add(new Business
+            {
+                Id = 1,
+                Name = "Vending A",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+                SalesProvider = ExternalProvider.Nayax,
+            });
+            var machine = new LocalMachine
+            {
+                BusinessId = 1,
+                Name = $"Machine {MachineId}",
+                ExternalMachineId = MachineId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            };
+            seed.Machines.Add(machine);
+            // The 00:30 Monday Sydney sale, so the Monday report has a machine row to carry the
+            // expenses at all.
+            seed.NayaxSales.Add(Sale(1, JustAfterSydneyMidnightUtc, 3.5m, cost: 1m));
+            await seed.SaveChangesAsync();
+
+            seed.OperatingExpenses.AddRange(
+                new OperatingExpense
+                {
+                    BusinessId = 1,
+                    ExpenseDate = Monday,
+                    Category = OperatingExpenseCategory.Insurance,
+                    Description = "Monday",
+                    MachineId = machine.Id,
+                    AmountExGst = 10m,
+                    GstAmount = 1m,
+                    TotalAmount = 11m
+                },
+                new OperatingExpense
+                {
+                    BusinessId = 1,
+                    ExpenseDate = Sunday,
+                    Category = OperatingExpenseCategory.Insurance,
+                    Description = "Sunday",
+                    MachineId = machine.Id,
+                    AmountExGst = 20m,
+                    GstAmount = 2m,
+                    TotalAmount = 22m
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Context(connection);
+        var monday = await Machines(db).Handle(Filter(Monday), CancellationToken.None);
+
+        Assert.Equal(11m, Assert.Single(monday.Rows).DirectOperatingExpenses);
+    }
+
+    /// <summary>
     /// The CSV/XLSX export of each of these reports shows exactly the figures its screen shows,
     /// because both are built from the same use-case result. Full recorded coverage is seeded so the
     /// export prints the amounts rather than substituting an availability state for them.
@@ -433,6 +746,22 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.Equal("3.5", await CellAsync(exports, "reconciliation", Monday, "TotalVendingSales"));
         Assert.Equal("0", await CellAsync(exports, "bookkeeping", Sunday, "GrossSales"));
         Assert.Equal("0", await CellAsync(exports, "dashboard", Sunday, "Sales"));
+
+        // The three reports issue #1252 moved export the same figures their screens show.
+        Assert.Equal("3.5", await CellAsync(exports, "machine-profitability", Monday, "Sales"));
+        Assert.Equal("3.5", await CellAsync(exports, "products", Monday, "Sales"));
+        var mondayTransactions = await exports.Handle("transactions", TransactionFilter(Monday), CancellationToken.None);
+        Assert.Equal("3.5", mondayTransactions.Rows[1][mondayTransactions.Rows[0].ToList().IndexOf("Sale")]);
+
+        // Asked for Sunday, each of them exports no data row at all - its one trailing metadata row
+        // states the availability instead of fabricating a machine, product or transaction.
+        foreach (var report in new[] { "machine-profitability", "products" })
+        {
+            var table = await exports.Handle(report, Filter(Sunday), CancellationToken.None);
+            Assert.Equal(ReportExportTable.NoRowsLabel, table.Rows[1][0]);
+        }
+        var sundayTransactions = await exports.Handle("transactions", TransactionFilter(Sunday), CancellationToken.None);
+        Assert.Equal(ReportExportTable.NoRowsLabel, sundayTransactions.Rows[1][0]);
     }
 
     private static async Task<string> CellAsync(GetReportExportRows exports, string report, DateTime date, string column)
@@ -444,6 +773,9 @@ public class MoneyReportSydneyBusinessDayTests
     }
 
     private static ReportingFilterDto Filter(DateTime businessDate) => new(From: businessDate, To: businessDate);
+
+    private static TransactionSalesFilterDto TransactionFilter(DateTime businessDate) =>
+        new(From: businessDate, To: businessDate);
 
     private static DateTime Utc(int year, int month, int day, int hour, int minute = 0) =>
         new(year, month, day, hour, minute, 0, DateTimeKind.Utc);
@@ -481,12 +813,21 @@ public class MoneyReportSydneyBusinessDayTests
     /// Nayax fleet read is faked, because a site is known only from a machine's <c>CustomerID</c>
     /// and nothing stored here can supply it.
     /// </summary>
-    private static IGetSiteCommissionReport SiteCommissions(AppDbContext db)
+    private static IGetSiteCommissionReport SiteCommissions(AppDbContext db) =>
+        new GetSiteCommissionReport(
+            FleetWithTheOneMachine(), new EfSiteCommissionStore(db), new SiteNameResolver(), Sydney);
+
+    /// <summary>
+    /// The live fleet read every site-aware report here depends on: one machine, mapped to one
+    /// site. Only this read is faked, because a site is known only from a machine's
+    /// <c>CustomerID</c> and nothing stored in the database can supply it.
+    /// </summary>
+    private static INayaxLynxClient FleetWithTheOneMachine()
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = MachineId, CustomerID = SiteId } });
-        return new GetSiteCommissionReport(nayax.Object, new EfSiteCommissionStore(db), new SiteNameResolver());
+        return nayax.Object;
     }
 
     private static GetBookkeepingReport Bookkeeping(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>
@@ -500,7 +841,14 @@ public class MoneyReportSydneyBusinessDayTests
         new(Bookkeeping(db), new EfGstReportFactsProvider(db));
 
     private static GetProductProfitabilityReport Products(AppDbContext db) =>
-        new(new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
+        new(new EfProductProfitabilityReportFactsProvider(db, Sydney), new EfProductPurchaseCostFactsProvider(db));
+
+    private static GetMachineProfitabilityReport Machines(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>
+        new(new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db, Sydney), commissions ?? EmptyCommissions(), Sydney));
+
+    private static GetTransactionSalesReport Transactions(AppDbContext db) =>
+        new(new EfTransactionSalesReportFactsProvider(db, Sydney, FleetWithTheOneMachine()));
 
     private static GetDashboardReport Dashboard(AppDbContext db, IGetSiteCommissionReport? commissions = null) =>
         new(Bookkeeping(db, commissions), Products(db),
@@ -510,11 +858,8 @@ public class MoneyReportSydneyBusinessDayTests
         new(new EfReconciliationReportFactsProvider(db, Sydney));
 
     private static GetReportExportRows Exports(AppDbContext db) =>
-        new(Bookkeeping(db), Daily(db), Reconciliation(db),
-            new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(
-                db, TestFinancialUseCases.ProcessingFees(db, Sydney), EmptyCommissions())),
-            Products(db), Gst(db), Dashboard(db),
-            new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db)));
+        new(Bookkeeping(db), Daily(db), Reconciliation(db), Machines(db),
+            Products(db), Gst(db), Dashboard(db), Transactions(db));
 
     private static async Task<SqliteConnection> CreateSqliteAsync()
     {

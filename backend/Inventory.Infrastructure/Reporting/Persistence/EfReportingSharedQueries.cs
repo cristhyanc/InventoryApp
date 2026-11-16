@@ -26,15 +26,17 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// <see cref="BusinessDateSalesWindow"/>, which resolves an inclusive range of requested business
 /// dates to the UTC instants those business days actually cover - including the site commission
 /// those reports subtract, which is calculated over the same window rather than over the requested
-/// dates read as UTC. Bookkeeping, the GST accounting aid (through bookkeeping), the reports
-/// dashboard and reconciliation select that way, as the daily report already did; machine and
-/// product profitability, the standalone Commission report and Transaction Sales still pass plain
-/// calendar-date bounds and are part 2 of that change.
+/// dates read as UTC. Issue #1252 completed that move: every money report - bookkeeping, the GST
+/// accounting aid (through bookkeeping), the daily report, the reports dashboard, reconciliation,
+/// machine and product profitability, the standalone Commission report and Transaction Sales -
+/// selects its sales this way, and none of these helpers offers a calendar-date form for a figure
+/// measured over sale instants any more.
 ///
 /// <see cref="EfTransactionSalesReportFactsProvider"/>, the last migrated adapter, deliberately does
-/// not reuse these helpers: it needs every transaction status (not only completed sales) and its own
-/// site-name/product-catalogue facts, so its query shape is not equivalent to any helper here (see
-/// the reporting migration track in docs/architecture.md).
+/// not reuse the sale-selecting helpers here: it needs every transaction status (not only completed
+/// sales) and its own site-name/product-catalogue facts, so its query shape is not equivalent to any
+/// helper here (see the reporting migration track in docs/architecture.md). It does share
+/// <see cref="SalesWindow"/> and the coverage query.
 /// </summary>
 internal static class EfReportingSharedQueries
 {
@@ -73,9 +75,9 @@ internal static class EfReportingSharedQueries
 
         /// <summary>
         /// The same period as a <see cref="SiteCommissionBusinessPeriod"/>, so a report's commission
-        /// is calculated over exactly the sales its revenue counts while the effective-dated
-        /// agreement, payments and due date are still resolved from the requested business dates
-        /// (issue #1250).
+        /// is calculated over exactly the sales its revenue counts (issue #1250), while the
+        /// effective-dated agreement covering each of those sales is resolved from that sale's own
+        /// business date (issue #1252).
         /// </summary>
         public SiteCommissionBusinessPeriod CommissionPeriod =>
             new(StartUtc, EndExclusiveUtc, FirstBusinessDate, LastBusinessDate);
@@ -196,23 +198,20 @@ internal static class EfReportingSharedQueries
     public static IQueryable<SaleCost> CostQuery(AppDbContext db, BusinessDateSalesWindow window, long? machineId) =>
         CostQuery(db, window.StartUtc, window.EndExclusiveUtc, machineId);
 
-    // Shared by EfBookkeepingReportFactsProvider and EfMachineProfitabilityReportFactsProvider: both
-    // resolve the same effective-dated site commission coverage/warnings for a date range and
-    // optional machine filter, gated on which completed-sale machine IDs actually have a mapped site.
-    public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
-        AppDbContext db, IGetSiteCommissionReport siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
-        long? machineId, CancellationToken cancellationToken) =>
-        ResolveMachineCommissionsAsync(
-            db, siteCommissions, new SiteCommissionBusinessPeriod(from, endExclusive, from, to),
-            machineId, cancellationToken);
-
     /// <summary>
-    /// The same resolution for a business-date window (issue #1250): the commission report is asked
-    /// for the window's own period, so the commission <em>amounts</em> it returns - which bookkeeping
-    /// publishes as <c>SiteCommission</c> and the reports dashboard republishes - are calculated over
-    /// exactly the sales the report's revenue counts, and the completed-sale machine IDs they are
-    /// gated on are selected between the same instants. The effective-dated agreement, payments and
-    /// due date still come from the window's two business dates.
+    /// The effective-dated site commission coverage, warnings and per-machine amounts for a
+    /// business-date window, gated on which completed-sale machine IDs actually have a mapped site.
+    /// Shared by <see cref="EfBookkeepingReportFactsProvider"/>,
+    /// <see cref="EfDashboardReportFactsProvider"/> and
+    /// <see cref="EfMachineProfitabilityReportFactsProvider"/>.
+    ///
+    /// <para>The commission report is asked for the window's own period (issue #1250), so the
+    /// commission <em>amounts</em> it returns - which bookkeeping publishes as <c>SiteCommission</c>
+    /// and the reports dashboard republishes - are calculated over exactly the sales the report's
+    /// revenue counts, and the completed-sale machine IDs they are gated on are selected between the
+    /// same instants. There is no calendar-date form of this helper: issue #1252 moved the last
+    /// caller that had one onto the window, so no report can ask for commission over the whole UTC
+    /// dates a business day straddles.</para>
     /// </summary>
     public static Task<CommissionResolutionResult> GetMachineCommissionsAsync(
         AppDbContext db, IGetSiteCommissionReport siteCommissions, BusinessDateSalesWindow window,

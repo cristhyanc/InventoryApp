@@ -150,10 +150,13 @@ public class SiteCommissionServiceTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
             machines.Select(x => new NayaxMachine { MachineID = x.MachineId, CustomerID = x.SiteId }).ToList());
+        // The trivial identity calendar: these tests are about the commission rules themselves, not
+        // about which business day a sale falls on (that is MoneyReportSydneyBusinessDayTests).
         return new GetSiteCommissionReport(
             nayax.Object,
             new EfSiteCommissionStore(db),
-            new SiteNameResolver());
+            new SiteNameResolver(),
+            TestFinancialUseCases.TrivialCalendar);
     }
 
     private static Task<SiteCommissionReport> Report(
