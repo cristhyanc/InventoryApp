@@ -41,6 +41,13 @@ interface PendingDecision {
  * The page reads one server page at a time, from two separate lists: "Needs review" (the default,
  * exactly the sales the Dashboard alert counts) and "Decided". However many sales an Owner has
  * decided, every sale still waiting can be reached.
+ *
+ * **Nothing financial is decided here** (issue #1306). The API withholds the stored sale's amount,
+ * the amount Nayax's record carried and the reimbursement difference a decision moved from a member
+ * without `Dashboard.ViewFinancials`, so such a member never receives them. This page only chooses
+ * what to render in their place: the amount lines are left out altogether rather than shown empty
+ * or as `0.00`, and the comparison that says *which* field Nayax disagreed about stays, because
+ * that is what makes a sale worth an Operator's attention.
  */
 @Component({
   selector: 'app-nayax-sale-review-page',
@@ -63,6 +70,16 @@ export class NayaxSaleReviewPageComponent implements OnInit, OnDestroy {
   items: NayaxSaleReviewItem[] = [];
   state: 'loading' | 'loaded' | 'failed' = 'loading';
   canDecide = false;
+
+  /**
+   * Whether the signed-in member holds `Dashboard.ViewFinancials`, read from the same
+   * `GET /api/me/access` capabilities every other hidden figure in this application reads. It starts
+   * `false`, fail-closed like {@link canDecide} beside it, so an amount line is never rendered for a
+   * member whose capabilities have not been read yet. It decides rendering only: the API is what
+   * withholds the figures.
+   */
+  canViewFinancials = false;
+
   pending: PendingDecision | null = null;
   saving = false;
   message: string | null = null;
@@ -73,6 +90,9 @@ export class NayaxSaleReviewPageComponent implements OnInit, OnDestroy {
 
   constructor(private readonly review: NayaxSaleReviewService, access: AccessService) {
     this.subscriptions.add(access.allows('Data.Repair').subscribe((allowed) => (this.canDecide = allowed)));
+    this.subscriptions.add(
+      access.allows('Dashboard.ViewFinancials').subscribe((allowed) => (this.canViewFinancials = allowed))
+    );
   }
 
   ngOnInit(): void {

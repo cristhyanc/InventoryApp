@@ -60,6 +60,14 @@ public class OperatorReadableFinancialFigureTests
         // and "Sales" does not match it. The fragment is the amount's own name rather than a bare
         // "Sale", which would match every date, name and status that merely belongs to a sale.
         "SaleAmount",
+        // Issue #1306 (audit finding AI-02): the Nayax sales review of issue #1105 publishes a
+        // queue sale's settled amount, the amount Nayax's own record carries and the reimbursement
+        // difference a decision moved, and not one of the fragments above matches any of them.
+        // "Settlement" is what this application calls a sale's money value wherever it comes from
+        // the provider, and "Difference" is what it calls a money delta between two of its own
+        // figures.
+        "Settlement",
+        "Difference",
     ];
 
     /// <summary>
@@ -229,6 +237,59 @@ public class OperatorReadableFinancialFigureTests
                 + "is withheld above. The list is never withheld: an Operator may see that the "
                 + "machine dispensed something, and withholding the rows would make an unavailable "
                 + "provider and an unprivileged role look identical."),
+
+        // GET api/nayax-sale-review (issue #1105, closed for money by issue #1306): the queue sales
+        // Nayax's own records contradict or do not yet show, and the ones an Owner has decided.
+        new(
+            "NayaxSaleReviewItem.SettlementValue",
+            FigureOutcome.Withheld,
+            "Issue #1306 (audit finding AI-02): the stored sale's settled amount, null without the "
+                + "capability and never 0, through NayaxSaleReviewResponseMapper and the same "
+                + "FinancialFigureVisibility.Withhold every other mapper uses. The sale's machine, "
+                + "instant, product, state and whether it is counted stay, so the page is still "
+                + "usable for seeing which sales need attention."),
+        new(
+            "NayaxSaleReviewEvidence.ProviderSettlementValue",
+            FigureOutcome.Withheld,
+            "Issue #1306: the amount Nayax's own lastSales record carried for the sale. Withheld on "
+                + "the same terms as the stored amount beside it - publishing one of the two would "
+                + "publish the other by subtraction. Each compared field's own answer (matches, "
+                + "differs, not compared) is not an amount and stays."),
+        new(
+            "NayaxSaleReviewHistoryEntry.ReconciledPeriodDifference",
+            FigureOutcome.Withheld,
+            "Issue #1306: how much an Owner's decision moved an already reconciled reimbursement "
+                + "period by. The period itself is not an amount and stays: it says which period a "
+                + "decision affected, never by how much."),
+
+        // The purchase-cost deltas of issues #63 and #183, which the "Settlement"/"Difference"
+        // vocabulary of issue #1306 reaches for the first time. Each is a difference between two
+        // figures the recorded decision (Cristhyan, 15 October 2026) deliberately keeps visible to
+        // an Operator, who records purchases and restocks the machines; none of them is a sales,
+        // revenue, profit, margin or valuation figure. Issue #1306 lists them in its pull request
+        // rather than changing them, because withholding a figure that decision keeps visible is a
+        // decision for a human to make.
+        new(
+            "ProductPriceComparisonDto.AbsoluteDifference",
+            FigureOutcome.NotAFinancialAmount,
+            "Issue #63: the gap between the lowest and the latest recorded purchase unit cost of "
+                + "one product. Both unit costs are on the same response and the recorded decision "
+                + "keeps them visible, so their difference states nothing further."),
+        new(
+            "ProductPriceComparisonDto.PercentageDifference",
+            FigureOutcome.NotAFinancialAmount,
+            "Issue #63: the same gap as a percentage, which carries no amount at all."),
+        new(
+            "PurchaseValidationDto.TotalDifference",
+            FigureOutcome.NotAFinancialAmount,
+            "The gap between a purchase's own typed total and the total calculated from its lines, "
+                + "beside both of those figures. It is the purchase's own cost data, which the "
+                + "recorded decision keeps visible to the role that records purchases."),
+        new(
+            "NayaxStockEventPreviewDto.UnaccountedDifference",
+            FigureOutcome.NotAFinancialAmount,
+            "Issue #183: a count of units, not money - how many more units a pending refill event "
+                + "would take out of storage than storage holds."),
 
         new(
             "MachineRestockSyncReminderMachineDto.HasSalesSinceLastSync",
