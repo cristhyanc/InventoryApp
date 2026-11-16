@@ -23,6 +23,9 @@ export class CategoryListComponent implements OnInit, OnDestroy {
   confirmingCategory: Category | null = null;
   form = { name: '', description: '' };
 
+  /** Whether a create or update request is in flight, so a second submit before it answers is ignored (issue #1280). */
+  saving = false;
+
   /**
    * Whether a support session is active (issue #737, extending #554): create/rename and delete are
    * hidden while it is, because a session grants `InventoryOperate` - the capability this page
@@ -83,10 +86,20 @@ export class CategoryListComponent implements OnInit, OnDestroy {
     this.startCreate();
   }
 
+  /** The submit button's label, which names the save in flight while one is outstanding (issue #1280). */
+  get submitLabel(): string {
+    if (this.saving) {
+      return 'Saving...';
+    }
+    return this.editing ? 'Update' : 'Create';
+  }
+
   save(): void {
     // Checked here as well as disabled in the template, so the write is actually unavailable
-    // rather than merely inert - the endpoint refuses it either way.
-    if (this.sessionActive) {
+    // rather than merely inert - the endpoint refuses it either way. `saving` is checked too
+    // (issue #1280), so a double click on the submit button sends only one request rather than
+    // racing a second create or update past the one already in flight.
+    if (this.sessionActive || this.saving) {
       return;
     }
     if (!this.form.name.trim()) {
@@ -94,13 +107,16 @@ export class CategoryListComponent implements OnInit, OnDestroy {
       return;
     }
     this.error = '';
+    this.saving = true;
 
     const payload = { name: this.form.name.trim(), description: this.form.description || null };
     const onSuccess = () => {
+      this.saving = false;
       this.startCreate();
       this.load();
     };
     const onError = (error: unknown) => {
+      this.saving = false;
       this.error = apiErrorMessage(error, this.editing ? 'Failed to update category.' : 'Failed to create category.');
     };
 
