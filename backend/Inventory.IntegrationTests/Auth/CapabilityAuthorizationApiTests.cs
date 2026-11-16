@@ -180,8 +180,8 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "SiteCommissions.Manage", "GET", "/api/site-commissions/agreements", "Manager,Owner" },
         { "SiteCommissions.Manage", "POST", "/api/site-commissions/agreements", "Manager,Owner" },
         // Issue #1254's end-agreement action. It is safe to call in both directions here, because
-        // no agreement with this id exists: every role that holds the capability is answered 404
-        // and writes nothing, exactly as the rows above that use a missing id are.
+        // the "{}" body carries no end date, which JsonRequiredAttribute refuses with 400 before
+        // anything is read or written - and no agreement with this id exists either way.
         { "SiteCommissions.Manage", "POST", $"/api/site-commissions/agreements/{MissingId}/end", "Manager,Owner" },
 
         // Issue #526: the Owner-only surfaces.

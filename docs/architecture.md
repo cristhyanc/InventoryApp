@@ -14935,7 +14935,10 @@ cover either still belongs to it or belongs to no agreement at all, so no sale s
 different rate, and the narrowing itself cannot create the overlap the add refuses. Each breach is a
 `400` carrying the rule's own caller-safe sentence through `DomainExceptionHandler`
 (`DomainValidationException`), and an agreement the caller's business does not hold - another
-business's key included - is `404` rather than a refusal.
+business's key included - is `404` rather than a refusal. The request body's `endDate` is marked
+`JsonRequiredAttribute`, the way this repository's other value-typed write fields are, so a body
+that omits it is refused outright instead of binding to `default(DateTime)` and reaching the rule as
+1 January 0001 - an answer about the agreement's start date, which is not what went wrong.
 
 **The authoritative read, the comparison and the write are one operation.**
 `ISiteCommissionStore.BeginWriteTransactionAsync` opens `SqliteWriteLockTransaction`
@@ -14988,7 +14991,8 @@ new end date and the in-lock instant, and a request with no identified actor rea
 `SiteCommissionAgreementEndApiTests` drives the real API: the 12% agreement is refused while the 10%
 one is open-ended and accepted once it has been ended on 30 June, an agreement that still overlaps is
 refused anyway, both refusals answer `400` with the rule's sentence and change nothing, a Manager may
-end an agreement and an Operator is `403`, another business's agreement is `404` and untouched, and
+end an agreement and an Operator is `403`, another business's agreement is `404` and untouched, a
+body that omits the end date is refused with `400` and leaves the agreement open-ended, and
 the committed change - and only the committed change - appears in the audit log.
 `FinancialAdapterTenancyTests` adds the two-business proof that neither new store method can reach
 another business's agreement. `CapabilityAuthorizationApiTests`,

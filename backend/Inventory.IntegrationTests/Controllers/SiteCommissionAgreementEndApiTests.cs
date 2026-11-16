@@ -205,6 +205,24 @@ public sealed class SiteCommissionAgreementEndApiTests
                 message.Contains($"agreement {agreementId};", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// <c>EndDate</c> is a <c>DateTime</c>, so a body that omits it would otherwise bind to 1
+    /// January 0001 and be refused with the rule's sentence about the agreement's start date - an
+    /// answer about the wrong thing. <c>JsonRequiredAttribute</c> refuses the under-posted body
+    /// instead, and the agreement is untouched.
+    /// </summary>
+    [Fact]
+    public async Task A_request_without_the_end_date_is_refused_and_writes_nothing()
+    {
+        var agreementId = await _factory.AgreementIdAsync(ApiFactory.UnderPostedSiteId);
+
+        var response = await _factory.AsOwner().PostAsync(
+            EndRoute(agreementId), new StringContent("{}", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(await _factory.EndDateOfAsync(agreementId));
+    }
+
     private static string EndRoute(int agreementId) =>
         $"/api/site-commissions/agreements/{agreementId}/end";
 
@@ -243,6 +261,7 @@ public sealed class SiteCommissionAgreementEndApiTests
         public const long AuditSiteId = 16;
         public const long RefusalAuditSiteId = 17;
         public const long OtherBusinessSiteId = 18;
+        public const long UnderPostedSiteId = 19;
 
         private static readonly DateTime CreatedAt = new(2026, 11, 16, 4, 0, 0, DateTimeKind.Utc);
         private static readonly DateTime Start = new(2026, 1, 1);
@@ -317,6 +336,7 @@ public sealed class SiteCommissionAgreementEndApiTests
                 OpenEnded(BusinessId, OperatorSiteId),
                 OpenEnded(BusinessId, AuditSiteId),
                 OpenEnded(BusinessId, RefusalAuditSiteId),
+                OpenEnded(BusinessId, UnderPostedSiteId),
                 OpenEnded(OtherBusinessId, OtherBusinessSiteId));
 
             await db.SaveChangesAsync();
