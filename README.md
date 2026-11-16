@@ -1312,8 +1312,8 @@ capabilities](#roles-and-capabilities)).
 ### Where the page is, and what is on it
 
 **Admin → Reimbursement Report** (`/admin/imports/reimbursement-report`, issue #1152). It is in the
-sidebar's **Admin** group directly after **Imports**, and the Imports page itself carries a
-**Reimbursement Report** card that opens it; the breadcrumb reads Admin › Imports › Reimbursement
+sidebar's **Admin** group directly after **Imports** (the Imports page itself no longer links to it);
+the breadcrumb reads Admin › Imports › Reimbursement
 Report. The entry needs the same access as Imports (`Imports.Run`), is left out of the menu while the
 Nayax connection is not usable for the same reason Imports is, and is covered by the **same**
 Super Admin menu switch as Imports — switching `admin.imports` off hides both ways in (see
@@ -2894,8 +2894,8 @@ does not manage.
   support session is active, and Nayax has not refused this application permission to read the
   catalogue — a refused catalogue read hides that button even though the connection itself is usable
   (`PendingPermissions` is a usable status), while a permission nothing has stated yet still offers
-  it. **Admin → Imports → Import products** is a link to the same page, so every entry point opens
-  the identical review; the review itself used to be a panel at the bottom of Admin → Imports, and
+  it. Admin → Imports no longer links to it (removed at the owner's request, 17 November 2026); the
+  review itself used to be a panel at the bottom of Admin → Imports, and
   closing it now returns you to Products. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
@@ -4283,9 +4283,8 @@ every business exactly as it is today.
   plan rather than claiming Nayax is not connected — which would be untrue of a business whose
   credentials are stored and working. **Importing a Nayax sales file** is the same kind of lock on
   **Admin → Imports**: that one card says it needs the Pro plan and withholds the file
-  controls, so nothing is uploaded that could only be refused, while the pending reimbursement XML
-  import, the product-catalogue import link and the CSV template download on the same page keep
-  working exactly as they do now. A refusal that arrives anyway — the plan changed between reads, or
+  controls, so nothing is uploaded that could only be refused, while the CSV template download on
+  the same page keeps working exactly as it does now. A refusal that arrives anyway — the plan changed between reads, or
   it could not be read at all — is shown in that card too, naming the plan the refusal itself named,
   rather than as a failed-import message with a retry that would be refused again.
 - **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does
