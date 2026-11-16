@@ -167,6 +167,7 @@ public sealed class UploadPurchase
             throw new AttachmentStorageQuotaExceededException();
 
         var (storedFileName, fileMetadata) = await SaveDocumentAsync(file, cancellationToken);
+        var staged = new StagedDocument(storedFileName, fileMetadata, quota);
 
         var resolvedFields = fields with
         {
@@ -176,9 +177,20 @@ public sealed class UploadPurchase
             PurchaseDate = effectivePurchaseDate,
         };
 
-        return await CreateOrCleanUpAsync(
-            resolvedFields, items, fileMetadata, decision, idempotency, storedFileName, quota, cancellationToken);
+        return await CreateOrCleanUpAsync(resolvedFields, items, decision, idempotency, staged, cancellationToken);
     }
+
+    /// <summary>
+    /// What this attempt put in place for the document before the purchase was written: the name
+    /// the bytes were stored under, the metadata the purchase records them by, and the storage
+    /// reserved for them (issue #968). They are staged together and, when no purchase ends up
+    /// naming them, removed together, so they travel as one value rather than as three parameters.
+    /// A purchase with no document stages nothing and carries the not-enforced decision.
+    /// </summary>
+    private sealed record StagedDocument(
+        string? StoredFileName,
+        PurchaseFileMetadata? Metadata,
+        AttachmentQuotaDecision Quota);
 
     /// <summary>
     /// The purchase an earlier request under this key already saved - or a refusal, when that key
@@ -245,24 +257,22 @@ public sealed class UploadPurchase
     private async Task<PurchaseRecord?> CreateOrCleanUpAsync(
         PurchaseFields resolvedFields,
         IReadOnlyList<PurchaseItemInput> items,
-        PurchaseFileMetadata? fileMetadata,
         SupplierOrderCompletionDecision? decision,
         PurchaseIdempotencyClaim? idempotency,
-        string? storedFileName,
-        AttachmentQuotaDecision quota,
+        StagedDocument staged,
         CancellationToken cancellationToken)
     {
         try
         {
             var outcome = await _store.CreateAsync(
-                resolvedFields, items, fileMetadata, decision, quota.Reservation, idempotency, cancellationToken);
+                resolvedFields, items, staged.Metadata, decision, staged.Quota.Reservation, idempotency, cancellationToken);
             if (!outcome.Replayed) return outcome.Purchase;
 
             // An earlier request under this key had already saved the purchase, and the store wrote
             // nothing (issue #1247). The bytes this attempt stored and the storage it reserved are
             // therefore for a document no purchase will ever name, so they go exactly as they do
             // when a save fails - the saved purchase keeps whatever document it was saved with.
-            await CleanUpAsync(storedFileName, quota, cancellationToken);
+            await CleanUpAsync(staged, cancellationToken);
             return outcome.Purchase;
         }
         catch
@@ -273,7 +283,7 @@ public sealed class UploadPurchase
             // the quota no longer fits - so nothing holds storage for a purchase that was not
             // saved. A failed removal is left for the reconciliation command rather than hiding
             // the failure that produced it.
-            await CleanUpAsync(storedFileName, quota, cancellationToken);
+            await CleanUpAsync(staged, cancellationToken);
             throw;
         }
     }
@@ -283,12 +293,11 @@ public sealed class UploadPurchase
     /// it wrote, and the storage it reserved for them. Only this request's own bytes are ever
     /// touched.
     /// </summary>
-    private async Task CleanUpAsync(
-        string? storedFileName, AttachmentQuotaDecision quota, CancellationToken cancellationToken)
+    private async Task CleanUpAsync(StagedDocument staged, CancellationToken cancellationToken)
     {
-        if (storedFileName is not null)
-            await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
-        await _quota.ReleaseAsync(quota, cancellationToken);
+        if (staged.StoredFileName is not null)
+            await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, staged.StoredFileName, cancellationToken);
+        await _quota.ReleaseAsync(staged.Quota, cancellationToken);
     }
 
     private SupplierOrderCompletionDecision ToDecision(SupplierOrderCompletionRequest request)
