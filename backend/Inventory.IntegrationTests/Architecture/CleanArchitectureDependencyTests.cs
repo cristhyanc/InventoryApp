@@ -229,6 +229,11 @@ public class CleanArchitectureDependencyTests
     /// #201, alongside the pending-migrations one, for the same reason) are startup guards that
     /// <c>DatabaseSchemaStartup</c> throws from the composition root, which is where the schema
     /// decision is made (see docs/architecture.md § SQLite operating assumptions).
+    /// <see cref="InventoryApi.Bootstrap.DatabaseSchemaNewerThanCodeException"/> is the third, added
+    /// by issue #1299 as the conscious, reviewed edit this comment asks for: it is the exact mirror
+    /// of the pending-migrations guard - the schema is ahead of the code instead of behind it - it
+    /// is thrown from the same method on the same startup decision, and moving it alone to another
+    /// layer would split one decision's three outcomes across two assemblies.
     ///
     /// Two former entries are gone. <c>InventoryCostDataQualityException</c> moved to
     /// <c>Inventory.Application.Costing</c> with the product cost rebuild use case that throws it
@@ -248,6 +253,7 @@ public class CleanArchitectureDependencyTests
         [
             "InventoryApi.Bootstrap.PendingMigrationsException",
             "InventoryApi.Bootstrap.DatabaseMigrationFailedException",
+            "InventoryApi.Bootstrap.DatabaseSchemaNewerThanCodeException",
         ];
 
         var offenders = ApiAssembly

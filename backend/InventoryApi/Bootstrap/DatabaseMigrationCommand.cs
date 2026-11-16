@@ -66,6 +66,10 @@ public static class DatabaseMigrationArguments
 /// <c>WebApplicationBuilder</c>.
 /// </summary>
 /// <param name="AppliedBefore">Migrations already applied before this run.</param>
+/// <param name="UnknownApplied">
+/// Applied migrations this build does not contain (issue #1299): the database's schema is newer
+/// than the code, which pending migrations alone never reveal.
+/// </param>
 /// <param name="PendingBefore">Migrations pending before this run.</param>
 /// <param name="Applied">True only when this run actually called <c>Migrate</c>.</param>
 /// <param name="PendingAfter">
@@ -78,6 +82,7 @@ public static class DatabaseMigrationArguments
 /// </param>
 public sealed record DatabaseMigrationOutcome(
     IReadOnlyList<string> AppliedBefore,
+    IReadOnlyList<string> UnknownApplied,
     IReadOnlyList<string> PendingBefore,
     bool Applied,
     IReadOnlyList<string> PendingAfter,
@@ -87,11 +92,17 @@ public sealed record DatabaseMigrationOutcome(
 
     public bool FullyApplied => PendingAfter.Count == 0;
 
+    /// <summary>True when the database's schema is newer than this build (issue #1299).</summary>
+    public bool SchemaIsNewerThanThisBuild => UnknownApplied.Count > 0;
+
     /// <summary>
-    /// The process exit code for this outcome: non-zero only when an apply ran and still left
-    /// migrations pending. A dry run and an already up-to-date database both succeed.
+    /// The process exit code for this outcome: non-zero when an apply ran and still left migrations
+    /// pending, and non-zero whenever the schema is newer than this build - a database this build
+    /// does not understand is never a success, which is why a dry run against one no longer reports
+    /// "already up to date" and exits 0 (issue #1299). An up-to-date database this build does
+    /// understand still succeeds in both modes.
     /// </summary>
-    public int ExitCode => Applied && !FullyApplied ? 1 : 0;
+    public int ExitCode => SchemaIsNewerThanThisBuild || (Applied && !FullyApplied) ? 1 : 0;
 }
 
 /// <summary>
@@ -103,6 +114,12 @@ public sealed record DatabaseMigrationOutcome(
 /// because the order matters and is part of the behaviour: the summary, the pending migration
 /// names and "Applying..." must reach the operator <i>before</i> the migration starts, so that an
 /// apply which fails part-way still leaves them looking at what was attempted.
+///
+/// Since issue #1299 it also reports the applied migrations this build does <i>not</i> contain -
+/// the database's schema being newer than the code, which no count of pending migrations reveals -
+/// and that report makes the run exit non-zero instead of saying "already up to date". How
+/// migrations are applied is unchanged: an <c>--apply</c> against such a database still applies
+/// exactly what is pending, with the finding on the operator's screen first.
 /// </summary>
 public static class DatabaseMigrator
 {
@@ -117,6 +134,7 @@ public static class DatabaseMigrator
         CancellationToken cancellationToken)
     {
         var appliedBefore = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToList();
+        var unknownApplied = UnknownAppliedMigrations.In(appliedBefore, db.Database.GetMigrations());
         var pendingBefore = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
 
         output.WriteLine();
@@ -124,13 +142,47 @@ public static class DatabaseMigrator
         output.WriteLine(new string('-', 78));
         output.WriteLine($"Applied migrations : {appliedBefore.Count}");
         output.WriteLine($"Pending migrations : {pendingBefore.Count}");
+
+        if (unknownApplied.Count > 0)
+        {
+            output.WriteLine($"Unknown applied    : {unknownApplied.Count}");
+        }
+
         output.WriteLine();
+
+        // Issue #1299: an applied id this build does not contain is reported before anything else
+        // is said about pending work, because it changes what the operator should do next - and on
+        // an apply it has to be on their screen before `Migrate` is called.
+        if (unknownApplied.Count > 0)
+        {
+            foreach (var migration in unknownApplied)
+            {
+                output.WriteLine($"  unknown  {migration}");
+            }
+
+            output.WriteLine();
+            output.WriteLine(UnknownAppliedMigrations.Summarise(unknownApplied));
+            output.WriteLine(UnknownAppliedMigrations.RecoveryGuidance);
+            output.WriteLine();
+        }
 
         if (pendingBefore.Count == 0)
         {
-            output.WriteLine("The schema is already up to date. Nothing to do.");
-            output.WriteLine();
-            return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: false, pendingBefore, Readiness: null);
+            // "Already up to date" would be false here: this build is behind the database, which is
+            // the exact mistake the unknown-applied report above exists to stop (issue #1299).
+            if (unknownApplied.Count == 0)
+            {
+                output.WriteLine("The schema is already up to date. Nothing to do.");
+                output.WriteLine();
+            }
+
+            return new DatabaseMigrationOutcome(
+                appliedBefore,
+                unknownApplied,
+                pendingBefore,
+                Applied: false,
+                pendingBefore,
+                Readiness: null);
         }
 
         foreach (var migration in pendingBefore)
@@ -143,10 +195,19 @@ public static class DatabaseMigrator
         if (!apply)
         {
             output.WriteLine(
-                "Dry run: nothing was applied. Take a verified backup, then re-run with "
-                    + $"{DatabaseMigrationArguments.ApplyFlag}.");
+                unknownApplied.Count > 0
+                    ? "Dry run: nothing was applied. Resolve the unknown applied migration(s) above "
+                        + "first; this build is not the one to apply anything to this database."
+                    : "Dry run: nothing was applied. Take a verified backup, then re-run with "
+                        + $"{DatabaseMigrationArguments.ApplyFlag}.");
             output.WriteLine();
-            return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: false, pendingBefore, Readiness: null);
+            return new DatabaseMigrationOutcome(
+                appliedBefore,
+                unknownApplied,
+                pendingBefore,
+                Applied: false,
+                pendingBefore,
+                Readiness: null);
         }
 
         output.WriteLine("Applying...");
@@ -181,7 +242,13 @@ public static class DatabaseMigrator
                     + $"{BusinessBootstrapArguments.DryRunFlag}` next. See docs/tenant-rollout.md.");
         output.WriteLine();
 
-        return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: true, pendingAfter, readiness);
+        return new DatabaseMigrationOutcome(
+            appliedBefore,
+            unknownApplied,
+            pendingBefore,
+            Applied: true,
+            pendingAfter,
+            readiness);
     }
 }
 
