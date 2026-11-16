@@ -16,6 +16,11 @@ public enum NayaxSqsDisposition
     /// Something that may succeed later did not succeed now - a busy database, a network or AWS
     /// failure, a Nayax timeout, a rebuild that is still failing. The message is <em>not</em>
     /// deleted and its visibility is set to a bounded backoff, so the next receive is the retry.
+    ///
+    /// <para>How long that backoff is depends on the reason (issue #1305): the three reasons that
+    /// say something outside this application is unavailable wait on the growing outage schedule,
+    /// and every other transient reason keeps the short per-receive backoff. The reader decides it
+    /// in one place; the arithmetic is <c>NayaxSqsQueuePolicy</c>'s.</para>
     /// </summary>
     Transient,
 

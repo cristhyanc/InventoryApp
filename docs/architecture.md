@@ -19398,15 +19398,32 @@ failed rebuild used to cause on every visit; that warning now appears only when 
 
 | Kind | Examples | Action |
 |---|---|---|
-| Transient | `SQLITE_BUSY` after the busy timeout; a network or AWS failure; a Nayax timeout or failure; an unusable connection or a plan without the sales provider; a pending rebuild still failing | **Not deleted.** Visibility set to 30 s × receive count, capped at the visibility timeout |
+| Transient — something is unavailable | `SQLITE_BUSY` after the busy timeout; a network or AWS failure; a Nayax timeout or failure; an unusable connection or a plan without the sales provider (`StoreUnavailable`, `ProviderUnavailable`, `ConnectionUnavailable`) | **Not deleted.** Visibility set to the outage schedule's step for this receive count (issue #1305): **45 s, 30 min, 3 h, 9 h, then 11 h** |
+| Transient — a rebuild is pending | a pending rebuild still failing (`RebuildPending`) | **Not deleted.** Visibility set to 30 s × receive count, capped at the visibility timeout |
 | Permanent | #1102 Invalid, Unsupported or FreeVend; a missing, unknown or disabled sender; a business that is not `Active`; a machine that is not the business's | **Not deleted.** Visibility set to 0, so the message reaches the dead-letter queue after the queue's own `maxReceiveCount` |
 | Done | a CompletedSale or CancelledOrDeclined saved with no pending rebuild; a duplicate whose rebuilds are clear; Revalue; Multivend | **Deleted** |
 
-Two of those rows need their reasoning stated. An **unusable connection or a downgraded plan is
+**The outage schedule is one list in `NayaxSqsQueuePolicy.TransientOutageSchedule`, read by receive
+count** (issue #1305, the owner's decision of 14 Nov 2026 on audit finding INT-02). A receive count past
+its five steps stays on the last one, and a receive count the queue did not report is treated as the
+first receive. It exists because the two failures it has to cover are hours apart: the first step is
+under a minute so a dropped connection or one slow Nayax call clears on the next receive, and the later
+steps are hours so an outage nobody is awake for — a Nayax token that expired overnight — is ridden out
+instead of spending the queue's receives in seven minutes. With the dead-letter queue's documented
+`maxReceiveCount` of **5**, the four waits between the first receive and the fifth and last attempt
+total **12 h 30 m 45 s**, and the fifth wait keeps the message on the main queue for another 11 hours
+before AWS moves it — so a sale reaches the dead-letter queue roughly **23½ hours** after its first
+receive rather than after about seven minutes. No step reaches SQS's own 12-hour ceiling
+(`MaxVisibilityTimeoutSeconds`), because `ChangeMessageVisibility` refuses a larger value outright and a
+refused call would drop the message back to the queue's plain 120-second timeout. A **pending rebuild
+is deliberately not on this schedule**: what it waits for is this application's own cost replay, not a
+remote system coming back, so it keeps the short per-receive backoff.
+
+Two of the table's rows need their reasoning stated. An **unusable connection or a downgraded plan is
 transient**, not permanent: an unknown sender and a foreign machine are statements about the *message*,
 while a disconnected business is a statement about *today* — reconnecting makes the very same message
-saveable, so the sale is parked for the next receive rather than pushed at the dead-letter queue. And a
-**failure nobody recognised is transient too**: deleting a message because this application threw
+saveable, so the sale waits out the outage schedule rather than being pushed at the dead-letter queue.
+And a **failure nobody recognised is transient too**: deleting a message because this application threw
 something unexpected would lose a real sale, and the queue's own `maxReceiveCount` is what stops a
 message retrying forever. Nothing is ever deleted to get rid of it.
 
@@ -20845,9 +20862,12 @@ answered here criterion by criterion rather than left to the general paragraphs 
    processes one message at a time — which the single-writer SQLite file requires anyway. Staleness is
    the whole point of the feature: sales reach the application within seconds instead of on the next
    Dashboard load.
-2. **Retries.** Nothing is retried in a loop here; the *queue* is the retry. A transient outcome sets
-   the message's visibility to 30 s × its receive count, capped at the visibility timeout, so the
-   backoff is counted by SQS's own `ApproximateReceiveCount` and therefore survives a restart. A
+2. **Retries.** Nothing is retried in a loop here; the *queue* is the retry. A transient outcome whose
+   reason is that something outside the application is unavailable sets the message's visibility to the
+   outage schedule's step for its receive count — 45 s, 30 min, 3 h, 9 h, then 11 h (issue #1305) — and
+   any other transient outcome, today a pending cost rebuild, to 30 s × its receive count capped at the
+   visibility timeout; either way the backoff is counted by SQS's own `ApproximateReceiveCount` and
+   therefore survives a restart. A
    `ReceiveMessage` that fails backs off with jitter up to 60 s. Nayax calls still pass through
    `NayaxResilienceHandler` as every other caller's do. A message that can never succeed is retried not
    at all: its visibility is set to zero so the queue's `maxReceiveCount` carries it to the dead-letter
