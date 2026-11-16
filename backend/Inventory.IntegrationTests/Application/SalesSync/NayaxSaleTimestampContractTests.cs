@@ -273,13 +273,14 @@ public class NayaxSaleTimestampContractTests
             await Store(db).PersistLatestSalesAsync(sales, CancellationToken.None);
 
         await using var read = Context(connection);
-        var report = await new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(read))
+        var calendar = new FixedSydneyTime(SundayEveningUtc).Calendar;
+        var report = await new GetTransactionSalesReport(
+                new EfTransactionSalesReportFactsProvider(read, calendar))
             .Handle(
                 new TransactionSalesFilterDto(From: new DateTime(2026, 10, 1), To: new DateTime(2026, 10, 7)),
                 CancellationToken.None);
 
         var row = Assert.Single(report.Rows);
-        var calendar = new FixedSydneyTime(SundayEveningUtc).Calendar;
         Assert.Equal(SundayEveningUtc, row.TransactionDate);
         Assert.Equal(new DateTime(2026, 10, 4), calendar.ToBusinessDate(row.TransactionDate));
     }

@@ -1,5 +1,6 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.ProductMatching;
 
@@ -24,11 +25,14 @@ namespace Inventory.Application.Commissions;
 ///
 /// <para><b>Which sales a period holds and which agreement covers it are two separate questions</b>
 /// (issue #1250). Sales are selected between the period's two UTC instants; the agreement is
-/// resolved from its two business dates, because it is effective-dated.
-/// <see cref="HandleBusinessPeriod"/> is what the money reports ask, so
-/// their commission is calculated over exactly the sales their revenue counts, and
-/// <see cref="Handle"/> is the calendar-date form the standalone Commission report keeps until issue
-/// #1252 migrates it.</para>
+/// effective-dated, so it is resolved from a <em>date</em> - and since issue #1252 that date is the
+/// individual sale's own business date, so a rate that changes at business-day midnight charges the
+/// 23:59 sale the old rate and the 00:01 sale the new one.
+/// <see cref="HandleBusinessPeriod"/> is what the money reports ask, so their commission is
+/// calculated over exactly the sales their revenue counts, and <see cref="Handle"/> - the standalone
+/// Commission report's entry point - resolves the requested business dates to the same kind of
+/// window through the one business calendar port (issue #1252), so commission due for a month starts
+/// at local midnight.</para>
 ///
 /// <para><b>Exactly two answers degrade</b>, the same two <c>CalculateReorderNeeds</c> degrades on:
 /// <see cref="NayaxNotConnectedException"/> (no credentials an ordinary operation may use) and
@@ -42,15 +46,18 @@ public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteCommissionStore _store;
     private readonly ISiteNameResolver _siteNameResolver;
+    private readonly IBusinessCalendar _businessCalendar;
 
     public GetSiteCommissionReport(
         INayaxLynxClient nayax,
         ISiteCommissionStore store,
-        ISiteNameResolver siteNameResolver)
+        ISiteNameResolver siteNameResolver,
+        IBusinessCalendar businessCalendar)
     {
         _nayax = nayax;
         _store = store;
         _siteNameResolver = siteNameResolver;
+        _businessCalendar = businessCalendar;
     }
 
     public Task<SiteCommissionReport> Handle(
@@ -58,18 +65,19 @@ public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
         DateTime to,
         long? siteId,
         CancellationToken cancellationToken) =>
-        HandleBusinessPeriod(SiteCommissionBusinessPeriod.ForCalendarDates(from, to), siteId, cancellationToken);
+        HandleBusinessPeriod(
+            SiteCommissionBusinessPeriod.ForBusinessDates(_businessCalendar, from, to), siteId, cancellationToken);
 
     public async Task<SiteCommissionReport> HandleBusinessPeriod(
         SiteCommissionBusinessPeriod period,
         long? siteId,
         CancellationToken cancellationToken)
     {
-        // The period's two business dates answer the effective-dated question - which agreement
-        // covers the period - and its two instants are the only thing that selects sales.
-        // Separating them is what lets a money report have its commission calculated over exactly
-        // the sales its revenue counts (issue #1250) while the standalone Commission report keeps
-        // its calendar-date selection (issue #1252).
+        // The period's two business dates are what the report reports itself as covering, and its
+        // two instants are the only thing that selects sales. Separating them is what lets every
+        // money report have its commission calculated over exactly the sales its revenue counts
+        // (issue #1250); since issue #1252 the standalone Commission report resolves its own
+        // window the same way, so both routes measure one requested range over one window.
         var from = period.FirstBusinessDate.Date;
         var to = period.LastBusinessDate.Date;
 
@@ -134,8 +142,12 @@ public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
                     CommissionAgreement? agreement;
                     try
                     {
+                        // Resolved by the sale's own business date (issue #1252): an agreement that
+                        // starts at business-day midnight covers the 00:01 sale and not the 23:59
+                        // one, which comparing the stored UTC instant's date could not express.
                         agreement = EffectiveFinancialConfiguration.ResolveAgreement(
-                            siteAgreements, site.Key, sale.MachineAuthorizationTime);
+                            siteAgreements, site.Key,
+                            _businessCalendar.ToBusinessDate(sale.MachineAuthorizationTime));
                     }
                     catch (InvalidOperationException)
                     {

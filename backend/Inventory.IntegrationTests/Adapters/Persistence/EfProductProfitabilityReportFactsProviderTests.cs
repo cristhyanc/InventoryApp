@@ -37,7 +37,7 @@ public class EfProductProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, CostOfGoodsSold = 2m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, CostOfGoodsSold = 1m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfProductProfitabilityReportFactsProvider(db);
+        var provider = new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -65,7 +65,7 @@ public class EfProductProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, ProductId = 1, NayaxProductId = 1, ProductName = "Water", SettlementValue = 3m, CostOfGoodsSold = 1m, MachineAuthorizationTime = new DateTime(2026, 9, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, ProductId = null, NayaxProductId = 999, ProductName = "Water (999)", SettlementValue = 3m, CostOfGoodsSold = 1m, MachineAuthorizationTime = new DateTime(2026, 9, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfProductProfitabilityReportFactsProvider(db);
+        var provider = new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1), null, CancellationToken.None);
 
@@ -82,7 +82,7 @@ public class EfProductProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, ProductId = 1, NayaxProductId = 1, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 11, ProductId = 2, NayaxProductId = 2, SettlementValue = 20m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfProductProfitabilityReportFactsProvider(db);
+        var provider = new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -100,7 +100,7 @@ public class EfProductProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, ProductId = 1, NayaxProductId = 1, SettlementValue = 10m, CostOfGoodsSold = 4m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, ProductId = 1, NayaxProductId = 1, SettlementValue = 10m, CostOfGoodsSold = null, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfProductProfitabilityReportFactsProvider(db);
+        var provider = new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 

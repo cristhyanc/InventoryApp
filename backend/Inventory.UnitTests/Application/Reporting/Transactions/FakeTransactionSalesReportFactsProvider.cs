@@ -67,8 +67,13 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         decimal sale = 10m,
         decimal? costOfGoodsSold = 4m,
         bool hasPersistedCost = true,
-        DateTime? transactionDate = null) => new(
-        transactionId, transactionDate ?? new DateTime(2025, 8, 1), machineId, machineName,
+        DateTime? transactionDate = null,
+        // The business date the adapter derived for the instant (issue #1252). The fake leaves it
+        // at the instant's own date unless a test is about the boundary itself, which keeps the
+        // use-case tests about filtering, sorting and totals.
+        DateTime? businessDate = null) => new(
+        transactionId, transactionDate ?? new DateTime(2025, 8, 1),
+        businessDate ?? (transactionDate ?? new DateTime(2025, 8, 1)).Date, machineId, machineName,
         siteId, siteName, productId, nayaxProductId, rawProductName,
         Inventory.Domain.FinancialConfiguration.NayaxPaymentType.Card, "Credit Card", sale,
         null, costOfGoodsSold, costOfGoodsSold,

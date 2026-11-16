@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -22,26 +23,35 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// EF-translatable, so this adapter materializes only the required sale columns and
 /// classifies/groups them in memory, matching the pattern already used by
 /// <see cref="EfBookkeepingReportFactsProvider"/>.
+///
+/// Since issue #1252 it selects its sales by business-date instants, through the same
+/// <see cref="EfReportingSharedQueries.SalesWindow"/> bookkeeping uses, so a sale in the first hours
+/// of a business day is counted on that day rather than on the previous one.
 /// </summary>
 public sealed class EfProductProfitabilityReportFactsProvider : IProductProfitabilityReportFactsProvider
 {
     private readonly AppDbContext _db;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public EfProductProfitabilityReportFactsProvider(AppDbContext db)
+    public EfProductProfitabilityReportFactsProvider(AppDbContext db, IBusinessCalendar businessCalendar)
     {
         _db = db;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<ProductProfitabilityReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
-        var endExclusive = to.Date.AddDays(1);
+        // The requested dates are inclusive business dates, so the sales they select run from
+        // business-day midnight at the start of the first up to, exclusively, business-day midnight
+        // at the start of the day after the last - 23, 24 or 25 hours per day (issue #1252).
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
 
         var catalogue = await _db.Products.AsNoTracking()
             .Select(product => new ProductProfitabilityCatalogueEntry(
                 product.Id, product.Name, product.Category == null ? null : product.Category.Name))
             .ToListAsync(cancellationToken);
 
-        var saleRows = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
+        var saleRows = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
             .Select(x => new
             {
                 x.ProductId,
@@ -78,9 +88,9 @@ public sealed class EfProductProfitabilityReportFactsProvider : IProductProfitab
         // (issue #731): a period holding only cancelled rows has sales data and no product rows at
         // all, which is unverified rather than a measured "nothing sold".
         var containsSalesRows = await EfReportingSharedQueries
-            .AllSalesQuery(_db, from, endExclusive, machineId).AnyAsync(cancellationToken);
+            .AllSalesQuery(_db, window, machineId).AnyAsync(cancellationToken);
         var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
-            _db, from, endExclusive, containsSalesRows, containsSettlementRows: false, cancellationToken);
+            _db, window, containsSalesRows, containsSettlementRows: false, cancellationToken);
 
         return new ProductProfitabilityReportFacts(saleGroups, catalogue)
         {

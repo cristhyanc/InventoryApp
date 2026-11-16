@@ -89,13 +89,13 @@ public class EfReportCoverageFactsTests
 
         var daily = await new EfDailyReportFactsProvider(db, fees, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
-        var transactions = await new EfTransactionSalesReportFactsProvider(db)
+        var transactions = await new EfTransactionSalesReportFactsProvider(db, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
         var reconciliation = await new EfReconciliationReportFactsProvider(db, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
-        var products = await new EfProductProfitabilityReportFactsProvider(db)
+        var products = await new EfProductProfitabilityReportFactsProvider(db, calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
-        var machines = await new EfMachineProfitabilityReportFactsProvider(db, fees, EmptyCommissions())
+        var machines = await new EfMachineProfitabilityReportFactsProvider(db, fees, EmptyCommissions(), calendar)
             .GetFactsAsync(From, To, null, CancellationToken.None);
 
         return
