@@ -1129,6 +1129,18 @@ A message reaches the dead-letter queue after five receives that did not finish 
 report on its own — it is the queue doing what it was configured to do — but it always means at least
 one transaction was **not** imported, so it is worth looking at every time.
 
+**How long that takes depends on why the message failed.** A message refused for good — an unknown
+sender, a business that is not trading, a message that is not a transaction this application consumes —
+is released immediately and is in the dead-letter queue within minutes. A message that failed because
+something was *unavailable* (the database, the business's Nayax connection, or Nayax itself) now waits
+out a growing schedule instead: **45 s, then 30 min, then 3 h, then 9 h, then 11 h** between receives
+(issue #1305). Its fifth and last attempt is therefore about **12½ hours** after the first one, and it
+appears in the dead-letter queue roughly **23½ hours** after that first receive. So an outage that is
+fixed overnight — an expired Nayax token, say — is retried by the queue itself and needs no redrive, and
+a sale that *has* reached the dead-letter queue has already been retried across more than a day. The
+hourly `lastSales` reconciliation still covers those sales in the meantime, so a dead-letter message is
+not automatically a missing sale; check the sale before concluding it was lost.
+
 1. **Find out why.** The reader's own log lines name the queue message id and a fixed reason code for
    every message it refused. The codes worth acting on are: `SenderUnknown` or `SenderDisabled` (no
    business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin

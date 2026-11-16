@@ -13,6 +13,13 @@ namespace InventoryApi.Tests.Domain.NayaxSqs;
 public class NayaxSqsQueuePolicyTests
 {
     /// <summary>
+    /// The dead-letter queue's <c>maxReceiveCount</c> as README.md § What a human sets up, once
+    /// records it. It is an AWS setting rather than an application one, so it is restated here as the
+    /// number the outage schedule is measured against and never read from configuration.
+    /// </summary>
+    private const int DocumentedMaxReceiveCount = 5;
+
+    /// <summary>
     /// The default is parent #1100's own AWS setting for the main queue. The application has a value
     /// for it because the two have to agree: every extension, every backoff and the extension
     /// interval are measured against this one number.
@@ -58,6 +65,9 @@ public class NayaxSqsQueuePolicyTests
     /// <summary>
     /// Thirty seconds per receive so far, capped at the visibility timeout. Counting by the queue's
     /// own receive count rather than by a stored attempt is what makes the backoff survive a restart.
+    ///
+    /// <para>Since issue #1305 this is the wait for a transient failure that is <em>not</em> an
+    /// outage - a cost rebuild still pending - and it is unchanged.</para>
     /// </summary>
     [Theory]
     [InlineData(1, 30)]
@@ -87,6 +97,103 @@ public class NayaxSqsQueuePolicyTests
         Assert.Equal(
             TimeSpan.FromSeconds(30),
             NayaxSqsQueuePolicy.TransientVisibility(receiveCount, TimeSpan.FromSeconds(120)));
+    }
+
+    /// <summary>
+    /// Issue #1305: the outage schedule, step by step. These are the waits an outage is ridden out
+    /// with, so each one is asserted by receive count rather than derived in the test.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 45)]
+    [InlineData(2, 30 * 60)]
+    [InlineData(3, 3 * 60 * 60)]
+    [InlineData(4, 9 * 60 * 60)]
+    [InlineData(5, 11 * 60 * 60)]
+    public void An_outage_waits_the_scheduled_step_for_its_receive_count(
+        int receiveCount, int expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            NayaxSqsQueuePolicy.TransientOutageVisibility(receiveCount));
+    }
+
+    /// <summary>
+    /// A receive count past the schedule - and one the queue did not report at all - still has to
+    /// produce a usable wait: the last step for the first, and the shortest step for the second, so
+    /// a message nothing knows about is retried promptly rather than parked for half a day.
+    /// </summary>
+    [Theory]
+    [InlineData(6, 11 * 60 * 60)]
+    [InlineData(50, 11 * 60 * 60)]
+    [InlineData(0, 45)]
+    [InlineData(-3, 45)]
+    public void An_outage_receive_count_outside_the_schedule_uses_its_nearest_step(
+        int receiveCount, int expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            NayaxSqsQueuePolicy.TransientOutageVisibility(receiveCount));
+    }
+
+    /// <summary>
+    /// The owner's decision of 14 Nov 2026 (issue #1305) in one assertion: with the queue's
+    /// documented <c>maxReceiveCount</c> of five, the four waits between the first receive and the
+    /// fifth - and last - attempt have to cover at least twelve hours, so a Nayax token that expired
+    /// overnight is still fixable before the sale reaches the dead-letter queue.
+    /// </summary>
+    [Fact]
+    public void The_outage_schedule_keeps_retrying_for_at_least_twelve_hours()
+    {
+        var toTheLastAttempt = Enumerable
+            .Range(1, DocumentedMaxReceiveCount - 1)
+            .Aggregate(TimeSpan.Zero, (total, receive) =>
+                total + NayaxSqsQueuePolicy.TransientOutageVisibility(receive));
+
+        Assert.True(
+            toTheLastAttempt >= TimeSpan.FromHours(12),
+            $"the schedule reaches its last attempt after {toTheLastAttempt}, which is under 12 hours");
+    }
+
+    /// <summary>
+    /// The first wait is short on purpose: a blip of a few seconds must not cost the sale a minute,
+    /// let alone the first scheduled hour.
+    /// </summary>
+    [Fact]
+    public void The_first_outage_retry_happens_within_a_minute()
+    {
+        Assert.True(NayaxSqsQueuePolicy.TransientOutageVisibility(1) < TimeSpan.FromMinutes(1));
+    }
+
+    /// <summary>
+    /// No step may pass SQS's own 12-hour ceiling, because <c>ChangeMessageVisibility</c> refuses a
+    /// larger value outright - which would leave the message on the queue's plain visibility timeout
+    /// and undo the whole schedule.
+    /// </summary>
+    [Fact]
+    public void No_outage_step_passes_the_queues_own_ceiling()
+    {
+        var ceiling = TimeSpan.FromSeconds(NayaxSqsQueuePolicy.MaxVisibilityTimeoutSeconds);
+
+        Assert.All(
+            NayaxSqsQueuePolicy.TransientOutageSchedule,
+            step => Assert.InRange(step, TimeSpan.Zero, ceiling));
+        Assert.All(
+            Enumerable.Range(-2, 60),
+            receive => Assert.InRange(
+                NayaxSqsQueuePolicy.TransientOutageVisibility(receive), TimeSpan.Zero, ceiling));
+    }
+
+    /// <summary>
+    /// The schedule only ever grows, which is what makes the total above a property of the steps
+    /// rather than of their order: a later attempt never waits less than an earlier one.
+    /// </summary>
+    [Fact]
+    public void The_outage_schedule_never_shrinks()
+    {
+        var steps = NayaxSqsQueuePolicy.TransientOutageSchedule;
+
+        Assert.NotEmpty(steps);
+        Assert.Equal(steps.OrderBy(step => step), steps);
     }
 
     /// <summary>

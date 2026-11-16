@@ -462,7 +462,8 @@ public sealed class NayaxSqsSalesReader
             case NayaxSqsDisposition.Transient:
                 await ChangeVisibilityAsync(
                         message,
-                        NayaxSqsQueuePolicy.TransientVisibility(message.ApproximateReceiveCount, visibility),
+                        TransientVisibilityFor(
+                            outcome.Reason, message.ApproximateReceiveCount, visibility),
                         cancellationToken)
                     .ConfigureAwait(false);
                 break;
@@ -477,6 +478,29 @@ public sealed class NayaxSqsSalesReader
                 break;
         }
     }
+
+    /// <summary>
+    /// How long a message that failed transiently waits before its next receive, which depends on
+    /// what it is waiting for (issue #1305).
+    ///
+    /// <para>A failure that says something <em>outside</em> this application is unavailable - the
+    /// database, the business's Nayax connection or Nayax itself - is waited out on
+    /// <see cref="NayaxSqsQueuePolicy.TransientOutageSchedule"/>, which grows into hours so an outage
+    /// nobody is awake for is still ridden out rather than ending in the dead-letter queue. Every
+    /// other transient reason - today a cost rebuild still pending - keeps the short backoff of
+    /// <see cref="NayaxSqsQueuePolicy.TransientVisibility"/>: what it waits for is this application's
+    /// own work, so parking the sale for hours would only delay it.</para>
+    /// </summary>
+    private static TimeSpan TransientVisibilityFor(
+        NayaxSqsProcessingReason reason, int approximateReceiveCount, TimeSpan visibility) =>
+        reason switch
+        {
+            NayaxSqsProcessingReason.ConnectionUnavailable
+                or NayaxSqsProcessingReason.StoreUnavailable
+                or NayaxSqsProcessingReason.ProviderUnavailable =>
+                NayaxSqsQueuePolicy.TransientOutageVisibility(approximateReceiveCount),
+            _ => NayaxSqsQueuePolicy.TransientVisibility(approximateReceiveCount, visibility),
+        };
 
     /// <summary>
     /// The sender gates, every one of them before a business scope exists and therefore before
