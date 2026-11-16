@@ -5,9 +5,10 @@
 -->
 <div class="card mb-6">
   <div class="card-body flex flex-wrap gap-4">
-    <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
+    <!-- Accessible names matching the Products list's own search and category filters (issue #1279, audit #1225 FE-08). -->
+    <input class="max-w-[220px]" aria-label="Search name or SKU" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
 
-    <select class="max-w-[180px]" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
+    <select class="max-w-[180px]" aria-label="Category:" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
       <option value="">All Categories</option>
       @for (c of categories; track c.id) {
         <option [ngValue]="c.id">{{ c.name }}</option>
