@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.NayaxSaleReview;
 using Inventory.Domain.NayaxSqs;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +20,11 @@ namespace InventoryApi.Controllers;
 /// state, stale evidence or an unlinked Nayax product is a <c>DomainConflictException</c> mapped
 /// centrally to <c>409</c>, and a decision the table refuses or a missing reason is a
 /// <c>DomainValidationException</c> mapped to <c>400</c>.</para>
+///
+/// <para>The list's money is withheld from a caller without <c>Dashboard.ViewFinancials</c> (issue
+/// #1306), through <see cref="NayaxSaleReviewResponseMapper"/>: an Operator may see which sales
+/// need attention without being shown what the business took. The summary needs no such projection,
+/// because it carries two counts of sales and no amount.</para>
 /// </summary>
 [ApiController]
 [Route("api/nayax-sale-review")]
@@ -27,15 +33,22 @@ namespace InventoryApi.Controllers;
 public sealed class NayaxSaleReviewController : ControllerBase
 {
     private readonly ReviewNayaxSales _review;
+    private readonly CurrentCapabilities _capabilities;
 
-    public NayaxSaleReviewController(ReviewNayaxSales review)
+    public NayaxSaleReviewController(ReviewNayaxSales review, CurrentCapabilities capabilities)
     {
         _review = review;
+        _capabilities = capabilities;
     }
 
     /// <summary>
     /// One page of the business's flagged (<c>view=10</c>, the default) or Owner-decided
     /// (<c>view=20</c>) queue sales, newest first, with the view's total.
+    ///
+    /// <para>Each sale's settled amount, the amount Nayax's own record carried and the reimbursement
+    /// difference a decision moved are <c>null</c> for a caller without
+    /// <c>Dashboard.ViewFinancials</c>. Everything else about the page - which sales it holds, their
+    /// order, the view's total and the decisions the table allows - is the same for every caller.</para>
     /// </summary>
     /// <response code="200">The page.</response>
     /// <response code="400">The page index is negative, or the page size is outside 1 to 100.</response>
@@ -47,10 +60,18 @@ public sealed class NayaxSaleReviewController : ControllerBase
         [FromQuery] NayaxSaleReviewView view = NayaxSaleReviewView.NeedsReview,
         [FromQuery] int pageIndex = 0,
         [FromQuery] int pageSize = NayaxSaleReviewQuery.DefaultPageSize,
-        CancellationToken cancellationToken = default) =>
-        Ok(await _review.ListAsync(new NayaxSaleReviewQuery(view, pageIndex, pageSize), cancellationToken));
+        CancellationToken cancellationToken = default)
+    {
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
+        var page = await _review.ListAsync(new NayaxSaleReviewQuery(view, pageIndex, pageSize), cancellationToken);
 
-    /// <summary>How many sales wait for the Owner, and how many of those are not being counted.</summary>
+        return Ok(NayaxSaleReviewResponseMapper.ToResponse(page, visibility));
+    }
+
+    /// <summary>
+    /// How many sales wait for the Owner, and how many of those are not being counted. Two counts of
+    /// sales and no amount, so every caller that may read it is answered the same figures.
+    /// </summary>
     [HttpGet("summary")]
     [RequireCapability(Capability.DashboardView)]
     [ProducesResponseType(StatusCodes.Status200OK)]

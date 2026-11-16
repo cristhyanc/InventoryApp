@@ -44,6 +44,11 @@ export interface NayaxSaleReviewEvidence {
   observedAtUtc: string;
   resultingState: NayaxSqsVerification;
   providerMachineId: number | null;
+
+  /**
+   * The amount Nayax's own record carried, `null` when the provider gave none and `null` just the
+   * same when the API withheld it from a member without `Dashboard.ViewFinancials` (issue #1306).
+   */
   providerSettlementValue: number | null;
   providerAuthorizationInstantUtc: string | null;
   providerCurrencyCode: string | null;
@@ -70,6 +75,11 @@ export interface NayaxSaleReviewHistoryEntry {
   resultingState: NayaxSqsVerification;
   reconciledPeriodFrom: string | null;
   reconciledPeriodTo: string | null;
+
+  /**
+   * How much the decision moved an already reconciled reimbursement period by, `null` when it moved
+   * none and `null` just the same when the API withheld it (issue #1306).
+   */
   reconciledPeriodDifference: number | null;
 }
 
@@ -83,7 +93,14 @@ export interface NayaxSaleReviewItem {
   transactionId: number;
   machineId: number;
   machineName: string | null;
-  settlementValue: number;
+
+  /**
+   * The stored sale's settled amount, or `null` when the API withheld it (issue #1306): a member
+   * without `Dashboard.ViewFinancials` is answered the sale without its money. Never `0` for a
+   * withheld figure - the server keeps "not yours to see" and "genuinely nothing" distinct - so the
+   * page must never render it as one.
+   */
+  settlementValue: number | null;
   authorizationInstantUtc: string;
   receivedViaSqsAtUtc: string | null;
   state: NayaxSqsVerification;

@@ -111,7 +111,22 @@ interface RenderOptions {
   items?: NayaxSaleReviewItem[];
   list?: (view: NayaxSaleReviewView, pageIndex: number, pageSize: number) => Observable<NayaxSaleReviewPage>;
   canDecide?: boolean;
+
+  /** Whether the member holds `Dashboard.ViewFinancials` (issue #1306). */
+  canViewFinancials?: boolean;
   decide?: (saleId: number, body: NayaxSaleDecisionBody) => Observable<NayaxSaleDecisionApplied>;
+}
+
+/**
+ * A sale the API answered a member without `Dashboard.ViewFinancials` with (issue #1306): every
+ * money figure withheld as `null`, and nothing else about it changed.
+ */
+function withheldAmountsItem(overrides: Partial<NayaxSaleReviewItem> = {}): NayaxSaleReviewItem {
+  return conflictItem({
+    settlementValue: null,
+    latestComparison: comparison({ providerSettlementValue: null }),
+    ...overrides
+  });
 }
 
 async function render(options: RenderOptions = {}) {
@@ -131,7 +146,17 @@ async function render(options: RenderOptions = {}) {
     providers: [
       provideRouter([]),
       { provide: NayaxSaleReviewService, useValue: { list, decide } },
-      { provide: AccessService, useValue: { allows: () => of(options.canDecide ?? true) } },
+      {
+        provide: AccessService,
+        useValue: {
+          allows: (capability: string) =>
+            of(
+              capability === 'Dashboard.ViewFinancials'
+                ? options.canViewFinancials ?? true
+                : options.canDecide ?? true
+            )
+        }
+      },
       { provide: BusinessTimeZoneService, useValue: { timeZoneId: 'Australia/Sydney' } }
     ]
   }).compileComponents();
@@ -273,6 +298,69 @@ describe('NayaxSaleReviewPageComponent (issue #1105)', () => {
     const history = sale.querySelector('[data-testid="nayax-sale-review-history"]')?.textContent ?? '';
     expect(history).toContain("Use Nayax's values by the owner");
     expect(history).toContain('Changed the reimbursement period 01/11/2026');
+  });
+
+  it('shows no amount at all to a member who may not see the figures (issue #1306)', async () => {
+    const { host } = await render({
+      canViewFinancials: false,
+      items: [withheldAmountsItem(), investigationItem()]
+    });
+
+    const sale = item(host, 101);
+    expect(sale.querySelector('[data-testid="nayax-sale-review-stored-amount"]')).toBeNull();
+    expect(sale.querySelector('[data-testid="nayax-sale-review-provider-amount"]')).toBeNull();
+
+    // No empty line and no 0.00 standing in for a figure: the amount lines are simply not there,
+    // and nothing on the card renders a currency.
+    expect(sale.textContent).not.toContain('Amount: ,');
+    expect(sale.textContent).not.toContain('0.00');
+    expect(sale.textContent).not.toContain('$');
+    expect(host.textContent).not.toContain('$');
+
+    // What is left is what makes the sale worth looking at: its state, whether it is counted and
+    // which of Nayax's fields disagreed.
+    expect(sale.querySelector('[data-testid="nayax-sale-review-state"]')?.textContent).toContain(
+      'Contradicted by Nayax - not counted'
+    );
+    expect(sale.textContent).toContain('Counted in sales: No');
+    expect(sale.querySelector('[data-testid="nayax-sale-review-amount-comparison"]')?.textContent?.trim()).toBe(
+      'Amount: differs'
+    );
+  });
+
+  it('hides a decision history amount from a member who may not see the figures (issue #1306)', async () => {
+    const entry = {
+      id: 1,
+      superseded: false,
+      decision: NayaxSaleOwnerDecision.UseNayaxValues,
+      evidenceId: 7,
+      reason: null,
+      occurredAtUtc: '2026-11-06T03:00:00Z',
+      previousState: NayaxSqsVerification.Conflict,
+      resultingState: NayaxSqsVerification.OwnerCorrected,
+      reconciledPeriodFrom: '2026-11-01T00:00:00',
+      reconciledPeriodTo: '2026-11-07T00:00:00',
+      reconciledPeriodDifference: null
+    };
+    const { host } = await render({
+      canViewFinancials: false,
+      items: [withheldAmountsItem({ state: NayaxSqsVerification.OwnerCorrected, availableDecisions: [], history: [entry] })]
+    });
+
+    const history = item(host, 101).querySelector('[data-testid="nayax-sale-review-history"]')?.textContent ?? '';
+    expect(history).toContain("Use Nayax's values by the owner");
+    expect(history).not.toContain('Changed the reimbursement period');
+    expect(history).not.toContain('0.00');
+  });
+
+  it('shows both amounts, and how they compared, to a member who may see the figures', async () => {
+    const { host } = await render();
+
+    const sale = item(host, 101);
+    expect(sale.querySelector('[data-testid="nayax-sale-review-stored-amount"]')?.textContent).toContain('$5.00');
+    expect(sale.querySelector('[data-testid="nayax-sale-review-provider-amount"]')?.textContent).toContain('$4.50');
+    expect(sale.querySelector('[data-testid="nayax-sale-review-provider-amount"]')?.textContent).toContain('differs');
+    expect(sale.querySelector('[data-testid="nayax-sale-review-amount-comparison"]')).toBeNull();
   });
 
   it('says so when nothing needs review, and when the list could not be loaded', async () => {

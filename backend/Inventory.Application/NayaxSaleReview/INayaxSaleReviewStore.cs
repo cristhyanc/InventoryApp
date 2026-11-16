@@ -48,13 +48,18 @@ public sealed record NayaxSaleAvailableDecision(NayaxSaleOwnerDecision Decision,
 /// <summary>
 /// One flagged or decided queue-delivered sale on the review page: its stored values, its state, the
 /// latest evidence of each kind, its decision history, and the decisions the table allows for it.
+///
+/// <para><see cref="SettlementValue"/> is nullable because the API withholds it from a caller
+/// without <c>Dashboard.ViewFinancials</c> (issue #1306): the store always reads the stored amount,
+/// and <c>InventoryApi.Adapters.Mapping.NayaxSaleReviewResponseMapper</c> is what decides whether
+/// the response carries it.</para>
 /// </summary>
 public sealed record NayaxSaleReviewItem(
     long SaleId,
     long TransactionId,
     long MachineId,
     string? MachineName,
-    decimal SettlementValue,
+    decimal? SettlementValue,
     DateTime AuthorizationInstantUtc,
     DateTime? ReceivedViaSqsAtUtc,
     NayaxSqsVerification State,
