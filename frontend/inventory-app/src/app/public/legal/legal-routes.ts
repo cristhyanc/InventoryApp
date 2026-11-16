@@ -16,11 +16,16 @@ export const TERMS_OF_USE_ROUTE = 'terms-of-use';
 export const legalRoutes: Routes = [
   {
     path: PRIVACY_POLICY_ROUTE,
+    // The page's own heading is "Restockroo Privacy Policy" (`privacy-policy-content.ts`), already
+    // naming the product, so the tab title uses the short page name instead of repeating it.
+    title: 'Privacy Policy · Restockroo',
     data: PUBLIC_LAYOUT_DATA,
     loadComponent: () => import('./privacy-policy-page.component').then((m) => m.PrivacyPolicyPageComponent)
   },
   {
     path: TERMS_OF_USE_ROUTE,
+    // As above: the heading is "Restockroo Terms of Use" (`terms-of-use-content.ts`).
+    title: 'Terms of Use · Restockroo',
     data: PUBLIC_LAYOUT_DATA,
     loadComponent: () => import('./terms-of-use-page.component').then((m) => m.TermsOfUsePageComponent)
   }

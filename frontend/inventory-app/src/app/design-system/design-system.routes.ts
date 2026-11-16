@@ -25,6 +25,7 @@ export function createDesignSystemRoutes(isDevelopmentBuild: boolean): Routes {
   return [
     {
       path: DESIGN_SYSTEM_FIXTURE_PATH,
+      title: 'Shared widgets and icons · Restockroo',
       loadComponent: () => import('./widget-gallery.component').then((m) => m.WidgetGalleryComponent)
     }
   ];

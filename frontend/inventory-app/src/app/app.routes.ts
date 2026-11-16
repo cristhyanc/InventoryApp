@@ -55,7 +55,7 @@ import { confirmExpenseFormLeave } from './components/expenses/expense-form-leav
  */
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
-  { path: 'auth', component: AuthCallbackComponent },
+  { path: 'auth', title: 'Signing you in · Restockroo', component: AuthCallbackComponent },
   {
     // Public: the sign-in page where a signed-out visitor chooses which trusted authority to sign
     // in against (issue #711). It is what `SignInAuthorityGuard` sends them to instead of starting
@@ -64,6 +64,7 @@ export const routes: Routes = [
     // page, rather than showing them the chooser again after a successful sign-in.
     // Since issue #957 it is drawn in the public layout, like the homepage it is reached from.
     path: SIGN_IN_ROUTE,
+    title: 'Sign in · Restockroo',
     canActivate: [signInPageGuard],
     data: PUBLIC_LAYOUT_DATA,
     component: SignInComponent
@@ -72,6 +73,7 @@ export const routes: Routes = [
     // Reached by a guard above, so it declares no capability of its own: a member sent here
     // because their role does not allow a page must not be sent away from the explanation too.
     path: ACCESS_NOT_ALLOWED_PATH,
+    title: "You don't have access to this · Restockroo",
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/access-not-allowed.component').then((m) => m.AccessNotAllowedComponent)
   },
@@ -83,6 +85,9 @@ export const routes: Routes = [
     // already checked by the capability guard that ran before `requireProvider`, and sending
     // somebody away from their own explanation is the one thing this page must not do.
     path: PROVIDER_LOCKED_PATH,
+    // The page's heading is destination-specific once resolved (`ProviderLockedComponent.title`),
+    // so this is the generic heading it shows first, before that resolves.
+    title: 'This page needs Nayax · Restockroo',
     canActivate: [MsalGuard],
     loadComponent: () => import('./provider/provider-locked.component').then((m) => m.ProviderLockedComponent)
   },
@@ -91,6 +96,9 @@ export const routes: Routes = [
     // guard *sends* a member here, so it carries no capability of its own - the destinations that
     // redirect here each already passed their own capability guard before `requirePlan` ran.
     path: PLAN_LOCKED_PATH,
+    // As above, the generic heading shown before the destination-specific one resolves
+    // (`PlanLockedComponent.title`).
+    title: 'This page needs a different plan · Restockroo',
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/plan-locked.component').then((m) => m.PlanLockedComponent)
   },
@@ -102,21 +110,25 @@ export const routes: Routes = [
     // `application-pending` and `application-rejected` carried `OnboardingPlaceholderComponent`
     // until issue #542 built each one's own page.
     path: 'welcome',
+    title: 'Welcome · Restockroo',
     canActivate: [MsalGuard],
     component: WelcomeComponent
   },
   {
     path: 'application-pending',
+    title: 'Your application is pending · Restockroo',
     canActivate: [MsalGuard],
     component: ApplicationPendingComponent
   },
   {
     path: 'application-rejected',
+    title: 'Your application was not approved · Restockroo',
     canActivate: [MsalGuard],
     component: ApplicationRejectedComponent
   },
   {
     path: 'access-unavailable',
+    title: 'Your access is unavailable · Restockroo',
     canActivate: [MsalGuard],
     component: AccessUnavailableComponent
   },
@@ -126,6 +138,7 @@ export const routes: Routes = [
     // it is where those pages send a person whose state is not `Member`, and the form itself sends
     // anyone it is not for to the page their state calls for.
     path: BUSINESS_APPLICATION_ROUTE,
+    title: 'Start a new business · Restockroo',
     canActivate: [MsalGuard],
     component: BusinessApplicationComponent
   },
@@ -136,6 +149,7 @@ export const routes: Routes = [
     // `/invite` (issue #681). `MsalGuard` therefore never sees the token, so a signed-out visitor's
     // sign-in redirect does not carry it. The component is only there because a route needs one.
     path: 'invite/:token',
+    title: 'Open your invite link again · Restockroo',
     canMatch: [inviteTokenAddressBarGuard],
     component: InviteLinkReopenComponent
   },
@@ -144,6 +158,7 @@ export const routes: Routes = [
     // token (issue #681): lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem
     // it. Carries only `MsalGuard`, for the reason the comment above gives.
     path: INVITE_ADDRESS_BAR_ROUTE,
+    title: "You've been invited · Restockroo",
     canMatch: [pendingInviteTokenGuard],
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/invite-acceptance.component').then((m) => m.InviteAcceptanceComponent)
@@ -153,6 +168,7 @@ export const routes: Routes = [
     // the token explains that the invite link must be opened again, instead of the wildcard
     // silently landing on the dashboard. Public, like `auth`: it makes no request at all.
     path: INVITE_ADDRESS_BAR_ROUTE,
+    title: 'Open your invite link again · Restockroo',
     component: InviteLinkReopenComponent
   },
   {
@@ -176,6 +192,7 @@ export const routes: Routes = [
   },
   {
     path: '',
+    title: 'Dashboard · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Dashboard.View')],
     loadComponent: () => import('./components/dashboard/dashboard.component').then((m) => m.DashboardComponent)
   },
@@ -183,6 +200,7 @@ export const routes: Routes = [
     // The "New product" action (issue #737): the same routed edit page with no `:id`, so a
     // business with no sales provider can start a catalogue instead of only ever importing one.
     path: 'products/new',
+    title: 'New product · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     // Unsaved product changes ask before they are lost (issue #1111).
     canDeactivate: [confirmProductFormLeave],
@@ -190,6 +208,9 @@ export const routes: Routes = [
   },
   {
     path: 'products/:id/edit',
+    // The page's own heading shows the product's stored name once it loads
+    // (`product-form.component.html`); this is its "Edit product" fallback heading.
+    title: 'Edit product · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     // Unsaved product changes ask before they are lost (issue #1111).
     canDeactivate: [confirmProductFormLeave],
@@ -203,12 +224,14 @@ export const routes: Routes = [
     // Angular's exact matching of a two-segment path keeps it clear of the `products/:id/...`
     // routes, which are all three segments.
     path: 'products/import',
+    title: 'Import products · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
     loadComponent: () =>
       import('./components/products/product-import-page.component').then((m) => m.ProductImportPageComponent)
   },
   {
     path: 'stock-history',
+    title: 'Stock history · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
@@ -218,21 +241,29 @@ export const routes: Routes = [
     // /stock-history?productId=123 - so the links, bookmarks and deep links that already exist keep
     // working instead of being redirected to a page that has lost the product.
     path: 'products/:id/stock',
+    title: 'Stock history · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
   {
     path: 'products',
+    // The Products shell's own shared header (`products-shell.component.html`) carries the one
+    // heading - "Products" - across both child views below, neither of which has a heading of its
+    // own, so both share this same title rather than each declaring one that does not exist on the
+    // page.
+    title: 'Products · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
     children: [
       {
         path: '',
+        title: 'Products · Restockroo',
         pathMatch: 'full',
         loadComponent: () => import('./components/products/product-list.component').then((m) => m.ProductListComponent)
       },
       {
         path: 'needs-ordering',
+        title: 'Products · Restockroo',
         loadComponent: () => import('./components/products/product-needs-ordering.component').then((m) => m.ProductNeedsOrderingComponent)
       },
       {
@@ -247,6 +278,7 @@ export const routes: Routes = [
   },
   {
     path: 'categories',
+    title: 'Categories · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/categories/category-list.component').then((m) => m.CategoryListComponent)
   },
@@ -254,6 +286,7 @@ export const routes: Routes = [
     // Suppliers are purchasing work, so an Operator recording a purchase reaches this page; the
     // GST defaults editor on it is the one action it hides (issue #528).
     path: 'suppliers',
+    title: 'Suppliers · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
@@ -263,6 +296,7 @@ export const routes: Routes = [
     // so the page always has something to show. It hides its live stock, revenue and sync parts
     // itself while the shared availability answer refuses the fleet read.
     path: 'machines',
+    title: 'Machines · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
   },
@@ -277,6 +311,7 @@ export const routes: Routes = [
     // has not bought the connection is told to upgrade rather than to connect one upgrading would
     // make usable anyway.
     path: 'machines/:id',
+    title: 'Machine Details · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -291,6 +326,7 @@ export const routes: Routes = [
     // site pages depend on the same read the machine pages do, and, since issue #979, on the same
     // `Pro` plan feature that read needs.
     path: 'sites',
+    title: 'Sites · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -302,6 +338,7 @@ export const routes: Routes = [
   },
   {
     path: 'sites/:id/products',
+    title: 'Site Products · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -313,16 +350,19 @@ export const routes: Routes = [
   },
   {
     path: 'purchases',
+    title: 'Purchases · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/purchase-list.component').then((m) => m.PurchaseListComponent)
   },
   {
     path: 'purchases/new',
+    title: 'Add Purchase · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/purchase-upload.component').then((m) => m.PurchaseUploadComponent)
   },
   {
     path: 'purchases/orders',
+    title: 'Supplier Orders · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
@@ -332,6 +372,7 @@ export const routes: Routes = [
     // Declared after `purchases/new` and `purchases/orders`, which are two-segment paths this
     // three-segment pattern cannot shadow either way.
     path: 'purchases/:id/edit',
+    title: 'Edit Purchase · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () =>
       import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
@@ -354,6 +395,7 @@ export const routes: Routes = [
     // Plan-locked since issue #979 on `PlanFeature.BookkeepingAndGstReports`, the `Starter` plan
     // feature `ReportsController`'s own `[RequirePlan]` declares for this action.
     path: 'reports/bookkeeping',
+    title: 'Monthly Bookkeeping · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -378,6 +420,7 @@ export const routes: Routes = [
     // **before** `requireProvider`, so a business that has not bought the plan is told to upgrade
     // rather than to connect a Nayax account upgrading would make usable anyway.
     path: 'reports/daily',
+    title: 'Daily Sales / Reimbursement · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -389,6 +432,7 @@ export const routes: Routes = [
   },
   {
     path: 'reports/transactions',
+    title: 'Transaction Sales · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -401,6 +445,7 @@ export const routes: Routes = [
   },
   {
     path: 'reports/reconciliation',
+    title: 'Nayax Reconciliation · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -413,6 +458,7 @@ export const routes: Routes = [
   },
   {
     path: 'reports/machines',
+    title: 'Machine Profitability · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -424,6 +470,7 @@ export const routes: Routes = [
   },
   {
     path: 'reports/products',
+    title: 'Product Profitability · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -436,6 +483,7 @@ export const routes: Routes = [
   {
     // Plan-locked since issue #979, on the same `Starter` feature as Bookkeeping above.
     path: 'reports/gst',
+    title: 'GST / BAS Accounting Aid · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -456,6 +504,7 @@ export const routes: Routes = [
     // `requirePlan('SiteCommissions')` - the `Pro` plan feature `SiteCommissionsController` declares
     // for its whole controller - declared before the provider guard, for the same ordering reason.
     path: 'reports/site-commissions',
+    title: 'Site Commissions · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -468,6 +517,7 @@ export const routes: Routes = [
   },
   {
     path: 'pick-list',
+    title: 'Pick List · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('PickList.View')],
     // Typed refill quantities, planning work and an unconfirmed save all ask before a departure (issue #996).
     canDeactivate: [confirmPickListLeave],
@@ -475,6 +525,7 @@ export const routes: Routes = [
   },
   {
     path: 'take-inventory',
+    title: 'Take Inventory · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/take-inventory/take-inventory.component').then((m) => m.TakeInventoryComponent)
   },
@@ -482,6 +533,7 @@ export const routes: Routes = [
     // The Admin link hub owns no workflow of its own, so it is offered to a member who holds any
     // of the capabilities its pages need rather than to one particular role.
     path: 'admin',
+    title: 'Admin · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -491,6 +543,7 @@ export const routes: Routes = [
   },
   {
     path: 'admin/imports',
+    title: 'Imports · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
@@ -502,6 +555,7 @@ export const routes: Routes = [
     // records, so it is reachable by URL for a business whose connection has stopped working. The
     // menu hides the entry instead, exactly as it hides Imports.
     path: 'admin/imports/reimbursement-report',
+    title: 'Reimbursement Report · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
     loadComponent: () =>
       import('./components/admin/imports/reimbursement-report/reimbursement-report-page.component').then(
@@ -515,6 +569,7 @@ export const routes: Routes = [
     // recover those costs. It is the one Admin maintenance page over provider data that keeps no
     // provider guard, and that is a decision rather than an omission.
     path: 'admin/historical-cost-recovery',
+    title: 'Nayax Historical Cost Recovery · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/historical-cost-recovery/historical-cost-recovery.component').then(
@@ -529,6 +584,7 @@ export const routes: Routes = [
     // five stored-record reports of issue #868. Declared **after** `requireCapability`, as every
     // provider guard is.
     path: 'admin/avco-transition',
+    title: 'Inventory AVCO Transition Baseline · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -542,18 +598,21 @@ export const routes: Routes = [
     // The Nayax sales review (issue #1105): every member who can see the Dashboard can read it; the
     // page offers decisions only to an Owner, and the API enforces Data.Repair on each one.
     path: 'nayax-sales-review',
+    title: 'Nayax sales to review · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Dashboard.View')],
     loadComponent: () =>
       import('./components/nayax-sale-review/nayax-sale-review-page.component').then((m) => m.NayaxSaleReviewPageComponent)
   },
   {
     path: 'admin/costing-repair',
+    title: 'Costing Repair · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
   },
   {
     path: 'admin/historical-gst-classification',
+    title: 'Historical GST Classification · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/historical-gst-classification/historical-gst-classification.component').then(
@@ -562,6 +621,7 @@ export const routes: Routes = [
   },
   {
     path: 'admin/nayax-sale-timestamp-repair',
+    title: 'Nayax Sale Timestamp Repair · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component').then(
@@ -574,6 +634,7 @@ export const routes: Routes = [
     // redirects a refusal to the dashboard; entering this URL directly is still safe either way,
     // because the diagnostics API decides authority per request regardless of what the guard did.
     path: 'super-admin/diagnostics',
+    title: 'Platform Diagnostics · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/admin/diagnostics/platform-diagnostics.component').then((m) => m.PlatformDiagnosticsComponent)
@@ -591,6 +652,7 @@ export const routes: Routes = [
     // Platform-admin authority, not a business role, decides it - the same `platformAdminGuard`
     // as the diagnostics route above, and for the same reason.
     path: 'super-admin/businesses',
+    title: 'Businesses · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/super-admin/businesses/super-admin-businesses.component').then(
@@ -603,6 +665,7 @@ export const routes: Routes = [
     // authority, not a business role, decides it - the same `platformAdminGuard` as the two
     // super-admin routes above, and for the same reason.
     path: 'super-admin/supplier-presets',
+    title: 'Supplier presets · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/super-admin/supplier-presets/super-admin-supplier-presets.component').then(
@@ -616,6 +679,7 @@ export const routes: Routes = [
     // pack it claims to be. Platform-admin authority, not a business role, decides it - the same
     // `platformAdminGuard` as the three super-admin routes above, and for the same reason.
     path: 'super-admin/price-catalogue-review',
+    title: 'Supplier price review · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component').then(
@@ -629,6 +693,7 @@ export const routes: Routes = [
     // role, decides it - the same `platformAdminGuard` as the four super-admin routes above, and for
     // the same reason.
     path: 'super-admin/master-products',
+    title: 'Master Products · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/super-admin/master-products/super-admin-master-products.component').then(
@@ -642,6 +707,7 @@ export const routes: Routes = [
     // reason - and it is deliberately never affected by the switches it manages, because an
     // administrator must always be able to switch one back on.
     path: 'super-admin/menu-visibility',
+    title: 'Menu Visibility · Restockroo',
     canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/super-admin/menu-visibility/super-admin-menu-visibility.component').then(
@@ -650,6 +716,7 @@ export const routes: Routes = [
   },
   {
     path: 'admin/nayax-settings',
+    title: 'Integrations · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
       import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
@@ -661,6 +728,7 @@ export const routes: Routes = [
     // `requireCapability`, so a role without `SiteCommissions.Manage` still reaches its own
     // explanation rather than an invitation to connect a provider it could not use.
     path: 'admin/site-commission-agreements',
+    title: 'Site Commission Agreements · Restockroo',
     canActivate: [
       MsalGuard,
       accountStateGuard,
@@ -675,6 +743,7 @@ export const routes: Routes = [
   {
     // The Admin → Users page (issue #534): members and invite links, Owner-only.
     path: 'admin/users',
+    title: 'Users · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Members.Manage')],
     loadComponent: () => import('./components/admin/users/admin-users.component').then((m) => m.AdminUsersComponent)
   },
@@ -682,6 +751,7 @@ export const routes: Routes = [
     // The Admin → Roles page (issue #530): a read-only explanation of what each role can access,
     // Owner-only.
     path: 'admin/roles',
+    title: 'Roles · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Roles.View')],
     loadComponent: () => import('./components/admin/roles/roles.component').then((m) => m.RolesComponent)
   },
@@ -689,6 +759,7 @@ export const routes: Routes = [
     // The Admin → Business Settings page (issue #549): the business's own name, contact email,
     // ABN, GST registration and time zone, Owner-only.
     path: 'admin/business-settings',
+    title: 'Business Settings · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Business.Manage')],
     loadComponent: () =>
       import('./components/admin/business-settings/business-settings.component').then(
@@ -700,6 +771,7 @@ export const routes: Routes = [
     // its own. It is a two-segment path, so Angular's exact matching keeps it clear of the
     // three-segment `expenses/:id/edit` whatever the declaration order.
     path: 'expenses/new',
+    title: 'Add expense · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     // Unsaved expense changes ask before they are lost (issue #1167).
     canDeactivate: [confirmExpenseFormLeave],
@@ -708,6 +780,7 @@ export const routes: Routes = [
   },
   {
     path: 'expenses/:id/edit',
+    title: 'Edit expense · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     // Unsaved expense changes ask before they are lost (issue #1167).
     canDeactivate: [confirmExpenseFormLeave],
@@ -716,6 +789,7 @@ export const routes: Routes = [
   },
   {
     path: 'expenses',
+    title: 'Operating expenses · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
   },
@@ -725,6 +799,7 @@ export const routes: Routes = [
     // the prices and the storage figures it shows are visible to every member, not gated by what a
     // role may do.
     path: 'plan',
+    title: 'Plan · Restockroo',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Dashboard.View')],
     loadComponent: () => import('./components/plan/plan.component').then((m) => m.PlanComponent)
   },
