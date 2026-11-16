@@ -696,20 +696,12 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 //
 // Issue #1308 (audit OPS-04, #1228/#1231): both endpoints also carry the build's commit in an
 // X-Build-Sha header, read once at startup from BuildMetadata, so a deploy can eventually tell a
-// reply from the old process apart from the new one instead of trusting the first 200/503. This
-// middleware only sets the header and otherwise calls next(): it does not touch either
-// endpoint's status code or body.
+// reply from the old process apart from the new one instead of trusting the first 200/503. The
+// read happens here, before app.Run(), rather than on the first probe; the header itself is set by
+// BuildShaHeaderMiddleware, which only adds it and otherwise calls next(), touching neither
+// endpoint's status code nor its body.
 _ = BuildMetadata.BuildSha;
-app.Use(async (context, next) =>
-{
-    if (context.Request.Path.Equals("/health/live", StringComparison.Ordinal) ||
-        context.Request.Path.Equals("/health/ready", StringComparison.Ordinal))
-    {
-        context.Response.Headers["X-Build-Sha"] = BuildMetadata.BuildSha;
-    }
-
-    await next();
-});
+app.UseMiddleware<BuildShaHeaderMiddleware>();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
