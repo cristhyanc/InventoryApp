@@ -18004,6 +18004,34 @@ that meaning.
    causes a movement. The same product may legitimately occupy more than one MDB on one machine;
    each event stays individually auditable, and the preview groups them by product to show the
    combined requested storage impact.
+
+   **A match is no longer decided only once** (issue #1248, audit #1222 finding INV-13).
+   `MatchStatus`/`MatchedProductId` used to be written at import and never again, so an alert
+   imported while its MDB position did not exist in Nayax, or while no local product carried that
+   position's `NayaxProductID`, became Needs Review and stayed there for ever - the operator mapped
+   the product, came back, and still had to enter the refill by hand.
+   `Inventory.Application.MachineStockSync.RematchMachineStockEvents` now re-evaluates the events
+   that are **still waiting for a match** against the machine's current mapping, in two places:
+   - **Whenever the Sync Restock list loads.** `SyncMachineStockFromNayax` reads the machine's MDB
+     positions once - fresh, never from the 60-second machine-products cache (issue #842), the same
+     read the import uses, so an import and a re-match in the same run cannot disagree about the
+     mapping - and the preview the operator is handed already shows the refreshed match. A load with
+     nothing waiting and no new alert makes no machine-products read at all.
+   - **Again inside the apply's write lock** (step 7 below), because the match decides which
+     product's storage moves.
+
+   What "still waiting for a match" means is one rule,
+   `RematchMachineStockEvents.IsWaitingForAMatch` with `EfMachineStockEventStore`'s relational form
+   of it beside it: `Unprocessed`, `DuplicateResolution.None`, not `Matched`, and carrying the
+   parsed MDB and product name a mapping can resolve it by. So an **applied** event is never
+   re-matched (its match is the record of which product's storage moved), nor is one **dismissed** as
+   already recorded manually or **applied as a separate restock**, nor is an alert whose `EventData`
+   never parsed - re-parsing the same stored text deterministically fails the same way. The write,
+   `IMachineStockEventStore.UpdateMatchesAsync`, re-checks that same condition at the row and sets
+   the three match columns and nothing else: re-matching can never change an event's processing
+   status, its duplicate resolution, its movement, its parsed values or the imported alert itself.
+   The resolution is `NayaxMachineStockMatchPolicy`'s, unchanged - this issue changed no matching
+   rule, only how often the rule is asked.
 5. **Preview before anything changes.** The machine-detail page's **Sync Restock** action
    (`MachineRestockSyncComponent`) opens a reconciliation dialog and calls
    `POST /api/machines/{id}/sync-restock`, which fetches, imports, and returns a reconciliation
@@ -18077,6 +18105,27 @@ that meaning.
    original imported Nayax event row is never deleted or rewritten by either resolution; only the
    duplicate-resolution columns and, for an override, the ordinary `Applied` columns are added to
    it.
+
+   **Both resolutions take the write lock, and an event ends in exactly one state** (issue #1248,
+   audit #1222 finding INV-12). "Apply as separate restock" already re-read the event inside the
+   `BEGIN IMMEDIATE` transaction it writes in. "Already recorded manually" did not: it read the
+   event and checked its status outside every transaction and then stamped `ReconciledManually`
+   without re-checking `ProcessingStatus`, so two operators resolving one event in opposite ways at
+   the same moment both passed their own check and the event ended up **applied and marked as never
+   applied at once** - a real Nayax movement sitting under a reconciliation that says no movement
+   was made. It now opens the same write-locked transaction, re-reads the event inside it, and
+   commits the stamp from that read, so the two resolutions serialise against each other and against
+   an ordinary apply.
+   - Repeating the **same** resolution is unchanged: it is the established idempotent replay and
+     still answers `200` with `Reconciled` or `Applied` and the committed movement's id.
+   - A resolution that finds the event settled the **other** way is refused. It answers the new
+     `NayaxStockEventApplyOutcome.ResolutionConflict`, which `MachinesController` maps to **`409`**
+     carrying the same `NayaxStockEventApplyResultDto` shape - the event id, the outcome and the one
+     sentence saying which way the event actually went - having written nothing. The Sync Restock
+     dialog shows that sentence as a warning and reloads the list, so the row stops offering a
+     decision that has already been taken. The two refusal sentences are in one place,
+     `MachineStockResolutionMessages`, shared with the bulk resolution of step 6a so the single and
+     bulk actions cannot say different things about the same state.
 6a. **Bulk "Already recorded manually" for any eligible unresolved event, suggested or not (issue
     #242).** The possible-duplicate flag above is only a suggestion for human resolution; it is
     never a precondition for this resolution. The operator may explicitly check any unresolved,
@@ -18098,7 +18147,13 @@ that meaning.
     following the same per-event batch shape `ApplyMachineStockSync` established (step 7, below).
     Checking a box never itself reconciles anything - only this explicit action does - and
     **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
-    `isReadyToApply` computes, for **Apply selected**.
+    `isReadyToApply` computes, for **Apply selected**. Since issue #1248 each selected id is
+    resolved inside its **own** write-locked transaction, re-reading the event there before
+    stamping it, so an apply that commits in between is seen and that id is reported `NotApplicable`
+    rather than marked as never applied on top of its movement. The batch's per-event contract is
+    unchanged: every id still answers for itself, and the bulk action answers `200` with those
+    per-event outcomes rather than the single resolution's `409` - a batch has no one status to
+    refuse with.
 7. **Apply only what is accepted, one transaction and one cost rebuild per product** (issue #1127).
    `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
@@ -18124,7 +18179,18 @@ that meaning.
    and reports `Already applied.` with that one movement's id, never a second deduction. Within one
    batch each event's stock check is made against the quantity read at the start of that
    transaction less the refills the batch has already accepted, so a batch can never take more units
-   out of storage than it holds. A validated positive event is applied through the same
+   out of storage than it holds. **The match is re-evaluated inside that same lock** (issue #1248):
+   which product an event names decides which product's storage the batch deducts, so the machine's
+   current mapping is read once per request - outside every lock, because it is a Nayax read and
+   nothing is decided on it, exactly like the planning read that groups the request by product - and
+   each batch re-resolves the events still waiting for a match from the rows it read under its own
+   lock, writing the refreshed match through `UpdateMatchesAsync` in the same transaction as the
+   movement it decided. So a newly matched event can simply be applied, and a batch that rolls back
+   discards its refreshed matches with its movements. A request whose events are all already matched
+   makes **no** Nayax call at all, and a mapping that cannot be read - Nayax unreachable - leaves
+   every event decided from what is stored, exactly as before this issue: an event still waiting for
+   a match keeps waiting rather than being applied on a guess, and the already-matched events of the
+   same request are applied unaffected. A validated positive event is applied through the same
    `IRecordInventoryMovement` movement logic as every other stock adjustment - it reduces
    `QuantityInStock` but never touches costing quantity/value, the same invariant an internal
    transfer already preserves. If the requested quantity exceeds the storage left to it, the event is
@@ -18162,8 +18228,9 @@ that meaning.
    write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
    record a second movement when it races another apply of the same event either; a failed write
    or commit there returns the same `Error` and leaves the event unresolved, so it can be chosen
-   again. A cancelled request is the one failure that is not reported per event: it stops the
-   apply.
+   again. Since issue #1248 its "Already recorded manually" sibling takes that same lock, so the two
+   resolutions serialise against each other as well. A cancelled request is the one failure that is
+   not reported per event: it stops the apply.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
@@ -18253,8 +18320,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   dependency.
 - **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
-  issue #196 - and `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
-  #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
+  issue #196 - `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
+  #242 - and `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
+  #1248), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
   with `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
@@ -18262,9 +18330,12 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   transaction (`BeginRefillWriteTransactionAsync`/`IMachineStockRefillWriteTransaction`), the
   whole-request event read `FindEventsAsync` and the batch `ApplyProductRefillsAsync`, which records
   one product's accepted refills and the duplicate-resolution columns of each and rebuilds that
-  product's cost once; the use cases decide every event and own the commit, so no policy moved
-  behind the port). The Nayax read stays on the existing
-  `Inventory.Application.Nayax.INayaxLynxClient` port.
+  product's cost once; and, since issue #1248, with the re-match pair `FindRematchCandidatesAsync`
+  and `UpdateMatchesAsync`, whose `MachineStockEventMatchUpdate` carries the three match columns and
+  nothing else - the use cases decide every event and own the commit, so no policy moved behind the
+  port). `MachineStockEventState` carries the event's parsed MDB and product name for the same
+  issue, because they are what a refreshed mapping resolves a stored event by. The Nayax read stays
+  on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `Inventory.Infrastructure.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-product write-locked transaction

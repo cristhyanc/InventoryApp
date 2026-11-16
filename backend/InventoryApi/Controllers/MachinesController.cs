@@ -178,6 +178,11 @@ public class MachinesController : ControllerBase
     // The explicit resolution for a Nayax event flagged as a possible duplicate of a manual refill
     // (issue #196): "already recorded manually" reconciles it without any movement; "apply as
     // separate restock" is an explicit, auditable override that applies it exactly once.
+    //
+    // Both take the same write lock and re-read the event inside it (issue #1248). A resolution
+    // that finds the event settled the other way answers 409 with the same result shape, carrying
+    // the event id, the ResolutionConflict outcome and what the event's final state actually is -
+    // repeating the same resolution is still the idempotent 200.
     [HttpPost("{id:long}/sync-restock/resolve-duplicate")]
     public async Task<ActionResult<NayaxStockEventApplyResultDto>> ResolveSyncRestockDuplicate(
         long id, NayaxResolveDuplicateRequestDto dto, CancellationToken ct)
@@ -186,7 +191,10 @@ public class MachinesController : ControllerBase
         if (machine?.NayaxMachineId is null) return NotFound();
 
         var result = await _resolveMachineStockDuplicate.Handle(machine, dto.EventId, dto.Resolution, ct);
-        return Ok(result);
+
+        return result.Outcome == NayaxStockEventApplyOutcome.ResolutionConflict
+            ? Conflict(result)
+            : Ok(result);
     }
 
     // The bulk "already recorded manually" action (issue #242): reconciles every selected event in

@@ -1125,7 +1125,14 @@ export enum NayaxStockEventApplyOutcome {
   /** Reconciled as already recorded manually (issue #196): no movement was applied. */
   Reconciled = 5,
   /** Flagged as a possible duplicate and not yet explicitly resolved; the ordinary Apply action refused it. */
-  DuplicateRequiresResolution = 6
+  DuplicateRequiresResolution = 6,
+  /**
+   * The event was already settled the *other* way, so this resolution changed nothing (issue
+   * #1248). `POST /api/machines/{id}/sync-restock/resolve-duplicate` answers it with 409 and this
+   * same result shape; repeating the *same* resolution is still the idempotent `Reconciled`/
+   * `Applied` 200.
+   */
+  ResolutionConflict = 7
 }
 
 export interface NayaxStockEventApplyResult {

@@ -18,6 +18,13 @@ namespace Inventory.Application.MachineStockSync;
 /// its own durable audit/reconciliation record and outcome; one invalid or already-settled id is
 /// reported back explicitly rather than silently skipped, and it never blocks or changes the outcome
 /// of the others in the same request.
+///
+/// <para><strong>Each event is resolved inside the same write lock the single resolution takes</strong>
+/// (issue #1248). "Is this event still pending?" decides a write, so each id's own
+/// <c>BEGIN IMMEDIATE</c> transaction is taken before the event is re-read and stamped: an apply of
+/// the same event that commits in between is seen, and that id is reported <c>NotApplicable</c>
+/// rather than marked as never applied on top of its movement. The batch's per-event contract is
+/// unchanged - every id still answers for itself and one settled id never blocks the others.</para>
 /// </summary>
 public sealed class ResolveMachineStockEventsAsAlreadyRecorded
 {
@@ -53,31 +60,13 @@ public sealed class ResolveMachineStockEventsAsAlreadyRecorded
     {
         var state = await _store.FindEventAsync(nayaxMachineId, eventId, cancellationToken);
         if (state is null)
-            return new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
+            return NotFound(eventId);
 
-        // Idempotent replay: once reconciled, repeating the request returns the same outcome without
-        // touching storage or the reconciliation record again.
-        if (state.DuplicateResolution == NayaxDuplicateResolution.ReconciledManually)
-        {
-            return new(
-                eventId,
-                NayaxStockEventApplyOutcome.Reconciled,
-                "Already reconciled as recorded manually; no Nayax movement was applied.",
-                null);
-        }
+        if (Settled(state) is { } settled)
+            return settled;
 
-        // An event already applied (an ordinary apply, or a duplicate resolved as a separate
-        // restock) already has a real inventory movement; it can never be retroactively marked as
-        // already recorded manually instead.
-        if (state.ProcessingStatus == NayaxStockEventProcessingStatus.Applied)
-        {
-            return new(
-                eventId,
-                NayaxStockEventApplyOutcome.NotApplicable,
-                "This event has already been applied as a Nayax inventory movement and cannot be marked as already recorded manually.",
-                null);
-        }
-
+        // Evidence only: which manual refill this reconciliation is recorded against. It decides no
+        // write, so it is read outside the lock, exactly as the single resolution reads it.
         var duplicate = state.MatchStatus == NayaxStockEventMatchStatus.Matched
             && state.MatchedProductId is long matchedProductId
             && state.ParsedQuantity is > 0
@@ -85,13 +74,57 @@ public sealed class ResolveMachineStockEventsAsAlreadyRecorded
                     matchedProductId, state.EventDateTimeGmt, manualRefills)
                 : null;
 
+        await using var transaction = await _store
+            .BeginRefillWriteTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // Authoritative, inside the write lock (issue #1248): this is the row the stamp below is
+        // written to, and an apply that committed since the read above must be seen rather than
+        // overwritten.
+        var locked = await _store.FindEventAsync(nayaxMachineId, eventId, cancellationToken);
+        if (locked is null)
+            return NotFound(eventId);
+
+        if (Settled(locked) is { } raced)
+            return raced;
+
         await _store.ReconcileAsManualDuplicateAsync(
-            state.Id, nayaxMachineId, duplicate?.Match.StockAdjustmentId, cancellationToken);
+            locked.Id, nayaxMachineId, duplicate?.Match.StockAdjustmentId, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         return new(
-            state.Id,
+            locked.Id,
             NayaxStockEventApplyOutcome.Reconciled,
-            "Reconciled as already recorded manually; no Nayax movement was applied.",
+            MachineStockResolutionMessages.Reconciled,
             null);
     }
+
+    /// <summary>
+    /// How an already-settled event answers this bulk resolution, or <see langword="null"/> when it
+    /// is still pending. Repeating the request on a reconciled event is the idempotent replay; an
+    /// event that already has a real inventory movement - an ordinary apply, or a duplicate
+    /// resolved as a separate restock - can never be retroactively marked as already recorded
+    /// manually instead, and says so for itself without affecting the other ids in the request.
+    /// </summary>
+    private static NayaxStockEventApplyResultDto? Settled(MachineStockEventState state) =>
+        state switch
+        {
+            { DuplicateResolution: NayaxDuplicateResolution.ReconciledManually } => new(
+                state.Id,
+                NayaxStockEventApplyOutcome.Reconciled,
+                MachineStockResolutionMessages.AlreadyReconciled,
+                null),
+
+            { ProcessingStatus: NayaxStockEventProcessingStatus.Applied } => new(
+                state.Id,
+                NayaxStockEventApplyOutcome.NotApplicable,
+                MachineStockResolutionMessages.AppliedCannotBeReconciled,
+                null),
+
+            _ => null,
+        };
+
+    private static NayaxStockEventApplyResultDto NotFound(int eventId) =>
+        new(eventId, NayaxStockEventApplyOutcome.Error, MachineStockResolutionMessages.NotFound, null);
 }

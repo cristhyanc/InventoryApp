@@ -83,7 +83,17 @@ public enum NayaxStockEventApplyOutcome
     /// Flagged as a possible duplicate of a manual refill and not yet explicitly resolved
     /// (issue #196); the ordinary Apply action refused it.
     /// </summary>
-    DuplicateRequiresResolution
+    DuplicateRequiresResolution,
+
+    /// <summary>
+    /// The event was already settled the <em>other</em> way, so this resolution changed nothing
+    /// (issue #1248): an event that has been applied cannot also be recorded as never applied, and
+    /// one reconciled as already recorded manually cannot also be applied as a separate restock.
+    /// <c>POST /api/machines/{id}/sync-restock/resolve-duplicate</c> answers it with <c>409</c>.
+    /// Repeating the <em>same</em> resolution is not this outcome: that is the established
+    /// idempotent replay and still answers <see cref="Reconciled"/> or <see cref="Applied"/>.
+    /// </summary>
+    ResolutionConflict
 }
 
 public record NayaxStockEventApplyResultDto(

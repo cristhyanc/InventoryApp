@@ -390,6 +390,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();
         services.AddScoped<GetMachineLatestSales>();
+        services.AddScoped<RematchMachineStockEvents>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
