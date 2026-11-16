@@ -38,17 +38,13 @@ public sealed class BackfillSaleCosts
     {
         var sales = await _store.LoadStockConsumingSalesAsync(
             new StockConsumingSaleSelection(), forUpdate: !dryRun, cancellationToken);
-        var costed = 0;
-        var estimated = 0;
-        var pending = 0;
-        var errors = 0;
-        var finalized = 0;
+        var counts = new OutcomeCounts();
 
         foreach (var sale in sales)
         {
-            if (!force && sale.CostingStatus is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated)
+            if (!force && IsFinal(sale.CostingStatus))
             {
-                finalized++;
+                counts.RecordFinalized();
                 continue;
             }
 
@@ -56,32 +52,66 @@ public sealed class BackfillSaleCosts
                 sale, force, SaleCostPrecedenceScope.Complete, cancellationToken);
             if (cost is null || !SaleCostPrecedence.Replaces(sale, cost))
             {
-                // Nothing to write, so the sale is reported by the state it is already in: a final
-                // cost of at least this decision's precedence is finalized, and a sale this run left
-                // exactly as it found it is still pending or in error.
-                if (sale.CostingStatus is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated)
-                    finalized++;
-                else if (sale.CostingStatus == SaleCostStatus.Error)
-                    errors++;
-                else
-                    pending++;
+                counts.RecordUnchanged(sale.CostingStatus);
                 continue;
             }
 
             if (!dryRun)
                 _store.StageCost(sale, cost);
-            switch (cost.Status)
-            {
-                case SaleCostStatus.Costed: costed++; break;
-                case SaleCostStatus.LegacyEstimated: estimated++; break;
-                case SaleCostStatus.Pending: pending++; break;
-                case SaleCostStatus.Error: errors++; break;
-            }
+            counts.RecordDecided(cost.Status);
         }
 
         if (!dryRun)
             await _store.SaveChangesAsync(cancellationToken);
 
-        return new SaleCostingBackfillResult(costed, estimated, pending, errors, finalized, dryRun);
+        return counts.ToResult(dryRun);
+    }
+
+    /// <summary>Whether a stored costing status is a final cost this tool reports as finalized.</summary>
+    private static bool IsFinal(SaleCostStatus status) =>
+        status is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated;
+
+    /// <summary>
+    /// The run's counts, so each sale is recorded in exactly one place: by the cost the run decided
+    /// for it, or - when nothing was written - by the state it is already in.
+    /// </summary>
+    private sealed class OutcomeCounts
+    {
+        private int _costed;
+        private int _estimated;
+        private int _pending;
+        private int _errors;
+        private int _finalized;
+
+        /// <summary>Records a sale that already had a final cost an unforced run leaves alone.</summary>
+        public void RecordFinalized() => _finalized++;
+
+        /// <summary>Records a sale by the status the run decided for it.</summary>
+        public void RecordDecided(SaleCostStatus status)
+        {
+            switch (status)
+            {
+                case SaleCostStatus.Costed: _costed++; break;
+                case SaleCostStatus.LegacyEstimated: _estimated++; break;
+                case SaleCostStatus.Error: _errors++; break;
+                default: _pending++; break;
+            }
+        }
+
+        /// <summary>
+        /// Records a sale nothing was written for by the state it is already in: a final cost of at
+        /// least the decision's precedence is finalized, and a sale the run left exactly as it found
+        /// it is still pending or in error.
+        /// </summary>
+        public void RecordUnchanged(SaleCostStatus stored)
+        {
+            if (IsFinal(stored))
+                RecordFinalized();
+            else
+                RecordDecided(stored);
+        }
+
+        public SaleCostingBackfillResult ToResult(bool dryRun) =>
+            new(_costed, _estimated, _pending, _errors, _finalized, dryRun);
     }
 }

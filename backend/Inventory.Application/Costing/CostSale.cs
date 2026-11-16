@@ -86,34 +86,9 @@ public sealed class CostSale : ICostSale
         // so the difference is raised on PR #766 for a human decision rather than settled here.
         var productId = sale.ProductId;
 
-        var baselineCutoff = productId is null
-            ? null
-            : await _store.GetTransitionCutoffAsync(productId.Value, cancellationToken);
-
-        // The product's own cost history is readable for this sale only when the sale is resolved and
-        // after the transition baseline cutoff: at or before it the baseline *is* the opening, and the
-        // replay ignores everything there, so neither step 1 nor step 2 has anything to say.
-        var readsTheLedger = productId is not null &&
-            !(baselineCutoff.HasValue && sale.AuthorizationTime <= baselineCutoff.Value);
-        var cost = readsTheLedger
-            ? await _rebuild.GetAverageUnitCostAtAsync(productId!.Value, sale.AuthorizationTime, sale.TransactionId, cancellationToken)
-            : null;
-
-        if (cost is >= 0)
-            return new SaleCostAssignment(cost.Value, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger);
-
-        // Precedence step 2, for the callers that ask for the complete precedence (issue #1261): the
-        // ledger has no known cost before this sale, so the latest costed purchase replayed before it
-        // is a better answer than the cost Nayax sent with the transaction. The sale-time path
-        // deliberately skips it, because the inventory-cost rebuild that follows a stored sale
-        // replays this very step straight afterwards.
-        if (precedence == SaleCostPrecedenceScope.Complete && readsTheLedger)
-        {
-            var latestPurchase = await _rebuild.GetLatestPurchaseUnitCostBeforeAsync(
-                productId!.Value, sale.AuthorizationTime, sale.TransactionId, cancellationToken);
-            if (latestPurchase is >= 0)
-                return new SaleCostAssignment(latestPurchase.Value, SaleCostStatus.Costed, SaleCostOrigin.Estimated);
-        }
+        var fromLedger = await CostFromLedgerAsync(sale, productId, precedence, cancellationToken);
+        if (fromLedger is not null)
+            return fromLedger;
 
         if (sale.NayaxProductCostPrice is >= 0)
             return new SaleCostAssignment(sale.NayaxProductCostPrice.Value, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport);
@@ -122,5 +97,47 @@ public sealed class CostSale : ICostSale
             null,
             productId is null || sale.NayaxProductCostPrice < 0 ? SaleCostStatus.Error : SaleCostStatus.Pending,
             SaleCostOrigin.Unknown);
+    }
+
+    /// <summary>
+    /// What the product's own cost history says about this sale - precedence step 1, then step 2 for
+    /// a caller that asked for the complete precedence - or <c>null</c> when it says nothing and the
+    /// decision falls to the sale's own Nayax cost.
+    ///
+    /// <para>Neither step is read for an unresolved sale or for one at or before the product's
+    /// transition-baseline cutoff: at or before it the baseline *is* the opening, and the replay
+    /// ignores everything there, so neither step has anything to say.</para>
+    /// </summary>
+    private async Task<SaleCostAssignment?> CostFromLedgerAsync(
+        CostableSale sale,
+        long? productId,
+        SaleCostPrecedenceScope precedence,
+        CancellationToken cancellationToken)
+    {
+        if (productId is null)
+            return null;
+
+        var baselineCutoff = await _store.GetTransitionCutoffAsync(productId.Value, cancellationToken);
+        if (baselineCutoff.HasValue && sale.AuthorizationTime <= baselineCutoff.Value)
+            return null;
+
+        var cost = await _rebuild.GetAverageUnitCostAtAsync(
+            productId.Value, sale.AuthorizationTime, sale.TransactionId, cancellationToken);
+        if (cost is >= 0)
+            return new SaleCostAssignment(cost.Value, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger);
+
+        // Precedence step 2, for the callers that ask for the complete precedence (issue #1261): the
+        // ledger has no known cost before this sale, so the latest costed purchase replayed before it
+        // is a better answer than the cost Nayax sent with the transaction. The sale-time path
+        // deliberately skips it, because the inventory-cost rebuild that follows a stored sale
+        // replays this very step straight afterwards.
+        if (precedence != SaleCostPrecedenceScope.Complete)
+            return null;
+
+        var latestPurchase = await _rebuild.GetLatestPurchaseUnitCostBeforeAsync(
+            productId.Value, sale.AuthorizationTime, sale.TransactionId, cancellationToken);
+        return latestPurchase is >= 0
+            ? new SaleCostAssignment(latestPurchase.Value, SaleCostStatus.Costed, SaleCostOrigin.Estimated)
+            : null;
     }
 }
