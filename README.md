@@ -1913,9 +1913,25 @@ sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 ```
 
 Store the verified backup somewhere other than the App Service's own `/home` mount — which is what
-`--upload` does for you. Restoring (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`)
-overwrites live data and must be run deliberately, by a human, after stopping the API — never
-automatically. Retention/alerting and automated restore remain out of scope for
+`--upload` does for you.
+
+The database created by this application runs in **WAL mode** (EF Core's SQLite database creator
+sets it when it builds a new file; see
+[docs/architecture.md § SQLite operating assumptions](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53)
+for why, and what production's mode depends on). That keeps these two procedures separate and
+non-interchangeable:
+
+- **Backup, while the app runs** — only with `backup-database` or `sqlite3 ".backup"`, both shown
+  above. **Never copy `inventory.db` on its own while `inventory.db-wal` exists**: a plain
+  filesystem copy can capture the file mid-write, and in WAL mode it can also simply miss committed
+  data still sitting in `inventory.db-wal` rather than in `inventory.db` itself.
+- **Restore, with the app stopped** — replace the live database file with the verified backup
+  (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`), then remove any leftover
+  `inventory.db-wal` and `inventory.db-shm` left behind by the database being replaced (the
+  restored backup is its own complete snapshot and has no use for them), before starting the API
+  again. This must be run deliberately, by a human — never automatically.
+
+Retention/alerting and automated restore remain out of scope for
 `backup-database`. The full
 step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
