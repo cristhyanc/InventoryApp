@@ -159,8 +159,7 @@ public sealed class ApplyMachineStockSync
 
         // Authoritative, inside the write lock: these are the rows every decision below is made on
         // and the quantity the movements below are applied to.
-        var states = (await _store.FindEventsAsync(machine.RequiredNayaxMachineId, eventIds, cancellationToken))
-            .ToDictionary(state => state.Id);
+        var stored = await _store.FindEventsAsync(machine.RequiredNayaxMachineId, eventIds, cancellationToken);
         var product = await _store.FindStorageProductAsync(productId, cancellationToken);
 
         // The refreshed match of whatever this batch read as still waiting for one (issue #1248),
@@ -168,45 +167,14 @@ public sealed class ApplyMachineStockSync
         // committed with them, so a refreshed match can never outlive a batch that rolled back.
         IReadOnlyList<MachineStockEventMatchUpdate> rematched = mapping is null
             ? []
-            : RematchMachineStockEvents.Changes(states.Values, mapping);
+            : RematchMachineStockEvents.Changes(stored, mapping);
 
-        // The stored quantity read under the lock, less every refill this batch has already
-        // accepted. An event that does not fit the running balance is refused and stays Unprocessed.
-        var available = product?.QuantityInStock;
-        var accepted = new List<MachineStockRefillRequest>();
+        // Those same rows as the current mapping decides them, which is what every ruling below is
+        // made on, so what the batch decides and what it records about the match cannot differ.
+        var states = stored.ToDictionary(state => state.Id, state => Refreshed(state, mapping));
 
-        foreach (var eventId in eventIds)
-        {
-            if (!states.TryGetValue(eventId, out var stored))
-            {
-                results[eventId] = NotFound(eventId);
-                continue;
-            }
-
-            var state = Refreshed(stored, mapping);
-
-            // The matched product is revalidated under the lock as well: a row that no longer names
-            // this batch's product is refused rather than written inside its transaction.
-            var availableToThisEvent = state.MatchedProductId == productId ? available : null;
-            var ruling = Decide(state, availableToThisEvent, manualRefills);
-            if (ruling.Decision != NayaxStockEventApplyDecision.Apply)
-            {
-                results[eventId] = Classify(state, ruling);
-                continue;
-            }
-
-            accepted.Add(new MachineStockRefillRequest(
-                state.Id,
-                state.NayaxEventLogId,
-                state.ParsedQuantity!.Value,
-                NayaxDuplicateResolution.None,
-                MatchedManualStockAdjustmentId: null));
-
-            available = availableToThisEvent!.Value - state.ParsedQuantity.Value;
-
-            // The movement id is filled in from the write below; until it commits there is none.
-            results[eventId] = new(eventId, NayaxStockEventApplyOutcome.Applied, ruling.Message, null);
-        }
+        var accepted = AcceptEligible(
+            productId, eventIds, states, product?.QuantityInStock, manualRefills, results);
 
         if (accepted.Count == 0 && rematched.Count == 0)
         {
@@ -262,6 +230,59 @@ public sealed class ApplyMachineStockSync
                 StockAdjustmentId = refill.StockAdjustmentId,
             };
         }
+    }
+
+    /// <summary>
+    /// The refills one batch accepts, in request order, decided from the rows it read inside its own
+    /// write lock. Every event the policy refuses is given its non-writing result here instead and
+    /// nothing is written for it. <paramref name="storedQuantity"/> is the product's storage quantity
+    /// read under that same lock, and each accepted refill reduces the quantity left to the next
+    /// event before its eligibility is decided, so a batch can never take more units out of storage
+    /// than it holds.
+    /// </summary>
+    private static List<MachineStockRefillRequest> AcceptEligible(
+        long productId,
+        IReadOnlyList<int> eventIds,
+        IReadOnlyDictionary<int, MachineStockEventState> states,
+        int? storedQuantity,
+        IReadOnlyList<ManualRefillEvidence> manualRefills,
+        Dictionary<int, NayaxStockEventApplyResultDto> results)
+    {
+        var available = storedQuantity;
+        var accepted = new List<MachineStockRefillRequest>();
+
+        foreach (var eventId in eventIds)
+        {
+            if (!states.TryGetValue(eventId, out var state))
+            {
+                results[eventId] = NotFound(eventId);
+                continue;
+            }
+
+            // The matched product is revalidated under the lock as well: a row that no longer names
+            // this batch's product is refused rather than written inside its transaction.
+            var availableToThisEvent = state.MatchedProductId == productId ? available : null;
+            var ruling = Decide(state, availableToThisEvent, manualRefills);
+            if (ruling.Decision != NayaxStockEventApplyDecision.Apply)
+            {
+                results[eventId] = Classify(state, ruling);
+                continue;
+            }
+
+            accepted.Add(new MachineStockRefillRequest(
+                state.Id,
+                state.NayaxEventLogId,
+                state.ParsedQuantity!.Value,
+                NayaxDuplicateResolution.None,
+                MatchedManualStockAdjustmentId: null));
+
+            available = availableToThisEvent!.Value - state.ParsedQuantity.Value;
+
+            // The movement id is filled in once the batch's write commits; until then there is none.
+            results[eventId] = new(eventId, NayaxStockEventApplyOutcome.Applied, ruling.Message, null);
+        }
+
+        return accepted;
     }
 
     /// <summary>
