@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { Locator, Page, Route } from '@playwright/test';
 import { actors, expect, test } from '../fixtures/harness';
 
 /**
@@ -6,9 +6,10 @@ import { actors, expect, test } from '../fixtures/harness';
  * at 390px the table was 426px wide, forcing the page to scroll sideways, and the role
  * `<select>` shrank down to its arrow so the member's role could not be read.
  *
- * This is a browser test because jsdom answers neither "does the page scroll sideways at 390px"
- * nor "does a long email actually wrap onto more than one line" - both need real laid-out boxes
- * against the application's compiled Tailwind CSS. The Jest spec beside the component
+ * This is a browser test because jsdom answers none of "does the page scroll sideways at 390px",
+ * "does a long email actually wrap onto more than one line" and "is the role control wide enough to
+ * read the selected role" - all three need real laid-out boxes and real text metrics against the
+ * application's compiled Tailwind CSS. The Jest spec beside the component
  * (`member-management.component.spec.ts`) already asserts the narrow-card markup itself.
  *
  * **Only the member-list `GET` is answered in the browser.** The E2E fixture seeds one membership
@@ -21,13 +22,25 @@ import { actors, expect, test } from '../fixtures/harness';
  *
  * **It writes nothing.** No role is changed, nothing is revoked or reinstated: this only checks
  * that each member's name, email, role, status and action are laid out without sideways scroll at
- * 390px and that the table keeps its existing layout at 1440px.
+ * 390px, that the rendered role control measures wide enough for its selected role text, and that
+ * the table keeps its existing layout at 1440px.
  */
 const desktopViewport = { width: 1440, height: 900 };
 const narrowViewport = { width: 390, height: 844 };
 
 /** One CSS pixel of slack: a laid-out box edge is fractional, a viewport bound is not. */
 const tolerance = 1;
+
+/**
+ * The width Chromium's own dropdown indicator occupies inside a `<select>`'s content box, in CSS
+ * pixels. The indicator is painted inside the content box, so the selected option's label has only
+ * `width - border - padding - arrow` left to render in - which is why a control wide enough for the
+ * arrow alone (the defect in audit #1225 finding FE-03) still shows no readable role. 16px is a
+ * deliberately conservative figure for the pinned Chromium build: the real indicator, with the gap
+ * it keeps from the label, is wider, so requiring at least this much makes the assertion lenient
+ * about the browser's exact chrome while still rejecting the clipped control.
+ */
+const nativeSelectArrowWidth = 16;
 
 interface StubbedMember {
   membershipId: number;
@@ -88,7 +101,64 @@ async function pageOverflow(page: Page): Promise<number> {
   return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 }
 
-test('at 390x844 the Members list does not scroll sideways and the long email wraps', async ({ pageAs }) => {
+/** What a rendered role `<select>` actually measures, and what its selected label needs. */
+interface RoleControlMetrics {
+  /** The control's laid-out border-box width. */
+  readonly width: number;
+  readonly left: number;
+  readonly right: number;
+  /** Border and padding: horizontal space inside the box that no label can use. */
+  readonly horizontalChrome: number;
+  /** Width the selected option's own label needs, measured in the control's rendered font. */
+  readonly selectedLabelWidth: number;
+  /** The label that was measured, so a failure names the role that does not fit. */
+  readonly selectedLabel: string;
+  /** The font the measurement actually used, so the test can refuse a canvas-default fallback. */
+  readonly measuredWithFont: string;
+  /** The control's own font size, as the browser computed it. */
+  readonly fontSize: string;
+}
+
+/**
+ * Measures the role control as the browser laid it out, together with the width its selected
+ * label needs in that same font. Asserting the two against each other is the only way to tell a
+ * readable role from the original defect: a control collapsed to its arrow still reports the right
+ * `value` and still contains every `<option>`, so value- and option-based assertions pass while
+ * nothing legible is on screen.
+ */
+async function measureRoleControl(select: Locator): Promise<RoleControlMetrics> {
+  return select.evaluate((element) => {
+    const control = element as HTMLSelectElement;
+    const style = getComputedStyle(control);
+    const box = control.getBoundingClientRect();
+    const selectedLabel = control.options[control.selectedIndex]?.label ?? '';
+
+    // Canvas text metrics, not a character-count estimate: this is the same font stack, weight and
+    // size the control is painted with, so the comparison is in real rendered pixels. The
+    // shorthand deliberately omits line-height, which does not affect measured width.
+    const context = document.createElement('canvas').getContext('2d')!;
+    context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+
+    return {
+      width: box.width,
+      left: box.x,
+      right: box.x + box.width,
+      horizontalChrome:
+        Number.parseFloat(style.paddingLeft) +
+        Number.parseFloat(style.paddingRight) +
+        Number.parseFloat(style.borderLeftWidth) +
+        Number.parseFloat(style.borderRightWidth),
+      selectedLabelWidth: context.measureText(selectedLabel).width,
+      selectedLabel,
+      measuredWithFont: context.font,
+      fontSize: style.fontSize
+    };
+  });
+}
+
+test('at 390x844 the Members list does not scroll sideways, the long email wraps and the role is wide enough to read', async ({
+  pageAs
+}) => {
   expect(longEmail.length).toBeGreaterThanOrEqual(60);
   const page = await pageAs(actors.businessAOwner);
   await openUsersPage(page, narrowViewport);
@@ -115,9 +185,32 @@ test('at 390x844 the Members list does not scroll sideways and the long email wr
 
     const roleSelect = card.locator('select');
     await expect(roleSelect).toHaveValue(member.role);
-    // The chosen option's own label is on screen - not merely a value - so the role is readable
-    // text, not a control shrunk down to its arrow.
-    await expect(roleSelect.locator('option', { hasText: member.role })).toHaveCount(1);
+    await expect(roleSelect).toBeVisible();
+
+    // The role is readable, measured rather than inferred: the control, as Chromium laid it out,
+    // has room inside its padding and border for the whole selected label *and* the native arrow.
+    // This is the assertion that fails on the original defect, where the control was wide enough
+    // for its arrow only; `toHaveValue` and an `<option>` count both pass in that state.
+    const metrics = await measureRoleControl(roleSelect);
+    expect(metrics.selectedLabel, `the control shows ${member.role} as its selected label`).toBe(member.role);
+    expect(metrics.measuredWithFont, 'the measurement used the rendered font, not the canvas default').toContain(
+      metrics.fontSize
+    );
+    expect(metrics.selectedLabelWidth, 'the measured label has a real width').toBeGreaterThan(0);
+
+    const widthAvailableForLabel = metrics.width - metrics.horizontalChrome - nativeSelectArrowWidth;
+    expect(
+      widthAvailableForLabel,
+      `the role control is wide enough for "${metrics.selectedLabel}" plus its padding and arrow ` +
+        `(rendered ${metrics.width}px, chrome ${metrics.horizontalChrome}px, arrow ${nativeSelectArrowWidth}px, ` +
+        `label needs ${metrics.selectedLabelWidth}px)`
+    ).toBeGreaterThanOrEqual(metrics.selectedLabelWidth);
+
+    // And the whole control is on screen, so that visible width is not visible only after scrolling.
+    expect(metrics.left, 'the role control starts inside the viewport').toBeGreaterThanOrEqual(-tolerance);
+    expect(metrics.right, 'the role control ends inside the viewport').toBeLessThanOrEqual(
+      narrowViewport.width + tolerance
+    );
 
     if (member.isActive) {
       await expect(card.getByText('Active', { exact: true })).toBeVisible();
