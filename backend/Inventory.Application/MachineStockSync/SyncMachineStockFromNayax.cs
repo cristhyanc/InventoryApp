@@ -372,9 +372,13 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         var notes = $"A manual machine refill of {-duplicate.Match.QuantityChange} was recorded for this "
             + $"product/machine at {AsUtc(duplicate.Match.EffectiveAt):O}; this Nayax event reports {eventQuantity}.";
 
-        return duplicate.OtherQualifyingCount == 0
-            ? notes
-            : $"{notes} {duplicate.OtherQualifyingCount} other manual refill"
-                + $"{(duplicate.OtherQualifyingCount == 1 ? string.Empty : "s")} also qualified.";
+        if (duplicate.OtherQualifyingCount == 0)
+        {
+            return notes;
+        }
+
+        var plural = duplicate.OtherQualifyingCount == 1 ? string.Empty : "s";
+
+        return $"{notes} {duplicate.OtherQualifyingCount} other manual refill{plural} also qualified.";
     }
 }
