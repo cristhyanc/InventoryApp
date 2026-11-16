@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.Commissions;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Imports;
 using Inventory.Application.Members;
@@ -20,6 +21,7 @@ using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Commissions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
@@ -296,6 +298,12 @@ builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
 // transport fact. The event names the fields that changed and never a value - see
 // LoggingBusinessSettingsAudit.
 builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The commission-agreement audit trail (issue #1254), on exactly the same terms. It is a separate
+// port because ending an agreement is a different event with different fields - and because its
+// entry type has no field for a site name, a commission rate or any money figure, which keeps the
+// business's financial configuration out of the audit trail structurally rather than by a sink's
+// discretion.
+builder.Services.AddScoped<ISiteCommissionAgreementAudit, LoggingSiteCommissionAgreementAudit>();
 // The bulk product GST rule audit trail (issue #1076), on exactly the terms the settings one above
 // is satisfied: a structured event at the boundary that knows the request's correlation id, and no
 // audit table, because this issue authorises no schema change. It is a separate port because

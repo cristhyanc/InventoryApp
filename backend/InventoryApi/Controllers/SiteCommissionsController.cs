@@ -31,6 +31,11 @@ namespace InventoryApi.Controllers;
 /// <para><b>There is no payment route</b> (issue #1251, the repository owner's decision of 13
 /// November 2026): the application does not record commission payments, so this controller reports
 /// commission due and maintains the agreements, and nothing here writes a payment.</para>
+///
+/// <para><b>An agreement may be ended but never edited</b> (issue #1254, the repository owner's
+/// decision of 14 November 2026). <see cref="EndAgreement"/> sets an agreement's end date, which is
+/// what lets a site's rate change without a database edit; correcting a mistyped rate or start date,
+/// and deleting an agreement, stay out, because they would rewrite commission already reported.</para>
 /// </summary>
 [ApiController]
 [Route("api/site-commissions")]
@@ -43,15 +48,18 @@ public sealed class SiteCommissionsController : ControllerBase
     private readonly IGetSiteCommissionReport _getReport;
     private readonly GetSiteCommissionAgreements _getAgreements;
     private readonly SaveSiteCommissionAgreement _saveAgreement;
+    private readonly EndSiteCommissionAgreement _endAgreement;
 
     public SiteCommissionsController(
         IGetSiteCommissionReport getReport,
         GetSiteCommissionAgreements getAgreements,
-        SaveSiteCommissionAgreement saveAgreement)
+        SaveSiteCommissionAgreement saveAgreement,
+        EndSiteCommissionAgreement endAgreement)
     {
         _getReport = getReport;
         _getAgreements = getAgreements;
         _saveAgreement = saveAgreement;
+        _endAgreement = endAgreement;
     }
 
     [HttpGet]
@@ -130,5 +138,32 @@ public sealed class SiteCommissionsController : ControllerBase
                 dto.PaymentDueDaysAfterPeriodEnd),
             ct);
         return CreatedAtAction(nameof(Agreements), new { siteId = agreement.SiteId }, agreement);
+    }
+
+    /// <summary>
+    /// Ends one of the business's own agreements on a date (issue #1254), so a site's rate can
+    /// change in the application instead of in the database: the add above refuses any overlap, so
+    /// an open-ended agreement blocked every later one for ever.
+    ///
+    /// <para>It is the same capability as the rest of this controller - a Manager and an Owner may
+    /// both add an agreement, so both may end one - and the same plan. A read-only support session
+    /// is refused by the central method rule, as every other write on this surface is.</para>
+    ///
+    /// <para>The end date must be on or after the agreement's start date and may not be later than
+    /// an end date it already carries; either breach is a <c>400</c> carrying the rule's own
+    /// sentence, through <c>DomainExceptionHandler</c>. An agreement the caller's business does not
+    /// hold - another business's key included - is <c>404</c>.</para>
+    /// </summary>
+    [HttpPost("agreements/{agreementId:int}/end")]
+    public async Task<ActionResult<CommissionAgreement>> EndAgreement(
+        int agreementId,
+        EndSiteCommissionAgreementDto dto,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var ended = await _endAgreement.Handle(
+            new EndSiteCommissionAgreementInput(agreementId, dto.EndDate), ct);
+        return ended is null ? NotFound() : Ok(ended);
     }
 }

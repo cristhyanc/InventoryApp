@@ -199,4 +199,98 @@ describe('SiteCommissionAgreementsComponent write control during a support sessi
 
     expect(saveSiteCommissionAgreement).not.toHaveBeenCalled();
   });
+
+  /**
+   * Issue #1254. The action is hidden during a session rather than disabled, the way Record Payment
+   * was: there is no mid-edit state in a date picker nobody may submit. A session grants
+   * `SiteCommissionsManage`, so the control would otherwise still render.
+   */
+  it('hides End agreement while a session is active', async () => {
+    const { host } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([agreement()])), saveSiteCommissionAgreement: jest.fn() },
+      undefined,
+      undefined,
+      of(true)
+    );
+
+    expect(host.querySelector('app-end-commission-agreement')).toBeNull();
+    expect(host.textContent).not.toContain('End agreement');
+  });
+
+  it('does not end an agreement while a session is active, even if the handler is invoked directly', async () => {
+    const endSiteCommissionAgreement = jest.fn();
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([agreement()])), saveSiteCommissionAgreement: jest.fn(), endSiteCommissionAgreement },
+      undefined,
+      undefined,
+      of(true)
+    );
+
+    fixture.componentInstance.endAgreement(agreement(), '2026-06-30');
+
+    expect(endSiteCommissionAgreement).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Ending an agreement from the current-agreements table (issue #1254), which is how a site's rate
+ * changes: the add refuses any overlap, so an open-ended agreement blocked every later one for ever.
+ */
+describe('SiteCommissionAgreementsComponent End agreement (issue #1254)', () => {
+  it('offers End agreement on every stored agreement while no session is active', async () => {
+    const { host } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([agreement(), agreement({ id: 2, siteId: 1 })])), saveSiteCommissionAgreement: jest.fn() }
+    );
+
+    expect(host.querySelectorAll('app-end-commission-agreement')).toHaveLength(2);
+    expect(host.textContent).toContain('End agreement');
+  });
+
+  it('ends the agreement, shows a success toast, and reloads', async () => {
+    const siteCommissionAgreements = jest.fn(() => of([agreement()]));
+    const endSiteCommissionAgreement = jest.fn(() => of(agreement({ effectiveTo: '2026-06-30' })));
+    const success = jest.fn();
+    const { fixture } = await render(
+      { siteCommissionAgreements, saveSiteCommissionAgreement: jest.fn(), endSiteCommissionAgreement },
+      undefined,
+      { success }
+    );
+
+    fixture.componentInstance.endAgreement(agreement(), '2026-06-30');
+
+    expect(endSiteCommissionAgreement).toHaveBeenCalledWith(1, '2026-06-30');
+    expect(success).toHaveBeenCalledWith('Site commission agreement ended.');
+    expect(siteCommissionAgreements).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.loading).toBe(false);
+  });
+
+  it('reports the API refusal verbatim and does not reload', async () => {
+    const siteCommissionAgreements = jest.fn(() => of([agreement()]));
+    const endSiteCommissionAgreement = jest.fn(() =>
+      throwError(() => ({ error: { message: "The end date must be on or after the agreement's start date." } }))
+    );
+    const error = jest.fn();
+    const { fixture } = await render(
+      { siteCommissionAgreements, saveSiteCommissionAgreement: jest.fn(), endSiteCommissionAgreement },
+      undefined,
+      { error }
+    );
+
+    fixture.componentInstance.endAgreement(agreement(), '2025-12-31');
+
+    expect(error).toHaveBeenCalledWith("The end date must be on or after the agreement's start date.");
+    expect(siteCommissionAgreements).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.loading).toBe(false);
+  });
+
+  it('calls nothing for an agreement the listing carries no key for', async () => {
+    const endSiteCommissionAgreement = jest.fn();
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement: jest.fn(), endSiteCommissionAgreement }
+    );
+
+    fixture.componentInstance.endAgreement(agreement({ id: undefined }), '2026-06-30');
+
+    expect(endSiteCommissionAgreement).not.toHaveBeenCalled();
+  });
 });

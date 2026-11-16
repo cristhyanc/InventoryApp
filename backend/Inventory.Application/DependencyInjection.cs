@@ -334,6 +334,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetSiteCommissionReport>(sp => sp.GetRequiredService<GetSiteCommissionReport>());
         services.AddScoped<GetSiteCommissionAgreements>();
         services.AddScoped<SaveSiteCommissionAgreement>();
+        // Ending an agreement on a date (issue #1254). Its audit port is satisfied at the
+        // InventoryApi boundary, which is the only layer that knows the request's correlation id -
+        // the same terms the member, invite and business-settings audits are satisfied on.
+        services.AddScoped<EndSiteCommissionAgreement>();
         services.AddScoped<ListCategories>();
         services.AddScoped<GetCategory>();
         services.AddScoped<CreateCategory>();

@@ -495,6 +495,10 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "GET", Capability.SiteCommissionsManage)]
     [InlineData("api/site-commissions/agreements", "POST", Capability.SiteCommissionsManage)]
+    // Issue #1254's end-agreement action. Ending an agreement is the same capability as adding one -
+    // a Manager and an Owner may both do it - because it only ever narrows an agreement: no date it
+    // used to cover moves onto a different rate.
+    [InlineData("api/site-commissions/agreements/{agreementId:int}/end", "POST", Capability.SiteCommissionsManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "GET", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
     [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]
