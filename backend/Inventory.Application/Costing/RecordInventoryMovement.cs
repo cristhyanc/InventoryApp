@@ -44,6 +44,7 @@ public sealed class RecordInventoryMovement : IRecordInventoryMovement
             movement.Notes,
             movement.MachineId,
             movement.EatBefore,
-            movement.Source));
+            movement.Source,
+            movement.MachineLedgerEffectiveAt));
     }
 }

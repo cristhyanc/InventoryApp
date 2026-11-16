@@ -18,6 +18,13 @@ namespace Inventory.Infrastructure.Persistence;
 /// row. It writes no second copy of either, so the machine ledger cannot disagree with Stock
 /// History, and a completed sale cannot be consumed twice.
 ///
+/// A refill is read at the instant the machine was physically refilled (issue #1243). For a Nayax
+/// Sync Restock event that is the event's own <c>EventDateTimeGMT</c>, carried on the movement as
+/// <see cref="StockAdjustment.MachineLedgerEffectiveAt"/>; this adapter is its only reader, and
+/// <c>EffectiveAt</c> - the apply instant the cost replay and Stock History read - is left alone.
+/// Without that, an event applied after a machine count was replayed on top of the count and
+/// invented machine stock the count had already absorbed.
+///
 /// A sale is attributed to the local product persisted on its own row (issue #758) - the same
 /// association <see cref="EfInventoryCostLedgerStore"/> reads to decide which product's costing a
 /// sale belongs to - so the machine ledger and the costing ledger always agree about which product
@@ -49,12 +56,22 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
         var localMachineId = machine.LocalMachineId;
         var nayaxMachineId = machine.NayaxMachineId;
 
+        // A refill is replayed at the instant the machine was physically refilled, which for a
+        // Nayax Sync Restock event is the event's own EventDateTimeGMT rather than the instant an
+        // operator applied it (issue #1243). That instant is the only thing this adapter reads
+        // StockAdjustment.MachineLedgerEffectiveAt for, and it is the only reader of that column:
+        // the movement's EffectiveAt stays the apply time for the cost replay and Stock History. A
+        // manual refill - and any movement recorded before the column existed - has none, so it
+        // falls back to EffectiveAt and is replayed exactly as before.
         var refills = await _db.StockAdjustments
             .AsNoTracking()
             .Where(adjustment => adjustment.MachineId == localMachineId
                 && adjustment.Reason == StockAdjustmentReason.MachineRefill)
             .Select(adjustment => new MachineRefillFact(
-                adjustment.Id, adjustment.ProductId, adjustment.QuantityChange, adjustment.EffectiveAt))
+                adjustment.Id,
+                adjustment.ProductId,
+                adjustment.QuantityChange,
+                adjustment.MachineLedgerEffectiveAt ?? adjustment.EffectiveAt))
             .ToListAsync(cancellationToken);
 
         // Attribution is the sale's own persisted association (issue #758): the ledger reads the
