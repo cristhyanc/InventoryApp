@@ -6,8 +6,9 @@ namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
 /// The one way a <see cref="PendingInventoryCostRebuild"/> is recorded (issues #1103 and #1105),
-/// shared by the sales sync, the provider evidence write and an Owner decision so that every writer
-/// enqueues work under the same rules. The rows it stages are saved by the caller, inside the
+/// shared by the sales sync, the provider evidence write, an Owner decision and - since issue #1261 -
+/// the sale-cost backfills' own store, so that every writer enqueues work under the same rules. The
+/// rows it stages are saved by the caller, inside the
 /// caller's own <c>BEGIN IMMEDIATE</c> transaction, beside the change that made the work necessary.
 ///
 /// <para><strong>The instant only ever moves earlier.</strong> A product that already has a pending
