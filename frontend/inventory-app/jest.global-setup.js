@@ -5,6 +5,6 @@
  * this, Jest runs in the host's zone: UTC in CI, whatever a developer's machine is set to
  * elsewhere, so the same spec can pass on one and fail on the other (issue #1292).
  */
-module.exports = async () => {
+module.exports = async function setJestTimeZoneToUtc() {
   process.env.TZ = 'UTC';
 };
