@@ -142,7 +142,8 @@ public sealed class ReportExportTenantIsolationTests : IDisposable
                 Application.Reporting.Dashboard.FakeDashboardReportFactsProvider.Complete()));
 
         return new GetReportExportRows(bookkeeping, daily, reconciliation, machineProfitability,
-            productProfitability, gst, dashboard, transactions);
+            productProfitability, gst, Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(gst),
+            dashboard, transactions);
     }
 
     private async Task SeedCompletedSaleAsync(int businessId, long transactionId, long machineId, decimal settlementValue)

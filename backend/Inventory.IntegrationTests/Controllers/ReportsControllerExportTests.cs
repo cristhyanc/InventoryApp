@@ -76,12 +76,13 @@ public class ReportsControllerExportTests
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase,
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase,
+            FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase,
             getTransactionSalesReport);
 
         return new ReportsController(getReportExportRows, writer, bookkeepingUseCase, dailyUseCase,
             reconciliationUseCase, machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase,
-            dashboardUseCase, getTransactionSalesReport);
+            FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
     }
 
     [Theory]

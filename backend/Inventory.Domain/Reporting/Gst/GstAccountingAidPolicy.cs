@@ -23,10 +23,19 @@ public readonly record struct GstAccountingAidInputs(
     decimal OperatingExpenseGst,
     decimal PurchaseInputGst = 0m);
 
+/// <summary>
+/// The aid's derived figures.
+///
+/// <para><c>GstCredits</c> is the period's eligible GST credits: the Nayax fee GST, the
+/// operating-expense GST and the resolved purchase input GST added together, each source counted
+/// exactly once (issue #1318, where this is BAS label 1B). It is the whole of what <c>NetGst</c>
+/// subtracts, so the two can never disagree about which credits were allowed.</para>
+/// </summary>
 public readonly record struct GstAccountingAidResult(
     decimal TaxableSales,
     decimal TaxableFees,
-    decimal NetGst);
+    decimal NetGst,
+    decimal GstCredits);
 
 public static class GstAccountingAidPolicy
 {
@@ -35,9 +44,23 @@ public static class GstAccountingAidPolicy
     /// taxable sales: the GST-inclusive taxable sales less the GST on them. Since issue #1255 that
     /// inclusive figure excludes GST-free products' sales, so neither figure is derived from gross
     /// sales any more.
+    ///
+    /// <para>Net GST is <c>GST on sales − GST credits</c>, where the credits are the three eligible
+    /// sources added up once (issue #1318). That is the same subtraction this policy always made -
+    /// <c>GstOnSales − GstOnFees − OperatingExpenseGst − PurchaseInputGst</c> - written so the
+    /// credit total a BAS reader sees as 1B and the net GST beside it come from one place rather
+    /// than from two additions that could drift apart. An unclassified purchase component
+    /// contributes nothing to <see cref="GstAccountingAidResult.GstCredits"/>, because
+    /// <c>PurchaseInputGst</c> already carries only what an explicit classification resolved.</para>
     /// </summary>
-    public static GstAccountingAidResult Calculate(GstAccountingAidInputs inputs) => new(
-        TaxableSales: inputs.TaxableSalesIncludingGst - inputs.GstOnSales,
-        TaxableFees: inputs.NayaxFeesExGst,
-        NetGst: inputs.GstOnSales - inputs.GstOnFees - inputs.OperatingExpenseGst - inputs.PurchaseInputGst);
+    public static GstAccountingAidResult Calculate(GstAccountingAidInputs inputs)
+    {
+        var credits = inputs.GstOnFees + inputs.OperatingExpenseGst + inputs.PurchaseInputGst;
+
+        return new GstAccountingAidResult(
+            TaxableSales: inputs.TaxableSalesIncludingGst - inputs.GstOnSales,
+            TaxableFees: inputs.NayaxFeesExGst,
+            NetGst: inputs.GstOnSales - credits,
+            GstCredits: credits);
+    }
 }

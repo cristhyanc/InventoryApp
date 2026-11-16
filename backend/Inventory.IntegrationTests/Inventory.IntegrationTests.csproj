@@ -98,6 +98,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" Link="Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Export\EmptyReportExportComposition.cs" Link="Application\Reporting\Export\EmptyReportExportComposition.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Gst\FakeGstReportFactsProvider.cs" Link="Application\Reporting\Gst\FakeGstReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Gst\FakeGstRegistrationStore.cs" Link="Application\Reporting\Gst\FakeGstRegistrationStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" Link="Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" Link="Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" />

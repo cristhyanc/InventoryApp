@@ -859,7 +859,9 @@ public class MoneyReportSydneyBusinessDayTests
 
     private static GetReportExportRows Exports(AppDbContext db) =>
         new(Bookkeeping(db), Daily(db), Reconciliation(db), Machines(db),
-            Products(db), Gst(db), Dashboard(db), Transactions(db));
+            Products(db), Gst(db),
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(Gst(db)),
+            Dashboard(db), Transactions(db));
 
     private static async Task<SqliteConnection> CreateSqliteAsync()
     {

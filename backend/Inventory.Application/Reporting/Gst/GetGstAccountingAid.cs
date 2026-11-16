@@ -22,8 +22,13 @@ namespace Inventory.Application.Reporting.Gst;
 /// <c>PurchaseGstPolicy</c>. Only resolved components reduce net GST; unclassified ones are shown
 /// as an unresolved count and amount beside a clear incomplete status, so an incomplete period is
 /// never presented as a finished BAS figure.
+///
+/// <para>Since issue #1318 the run is published twice: <see cref="Handle"/> returns the aid report,
+/// and <see cref="Compose"/> returns that same report together with the figures and conditional
+/// notes the Bookkeeping BAS summary needs beside it. The summary is a projection of this one
+/// calculation, never a second one.</para>
 /// </summary>
-public sealed class GetGstAccountingAid
+public sealed class GetGstAccountingAid : IGetGstAccountingAid
 {
     private readonly IGetBookkeepingReport _getBookkeepingReport;
     private readonly IGstReportFactsProvider _facts;
@@ -34,7 +39,10 @@ public sealed class GetGstAccountingAid
         _facts = facts;
     }
 
-    public async Task<GstAccountingAidDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken)
+    public async Task<GstAccountingAidDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken) =>
+        (await Compose(filter, cancellationToken)).Report;
+
+    public async Task<GstAccountingAidComposition> Compose(ReportingFilterDto filter, CancellationToken cancellationToken)
     {
         var bookkeeping = await _getBookkeepingReport.Handle(filter, cancellationToken);
         var machineId = filter.MachineId ?? filter.MachineID;
@@ -80,7 +88,7 @@ public sealed class GetGstAccountingAid
             containsUnmappedProducts: false,
             notes: notes);
 
-        return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
+        var report = new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
             bookkeeping.GstOnSales, derived.TaxableFees, bookkeeping.GstOnFees, derived.NetGst, quality,
             GstFreeSales: bookkeeping.GstFreeSales,
             InventoryPurchaseGst: purchases.TotalGst)
@@ -101,6 +109,14 @@ public sealed class GetGstAccountingAid
             // combination written here.
             NetGstAvailability = availability.Combined
         };
+
+        // The BAS summary's extra inputs travel beside the report rather than inside it: they are
+        // this calculation's own facts, and the aid's published contract has no use for them.
+        return new GstAccountingAidComposition(report, notes,
+            TotalSalesIncludingGst: bookkeeping.Sales,
+            GstCredits: derived.GstCredits,
+            EstimatedFeeGst: bookkeeping.NayaxProcessingFees.EstimatedFeeGst,
+            FeeGstIncludesEstimates: bookkeeping.NayaxProcessingFees.HasEstimatedFees);
     }
 
     /// <summary>

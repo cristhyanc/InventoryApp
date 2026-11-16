@@ -1,6 +1,6 @@
-import { Directive, OnInit } from '@angular/core';
+import { Directive, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { Observable } from 'rxjs';
+import { Observable, Subject, Subscription, catchError, map, of, switchMap, tap } from 'rxjs';
 import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportAvailability, ReportProviderAvailability } from '../../features/reports/shared/models/reporting.models';
@@ -19,12 +19,19 @@ interface ReportedAvailability {
   salesAvailability?: ReportAvailability;
 }
 
+/**
+ * One finished report request: the report it answered with, or `null` for one that failed. Both
+ * outcomes travel through the same stream so a superseded request's failure cannot end the stream
+ * either.
+ */
+type ReportLoad<T> = { report: T | null };
+
 /** The one sentence every report page shows when its machine filter could not be read. */
 export const REPORT_MACHINE_FILTER_ERROR =
   'The machine list could not be loaded, so this report cannot be narrowed to one machine.';
 
 @Directive()
-export abstract class ReportPageBase<T> implements OnInit {
+export abstract class ReportPageBase<T> implements OnInit, OnDestroy {
   loading = false;
   error = '';
   from = this.isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -42,12 +49,36 @@ export abstract class ReportPageBase<T> implements OnInit {
   period = 'thisMonth';
   report: T | null = null;
 
+  /** The applied filter of each load, newest last. See the constructor for why it is a stream. */
+  private readonly requested = new Subject<ReportingFilter>();
+  private readonly loads: Subscription;
+
   protected constructor(
     protected route: ActivatedRoute,
     protected reports: ReportingService,
     protected machineService: MachineService,
     /** The shared provider-availability signal (issue #728). */
-    protected provider: ProviderAvailabilityService) {}
+    protected provider: ProviderAvailabilityService) {
+    // Every load goes through one stream so that `switchMap` can cancel the request in flight when
+    // a new date range or machine scope is applied. Accepting every response let a slower earlier
+    // request answer last and replace the report the page is now reporting - and, on Bookkeeping,
+    // leave the GST and BAS summary beside it describing the period the page had moved off
+    // (issue #1318). A superseded response is now unreachable rather than merely unlikely. It is
+    // the same latest-request pattern the product GST rule and machine latest-sales reads use.
+    this.loads = this.requested
+      .pipe(
+        tap(() => { this.loading = true; this.error = ''; }),
+        switchMap((filter): Observable<ReportLoad<T>> => this.request(filter).pipe(
+          map((report): ReportLoad<T> => ({ report })),
+          catchError(() => of<ReportLoad<T>>({ report: null }))
+        ))
+      )
+      .subscribe(outcome => {
+        this.loading = false;
+        if (outcome.report === null) this.error = 'Unable to load this report.';
+        else this.report = outcome.report;
+      });
+  }
 
   ngOnInit(): void {
     loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
@@ -60,12 +91,11 @@ export abstract class ReportPageBase<T> implements OnInit {
   abstract request(filter: ReportingFilter): Observable<T>;
 
   load(): void {
-    this.loading = true;
-    this.error = '';
-    this.request({ from: this.from, to: this.to, machineId: this.machineId }).subscribe({
-      next: value => { this.report = value; this.loading = false; },
-      error: () => { this.error = 'Unable to load this report.'; this.loading = false; }
-    });
+    this.requested.next({ from: this.from, to: this.to, machineId: this.machineId });
+  }
+
+  ngOnDestroy(): void {
+    this.loads.unsubscribe();
   }
 
   selectPeriod(period: string): void {

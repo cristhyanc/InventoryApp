@@ -145,6 +145,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+        // The one-column GST registration read the Bookkeeping BAS summary gates on (issue #1318).
+        services.AddScoped<IGstRegistrationStore, EfGstRegistrationStore>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();

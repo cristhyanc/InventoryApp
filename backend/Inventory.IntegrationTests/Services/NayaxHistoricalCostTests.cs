@@ -286,7 +286,8 @@ public class NayaxHistoricalCostTests
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar));
         var getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(getGstAccountingAid), getDashboardReport,
             getTransactionSalesReport);
         var csv = Encoding.UTF8.GetString(new ReportExportFileWriter().WriteCsv(await getReportExportRows.Handle(
             "transactions",
