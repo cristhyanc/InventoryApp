@@ -700,18 +700,23 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 // read happens here, before app.Run(), rather than on the first probe; the header itself is set by
 // BuildShaHeaderMiddleware, which only adds it and otherwise calls next(), touching neither
 // endpoint's status code nor its body.
+//
+// The header travels with the two registrations below, through the BuildShaHeaderMetadata marker
+// each one carries, rather than with a comparison against their path text: routing matches a
+// template case-insensitively and ignores a trailing slash, so it sends /HEALTH/READY and
+// /health/ready/ to the same endpoint, and a probe spelled either way has to get the same commit.
 _ = BuildMetadata.BuildSha;
 app.UseMiddleware<BuildShaHeaderMiddleware>();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = _ => false,
-}).AllowAnonymous();
+}).AllowAnonymous().WithMetadata(BuildShaHeaderMetadata.Instance);
 
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
-}).AllowAnonymous();
+}).AllowAnonymous().WithMetadata(BuildShaHeaderMetadata.Instance);
 
 app.MapControllers();
 

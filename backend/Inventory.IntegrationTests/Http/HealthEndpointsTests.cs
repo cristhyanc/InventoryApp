@@ -63,6 +63,68 @@ public sealed class HealthEndpointsTests : IClassFixture<HealthEndpointsTests.Ap
     }
 
     /// <summary>
+    /// Issue #1308: ASP.NET Core routing matches a route template case-insensitively and ignores a
+    /// trailing slash, so it selects the very same liveness endpoint - with its normal status code
+    /// and body - for every spelling below. The build commit therefore has to be bound to the
+    /// endpoint registration rather than to one spelling of its path, or an operator polling
+    /// <c>/HEALTH/LIVE</c> or <c>/health/live/</c> after a deploy gets a healthy reply carrying no
+    /// SHA at all and cannot tell the new release from the old process finishing its restart.
+    /// </summary>
+    [Theory]
+    [InlineData("/health/live")]
+    [InlineData("/health/live/")]
+    [InlineData("/HEALTH/LIVE")]
+    [InlineData("/Health/Live")]
+    public async Task Liveness_endpoint_reports_the_build_commit_for_every_route_variant(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        AssertBuildShaHeader(response);
+    }
+
+    /// <summary>
+    /// Issue #1308: the readiness endpoint, which the deploy workflow actually polls, for the same
+    /// route variants and for the same reason as
+    /// <see cref="Liveness_endpoint_reports_the_build_commit_for_every_route_variant"/>.
+    /// </summary>
+    [Theory]
+    [InlineData("/health/ready")]
+    [InlineData("/health/ready/")]
+    [InlineData("/HEALTH/READY")]
+    [InlineData("/Health/Ready")]
+    public async Task Readiness_endpoint_reports_the_build_commit_for_every_route_variant(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        AssertBuildShaHeader(response);
+    }
+
+    /// <summary>
+    /// Issue #1308: nothing but the two health endpoints exposes the build commit - neither a path
+    /// no endpoint matches (a 404 from routing) nor a real, unrelated API endpoint.
+    /// </summary>
+    [Theory]
+    [InlineData("/health")]
+    [InlineData("/health/livez")]
+    [InlineData("/api/products")]
+    public async Task Other_responses_do_not_carry_the_build_commit(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.DoesNotContain(
+            response.Headers,
+            header => string.Equals(header.Key, "X-Build-Sha", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Issue #1308: the header must be a full 40-character hex commit SHA, or the literal
     /// "unknown" for a build with no git revision to stamp (for example a local build outside a
     /// git checkout) - never empty, and never any other build or environment detail.
@@ -154,6 +216,25 @@ public sealed class HealthEndpointsDatabaseUnavailableTests : IClassFixture<Heal
 
         var response = await client.GetAsync("/health/ready");
 
+        HealthEndpointsTests.AssertBuildShaHeader(response);
+    }
+
+    /// <summary>
+    /// Issue #1308: the 503 readiness reply carries the build commit for every route variant too,
+    /// so an operator polling a case variant during a failed deploy still learns which build
+    /// refused, not merely that something did.
+    /// </summary>
+    [Theory]
+    [InlineData("/health/ready/")]
+    [InlineData("/HEALTH/READY")]
+    public async Task Readiness_endpoint_reports_the_build_commit_on_a_503_for_every_route_variant(string path)
+    {
+        var client = _factory.CreateClient();
+        _factory.MakeDatabaseUnreachable();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         HealthEndpointsTests.AssertBuildShaHeader(response);
     }
 
