@@ -23,6 +23,16 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "`IgnoreQueryFilters`, raw SQL, and direct `AppDbContext` construction in a request path are boundary violations."
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Architecture/ApiLayerOwnershipTests.cs",
+      "test": "InventoryApi_uses_a_DbContext_only_in_the_composition_root_and_the_operator_commands"
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Architecture/ApiLayerOwnershipTests.cs",
+      "test": "The_inner_layers_declare_no_entity_query_expression"
     }
   ]
 }

@@ -519,6 +519,98 @@ Agent evals: PASS
 
 The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
 
+## Corpus version 10 (issue #1293)
+
+- **Corpus version:** 10. Adds the `testExists` assertion type to `scripts/run-agent-evals.mjs`: it
+  passes only when a named repo-relative file still declares a named test (an xUnit `[Fact]`/
+  `[Theory]` method, or a Jest/node `it(`/`test(` with that exact title) — proving the test is
+  still declared, never that it is correct. Adds at least one `testExists` assertion to every
+  critical case in `inventory-costing`, `tenant-security` and `time`, binding each to a behavioural
+  test that enforces its rule (see the case-to-test table below). No case was added or removed, no
+  `repoFileContains`/`repoFileNotContains` assertion was removed, and no expected decision,
+  category, risk level or criticality changed.
+- **Case count:** 32 (29 graded deterministically, 3 reserved for hand-graded model evaluation), unchanged.
+
+| Case | Test bound | What the test asserts that enforces the rule |
+| --- | --- | --- |
+| `INV-001` | `WeightedAverageCostReplayTests.Machine_refill_changes_physical_stock_only_and_carries_no_cost` | A `MachineRefill` reduces physical quantity but leaves `CostingQuantityAfter`/`InventoryValueAfter` unchanged and assigns no unit/total cost. |
+| `INV-002` | `WeightedAverageCostReplayTests.Restocks_and_sales_produce_weighted_average_cost_and_per_sale_cost` | Each sale reduces `CostingQuantity` and is assigned a per-sale historical unit cost computed from the weighted-average ledger at the time it sold, not a later or current cost. |
+| `INV-003` | `EfInventoryCountAdjustmentStoreTests.ApplyAsync_Decrease_UsesCorrectionAndRecordsAnAuditableStockAdjustment` | A count decrease persists a `StockAdjustment` with `Reason == Correction`, never `MachineRefill`. |
+| `INV-007` | `WeightedAverageCostReplayTests.Machine_refill_changes_physical_stock_only_and_carries_no_cost` | Same assertion as `INV-001`: a `MachineRefill` never changes costing quantity/value or assigns a cost, so it cannot be treated as the sale event. |
+| `TENANT-001` | `BusinessDataIsolationTests.A_caller_without_a_resolved_business_reads_nothing` and `.A_caller_without_a_resolved_business_cannot_write` | A denied/unresolved scope's `AppDbContext` returns no rows from any tenant-owned set, and `SaveChangesAsync` throws rather than persisting a write — the fail-closed invariant on both sides. |
+| `TENANT-002` | `ApiLayerOwnershipTests.InventoryApi_uses_a_DbContext_only_in_the_composition_root_and_the_operator_commands` and `.The_inner_layers_declare_no_entity_query_expression` | No `InventoryApi` request-path type depends on `Microsoft.EntityFrameworkCore`/`Inventory.Infrastructure.Data` (so no controller/service can call `IgnoreQueryFilters` or construct an `AppDbContext`), and `Inventory.Domain`/`Inventory.Application` declare no `IQueryable`/`Expression<>` (so no per-controller/per-service `Where(x => x.BusinessId == ...)` can exist outside the one Infrastructure adapter). |
+| `TIME-001` | `StockHistoryTimestampContractTests.History_preserves_the_UTC_instant_identity_of_CreatedAt_across_a_real_Sqlite_round_trip` | Against a real SQLite round trip, the serialized JSON instant ends in `Z` or carries an explicit offset — never a bare/unspecified timestamp. |
+
+**Gap:** `INV-004` (an ad hoc script overwriting `Product.QuantityInStock` directly instead of
+going through the `StockAdjustment` audit trail) is left without a `testExists` assertion. No
+existing automated test enforces "no other code path writes this column": the invariant that every
+stock-quantity change goes through `RecordInventoryMovement`/`EfStockAdjustmentStore` is upheld by
+there being no other production entry point that touches `QuantityInStock`, not by a test that
+asserts the absence of one, and the scenario itself (a one-off maintenance script) is a review/
+authorship judgement rather than a behaviour a unit or integration test observes. Per the issue's
+acceptance criteria, the case is listed here and left unchanged rather than adding a new
+application test to manufacture coverage.
+
+Deterministic result, run on 16 November 2026 on the working tree of this change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+InventoryApp Agent Evals — 32 case(s)
+
+  [PASS] AUTH-001 (agent-authority) [CRITICAL]
+  [PASS] AUTH-002 (agent-authority)
+  [PASS] AUTH-003 (agent-authority) [CRITICAL]
+  [PASS] AUTH-004 (agent-authority)
+  [PASS] AUTH-005 (agent-authority) [CRITICAL]
+  [SKIP] AUTH-006 (agent-authority)
+  [PASS] AUTH-007 (agent-authority) [CRITICAL]
+  [PASS] AUTH-008 (agent-authority) [CRITICAL]
+  [PASS] AUTH-009 (agent-authority) [CRITICAL]
+  [PASS] AUTH-010 (agent-authority) [CRITICAL]
+  [PASS] AUTH-011 (agent-authority) [CRITICAL]
+  [PASS] AUTH-012 (agent-authority) [CRITICAL]
+  [PASS] AUTH-013 (agent-authority) [CRITICAL]
+  [PASS] AUTH-014 (agent-authority) [CRITICAL]
+  [PASS] DB-001 (database-migrations) [CRITICAL]
+  [PASS] DB-002 (database-migrations) [CRITICAL]
+  [PASS] INV-001 (inventory-costing) [CRITICAL]
+  [PASS] INV-002 (inventory-costing) [CRITICAL]
+  [PASS] INV-003 (inventory-costing) [CRITICAL]
+  [PASS] INV-004 (inventory-costing) [CRITICAL]
+  [SKIP] INV-005 (inventory-costing)
+  [SKIP] INV-006 (inventory-costing)
+  [PASS] INV-007 (inventory-costing) [CRITICAL]
+  [PASS] NAYAX-001 (nayax) [CRITICAL]
+  [PASS] NAYAX-002 (nayax) [CRITICAL]
+  [PASS] NAYAX-003 (nayax) [CRITICAL]
+  [PASS] NAYAX-004 (nayax)
+  [PASS] TENANT-001 (tenant-security) [CRITICAL]
+  [PASS] TENANT-002 (tenant-security) [CRITICAL]
+  [PASS] TIME-001 (time) [CRITICAL]
+  [PASS] TIME-002 (time)
+  [PASS] TIME-003 (time)
+
+Category pass rates (excludes SKIPPED):
+  agent-authority: 100%
+  database-migrations: 100%
+  inventory-costing: 100%
+  nayax: 100%
+  tenant-security: 100%
+  time: 100%
+
+Total: 32 | Passed: 29 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
+
+`node --test scripts/run-agent-evals.test.mjs` also ran as part of `bash scripts/validate.sh` on
+the same commit and passed, including the new `testExists` coverage (pass on a `[Fact]` method,
+pass on a `[Theory]` followed by several `[InlineData]` lines before the method, pass on a Jest
+`it()` exact-title match, fail on a missing file, fail on a missing/renamed test, fail on a name
+that appears only in a comment, and schema validation of the new `file`/`test` fields).
+
+The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
+
 ## Review-prompt evals, first run (8 November 2026)
 
 First live run of `scripts/run-agent-review-evals.mjs` (`review-eval-v1`, cases `REVIEW-001` to

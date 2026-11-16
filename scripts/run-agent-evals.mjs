@@ -31,7 +31,12 @@ export const REQUIRED_CATEGORIES = Object.freeze([
 
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high']);
 export const DECISIONS = Object.freeze(['proceed', 'reject', 'stop']);
-export const ASSERTION_TYPES = Object.freeze(['repoFileContains', 'repoFileNotContains', 'requiresModelEvaluation']);
+export const ASSERTION_TYPES = Object.freeze([
+  'repoFileContains',
+  'repoFileNotContains',
+  'testExists',
+  'requiresModelEvaluation',
+]);
 export const ID_PATTERN = /^[A-Z][A-Z0-9]*-\d{3}$/;
 export const MIN_CORPUS_SIZE = 10;
 
@@ -125,6 +130,12 @@ export function validateCase(caseObj, { root = repositoryRoot, source = '<case>'
       } else if (!existsSync(resolve(root, assertion.file))) {
         errors.push(`${assertionPrefix} references a file that does not exist: ${assertion.file}`);
       }
+      if (assertion.type === 'testExists') {
+        if (!isNonEmptyString(assertion.test)) {
+          errors.push(`${assertionPrefix} "test" must be a non-empty test/method name.`);
+        }
+        return;
+      }
       if (!isNonEmptyString(assertion.text)) {
         errors.push(`${assertionPrefix} "text" must be a non-empty substring to check for.`);
       }
@@ -217,6 +228,60 @@ export function loadCorpus(dir) {
   return { cases, malformed };
 }
 
+// --- testExists detection ----------------------------------------------------------------
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Strips `/* ... *\/` block comments and `//`/`///` line comments (good enough for scanning test source). */
+function stripComments(content) {
+  return content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
+
+const XUNIT_TEST_ATTRIBUTES = Object.freeze(['Fact', 'Theory']);
+
+/**
+ * True when `content` declares an xUnit test method named `testName`: a method whose nearest
+ * preceding attribute run (skipping only other attributes such as `[InlineData]`/`[MemberData]`/
+ * `[Trait]`, in any number, on their own lines) includes `[Fact]` or `[Theory]`. A mention inside
+ * a comment never counts, because comments are stripped first.
+ */
+function declaresXunitTest(content, testName) {
+  const methodPattern = new RegExp(`\\b${escapeRegExp(testName)}\\s*\\(`);
+  const attributeNamePattern = /\[\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+
+  let hasFactOrTheory = false;
+  for (const rawLine of stripComments(content).split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+
+    if (line.startsWith('[')) {
+      let match;
+      attributeNamePattern.lastIndex = 0;
+      while ((match = attributeNamePattern.exec(line)) !== null) {
+        if (XUNIT_TEST_ATTRIBUTES.includes(match[1])) hasFactOrTheory = true;
+      }
+      continue;
+    }
+
+    if (hasFactOrTheory && methodPattern.test(line)) return true;
+    hasFactOrTheory = false;
+  }
+  return false;
+}
+
+/** True when `content` declares a Jest/node `it(`/`test(` whose title is exactly `testName`. */
+function declaresJestTest(content, testName) {
+  const pattern = new RegExp(`\\b(it|test)\\s*\\(\\s*(['"\`])${escapeRegExp(testName)}\\2`);
+  return pattern.test(stripComments(content));
+}
+
+/** Dispatches on file extension: `.cs` is xUnit, everything else is Jest/node. */
+function declaresTest(content, file, testName) {
+  return file.endsWith('.cs') ? declaresXunitTest(content, testName) : declaresJestTest(content, testName);
+}
+
 // --- Evaluation -----------------------------------------------------------------------------
 
 function evaluateAssertion(assertion, root, cache) {
@@ -237,6 +302,12 @@ function evaluateAssertion(assertion, root, cache) {
 
   if (content === null) {
     return `${assertion.file} could not be read.`;
+  }
+
+  if (assertion.type === 'testExists') {
+    return declaresTest(content, assertion.file, assertion.test)
+      ? null
+      : `${assertion.file} does not declare a test named "${assertion.test}" (missing or renamed).`;
   }
 
   const found = content.includes(assertion.text);

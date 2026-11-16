@@ -23,6 +23,11 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "A sale that consumed a unit reduces costing inventory and records historical unit cost and COGS."
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.UnitTests/Domain/Costing/WeightedAverageCostReplayTests.cs",
+      "test": "Machine_refill_changes_physical_stock_only_and_carries_no_cost"
     }
   ]
 }

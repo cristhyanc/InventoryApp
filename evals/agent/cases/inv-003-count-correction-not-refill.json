@@ -24,6 +24,11 @@
       "type": "repoFileContains",
       "file": "backend/Inventory.Infrastructure/Models/StockAdjustment.cs",
       "text": "MachineRefill = 5"
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Adapters/Persistence/EfInventoryCountAdjustmentStoreTests.cs",
+      "test": "ApplyAsync_Decrease_UsesCorrectionAndRecordsAnAuditableStockAdjustment"
     }
   ]
 }
