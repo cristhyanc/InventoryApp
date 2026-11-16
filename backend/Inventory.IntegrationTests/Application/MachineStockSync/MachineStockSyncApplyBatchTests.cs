@@ -455,7 +455,12 @@ public class MachineStockSyncApplyBatchTests
             EffectiveAt = EventTime,
         });
 
+        // An unmatched event whose MDB really is the one its stored reason names, so the re-match
+        // of issue #1248 recomputes exactly the reason already stored and leaves the row alone: the
+        // machine the fixture's Nayax client describes has no position 9 either.
         var needsReview = SeedEvent(db, 4, null, 2);
+        needsReview.RawEventData = "Product MDB: 9 | Product  | 2";
+        needsReview.ParsedMdb = 9;
         needsReview.MatchStatus = NayaxStockEventMatchStatus.NeedsReview;
         needsReview.NeedsReviewReason = "MDB 9 is not a known position on machine 900.";
 
@@ -553,9 +558,10 @@ public class MachineStockSyncApplyBatchTests
     /// <summary>The same use case with the log a test wants to read back (issue #1240).</summary>
     private static ApplyMachineStockSync Apply(
         AppDbContext db, RecordingMachineStockSyncLog log, IRebuildProductCost? rebuild = null) =>
-        new(
+        TestMachineStockSyncUseCases.Apply(
             new EfMachineStockEventStore(
                 db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)),
+            new EfNayaxProductLinkStore(db),
             log);
 
     private static async Task<List<int>> EventIdsAsync(AppDbContext db) =>

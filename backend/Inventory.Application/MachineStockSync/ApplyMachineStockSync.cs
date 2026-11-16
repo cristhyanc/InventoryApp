@@ -36,6 +36,17 @@ namespace Inventory.Application.MachineStockSync;
 /// time of the check and stays in the response even when the rollback restores that stock; the event
 /// is still <c>Unprocessed</c> and can simply be retried.</para>
 ///
+/// <para><strong>The match is re-evaluated inside that lock too</strong> (issue #1248). Which
+/// product an event names is decided at import, so an event imported while its MDB position or its
+/// product's Nayax id was missing stayed unapplicable for ever. The machine's current mapping is
+/// therefore read once per request - outside every lock, because it is a Nayax read and nothing is
+/// decided on it - and each batch re-resolves the events still waiting for a match <em>inside</em>
+/// its own write lock, writing the refreshed match and the movement it decided in the same
+/// transaction. Only events that are still waiting are re-matched: an applied, reconciled or
+/// separately-applied event's match is the record of which product's storage moved. A request with
+/// nothing waiting makes no Nayax call at all, and a mapping that cannot be read leaves every event
+/// decided from what is stored, exactly as before.</para>
+///
 /// <para><strong>Every failed apply is logged, and one failure explains itself</strong> (issue
 /// #1240). Each event of a rolled-back batch leaves one <c>Warning</c> through
 /// <see cref="IMachineStockSyncLog"/> with its event id and the failure's short code, so a restock
@@ -53,11 +64,14 @@ public sealed class ApplyMachineStockSync
     internal const string UnreportedFailure = "Unreported";
 
     private readonly IMachineStockEventStore _store;
+    private readonly RematchMachineStockEvents _rematch;
     private readonly IMachineStockSyncLog _log;
 
-    public ApplyMachineStockSync(IMachineStockEventStore store, IMachineStockSyncLog log)
+    public ApplyMachineStockSync(
+        IMachineStockEventStore store, RematchMachineStockEvents rematch, IMachineStockSyncLog log)
     {
         _store = store;
+        _rematch = rematch;
         _log = log;
     }
 
@@ -81,6 +95,12 @@ public sealed class ApplyMachineStockSync
         var planned = (await _store.FindEventsAsync(machine.RequiredNayaxMachineId, requested, cancellationToken))
             .ToDictionary(state => state.Id);
 
+        // The machine's current MDB mapping, for the events still waiting for a match (issue
+        // #1248). It is read here, outside every lock, because reading it reaches Nayax and nothing
+        // is decided on it: it only says which batch such an event might belong to. Each batch
+        // re-resolves and writes the match inside its own lock, from the row it read there.
+        var mapping = await ReadCurrentMappingAsync(machine, planned.Values, cancellationToken);
+
         List<long> productOrder = [];
         var batches = new Dictionary<long, List<int>>();
 
@@ -92,11 +112,12 @@ public sealed class ApplyMachineStockSync
                 continue;
             }
 
-            if (state.MatchedProductId is not long productId)
+            var refreshed = Refreshed(state, mapping);
+            if (refreshed.MatchedProductId is not long productId)
             {
                 // Without a matched product every ruling the policy can reach is a non-writing one,
                 // whatever storage holds, so this event needs neither a product read nor a lock.
-                results[eventId] = Classify(state, Decide(state, null, manualRefills));
+                results[eventId] = Classify(refreshed, Decide(refreshed, null, manualRefills));
                 continue;
             }
 
@@ -112,7 +133,7 @@ public sealed class ApplyMachineStockSync
         foreach (var productId in productOrder)
         {
             await ApplyProductBatchAsync(
-                machine, productId, batches[productId], manualRefills, results, cancellationToken);
+                machine, productId, batches[productId], manualRefills, mapping, results, cancellationToken);
         }
 
         return new NayaxMachineStockApplyResponseDto([.. requested.Select(eventId => results[eventId])]);
@@ -128,6 +149,7 @@ public sealed class ApplyMachineStockSync
         long productId,
         IReadOnlyList<int> eventIds,
         IReadOnlyList<ManualRefillEvidence> manualRefills,
+        MachineStockMatchRefresh? mapping,
         Dictionary<int, NayaxStockEventApplyResultDto> results,
         CancellationToken cancellationToken)
     {
@@ -137,13 +159,96 @@ public sealed class ApplyMachineStockSync
 
         // Authoritative, inside the write lock: these are the rows every decision below is made on
         // and the quantity the movements below are applied to.
-        var states = (await _store.FindEventsAsync(machine.RequiredNayaxMachineId, eventIds, cancellationToken))
-            .ToDictionary(state => state.Id);
+        var stored = await _store.FindEventsAsync(machine.RequiredNayaxMachineId, eventIds, cancellationToken);
         var product = await _store.FindStorageProductAsync(productId, cancellationToken);
 
-        // The stored quantity read under the lock, less every refill this batch has already
-        // accepted. An event that does not fit the running balance is refused and stays Unprocessed.
-        var available = product?.QuantityInStock;
+        // The refreshed match of whatever this batch read as still waiting for one (issue #1248),
+        // decided from the same rows the rulings below are. It is written before the movements and
+        // committed with them, so a refreshed match can never outlive a batch that rolled back.
+        IReadOnlyList<MachineStockEventMatchUpdate> rematched = mapping is null
+            ? []
+            : RematchMachineStockEvents.Changes(stored, mapping);
+
+        // Those same rows as the current mapping decides them, which is what every ruling below is
+        // made on, so what the batch decides and what it records about the match cannot differ.
+        var states = stored.ToDictionary(state => state.Id, state => Refreshed(state, mapping));
+
+        var accepted = AcceptEligible(
+            productId, eventIds, states, product?.QuantityInStock, manualRefills, results);
+
+        if (accepted.Count == 0 && rematched.Count == 0)
+        {
+            return;
+        }
+
+        if (rematched.Count > 0)
+        {
+            await _store
+                .UpdateMatchesAsync(machine.RequiredNayaxMachineId, rematched, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        IReadOnlyList<AppliedMachineRefill> applied = [];
+        if (accepted.Count > 0)
+        {
+            var application = await _store
+                .ApplyProductRefillsAsync(machine, productId, accepted, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!application.Succeeded)
+            {
+                // Returned without committing: the transaction's disposal is what discards every
+                // write this batch staged - the refreshed matches included - so each accepted event
+                // reports the same failure and no movement id.
+                ReportFailed(accepted, results, application.Failure);
+                return;
+            }
+
+            applied = application.Applied;
+        }
+
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A commit that fails is the same failure as a write that fails: nothing this batch
+            // staged was committed, the transaction's disposal rolls it back, and the next product
+            // is still applied. A cancelled request is not caught here and stops the whole apply.
+            // Only the exception's type name is carried: a provider's own message can quote the
+            // statement or the data it failed on.
+            ReportFailed(accepted, results, new MachineRefillFailure(exception.GetType().Name, null));
+            return;
+        }
+
+        // Only now are the movement ids real: they are reported once the batch has committed.
+        foreach (var refill in applied)
+        {
+            results[refill.EventId] = results[refill.EventId] with
+            {
+                StockAdjustmentId = refill.StockAdjustmentId,
+            };
+        }
+    }
+
+    /// <summary>
+    /// The refills one batch accepts, in request order, decided from the rows it read inside its own
+    /// write lock. Every event the policy refuses is given its non-writing result here instead and
+    /// nothing is written for it. <paramref name="storedQuantity"/> is the product's storage quantity
+    /// read under that same lock, and each accepted refill reduces the quantity left to the next
+    /// event before its eligibility is decided, so a batch can never take more units out of storage
+    /// than it holds.
+    /// </summary>
+    private static List<MachineStockRefillRequest> AcceptEligible(
+        long productId,
+        IReadOnlyList<int> eventIds,
+        IReadOnlyDictionary<int, MachineStockEventState> states,
+        int? storedQuantity,
+        IReadOnlyList<ManualRefillEvidence> manualRefills,
+        Dictionary<int, NayaxStockEventApplyResultDto> results)
+    {
+        var available = storedQuantity;
         var accepted = new List<MachineStockRefillRequest>();
 
         foreach (var eventId in eventIds)
@@ -173,50 +278,11 @@ public sealed class ApplyMachineStockSync
 
             available = availableToThisEvent!.Value - state.ParsedQuantity.Value;
 
-            // The movement id is filled in from the write below; until it commits there is none.
+            // The movement id is filled in once the batch's write commits; until then there is none.
             results[eventId] = new(eventId, NayaxStockEventApplyOutcome.Applied, ruling.Message, null);
         }
 
-        if (accepted.Count == 0)
-        {
-            return;
-        }
-
-        var application = await _store
-            .ApplyProductRefillsAsync(machine, productId, accepted, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!application.Succeeded)
-        {
-            // Returned without committing: the transaction's disposal is what discards every write
-            // this batch staged, so each of them reports the same failure and no movement id.
-            ReportFailed(accepted, results, application.Failure);
-            return;
-        }
-
-        try
-        {
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            // A commit that fails is the same failure as a write that fails: nothing this batch
-            // staged was committed, the transaction's disposal rolls it back, and the next product
-            // is still applied. A cancelled request is not caught here and stops the whole apply.
-            // Only the exception's type name is carried: a provider's own message can quote the
-            // statement or the data it failed on.
-            ReportFailed(accepted, results, new MachineRefillFailure(exception.GetType().Name, null));
-            return;
-        }
-
-        // Only now are the movement ids real: they are reported once the batch has committed.
-        foreach (var applied in application.Applied)
-        {
-            results[applied.EventId] = results[applied.EventId] with
-            {
-                StockAdjustmentId = applied.StockAdjustmentId,
-            };
-        }
+        return accepted;
     }
 
     /// <summary>
@@ -251,7 +317,61 @@ public sealed class ApplyMachineStockSync
             null);
 
     private static NayaxStockEventApplyResultDto NotFound(int eventId) =>
-        new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
+        new(eventId, NayaxStockEventApplyOutcome.Error, MachineStockResolutionMessages.NotFound, null);
+
+    /// <summary>
+    /// The machine's current MDB mapping, or <see langword="null"/> when this request has no event
+    /// that a refreshed mapping could decide anything about (issue #1248) - an ordinary apply of
+    /// matched events therefore makes no Nayax call at all.
+    /// </summary>
+    private async Task<MachineStockMatchRefresh?> ReadCurrentMappingAsync(
+        MachineIdentity machine,
+        IEnumerable<MachineStockEventState> planned,
+        CancellationToken cancellationToken)
+    {
+        if (!planned.Any(RematchMachineStockEvents.IsWaitingForAMatch))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _rematch
+                .ReadCurrentMappingAsync(machine.RequiredNayaxMachineId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Nayax could not be read, so the machine's current mapping is unknown. Every event is
+            // then decided from what is stored, exactly as it was before re-matching existed: an
+            // event still waiting for a match keeps waiting rather than being applied on a guess,
+            // and the already-matched events of the same request are applied unaffected.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One event as the current mapping decides it, or unchanged when there is no mapping or the
+    /// event is not one that may be re-matched. It is the same resolution
+    /// <see cref="RematchMachineStockEvents.Changes"/> stages for the write, so what a batch decides
+    /// and what it records about the match cannot differ.
+    /// </summary>
+    private static MachineStockEventState Refreshed(
+        MachineStockEventState state, MachineStockMatchRefresh? mapping) =>
+        mapping is not null
+            && RematchMachineStockEvents.IsWaitingForAMatch(state)
+            && mapping.Resolve(state) is { } resolution
+                ? state with
+                {
+                    MatchStatus = resolution.MatchStatus,
+                    MatchedProductId = resolution.MatchedProductId,
+                    NeedsReviewReason = resolution.NeedsReviewReason,
+                }
+                : state;
 
     private static NayaxStockEventApplyRuling Decide(
         MachineStockEventState state,

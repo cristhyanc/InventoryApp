@@ -39,7 +39,24 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             e.MatchedProductId,
             e.ParsedQuantity,
             e.StockAdjustmentId,
-            e.DuplicateResolution);
+            e.DuplicateResolution,
+            e.ParsedMdb,
+            e.ParsedProductName);
+
+    /// <summary>
+    /// The one predicate for "this event is still waiting for a product match" (issue #1248),
+    /// shared by the candidate read and the write, so the two cannot drift apart: a processed,
+    /// reconciled or separately-applied event is never re-matched, because its match is the record
+    /// of which product's storage actually moved, and an event whose EventData never parsed has no
+    /// MDB and no product name for any mapping to resolve it by. It is the relational form of
+    /// <see cref="RematchMachineStockEvents.IsWaitingForAMatch"/>.
+    /// </summary>
+    private static readonly Expression<Func<NayaxMachineStockEvent, bool>> WaitingForAMatch =
+        e => e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+            && e.DuplicateResolution == NayaxDuplicateResolution.None
+            && e.MatchStatus != NayaxStockEventMatchStatus.Matched
+            && e.ParsedMdb != null
+            && e.ParsedProductName != null;
 
     private readonly AppDbContext _db;
     private readonly IRecordInventoryMovement _recordMovement;
@@ -199,6 +216,60 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         _db.NayaxMachineStockEvents
             .AsNoTracking()
             .Where(e => e.MachineId == nayaxMachineId);
+
+    public async Task<IReadOnlyList<MachineStockEventState>> FindRematchCandidatesAsync(
+        long nayaxMachineId, CancellationToken cancellationToken) =>
+        await EventsOf(nayaxMachineId)
+            .Where(WaitingForAMatch)
+            .Select(EventState)
+            .ToListAsync(cancellationToken);
+
+    public async Task<int> UpdateMatchesAsync(
+        long nayaxMachineId,
+        IReadOnlyList<MachineStockEventMatchUpdate> updates,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+
+        if (updates.Count == 0)
+            return 0;
+
+        var refreshed = updates.ToDictionary(update => update.EventId);
+        var ids = refreshed.Keys.ToList();
+
+        // Tracked, machine-scoped, and filtered by the same "still waiting" condition the candidate
+        // read uses: an event applied or resolved since that read is simply not among these rows,
+        // so nothing can rewrite the match a committed movement was decided from.
+        var rows = await _db.NayaxMachineStockEvents
+            .Where(e => e.MachineId == nayaxMachineId && ids.Contains(e.Id))
+            .Where(WaitingForAMatch)
+            .ToListAsync(cancellationToken);
+
+        var changed = 0;
+        foreach (var row in rows)
+        {
+            var update = refreshed[row.Id];
+            if (row.MatchStatus == update.MatchStatus
+                && row.MatchedProductId == update.MatchedProductId
+                && row.NeedsReviewReason == update.NeedsReviewReason)
+            {
+                continue;
+            }
+
+            row.MatchStatus = update.MatchStatus;
+            row.MatchedProductId = update.MatchedProductId;
+            row.NeedsReviewReason = update.NeedsReviewReason;
+            changed++;
+        }
+
+        if (changed > 0)
+        {
+            // Inside the caller's transaction where there is one; the caller owns the commit.
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        return changed;
+    }
 
     public async Task<NayaxStockSyncProduct?> FindStorageProductAsync(
         long productId, CancellationToken cancellationToken)

@@ -60,7 +60,7 @@ public class MachineStockSyncCommitFailureTests
         var store = FailsCommitFor.Product(Coke, Store(db));
         var log = new RecordingMachineStockSyncLog();
 
-        var result = await new ApplyMachineStockSync(store, log).Handle(Machine, ids, CancellationToken.None);
+        var result = await Apply(db, store, log).Handle(Machine, ids, CancellationToken.None);
 
         Assert.True(store.FailedACommit, "The Coke commit was never attempted, so nothing was proved.");
         Assert.Equal(ids, result.Results.Select(r => r.EventId));
@@ -116,7 +116,7 @@ public class MachineStockSyncCommitFailureTests
         }
 
         // Nothing about the Coke events is settled, so a retry applies them.
-        var retried = await new ApplyMachineStockSync(Store(db), new RecordingMachineStockSyncLog())
+        var retried = await Apply(db, Store(db), new RecordingMachineStockSyncLog())
             .Handle(Machine, [ids[0], ids[2]], CancellationToken.None);
         Assert.All(retried.Results, r => Assert.Equal(NayaxStockEventApplyOutcome.Applied, r.Outcome));
 
@@ -142,7 +142,7 @@ public class MachineStockSyncCommitFailureTests
         var store = FailsCommitFor.Product(Coke, Store(db), cancelling: cancellation);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new ApplyMachineStockSync(store, new RecordingMachineStockSyncLog())
+            () => Apply(db, store, new RecordingMachineStockSyncLog())
                 .Handle(Machine, ids, cancellation.Token));
 
         await using var verify = TestAppDbContext.For(options, SellerBusinessId);
@@ -202,6 +202,15 @@ public class MachineStockSyncCommitFailureTests
 
     private static EfMachineStockEventStore Store(AppDbContext db) =>
         new(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
+
+    /// <summary>
+    /// The apply use case over <paramref name="store"/>, with the re-match of issue #1248 wired as
+    /// production wires it. Every event these fixtures seed is already matched, so no
+    /// machine-products read happens at all.
+    /// </summary>
+    private static ApplyMachineStockSync Apply(
+        AppDbContext db, IMachineStockEventStore store, IMachineStockSyncLog log) =>
+        TestMachineStockSyncUseCases.Apply(store, new EfNayaxProductLinkStore(db), log);
 
     private static async Task<List<int>> EventIdsAsync(AppDbContext db) =>
         await db.NayaxMachineStockEvents.AsNoTracking()
@@ -366,6 +375,16 @@ public class MachineStockSyncCommitFailureTests
         public Task<IReadOnlyList<MachineStockEventState>> FindEventsAsync(
             long nayaxMachineId, IReadOnlyCollection<int> eventIds, CancellationToken cancellationToken) =>
             _inner.FindEventsAsync(nayaxMachineId, eventIds, cancellationToken);
+
+        public Task<IReadOnlyList<MachineStockEventState>> FindRematchCandidatesAsync(
+            long nayaxMachineId, CancellationToken cancellationToken) =>
+            _inner.FindRematchCandidatesAsync(nayaxMachineId, cancellationToken);
+
+        public Task<int> UpdateMatchesAsync(
+            long nayaxMachineId,
+            IReadOnlyList<MachineStockEventMatchUpdate> updates,
+            CancellationToken cancellationToken) =>
+            _inner.UpdateMatchesAsync(nayaxMachineId, updates, cancellationToken);
 
         public Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken) =>
             _inner.FindStorageProductAsync(productId, cancellationToken);

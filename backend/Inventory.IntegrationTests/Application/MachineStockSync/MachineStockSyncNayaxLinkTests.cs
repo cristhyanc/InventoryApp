@@ -92,10 +92,13 @@ public class MachineStockSyncNayaxLinkTests
                 new NayaxMachineProduct { NayaxProductID = NayaxProductId, MDBCode = Mdb, ProductName = ProductName },
             ]);
 
+        var store = new EfMachineStockEventStore(
+            db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
+
         return new SyncMachineStockFromNayax(
             nayax.Object,
-            new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)),
-            new EfNayaxProductLinkStore(db),
+            store,
+            TestMachineStockSyncUseCases.Rematch(store, new EfNayaxProductLinkStore(db), nayax.Object),
             new FakeClock(EventTime),
             new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
             new FakeMachineRestockSyncCoverageStore(),
