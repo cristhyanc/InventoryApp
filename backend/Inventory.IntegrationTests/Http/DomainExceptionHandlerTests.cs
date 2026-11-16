@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Inventory.Application.Costing;
 using Inventory.Domain.Exceptions;
+using Inventory.Infrastructure.Data;
 using InventoryApi.Http;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -153,20 +154,70 @@ public class DomainExceptionHandlerTests
         Assert.Empty(logger.Entries);
     }
 
+    /// <summary>
+    /// Issue #1240 replaced this type's mapping: it used to be unclaimed here, which made every
+    /// refused stock write a generic <c>500</c> with no product name. Its message is the replay's
+    /// own product-named sentence, written for the operator who has to repair that product, and the
+    /// refusal depends on the product's current history - so it is published verbatim as a
+    /// <c>409</c>, the status <see cref="DomainConflictException"/> already carries, and is logged
+    /// once at <see cref="LogLevel.Warning"/> rather than disappearing with the <c>500</c>.
+    /// </summary>
     [Fact]
-    public async Task Inventory_cost_data_quality_exception_is_not_claimed_here()
+    public async Task Inventory_cost_data_quality_exception_becomes_a_409_carrying_its_product_named_message()
     {
-        // It derives from InvalidOperationException but signals a data-integrity problem found
-        // while rebuilding costing history, not a routine client validation failure. Nothing
-        // catches it, so it surfaces as an unexpected error; this handler must not reclassify it
-        // as a client-caused 400.
+        const string Refusal = "Restock adjustment 12 for product Coke (7) has no valid unit cost.";
         var (handler, context, body, logger) = CreateHandler();
 
         var handled = await handler.TryHandleAsync(
-            context, new InventoryCostDataQualityException(InternalDetail), CancellationToken.None);
+            context, new InventoryCostDataQualityException(Refusal), CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
+        Assert.StartsWith("application/problem+json", context.Response.ContentType, StringComparison.Ordinal);
+
+        var root = ParseBody(body);
+        Assert.Equal("The request conflicts with the current state", root.GetProperty("title").GetString());
+        Assert.Equal(Refusal, root.GetProperty("detail").GetString());
+        Assert.Equal(Refusal, root.GetProperty("message").GetString());
+        Assert.Equal(409, root.GetProperty("status").GetInt32());
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains(Refusal, entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_plain_invalid_operation_exception_is_still_not_claimed_beside_that_subclass()
+    {
+        // The subclass above is claimed by name. Its base type must stay unclaimed: claiming it
+        // would publish the internal message of every InvalidOperationException in the BCL, EF Core
+        // and this application's own infrastructure.
+        var (handler, context, body, logger) = CreateHandler();
+
+        var handled = await handler.TryHandleAsync(
+            context, new InvalidOperationException(InternalDetail), CancellationToken.None);
 
         Assert.False(handled);
-        Assert.NotEqual(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        Assert.Empty(ReadBody(body));
+        Assert.DoesNotContain(InternalDetail, ReadBody(body), StringComparison.Ordinal);
+        Assert.Empty(logger.Entries);
+    }
+
+    /// <summary>
+    /// The tenant-isolation refusal, named here rather than left to the generic cases above: issue
+    /// #1240 widened this handler by one type, and a cross-business write must still be the loud,
+    /// logged, message-free <c>500</c> <c>GlobalExceptionHandler</c> gives it.
+    /// </summary>
+    [Fact]
+    public async Task A_cross_business_access_refusal_is_still_left_to_the_global_handler()
+    {
+        var (handler, context, body, logger) = CreateHandler();
+
+        var handled = await handler.TryHandleAsync(
+            context, new CrossBusinessAccessException(InternalDetail), CancellationToken.None);
+
+        Assert.False(handled);
+        Assert.NotEqual(StatusCodes.Status409Conflict, context.Response.StatusCode);
         Assert.Empty(ReadBody(body));
         Assert.Empty(logger.Entries);
     }

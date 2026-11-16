@@ -1144,6 +1144,29 @@ describe('ManualPickListComponent save', () => {
       expect(toast.error).toHaveBeenCalledWith(REFILL_CONFLICT_MESSAGE);
     });
 
+    /**
+     * Issue #1240: a row whose product has a fatal cost history refuses the whole pick with a `409`
+     * whose detail names that product and the machine the row was for. The generic conflict
+     * sentence would send the operator looking for a key clash that never happened, so the server's
+     * own detail is what they are shown - and the pick stays on screen, because nothing was
+     * recorded and it is the same pick once the product is repaired.
+     */
+    it('shows a cost data-quality refusal verbatim, naming the product and machine to repair', () => {
+      const detail =
+        'Nothing in this pick was recorded. Restock adjustment 12 for product Coke 375mL (7) has no valid unit cost. ' +
+        'That row was being picked for machine Front Lobby (4).';
+      const recordRefill = jest.fn((_request: PickListRefillRequest) =>
+        throwError(() => new HttpErrorResponse({ status: 409, error: { detail, message: detail } }))
+      );
+      const { component, toast } = createHarness(undefined, recordRefill);
+      component.onTakenChange(1, '3');
+
+      component.save();
+
+      expect(toast.error).toHaveBeenCalledWith(detail);
+      expect(component.takenValue(1)).toBe('3');
+    });
+
     it('does not resend while a save is already in flight', () => {
       const pending = new Subject<PickListRefillResponse>();
       const recordRefill = jest.fn(() => pending.asObservable());

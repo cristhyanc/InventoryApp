@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.Transactions;
@@ -25,34 +26,49 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// issue #306 moved to <see cref="SiteNameResolver"/>: this adapter calls its static entry point
 /// rather than the injected <c>ISiteNameResolver</c> port because it resolves a name per streamed
 /// row inside a static iterator. The completed/all-status sale query intentionally does not reuse
-/// <see cref="EfReportingSharedQueries"/> because transactions needs every status, not only
-/// completed sales.
+/// <see cref="EfReportingSharedQueries"/>'s sale helpers because transactions needs every status, not
+/// only completed sales; it does reuse <see cref="EfReportingSharedQueries.SalesWindow"/>, so its
+/// range resolution is the one every money report shares.
+///
+/// <para>Since issue #1252 the requested dates are inclusive <em>business</em> dates and the sales
+/// are selected between the UTC instants those business days cover. Each streamed row also carries
+/// the business date its instant falls on, taken from the one calendar port, so the use case can
+/// resolve the sale's fee rate and commission agreement by that date rather than by the UTC date the
+/// instant happens to land on.</para>
 /// </summary>
 public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesReportFactsProvider
 {
     private readonly AppDbContext _db;
+    private readonly IBusinessCalendar _businessCalendar;
     private readonly INayaxLynxClient? _nayaxLynxClient;
 
-    public EfTransactionSalesReportFactsProvider(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null)
+    public EfTransactionSalesReportFactsProvider(
+        AppDbContext db, IBusinessCalendar businessCalendar, INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
+        _businessCalendar = businessCalendar;
         _nayaxLynxClient = nayaxLynxClient;
     }
 
     public async Task<TransactionSalesReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
-        var endExclusive = to.Date.AddDays(1);
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
+        var startUtc = window.StartUtc;
+        var endExclusiveUtc = window.EndExclusiveUtc;
 
         var salesQuery = _db.NayaxSales.AsNoTracking()
-            .Where(x => x.MachineAuthorizationTime >= from && x.MachineAuthorizationTime < endExclusive &&
+            .Where(x => x.MachineAuthorizationTime >= startUtc && x.MachineAuthorizationTime < endExclusiveUtc &&
                 (!machineId.HasValue || x.MachineID == machineId.Value));
 
         var catalogue = await _db.Products.AsNoTracking()
             .Select(x => new TransactionSalesCatalogueEntry(x.Id, x.Name))
             .ToListAsync(cancellationToken);
 
+        // Every rate that could still be effective on one of the requested business dates. A rate
+        // that only takes effect after the last of them cannot apply to any sale in the window.
+        var lastBusinessDate = window.LastBusinessDate;
         var feeRateRows = await _db.NayaxProcessingFeeRates.AsNoTracking()
-            .Where(x => x.EffectiveFrom <= to)
+            .Where(x => x.EffectiveFrom <= lastBusinessDate)
             .Select(x => new { x.EffectiveFrom, x.FeeExGst })
             .ToListAsync(cancellationToken);
         var feeRates = feeRateRows.Select(x => new EffectiveNayaxFeeRate(x.EffectiveFrom, x.FeeExGst)).ToList();
@@ -91,10 +107,12 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
         // past: the state is reported beside the totals, and a state decided from the rows the
         // filter happened to keep would make a payment-type or status filter change it.
         var containsSalesRows = await salesQuery.AnyAsync(cancellationToken);
+        // Judged over exactly the instants the sales above were selected between, never the plain
+        // calendar range a business day straddles (issue #1250's rule, issue #1252's caller).
         var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
-            _db, from, endExclusive, containsSalesRows, containsSettlementRows: false, cancellationToken);
+            _db, window, containsSalesRows, containsSettlementRows: false, cancellationToken);
 
-        var rows = StreamRows(salesQuery, machineById, machinesBySite, cancellationToken);
+        var rows = StreamRows(salesQuery, machineById, machinesBySite, _businessCalendar, cancellationToken);
 
         return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreementRows, siteMappingUnavailable)
         {
@@ -109,6 +127,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
         IQueryable<NayaxSales> salesQuery,
         Dictionary<long, NayaxMachine> machineById,
         Dictionary<long, List<NayaxMachine>> machinesBySite,
+        IBusinessCalendar businessCalendar,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var sale in salesQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
@@ -121,7 +140,12 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
             var hasPersistedCost = sale.CostingStatus == SaleCostingStatus.Costed && sale.CostOfGoodsSold.HasValue;
 
             yield return new TransactionSalesReportFactsRow(
-                sale.TransactionID, sale.MachineAuthorizationTime, sale.MachineID, sale.MachineName,
+                sale.TransactionID, sale.MachineAuthorizationTime,
+                // The business date the sale's instant falls on, from the one calendar port
+                // (issue #1252): the date the report's effective-dated fee rate and commission
+                // agreement are resolved by, and the date the period that counted it is measured in.
+                DateTime.SpecifyKind(businessCalendar.ToBusinessDate(sale.MachineAuthorizationTime), DateTimeKind.Unspecified),
+                sale.MachineID, sale.MachineName,
                 siteId, siteName, sale.ProductId, sale.NayaxProductId, sale.ProductName,
                 PaymentMethodClassifier.Classify(sale.PaymentMethod), sale.PaymentMethod, sale.SettlementValue,
                 sale.NayaxProductCostPrice, sale.UnitCostAtSale, sale.CostOfGoodsSold,

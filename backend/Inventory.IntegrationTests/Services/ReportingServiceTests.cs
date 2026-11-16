@@ -89,13 +89,16 @@ public class ReportingRegressionTests
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(
             db, TestFinancialUseCases.TrivialCalendar));
-        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(
+            db, nayaxFees, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
-            new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
+            new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
+            new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions, TestFinancialUseCases.TrivialCalendar));
-        var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
+        var getTransactionSalesReport = new GetTransactionSalesReport(
+            new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar, nayaxLynxClient));
         return new ReportingHarness(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
             getTransactionSalesReport);

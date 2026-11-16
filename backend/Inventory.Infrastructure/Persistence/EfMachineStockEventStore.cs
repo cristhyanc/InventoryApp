@@ -242,7 +242,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 var entity = await _db.NayaxMachineStockEvents.FirstOrDefaultAsync(
                     e => e.Id == refill.EventId && e.MachineId == nayaxMachineId, cancellationToken);
                 if (entity is null)
-                    return new MachineRefillApplication(false, []);
+                    return new MachineRefillApplication(
+                        false, [], new MachineRefillFailure(MachineRefillFailure.EventNotFound, null));
 
                 events.Add((refill, entity));
             }
@@ -291,12 +292,22 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 true,
                 [.. applied.Select(x => new AppliedMachineRefill(x.Refill.EventId, x.Movement.Id))]);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             // The caller owns the transaction, so its disposal is what discards these writes; what
             // is left here is the unit of work, which must not carry the failed batch any further.
             _db.ChangeTracker.Clear();
-            return new MachineRefillApplication(false, []);
+
+            // Why it failed, for the caller's log line and - for the one failure whose message is
+            // written for an operator - for the result they see (issue #1240). Every other
+            // exception contributes its type name alone: a provider's own message can quote the
+            // statement or the data it failed on, which belongs in neither a log nor a response.
+            return new MachineRefillApplication(
+                false,
+                [],
+                new MachineRefillFailure(
+                    exception.GetType().Name,
+                    exception is InventoryCostDataQualityException refusal ? refusal.Message : null));
         }
     }
 

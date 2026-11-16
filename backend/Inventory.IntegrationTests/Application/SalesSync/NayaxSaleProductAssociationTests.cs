@@ -310,7 +310,7 @@ public class NayaxSaleProductAssociationTests : IDisposable
     {
         await using var db = Context();
         var report = await new GetProductProfitabilityReport(
-                new EfProductProfitabilityReportFactsProvider(db),
+                new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
                 new EfProductPurchaseCostFactsProvider(db))
             .Handle(
                 new ReportingFilterDto(SaleInstant.Date.AddDays(-7), SaleInstant.Date.AddDays(7)),

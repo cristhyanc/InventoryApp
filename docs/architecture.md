@@ -4888,17 +4888,21 @@ Issue #59 replaced ad hoc, per-controller exception handling with a small typed 
 | Layer | Owns | Examples | Escapes to the caller as |
 | --- | --- | --- | --- |
 | `Inventory.Domain` (`Inventory.Domain.Exceptions`) | Domain invariants: a deliberate business-rule/input check, or a request that conflicts with the current state of the data | `DomainException` (abstract root), `DomainValidationException`, `DomainConflictException`, `InsufficientStockException` | `400`/`409` via `DomainExceptionHandler`, message verbatim |
-| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation, an access-control refusal, or an integration the current business has not made usable | `Tenancy.BusinessAccessDeniedException`; `Nayax.NayaxNotConnectedException` and `Nayax.NayaxPermissionNotGrantedException` (issue #520) | The two Nayax connection failures become `409` via `NayaxConnectionExceptionHandler`, which publishes the fixed, caller-safe sentence each type declares as a constant. Anything else here is not claimed by a handler and propagates to `GlobalExceptionHandler` as a generic `500` unless a use case's controller catches it deliberately |
+| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation, an access-control refusal, or an integration the current business has not made usable | `Tenancy.BusinessAccessDeniedException`; `Nayax.NayaxNotConnectedException` and `Nayax.NayaxPermissionNotGrantedException` (issue #520); `Costing.InventoryCostDataQualityException` (issue #1240) | The two Nayax connection failures become `409` via `NayaxConnectionExceptionHandler`, which publishes the fixed, caller-safe sentence each type declares as a constant. `InventoryCostDataQualityException` becomes `409` via `DomainExceptionHandler`, message verbatim, logged once at `Warning`. Anything else here is not claimed by a handler and propagates to `GlobalExceptionHandler` as a generic `500` unless a use case's controller catches it deliberately |
 | `Inventory.Infrastructure` | Provider-specific failures (EF Core, Azure Blob, filesystem, HTTP, Nayax), translated to a plain answer or a narrow typed exception at that layer's own boundary so the provider SDK's exception type and message never cross it | `Nayax.NayaxUpstreamException`; `Documents.AzureBlobContainer` translates `Azure.RequestFailedException` by `ErrorCode` into a `bool`/`null` return and lets every other Azure failure propagate untranslated (never re-wrapped, never given a caller-safe message) | `502` via `NayaxUpstreamExceptionHandler` for Nayax; an untranslated provider failure (a missing container, a revoked role assignment) reaches `GlobalExceptionHandler` as a generic `500` with no SDK detail |
 | `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxConnectionExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
 
-The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException`, a developer-facing `InvalidOperationException` subclass rather than a caller-safe type, was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it; the HTTP boundary still does not map it.
+The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException` was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it, and issue #1240 then mapped it at the HTTP boundary (below): it derives from `InvalidOperationException`, but its message is the cost replay's own product-named sentence rather than a developer's, so the handler claims that one sealed type by name and nothing else under that base.
 
 `Inventory.Domain.Exceptions` defines a small, documented hierarchy with no ASP.NET Core reference, matching the Clean Architecture rule that a Domain failure must not know about HTTP: the abstract `DomainException` root (a deliberate business-rule failure, never a programming error, an infrastructure fault, or an unexpected condition), `DomainValidationException` for a deliberate business-rule/input check, `DomainConflictException` for a request that cannot proceed because of the current state of the data (an overlapping agreement, a concurrent change), and `InsufficientStockException`, which specializes `DomainConflictException` because the conflicting state it reports is a stock level rather than an overlapping record. Their messages are written for the caller and must never carry an internal path, identifier, or another actor's data. `DomainValidationException` and `InsufficientStockException` are sealed; `DomainConflictException` stays unsealed so a future specialization can join it the same way `InsufficientStockException` did.
 
-`InventoryApi/Http/DomainExceptionHandler.cs` publishes an exception's own message to the caller, so it may only claim exception types whose contract guarantees that message is caller-safe. Exactly three qualify: `DomainValidationException` and `InsufficientStockException` become `400 Bad Request`, and `DomainConflictException` becomes `409 Conflict`. `InsufficientStockException` qualifies because its message is a fixed sentence plus an available-stock count the caller is already entitled to see; its arm in the handler's `Classify` switch must stay listed ahead of `DomainConflictException`'s, because a C# type-pattern switch matches in source order and `InsufficientStockException` is now a subclass of `DomainConflictException` - without that ordering (and a matching exclusion in the conflict-logging check) it would silently fall back to `DomainConflictException`'s `409`-and-log-a-warning behaviour instead of keeping its own established `400`, unlogged one. Every `ProblemDetails` response carries the current trace ID and a `message` extension equal to `detail`, kept for the existing frontend error handling that already reads `error.message` for this migration (see `machine-detail.component.ts`). A validation outcome is not logged; a conflict is logged once at `Warning` with the trace ID, because it may indicate a real race between two callers, but it is still an expected outcome rather than a server error - `InsufficientStockException` is excluded from that logging despite being a `DomainConflictException` by inheritance, because its established behaviour predates that inheritance.
+`InventoryApi/Http/DomainExceptionHandler.cs` publishes an exception's own message to the caller, so it may only claim exception types whose contract guarantees that message is caller-safe. Exactly four qualify: `DomainValidationException` and `InsufficientStockException` become `400 Bad Request`, and `DomainConflictException` and `Inventory.Application.Costing.InventoryCostDataQualityException` become `409 Conflict`. `InsufficientStockException` qualifies because its message is a fixed sentence plus an available-stock count the caller is already entitled to see; its arm in the handler's `Classify` switch must stay listed ahead of `DomainConflictException`'s, because a C# type-pattern switch matches in source order and `InsufficientStockException` is now a subclass of `DomainConflictException` - without that ordering (and a matching exclusion in the conflict-logging check) it would silently fall back to `DomainConflictException`'s `409`-and-log-a-warning behaviour instead of keeping its own established `400`, unlogged one. Every `ProblemDetails` response carries the current trace ID and a `message` extension equal to `detail`, kept for the existing frontend error handling that already reads `error.message` for this migration (see `machine-detail.component.ts`). A validation outcome is not logged; a conflict is logged once at `Warning` with the trace ID, because it may indicate a real race between two callers, but it is still an expected outcome rather than a server error - `InsufficientStockException` is excluded from that logging despite being a `DomainConflictException` by inheritance, because its established behaviour predates that inheritance.
 
-**The handler must never claim a framework-wide base type such as `ArgumentException` or `InvalidOperationException`, and it must never claim a provider-specific infrastructure exception.** Because `UseExceptionHandler()` is registered ahead of the rest of the request pipeline, a type-based rule here applies to the whole application, not only to the controllers that were migrated. `ArgumentException` and `InvalidOperationException` are thrown throughout the BCL, EF Core, and this application's own infrastructure — `BusinessScope.Resolve`'s tenant-scope double-resolve guard, `BusinessId.From`, `EffectiveFinancialConfiguration.ResolveAgreement`, `GetReportExportRows`, `InventoryCostDataQualityException` — with messages written for a developer, not an API client. Claiming them would turn unrelated internal failures into public `400` responses that echo an internal message and are never logged, and would silently downgrade a tenant-isolation bug from a loud `500` to a quiet `400`. They therefore fall through to `GlobalExceptionHandler` as logged, generic `500`s, and `DomainExceptionHandlerTests` locks that in for `ArgumentException`, `ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`, and an `InvalidOperationException` subclass. A provider SDK exception (an Azure `RequestFailedException` `AzureBlobContainer` did not recognize, an EF Core `DbUpdateException`) that reaches this far is exactly the same case: it is neither claimed here nor given a caller-safe message anywhere, so it reaches `GlobalExceptionHandler` as a logged, generic `500` with no SDK type name, error code, or connection detail in the response body - the policy that keeps infrastructure-specific exceptions from ever escaping into the API's public contract.
+**A fatal cost history is the fourth claim, and it is claimed by name** (issue #1240). `InventoryCostDataQualityException` is what `RebuildProductCost` raises when a product's replayed history has a fatal data-quality issue - an uncosted positive `Restock`, physically or cost-negative stock, stored stock that does not reconcile - and until this issue nothing mapped it, so the manual stock adjustment (`POST api/products/{id}/stock`), both pick-list refills (`POST api/pick-list/refills`, `POST api/pick-list/multi-machine-refills`) and the Take Inventory apply (`POST api/products/{id}/inventory-count/apply`) all answered a generic `500` that named no product. Each of them now answers `409 Conflict` with the replay's own sentence as `detail` (and as the `message` extension the frontend reads), and the handler logs it once at `Warning` so moving it off `GlobalExceptionHandler`'s `500` does not make a blocked product silent. The status is `409` because the refusal depends on the product's *current history*, exactly like a `DomainConflictException`. Nothing is written by any of them: each endpoint's write transaction is left uncommitted, so a batch is still all or nothing. **No controller catches it** - `PurchasesController` is unchanged and keeps its existing `400`, because its own `catch (InvalidOperationException)` runs before any exception handler does.
+
+**A refused pick names the row, not just the product.** The replay's message names the product through `Inventory.Domain.Products.ProductLabel`, which is half of "which row do I fix?" when a pick is a matrix of products against machines. So both refill adapters re-raise the refusal through the shared `Inventory.Infrastructure.Persistence.PickListRefillCostRefusal`, which composes `Inventory.Domain.Stock.PickListRefillPolicy.CostHistoryRefusalMessage` - "Nothing in this pick was recorded. *&lt;the replay's sentence&gt;* That row was being picked for machine Front Lobby (7)." - with the machine named by `Inventory.Domain.Machines.MachineLabel`, beside `ProductLabel` and with the same id-always rule. The multi-machine batch names *that allocation's own* machine rather than the batch's first, and a single-machine refill that names no machine at all (which that contract allows) names the product alone. The machine's name is read only on the failure path: every other picker waits on the refill's write lock, so a pick that is about to succeed must not pay for a message it will not use. What proves this slice: `DomainExceptionHandlerTests` (the mapping, the warning, and the base `InvalidOperationException` still unclaimed beside it) and `CostDataQualityRefusalApiTests` (all four endpoints through the real pipeline over a seeded uncosted restock, both refills naming product and machine, and the healthy product in the same batch left with its stock, its movement absent and no refill row recorded).
+
+**The handler must never claim a framework-wide base type such as `ArgumentException` or `InvalidOperationException`, and it must never claim a provider-specific infrastructure exception.** Because `UseExceptionHandler()` is registered ahead of the rest of the request pipeline, a type-based rule here applies to the whole application, not only to the controllers that were migrated. `ArgumentException` and `InvalidOperationException` are thrown throughout the BCL, EF Core, and this application's own infrastructure — `BusinessScope.Resolve`'s tenant-scope double-resolve guard, `BusinessId.From`, `EffectiveFinancialConfiguration.ResolveAgreement`, `GetReportExportRows` — with messages written for a developer, not an API client. (`InventoryCostDataQualityException` is a subclass of `InvalidOperationException` that *is* claimed, by its own sealed type and because its message is written for the operator; claiming the base type would publish every one of the others.) Claiming them would turn unrelated internal failures into public `400` responses that echo an internal message and are never logged, and would silently downgrade a tenant-isolation bug from a loud `500` to a quiet `400`. They therefore fall through to `GlobalExceptionHandler` as logged, generic `500`s, and `DomainExceptionHandlerTests` locks that in for `ArgumentException`, `ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`, and an `InvalidOperationException` subclass. A provider SDK exception (an Azure `RequestFailedException` `AzureBlobContainer` did not recognize, an EF Core `DbUpdateException`) that reaches this far is exactly the same case: it is neither claimed here nor given a caller-safe message anywhere, so it reaches `GlobalExceptionHandler` as a logged, generic `500` with no SDK type name, error code, or connection detail in the response body - the policy that keeps infrastructure-specific exceptions from ever escaping into the API's public contract.
 
 The consequence for a throw site is explicit: **a check whose message is meant for the caller must throw `DomainValidationException` or `DomainConflictException` itself.** Migrating a controller to the centralized mapping therefore means converting the deliberate validation throws in the service behind it, not widening the handler. Anything else stays an ordinary framework exception and stays a generic `500`.
 
@@ -11184,12 +11188,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below, and since issue #1252 machine profitability does as well. **No report asks for the calendar-date `Handle` overload any more**: it remains as the direct expression of the date-range fee contract (with `FeeDate` null, which means the date part of the sale instant), and a money report must not use it. Transaction Sales estimates a fee per row rather than through this engine, and since issue #1252 it resolves that rate from the sale's business date too.
 
-What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
+What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. Issues #1250 and #1252 closed this for the reports; **no report selects sales by UTC date, and no report resolves a sale's fee rate or commission agreement from its UTC date, any more.** What remains open is narrower:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
-- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
+- **Reports: closed.** Every money report selects its sales by business-date instants, and both effective-dated per-sale lookups are made on the sale's own business date. Issue #1250 moved the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation; issue #1252 moved machine profitability (`EfMachineProfitabilityReportFactsProvider`), product profitability (`EfProductProfitabilityReportFactsProvider`), the standalone Commission report (`GetSiteCommissionReport.Handle`, the entry point `GET /api/site-commissions` asks) and Transaction Sales (`EfTransactionSalesReportFactsProvider`), and made `GetSiteCommissionReport` resolve each sale's agreement, and `TransactionRowPolicy` each sale's fee rate and agreement, from that sale's business date. Transaction Sales carries the derived date on each streamed fact row (`TransactionSalesReportFactsRow.BusinessDate`), so the Domain policy still reads a date and never a calendar.
+- **Open: the Machines dashboard's per-sale agreement resolution.** `EfMachineDashboardFactsStore` still compares a sale's raw UTC instant against an agreement's effective dates in its per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call. Its *periods* are already business-day windows (issue #310), so this affects only which agreement a sale near a rate change is priced at, not which sales a period holds. It is not part of issue #1252's reports and remains open follow-up work.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -11369,7 +11373,7 @@ changed.
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
 ([the dashboard rule above](#time)), the money reports select their sales between the same kind of
-boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
+boundaries (issues #1250 and #1252, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -11388,9 +11392,10 @@ the previous day's row; the owner decided on PR #392 that this belongs to #380's
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
-**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
-(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
-business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+**Every other money report follows the same rule (issue #1250 for bookkeeping, the GST accounting
+aid, the reports dashboard and reconciliation; issue #1252 for machine profitability, product
+profitability, the standalone Commission report and Transaction Sales — the owner's decision of
+13 November 2026: every money report counts a sale on its business date).** They selected sales by comparing the stored UTC instant with the requested calendar
 dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
 `Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
 in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
@@ -11418,28 +11423,44 @@ and the provider-coverage query. Four things follow it:
   counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
   net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
   separates the two questions the calculation asks: its two UTC instants select the completed sales,
-  and its two business dates resolve the effective-dated agreement. (They resolved the recorded
-  payments and the payment due date too until issue #1251 removed both from the report.) The
-  standalone Commission report (`GET /api/site-commissions`) keeps the
-  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
-  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+  and its two business dates are what the report reports itself as covering. (They resolved the
+  recorded payments and the payment due date too until issue #1251 removed both from the report.)
+
+**Issue #1252 is part 2, and it finishes the move.** Machine profitability
+(`EfMachineProfitabilityReportFactsProvider`), product profitability
+(`EfProductProfitabilityReportFactsProvider`) and Transaction Sales
+(`EfTransactionSalesReportFactsProvider`) resolve their requested dates through the same
+`EfReportingSharedQueries.SalesWindow` and select their sales, their all-status row check and their
+provider coverage between its instants; machine profitability asks the fee use case for
+`BusinessDateSalesWindow.FeePeriod` instead of a calendar-date range. The standalone Commission
+report's own entry point (`IGetSiteCommissionReport.Handle`, what `GET /api/site-commissions` asks)
+resolves the requested dates with `SiteCommissionBusinessPeriod.ForBusinessDates` through
+`IBusinessCalendar`, so commission due for a month starts at local midnight; the calendar-date
+`ForCalendarDates` factory is gone, as is the calendar-date `GetMachineCommissionsAsync` overload, so
+no report can ask for a sales figure over the whole UTC dates a business day straddles.
+
+**Both effective-dated per-sale lookups move with it.** `GetSiteCommissionReport` resolves each
+sale's agreement from `IBusinessCalendar.ToBusinessDate(sale.MachineAuthorizationTime)`, and
+`TransactionRowPolicy` resolves each row's fee rate *and* agreement from
+`TransactionRowInputs.BusinessDate`, which the adapter derived once per row and published as
+`TransactionSalesReportFactsRow.BusinessDate` — the Domain policy still reads a date and never
+touches a calendar. So an agreement or a rate that changes at business-day midnight charges a sale at
+23:59 the old value and a sale at 00:01 the new one, which comparing the stored instant's UTC date
+could not express: both sit on the same UTC date.
 
 Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
 and purchase dates keep their plain calendar-date bounds in these reports too.
-`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
-daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
-date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the eight reports, both
+daylight-saving transition days (4 October 2026 and 5 April 2026) across every one of them,
+bookkeeping totalling to the sum of the daily report's rows, machine profitability, product
+profitability and Transaction Sales (completed filter) totalling to bookkeeping's sales for one
+range, the date-only filters, the CSV/XLSX exports showing the same figures as the screens, the
+agreement and the fee rate that change at Sydney midnight, and - over the real
 `EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
-on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
-the standalone Commission report still answering $0.35 for the 4th. Figures for past
-ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
-anyone who has exported or lodged figures from these reports.
-
-Transaction Sales still filters its `from`/`to` by the UTC date of the instant
-(`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
-on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
-outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
+on the 5th in bookkeeping, in the reports dashboard, in bookkeeping's machine-filtered view and in
+the standalone Commission report. Figures for past ranges change for sales between midnight and
+10–11 am Sydney, including commission due; that is a release-note matter for anyone who has exported
+or lodged figures from these reports.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -11934,8 +11955,10 @@ it stages the movement, because staging it is what reads the stored quantity tha
 `StockMovementCostPolicy`'s "this would make physical stock negative" check is decided on. Read
 before the transaction opened, two simultaneous write-offs of 4 against a stock of 5 both read 5,
 both computed a new stock of 1, and the loser's movement was then refused by the cost replay as
-*becomes physically negative* — an `InventoryCostDataQualityException`, which no HTTP handler claims,
-so an operator whose adjustment simply no longer fitted got a `500`. Inside the lock the loser reads
+*becomes physically negative* — an `InventoryCostDataQualityException`, which at the time no HTTP
+handler claimed, so an operator whose adjustment simply no longer fitted got a `500` (since issue
+#1240 it would be a `409` naming the product, which is still the wrong answer for a losing writer:
+the lock is what makes it the established not-enough-stock `400`). Inside the lock the loser reads
 the quantity the winner left and is refused with the established `InsufficientStockException`
 (`400`, "Not enough products in stock. Available stock: 1"), and two adjustments that both fit are
 both recorded, the second against the quantity the first left.
@@ -14759,9 +14782,10 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report, bookkeeping, the
-reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
-machine and product profitability still select between plain calendar-date bounds. Its
+only be compared with the window the figures were measured over. Every one of these reports selects
+its sales between business-day midnights and judges its coverage over exactly those instants
+(issue #1250 for the daily report, bookkeeping, the reports dashboard and reconciliation; issue
+#1252 for machine profitability, product profitability and Transaction Sales). Its
 `Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
@@ -14884,17 +14908,21 @@ feature.
 the route is absent and answers `404` — not `403`, which is what a member refused the capability
 gets. `ISiteCommissionStore.GetPaymentsAsync`/`AddPaymentAsync` and their `EfSiteCommissionStore`
 implementations are gone with it, and `GetSiteCommissionReport` reads no payment at all; dropping the
-status also dropped its only use of `IBusinessCalendar`, so the use case no longer takes one.
+status also dropped its only use of `IBusinessCalendar` at the time, so the use case stopped taking
+one — issue #1252 gave it a calendar again for a different reason, to resolve the requested dates to
+business-day instants and each sale's agreement to that sale's business date.
 `SiteCommissionReportRow`/`SiteCommissionRowDto` no longer carry the five payment-derived members,
 and the domain `CommissionPayment` record — which existed only to carry a payment across the removed
 port — is gone. The Angular page drops the Paid, Outstanding and Status columns, the Outstanding
 figure in the details, the Payment history section and the Record Payment form, and the printable
 details page drops Outstanding and Payment history.
 
-**What is deliberately untouched.** Gross, card, cash and eligible sales, the rate, commission due,
-the machine breakdown and the products rows are the same figures for the same inputs — the
-availability model above, the agreement resolution, the data-quality states and the business-date
-window of issue #1250 all behave exactly as they did. The **stored rows stay**: `CommissionPayments`
+**What issue #1251 deliberately left untouched.** Gross, card, cash and eligible sales, the rate,
+commission due, the machine breakdown and the products rows were the same figures for the same
+inputs — the availability model above, the agreement resolution, the data-quality states and the
+business-date window of issue #1250 all behaved exactly as they did. (Issue #1252 then changed which
+sales a requested range holds and which agreement covers each of them, on its own decision: see
+[Nayax sale timestamps](#nayax-sale-timestamps-issue-380).) The **stored rows stay**: `CommissionPayments`
 is still a tenant-owned EF entity with its mapping, its index and its migration history, still
 counted by `BusinessBootstrapper` and still on the Super Admin diagnostics surface. There is no
 migration and no data change; the rows are simply never read. The agreement's
@@ -17961,6 +17989,24 @@ that meaning.
    the policy already refused keeps its own outcome - including an `InsufficientStock` decided
    against the storage left at the time of its check, which stays in the response even though the
    rollback has since restored that stock; the event is still `Unprocessed` and is simply retried.
+
+   **Every failed apply is logged, and exactly one failure explains itself** (issue #1240). Each
+   event of a rolled-back batch emits one `Warning` through the Application port
+   `IMachineStockSyncLog` (`Inventory.Infrastructure.MachineStockSync.LoggingMachineStockSyncLog` is
+   the one place those events become log lines, the arrangement `LoggingNayaxSqsReaderLog` has)
+   carrying the event id, a short failure code - the exception's type name, or `EventNotFound` - and
+   the caller-safe reason when there is one. Before this, a restock that never landed left no record
+   at all. What the **operator** sees is still the established
+   `Failed to apply this event; no inventory movement was recorded.`, with one exception: a fatal
+   **cost data-quality refusal** appends the cost replay's own product-named sentence to it, because
+   that is a repair the operator can make and a retry cannot. Every other failure - a commit the
+   database refuses, a movement that cannot be recorded, an event row this machine does not have -
+   keeps the generic sentence alone, deliberately: a provider or EF Core exception's own message can
+   quote the statement or the data it failed on, so it reaches the log as a type name and reaches
+   the response not at all. `MachineRefillFailure` is the shape that carries this back from
+   `IMachineStockEventStore.ApplyProductRefillsAsync`, and its `CostDataQualityMessage` is non-null
+   for that one failure only. The "Apply as separate restock" duplicate resolution writes the same
+   refill and is logged and explained in exactly the same way.
    The "Apply as separate restock" duplicate resolution of step 6 writes through the same
    write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
    record a second movement when it races another apply of the same event either; a failed write
