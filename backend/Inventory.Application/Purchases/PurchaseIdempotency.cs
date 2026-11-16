@@ -42,9 +42,13 @@ public sealed record PurchaseCreateOutcome(PurchaseRecord Purchase, bool Replaye
 public static class PurchaseIdempotencySubmission
 {
     /// <summary>
-    /// The claim for <paramref name="submitted"/> over <paramref name="content"/>, or
+    /// The key <paramref name="submitted"/> is claiming, as it will be stored, or
     /// <see langword="null"/> when no key was submitted - which is every client that predates this
     /// issue, and is the create that behaves exactly as it always has.
+    ///
+    /// <para>It is answered before the request is rendered for <see cref="Claim"/>, because
+    /// rendering a request reads the uploaded document's bytes: a create with no key has no stored
+    /// fingerprint to be compared with and must not pay for a digest nothing will look at.</para>
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The submitted key is too long. It is this exception rather than a
@@ -53,16 +57,23 @@ public static class PurchaseIdempotencySubmission
     /// does; the conflict a spent key produces is a <c>DomainConflictException</c>, because that one
     /// is about stored state and is mapped centrally to <c>409</c>.
     /// </exception>
-    public static PurchaseIdempotencyClaim? Claim(string? submitted, PurchaseFingerprintContent content)
+    public static string? AcceptedKey(string? submitted)
     {
-        ArgumentNullException.ThrowIfNull(content);
-
         if (!PurchaseIdempotencyPolicy.IsWithinLimit(submitted))
             throw new InvalidOperationException(PurchaseIdempotencyPolicy.KeyTooLongMessage);
 
-        return PurchaseIdempotencyPolicy.Normalize(submitted) is { } key
-            ? new PurchaseIdempotencyClaim(key, PurchaseCreateFingerprint.Compute(content))
-            : null;
+        return PurchaseIdempotencyPolicy.Normalize(submitted);
+    }
+
+    /// <summary>
+    /// The claim <paramref name="key"/> makes over <paramref name="content"/>: the key as it will be
+    /// stored, with the fingerprint of the request it stands for beside it.
+    /// </summary>
+    public static PurchaseIdempotencyClaim Claim(string key, PurchaseFingerprintContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        return new PurchaseIdempotencyClaim(key, PurchaseCreateFingerprint.Compute(content));
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.SupplierOrders;
@@ -51,7 +52,11 @@ namespace Inventory.Application.Purchases;
 /// <see cref="PurchaseIdempotencyPolicy.KeyReusedMessage"/>. That check is not the guarantee,
 /// though - it is the cheap half of it. The authoritative claim is
 /// <see cref="IPurchaseStore.CreateAsync"/>'s, taken inside the write transaction, because two
-/// copies of one submission that arrive together both read "nothing under this key" here. When that
+/// copies of one submission that arrive together both read "nothing under this key" here. What makes
+/// "the same request" trustworthy for a request that carries a receipt is that the document is
+/// compared by its own bytes: a keyed create hashes the upload once, through a stream of its own, and
+/// renders that digest into the fingerprint, so a <em>different</em> receipt submitted under a spent
+/// key is refused even when it shares the first one's file name and byte count. When that
 /// claim replays, this use case removes the bytes and the reservation its own attempt had staged,
 /// exactly as a failed save does - the purchase that was saved keeps its own document, and this
 /// request leaves nothing behind. A create with no key behaves exactly as it always has.</para>
@@ -127,8 +132,8 @@ public sealed class UploadPurchase
         // The key is read from the request as it stands here - the normalised invoice number
         // included, and the submitted purchase date rather than the clock's default, so two
         // identical retries render identically. Over-long is refused before anything is written.
-        var idempotency = PurchaseIdempotencySubmission.Claim(
-            idempotencyKey, ToFingerprintContent(file, fields, items, supplierOrderCompletion));
+        var idempotency = await ClaimAsync(
+            idempotencyKey, file, fields, items, supplierOrderCompletion, cancellationToken);
 
         // The cheap half of the guarantee: a retry that arrives after the first save is answered
         // here, before any storage is reserved and before any byte is written. The authoritative
@@ -205,15 +210,61 @@ public sealed class UploadPurchase
             : throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
 
     /// <summary>
+    /// The claim this create is made under, or <see langword="null"/> when it carries no key.
+    ///
+    /// <para>The uploaded document's bytes are read for their digest only once a key has been
+    /// accepted: the digest exists to be compared with one stored beside a key, so a create without
+    /// one never opens the upload a second time and is exactly the create it always was.</para>
+    /// </summary>
+    private static async Task<PurchaseIdempotencyClaim?> ClaimAsync(
+        string? idempotencyKey,
+        PurchaseFileInput? file,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        SupplierOrderCompletionRequest? supplierOrderCompletion,
+        CancellationToken cancellationToken)
+    {
+        if (PurchaseIdempotencySubmission.AcceptedKey(idempotencyKey) is not { } key) return null;
+
+        var digest = await DocumentDigestAsync(file, cancellationToken);
+        return PurchaseIdempotencySubmission.Claim(
+            key, ToFingerprintContent(file, fields, items, supplierOrderCompletion, digest));
+    }
+
+    /// <summary>
+    /// The SHA-256 of the uploaded document's own bytes as lowercase hexadecimal, or
+    /// <see langword="null"/> when the purchase carries no document.
+    ///
+    /// <para>The name and the length cannot stand in for it (issue #1247): a phone that names every
+    /// photo the same way can submit a <em>different</em> receipt of the same size under a spent
+    /// key, and without the digest that second purchase would be replayed as the first one instead
+    /// of being refused.</para>
+    ///
+    /// <para>It is read through a stream of its own, which is closed again here, so the bytes
+    /// storage writes are read from a stream opened fresh in <see cref="SaveDocumentAsync"/> and
+    /// nothing the document needs is consumed by hashing it. The hash streams the upload rather than
+    /// buffering it whole.</para>
+    /// </summary>
+    private static async Task<string?> DocumentDigestAsync(
+        PurchaseFileInput? file, CancellationToken cancellationToken)
+    {
+        if (file is null) return null;
+
+        await using var content = file.OpenReadStream();
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(content, cancellationToken));
+    }
+
+    /// <summary>
     /// The request as <see cref="PurchaseCreateFingerprint"/> renders it: what the caller submitted,
-    /// including the document's name and length and the supplier-order completion it asked for, and
-    /// never a value this server resolved for it.
+    /// including the document's name, length and digest and the supplier-order completion it asked
+    /// for, and never a value this server resolved for it.
     /// </summary>
     private static PurchaseFingerprintContent ToFingerprintContent(
         PurchaseFileInput? file,
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
-        SupplierOrderCompletionRequest? supplierOrderCompletion) =>
+        SupplierOrderCompletionRequest? supplierOrderCompletion,
+        string? documentDigest) =>
         new(
             fields.Title,
             fields.Notes,
@@ -227,6 +278,7 @@ public sealed class UploadPurchase
             fields.SupplierId,
             file?.FileName,
             file?.Length,
+            documentDigest,
             supplierOrderCompletion?.SupplierOrderId,
             supplierOrderCompletion?.DecisionFingerprint,
             [.. items.Select(item => new PurchaseFingerprintLine(

@@ -75,6 +75,7 @@ public class UploadPurchaseIdempotencyTests
     [InlineData("lineQuantity")]
     [InlineData("lineUnitCost")]
     [InlineData("document")]
+    [InlineData("documentBytes")]
     public async Task One_changed_value_under_a_spent_key_is_a_conflict(string changed)
     {
         var store = new FakePurchaseStore();
@@ -82,7 +83,13 @@ public class UploadPurchaseIdempotencyTests
         var useCase = UseCase(store, documents);
         await useCase.Handle(FileInput(), Fields(), Items(), null, Key, CancellationToken.None);
 
-        var file = changed == "document" ? FileInput("other.jpg") : FileInput();
+        var file = changed switch
+        {
+            "document" => FileInput("other.jpg"),
+            // The same name and the same byte count, a different receipt: only the bytes say so.
+            "documentBytes" => FileInput(bytes: [9, 8, 7]),
+            _ => FileInput(),
+        };
         var fields = changed switch
         {
             "title" => Fields() with { Title = "Thursday restock" },
@@ -102,6 +109,49 @@ public class UploadPurchaseIdempotencyTests
         await Assert.ThrowsAsync<DomainConflictException>(() =>
             useCase.Handle(file, fields, items, null, Key, CancellationToken.None));
         Assert.Single(await store.ListAsync(null, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Hashing the upload must not cost the purchase its document: the digest is read through a
+    /// stream of its own, so the bytes that reach storage are still all of them, in order.
+    /// </summary>
+    [Fact]
+    public async Task A_keyed_create_stores_the_whole_document_after_hashing_it()
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+
+        var saved = await UseCase(store, documents).Handle(
+            FileInput(bytes: [4, 5, 6, 7]), Fields(), Items(), null, Key, CancellationToken.None);
+
+        var stored = await documents.OpenReadAsync(
+            DocumentCategory.PurchaseDocument, saved!.StoredFileName, CancellationToken.None);
+        Assert.NotNull(stored);
+        using var bytes = new MemoryStream();
+        await stored!.Content.CopyToAsync(bytes, CancellationToken.None);
+        Assert.Equal(new byte[] { 4, 5, 6, 7 }, bytes.ToArray());
+        Assert.Equal(4, saved.FileSizeBytes);
+    }
+
+    /// <summary>
+    /// The digest exists to be compared with one stored beside a key, so a create that sends no key
+    /// never opens the upload for it: the one stream it opens is the one storage reads. A keyed
+    /// create opens the second one deliberately, which is the control beside it.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData(Key, 2)]
+    public async Task The_upload_is_opened_once_without_a_key_and_twice_with_one(string? submitted, int opened)
+    {
+        var store = new FakePurchaseStore();
+        var opens = 0;
+        var file = new PurchaseFileInput(
+            "receipt.jpg", "image/jpeg", 3, () => { opens++; return new MemoryStream([1, 2, 3]); });
+
+        await UseCase(store, new FakeDocumentStorage())
+            .Handle(file, Fields(), Items(), null, submitted, CancellationToken.None);
+
+        Assert.Equal(opened, opens);
     }
 
     /// <summary>
@@ -259,6 +309,9 @@ public class UploadPurchaseIdempotencyTests
 
     private static List<PurchaseItemInput> Items() => [new(3, 24m, 1.15m)];
 
-    private static PurchaseFileInput FileInput(string fileName = "receipt.jpg") =>
-        new(fileName, "image/jpeg", 3, () => new MemoryStream([1, 2, 3]));
+    private static PurchaseFileInput FileInput(string fileName = "receipt.jpg", byte[]? bytes = null)
+    {
+        var content = bytes ?? [1, 2, 3];
+        return new(fileName, "image/jpeg", content.Length, () => new MemoryStream(content));
+    }
 }

@@ -70,7 +70,10 @@ public class PurchaseCreateFingerprintTests
         { "no supplier", Content() with { SupplierId = null } },
         { "document name", Content() with { DocumentFileName = "other.jpg" } },
         { "document length", Content() with { DocumentLength = 2049 } },
-        { "no document", Content() with { DocumentFileName = null, DocumentLength = null } },
+        // A second receipt photographed under the same name at the same size: the name and the
+        // length say it is the same document and only its bytes say it is not.
+        { "document bytes", Content() with { DocumentDigest = new string('b', 64) } },
+        { "no document", Content() with { DocumentFileName = null, DocumentLength = null, DocumentDigest = null } },
         { "supplier order completed", Content() with { CompleteSupplierOrderId = 9, CompleteSupplierOrderFingerprint = "abc" } },
         { "a line's quantity", Content() with { Lines = [Line() with { Quantity = 25m }, SecondLine()] } },
         { "a line's unit cost", Content() with { Lines = [Line() with { UnitCost = 1.16m }, SecondLine()] } },
@@ -109,6 +112,7 @@ public class PurchaseCreateFingerprintTests
         4,
         "scan.jpg",
         2048,
+        new string('a', 64),
         null,
         null,
         [Line(), SecondLine()]);

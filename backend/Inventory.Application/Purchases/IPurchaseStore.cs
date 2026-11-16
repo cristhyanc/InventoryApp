@@ -69,6 +69,11 @@ public interface IPurchaseStore
     /// <see cref="Inventory.Domain.Exceptions.DomainConflictException"/> with
     /// <see cref="Inventory.Domain.Purchases.PurchaseIdempotencyPolicy.KeyReusedMessage"/>, also
     /// writing nothing. The per-business unique index on the key backs that up at the write.</para>
+    ///
+    /// <para>A create made under a key is answered with the purchase <em>as a read of it reads
+    /// it</em>, which is the projection a replay under that key is answered with, so an unchanged
+    /// request gets the same purchase from both paths. A create with no key is projected exactly as
+    /// it always was.</para>
     /// </summary>
     Task<PurchaseCreateOutcome> CreateAsync(
         PurchaseFields fields,

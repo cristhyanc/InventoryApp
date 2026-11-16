@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
+using Inventory.Application.Documents;
 using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -8,6 +10,7 @@ using InventoryApi.Auth.E2ETesting;
 using InventoryApi.Tests.Auth;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,11 +58,9 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
         var purchaseId = saved.GetProperty("id").GetInt32();
         Assert.Equal(purchaseId, replayed.GetProperty("id").GetInt32());
 
-        // The whole purchase, not merely its id: the retry is answered with exactly the purchase a
-        // read of it returns. (It is compared against the read rather than against the create's own
-        // response because the create renders the purchase date from the instant it was handed,
-        // which carries a "Z" the stored value does not - a difference between this endpoint's
-        // create and read responses that predates this issue and that nothing here changes.)
+        // The whole purchase, not merely its id, and from all three paths: the create, the retry
+        // that replays it and a read of it serialize one purchase identically.
+        Assert.Equal(saved.GetRawText(), replayed.GetRawText());
         Assert.Equal((await ReadAsync(purchaseId)).GetRawText(), replayed.GetRawText());
 
         // One purchase, one restock movement, and the two units on the receipt added to stock once.
@@ -92,6 +93,99 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
             problem.RootElement.GetProperty("detail").GetString());
         Assert.Equal(purchasesBefore, await _factory.PurchaseCountAsync());
         Assert.Equal(movementsBefore, await _factory.StockMovementCountAsync());
+    }
+
+    /// <summary>
+    /// A <em>different</em> receipt under a spent key is refused even when it is indistinguishable
+    /// from the first one by name and size - two photographs a phone named the same way, both three
+    /// bytes here. The document's name and length cannot decide this: only its bytes can, which is
+    /// why the fingerprint renders their digest. Being replayed instead would answer the operator
+    /// with the first receipt's purchase and silently lose the second one.
+    /// </summary>
+    [Fact]
+    public async Task The_same_key_with_a_different_document_of_the_same_name_and_length_is_refused()
+    {
+        var key = NewKey();
+        var created = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, document: [1, 2, 3]));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var purchase = await PurchaseAsync(created);
+        var storedFileName = purchase.GetProperty("storedFileName").GetString()!;
+        Assert.True(_factory.Documents.Contains(DocumentCategory.PurchaseDocument, storedFileName));
+        var purchasesBefore = await _factory.PurchaseCountAsync();
+        var movementsBefore = await _factory.StockMovementCountAsync();
+        var documentsBefore = _factory.Documents.SavedFileNames.Count;
+
+        var refused = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, document: [3, 2, 1]));
+
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        using var problem = JsonDocument.Parse(await refused.Content.ReadAsStringAsync());
+        Assert.Equal(
+            PurchaseIdempotencyPolicy.KeyReusedMessage,
+            problem.RootElement.GetProperty("detail").GetString());
+
+        // No second purchase, no second restock movement and no second document: the refusal is
+        // made before a byte of the second receipt is written anywhere.
+        Assert.Equal(purchasesBefore, await _factory.PurchaseCountAsync());
+        Assert.Equal(movementsBefore, await _factory.StockMovementCountAsync());
+        Assert.Equal(documentsBefore, _factory.Documents.SavedFileNames.Count);
+
+        // And the purchase that was saved still has the document it was saved with, bytes and all:
+        // hashing the upload to fingerprint it must not consume the bytes storage writes.
+        Assert.Equal(storedFileName, (await ReadAsync(purchase.GetProperty("id").GetInt32()))
+            .GetProperty("storedFileName").GetString());
+        Assert.True(_factory.Documents.Contains(DocumentCategory.PurchaseDocument, storedFileName));
+        var download = await _factory.BusinessA().GetAsync(
+            $"{PurchasesUri}/{purchase.GetProperty("id").GetInt32()}/file");
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    /// <summary>
+    /// The same receipt sent again under its key - the same bytes this time - is the retry the key
+    /// exists for: one purchase, and the retry's own bytes are never stored at all.
+    /// </summary>
+    [Fact]
+    public async Task A_retry_with_the_same_document_replays_and_stores_no_second_document()
+    {
+        var key = NewKey();
+        var created = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, document: [1, 2, 3]));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var documentsBefore = _factory.Documents.SavedFileNames.Count;
+
+        var retry = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, document: [1, 2, 3]));
+
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        Assert.Equal((await PurchaseAsync(created)).GetRawText(), (await PurchaseAsync(retry)).GetRawText());
+        Assert.Equal(documentsBefore, _factory.Documents.SavedFileNames.Count);
+        Assert.Equal(1, await _factory.PurchaseCountForKeyAsync(key));
+    }
+
+    /// <summary>
+    /// The create and the replay are one projection, including on a purchase date that sits exactly
+    /// on a business-day boundary - midnight in the business's own time zone, which is the instant a
+    /// response that serialized the date differently from a read would move to the day before.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_dated_on_a_business_day_boundary_is_serialized_the_same_way_by_both_paths()
+    {
+        var key = NewKey();
+
+        var created = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, purchaseDate: BusinessDayStart));
+        var retry = await _factory.BusinessA().PostAsync(PurchasesUri, await FormAsync(key, purchaseDate: BusinessDayStart));
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        var saved = await PurchaseAsync(created);
+        var replayed = await PurchaseAsync(retry);
+        Assert.Equal(saved.GetRawText(), replayed.GetRawText());
+        Assert.Equal((await ReadAsync(saved.GetProperty("id").GetInt32())).GetRawText(), saved.GetRawText());
+
+        // The instant itself, so a projection that agreed with itself while shifting the day would
+        // still be caught: 20 April 2026 in Sydney begins at 14:00 UTC on 19 April.
+        Assert.StartsWith(
+            "2026-04-19T14:00:00",
+            saved.GetProperty("purchaseDate").GetString(),
+            StringComparison.Ordinal);
     }
 
     /// <summary>Keys are tenant-owned: the same string in another business is another business's key.</summary>
@@ -215,8 +309,14 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("match").ValueKind);
     }
 
-    /// <summary>The purchase date every form in this file submits.</summary>
+    /// <summary>The purchase date every form in this file submits unless it says otherwise.</summary>
     private static readonly DateTime PurchaseDate = new(2026, 4, 1, 10, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// Midnight at the start of 20 April 2026 in the fixture business's own time zone
+    /// (Australia/Sydney, UTC+10 once daylight saving has ended), as the UTC instant a client sends.
+    /// </summary>
+    private static readonly DateTime BusinessDayStart = new(2026, 4, 19, 14, 0, 0, DateTimeKind.Utc);
 
     private static string NewKey() => Guid.NewGuid().ToString();
 
@@ -261,17 +361,31 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
     /// <summary>
     /// The create form. <paramref name="product"/> is <c>false</c> for Business B, which has its own
     /// catalogue: a purchase there names its own product rather than Business A's.
+    /// <paramref name="document"/> are the receipt's own bytes, sent under one fixed name so two
+    /// forms differ by their bytes alone.
     /// </summary>
     private async Task<MultipartFormDataContent> FormAsync(
-        string? key, string? invoiceNumber = null, int? supplierId = null, bool product = true)
+        string? key,
+        string? invoiceNumber = null,
+        int? supplierId = null,
+        bool product = true,
+        byte[]? document = null,
+        DateTime? purchaseDate = null)
     {
         var productId = product ? await _factory.ProductIdAsync() : await _factory.OtherBusinessProductIdAsync();
         var content = new MultipartFormDataContent
         {
             { new StringContent("Weekly restock"), "title" },
-            { new StringContent(PurchaseDate.ToString("O", CultureInfo.InvariantCulture)), "purchaseDate" },
+            { new StringContent((purchaseDate ?? PurchaseDate).ToString("O", CultureInfo.InvariantCulture)), "purchaseDate" },
             { new StringContent($"[{{\"productId\":{productId},\"quantity\":2,\"unitCost\":1.10}}]"), "items" },
         };
+        if (document is not null)
+        {
+            var part = new ByteArrayContent(document);
+            part.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+            content.Add(part, "file", "scan.jpg");
+        }
+
         if (key is not null) content.Add(new StringContent(key), "idempotencyKey");
         if (invoiceNumber is not null) content.Add(new StringContent(invoiceNumber), "invoiceNumber");
         if (supplierId is { } supplier)
@@ -288,8 +402,9 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
 
     /// <summary>
     /// The API hosted the way the end-to-end harness hosts it, over a disposable in-memory SQLite
-    /// database. No document storage double is needed: every purchase here is recorded without a
-    /// document, so nothing ever reaches the storage adapter at all.
+    /// database, with document storage replaced by the in-memory double so a receipt sent with a
+    /// create writes no file anywhere on this machine and a refused create can be shown to have
+    /// stored none.
     /// </summary>
     public sealed class ApiFactory : WebApplicationFactory<Program>
     {
@@ -301,6 +416,12 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
             E2ETestHostContentRoot.Pin();
             _connection.Open();
         }
+
+        /// <summary>
+        /// The same double <c>PurchaseWithoutDocumentApiTests</c> uses, so "what is in storage" means
+        /// the same thing in both files.
+        /// </summary>
+        public PurchaseWithoutDocumentApiTests.InMemoryDocumentStorage Documents { get; } = new();
 
         public HttpClient BusinessA() => As(E2ETestActors.BusinessAOwner.Key);
 
@@ -442,6 +563,9 @@ public sealed class PurchaseIdempotencyApiTests : IClassFixture<PurchaseIdempote
 
                 services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
             });
+
+            // Registered last, so an uploaded receipt never reaches the filesystem adapter.
+            builder.ConfigureTestServices(services => services.AddSingleton<IDocumentStorage>(Documents));
         }
 
         protected override void Dispose(bool disposing)

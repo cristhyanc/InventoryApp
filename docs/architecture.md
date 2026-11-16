@@ -11896,12 +11896,21 @@ following the pick list's pattern (`PickListRefillPolicy`, `PickListRefillFinger
 
 What "the same content" means is `Inventory.Domain.Purchases.PurchaseCreateFingerprint`: a SHA-256
 over the request **as submitted** - title, notes, invoice number, the receipt total and both
-charges with their classifications, the purchase date, the supplier, the document's name and length,
-the supplier-order completion decision, and every line's product, quantity, unit cost and
+charges with their classifications, the purchase date, the supplier, the document's name, length and
+digest, the supplier-order completion decision, and every line's product, quantity, unit cost and
 classification in the order they were sent. It renders no value this server resolved (the clock's
 default purchase date, the file-name title fallback), because a default would make two identical
 retries render differently and turn the second into a conflict. Lines are *not* sorted: a purchase
 may legitimately hold two lines for one product, so there is no total ordering to sort into.
+
+**The document is compared by its own bytes.** A name and a byte count do not identify a receipt -
+a phone that names every photo the same way submits two different ones of the same size as a matter
+of course - so `UploadPurchase` hashes the upload (SHA-256) and renders that digest into the
+fingerprint, and a *different* receipt under a spent key is refused rather than replayed as the
+first purchase. The hash is read through a stream of its own and that stream is closed again, so the
+bytes storage writes are read from a stream opened fresh and nothing the document needs is consumed;
+it is computed **only when the request carries a key**, because a digest exists to be compared with
+one stored beside a key, so a create with no key never opens the upload a second time.
 
 **The claim is taken inside the write transaction, and that is the point.** `UploadPurchase` reads
 the key first, before storage is reserved and before a byte of the document is written, so an
@@ -11916,6 +11925,16 @@ same way a failed save does. Keys are tenant-owned: two businesses may choose th
 one business's key never finds another's purchase. `PurchaseCreateConcurrencyTests` proves the race
 on a real SQLite file with two connections; `PurchaseIdempotencyApiTests` proves the contract over
 HTTP.
+
+**A keyed create and its replay are one projection.** "The same response" has to hold as it is
+serialized, not merely as a row: a create answered from the entity the write built renders the
+purchase date as the instant the request handed over (a UTC value, with the `Z` SQLite's stored value
+does not carry) and carries whichever navigations the write happened to load, while a replay is an
+ordinary read of the stored row. `EfPurchaseStore.CreateAsync` therefore reads a keyed create's
+purchase back through the same includes every read uses and answers with that, so an unchanged
+request receives the same purchase from both paths - a purchase dated exactly on a business-day
+boundary included. A create with **no** key is projected exactly as it always was, which is the
+backwards-compatible behaviour that criterion asks for.
 
 **The form keeps one key per purchase.** `PurchaseUploadComponent` creates a key when it opens, sends
 it with every attempt at that purchase - so a failed or timed-out attempt is retried under the same

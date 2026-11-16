@@ -270,10 +270,43 @@ public sealed class EfPurchaseStore : IPurchaseStore
         if (completionTarget is not null)
             await CompleteSupplierOrderAsync(completionTarget, supplierOrderCompletion!, cancellationToken);
 
+        // A keyed create is answered with the purchase as a read of it answers, because a retry
+        // under that key is answered by exactly such a read (issue #1247). A create with no key is
+        // projected from the entity this transaction built, exactly as it always was. The read is
+        // made here, while the transaction is still open and this connection can still see its own
+        // rows - after the commit the statement would have no transaction to run in.
+        var record = idempotency is null
+            ? ToRecord(purchase)
+            : await StoredRecordAsync(purchase, cancellationToken);
+
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
 
-        return new PurchaseCreateOutcome(ToRecord(purchase), Replayed: false);
+        return new PurchaseCreateOutcome(record, Replayed: false);
+    }
+
+    /// <summary>
+    /// The purchase this transaction has just written, read back through the same includes every
+    /// read of it uses and projected from the stored row rather than from the entity that was built
+    /// to write it.
+    ///
+    /// <para>It is what makes a keyed create and its replay one answer (issue #1247). The two were
+    /// projected differently: the created entity carries the purchase date as the request handed it
+    /// over - a UTC instant, which serializes with a <c>Z</c> the value SQLite stores and returns
+    /// does not - and carries whichever navigations the write happened to load, while a replay is an
+    /// ordinary read of the stored row. An unchanged request therefore has to be answered the same
+    /// way twice, and this is that one projection.</para>
+    /// </summary>
+    private async Task<PurchaseRecord> StoredRecordAsync(Purchase purchase, CancellationToken cancellationToken)
+    {
+        var stored = await _db.Receipts.AsNoTracking()
+            .Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.Id == purchase.Id, cancellationToken);
+
+        // The row was written by this transaction in this business's own scope, so it is there; the
+        // written entity is kept as the answer only so an impossible miss could not lose a purchase
+        // that was saved.
+        return stored is null ? ToRecord(purchase) : ToRecord(stored);
     }
 
     /// <summary>

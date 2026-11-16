@@ -33,6 +33,7 @@ public sealed record PurchaseFingerprintContent(
     int? SupplierId,
     string? DocumentFileName,
     long? DocumentLength,
+    string? DocumentDigest,
     int? CompleteSupplierOrderId,
     string? CompleteSupplierOrderFingerprint,
     IReadOnlyList<PurchaseFingerprintLine> Lines);
@@ -55,10 +56,13 @@ public sealed record PurchaseFingerprintContent(
 /// which is the case this has to answer; a human who retypes the same receipt in another order gets
 /// a new key from the form anyway.</para>
 ///
-/// <para><strong>The document is rendered by its name and its length, never by its bytes.</strong>
-/// Hashing an upload would mean reading it twice, and the two values the request already carries are
-/// enough to tell "the same receipt again" from "a different receipt under a spent key". A purchase
-/// with no document renders as a value no file name can collide with.</para>
+/// <para><strong>The document is rendered by its own bytes, through the digest the caller computes
+/// over them, as well as by its name and its length.</strong> The name and the length are not enough
+/// on their own: two different receipts photographed under one name at the same size - which a phone
+/// that names every photo the same way makes ordinary - would render identically, and the second one
+/// would be replayed as the first purchase instead of refused under a spent key. The digest is
+/// computed only for a create that carries a key, because it exists to be compared with a stored one.
+/// A purchase with no document renders as values no file name and no digest can collide with.</para>
 ///
 /// <para>The owning business is deliberately <em>not</em> rendered, for
 /// <c>PickListRefillFingerprint</c>'s reason: this value never leaves the server, is stored beside
@@ -72,9 +76,10 @@ public static class PurchaseCreateFingerprint
     /// Bumping this invalidates every stored fingerprint, which is the intended effect whenever the
     /// rendering below changes: a value from an older rendering must never be treated as matching a
     /// newer one. A key whose stored fingerprint no longer matches is refused as a reused key, which
-    /// is the fail-closed direction - a retry is refused rather than saved twice.
+    /// is the fail-closed direction - a retry is refused rather than saved twice. It is <c>v2</c>
+    /// because the document's digest joined the rendering.
     /// </summary>
-    private const string Version = "v1";
+    private const string Version = "v2";
 
     private const char FieldSeparator = '|';
     private const char RecordSeparator = '\n';
@@ -104,6 +109,7 @@ public static class PurchaseCreateFingerprint
             Number(content.SupplierId),
             Text("file", content.DocumentFileName),
             Number(content.DocumentLength),
+            Text("digest", content.DocumentDigest),
             Number(content.CompleteSupplierOrderId),
             Text("order", content.CompleteSupplierOrderFingerprint),
             Count(content.Lines.Count));
