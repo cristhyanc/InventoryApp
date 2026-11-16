@@ -177,7 +177,18 @@ public class RemoveProductUnitPriceMigrationTests
                 FROM SupplierOrderLines;
                 """))?.ToString());
 
-        var movement = await after.StockAdjustments.SingleAsync();
+        // Projected rather than materialised: this test stops at an older schema, and a column a
+        // later additive migration adds to StockAdjustments (issue #1243's MachineLedgerEffectiveAt)
+        // is in the model and not here.
+        var movement = await after.StockAdjustments
+            .Select(candidate => new
+            {
+                candidate.ProductId,
+                candidate.QuantityChange,
+                candidate.UnitCost,
+                candidate.TotalCost,
+            })
+            .SingleAsync();
         Assert.Equal((7L, 12, 1.10m, 13.20m), (movement.ProductId, movement.QuantityChange,
             movement.UnitCost, movement.TotalCost));
 

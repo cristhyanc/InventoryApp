@@ -734,6 +734,10 @@ public class MachineStockSyncApplyBatchTests
         public Task<decimal?> GetAverageUnitCostAtAsync(
             long productId, DateTime saleTime, long? saleTransactionId = null, CancellationToken cancellationToken = default) =>
             _inner.GetAverageUnitCostAtAsync(productId, saleTime, saleTransactionId, cancellationToken);
+
+        public Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+            long productId, DateTime saleTime, long? saleTransactionId = null, CancellationToken cancellationToken = default) =>
+            _inner.GetLatestPurchaseUnitCostBeforeAsync(productId, saleTime, saleTransactionId, cancellationToken);
     }
 
     #endregion

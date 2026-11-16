@@ -191,6 +191,31 @@ public class InventoryCostRepairUseCaseTests
         Assert.Empty(await db.InventoryCostRepairs.ToListAsync());
     }
 
+    /// <summary>
+    /// Issue #1261: a sale's transaction-level Nayax cost is one of the ledger's inputs - the replay
+    /// costs a sale from it when the ledger has no known cost before the sale - so correcting it
+    /// between the preview and the apply changes the projection the operator approved. It is refused
+    /// with the same stale-preview response as a new sale, rather than repaired against a history
+    /// nobody saw.
+    /// </summary>
+    [Fact]
+    public async Task Apply_rejects_a_preview_after_a_sales_Nayax_cost_changed()
+    {
+        await using var db = await SeedAsync();
+        var preview = await TestCostingUseCases.PreviewRepair(db).Handle(Request());
+        var sale = await db.NayaxSales.SingleAsync(x => x.TransactionID == 1);
+        sale.NayaxProductCostPrice = 1.75m;
+        await db.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            TestCostingUseCases.ApplyRepair(db, Identified()).Handle(ApplyRequest(preview.LedgerFingerprint)));
+
+        Assert.Equal(
+            "This product's cost history changed after the preview. Run the preview again before applying the repair.",
+            exception.Message);
+        Assert.Empty(await db.InventoryCostRepairs.ToListAsync());
+    }
+
     [Fact]
     public async Task Apply_rejects_a_fingerprint_that_does_not_match_the_current_ledger()
     {

@@ -8,6 +8,12 @@ namespace Inventory.Application.Costing;
 /// <see cref="Inventory.Domain.Costing.StockMovementCostPolicy"/>). <see cref="MachineId"/>,
 /// <see cref="EatBefore"/> and <see cref="Source"/> are audit attributes the caller stamps on the
 /// recorded movement; they never influence its cost.
+///
+/// <para><see cref="MachineLedgerEffectiveAt"/> (issue #1243) is the instant the <em>machine</em>-stock
+/// ledger replays the movement at, when that is not the instant it was recorded: a Nayax Sync Restock
+/// refill passes the event's own <c>EventDateTimeGMT</c>, and every other caller leaves it
+/// <c>null</c>. It influences neither the movement's cost nor its storage effect - the recorded
+/// movement keeps the apply time for the cost replay and Stock History.</para>
 /// </summary>
 public sealed record InventoryMovement(
     long ProductId,
@@ -17,7 +23,8 @@ public sealed record InventoryMovement(
     decimal? PurchaseUnitCost = null,
     long? MachineId = null,
     DateTime? EatBefore = null,
-    StockAdjustmentSource Source = StockAdjustmentSource.Manual);
+    StockAdjustmentSource Source = StockAdjustmentSource.Manual,
+    DateTime? MachineLedgerEffectiveAt = null);
 
 /// <summary>The product's current physical stock and costing state a new movement is costed against.</summary>
 public sealed record InventoryMovementCostState(int QuantityInStock, int? CostingQuantity, decimal AverageUnitCost);
@@ -38,7 +45,8 @@ public sealed record CostedInventoryMovement(
     string Notes,
     long? MachineId,
     DateTime? EatBefore,
-    StockAdjustmentSource Source);
+    StockAdjustmentSource Source,
+    DateTime? MachineLedgerEffectiveAt = null);
 
 /// <summary>
 /// A movement staged in the caller's unit of work but not yet saved. <see cref="Id"/> is assigned

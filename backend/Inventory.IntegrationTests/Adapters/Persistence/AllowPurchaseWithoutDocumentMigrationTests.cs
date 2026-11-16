@@ -114,7 +114,18 @@ public class AllowPurchaseWithoutDocumentMigrationTests
             Assert.Equal("Weekly restock", purchase.Title);
             var item = Assert.Single(await after.ReceiptItems.AsNoTracking().ToListAsync());
             Assert.Equal((purchase.Id, 1L, 12m, 1.10m), (item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost));
-            var movement = await after.StockAdjustments.AsNoTracking().SingleAsync();
+            // Projected for the same reason the product below is: a column a later additive
+            // migration adds to StockAdjustments (issue #1243's MachineLedgerEffectiveAt) is in the
+            // model and not in this schema.
+            var movement = await after.StockAdjustments.AsNoTracking()
+                .Select(candidate => new
+                {
+                    candidate.ReceiptItemId,
+                    candidate.QuantityChange,
+                    candidate.UnitCost,
+                    candidate.TotalCost,
+                })
+                .SingleAsync();
             Assert.Equal((item.Id, 12, 1.10m, 13.20m), (movement.ReceiptItemId, movement.QuantityChange, movement.UnitCost, movement.TotalCost));
             // Projected rather than materialised: this test stops at an older schema, and a column a
             // later additive migration adds to Products (issue #1245's CostingVersion) is in the

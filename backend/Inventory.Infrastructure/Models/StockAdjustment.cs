@@ -69,4 +69,31 @@ public class StockAdjustment : IBusinessOwned
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime EffectiveAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// The instant the <em>machine</em>-stock ledger replays this movement at, when it is not the
+    /// instant the movement was recorded (issue #1243). It is <c>null</c> for every movement but a
+    /// refill applied from a Nayax Sync Restock event, where it holds that event's own
+    /// <c>EventDateTimeGMT</c> - the instant the machine was physically refilled, which may be days
+    /// before an operator applied it.
+    ///
+    /// <para><strong>Only <see cref="Inventory.Infrastructure.Persistence.EfMachineStockLedgerStore"/>
+    /// reads it.</strong> <see cref="EffectiveAt"/> stays the apply time and remains the one instant
+    /// the cost replay, Stock History and every storage-stock query use, so applying a late event
+    /// cannot take units out of storage at an earlier instant and drive physical stock negative
+    /// there. A machine count sets the machine's expected level from its own instant onward, so
+    /// without this column a refill the count had already absorbed was replayed on top of it and
+    /// invented machine stock - and the next comparison reported shrinkage that never happened.</para>
+    ///
+    /// <para>Nullable with no backfill: a movement recorded before this column existed keeps today's
+    /// behaviour, because the ledger falls back to <see cref="EffectiveAt"/>.</para>
+    ///
+    /// <para>Integration state, like <see cref="LocalMachine.ExternalMachineId"/>: it is derived from
+    /// the provider's own event, no request chooses it, and it is deliberately off every wire
+    /// contract. The movement's published instants stay <see cref="CreatedAt"/> and
+    /// <see cref="EffectiveAt"/>, so Stock History and the adjust response are byte-for-byte what
+    /// they were.</para>
+    /// </summary>
+    [JsonIgnore]
+    public DateTime? MachineLedgerEffectiveAt { get; set; }
 }

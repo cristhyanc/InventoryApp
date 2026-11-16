@@ -37,7 +37,8 @@ public static class NayaxSaleCosting
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(costSale);
-        var cost = await costSale.Handle(sale.ToCostableSale(), force, cancellationToken);
+        var cost = await costSale.Handle(
+            sale.ToCostableSale(), force, cancellationToken: cancellationToken);
         if (cost is not null)
             sale.ApplySaleCost(cost);
     }
@@ -65,6 +66,7 @@ internal sealed class NayaxCostableSale : CostableSale
         UnitCostAtSale = entity.UnitCostAtSale;
         CostOfGoodsSold = entity.CostOfGoodsSold;
         CostingStatus = (SaleCostStatus)entity.CostingStatus;
+        CostSource = (SaleCostOrigin)entity.CostSource;
     }
 
     public NayaxSales Entity { get; }

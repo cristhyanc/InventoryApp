@@ -66,7 +66,7 @@ public class EfSaleCostingStoreTests
         var options = await SeedTwoBusinessesAsync(connection);
 
         await using var db = TestAppDbContext.For(options, BusinessB);
-        var store = new EfSaleCostingStore(db);
+        var store = TestCostingUseCases.SaleCostingStore(db);
 
         Assert.Null(await store.GetTransitionCutoffAsync(ProductA, CancellationToken.None));
         var sale = Assert.Single(await store.LoadStockConsumingSalesAsync(
@@ -89,7 +89,7 @@ public class EfSaleCostingStoreTests
 
         await using (var db = TestAppDbContext.Denied(options))
         {
-            var store = new EfSaleCostingStore(db);
+            var store = TestCostingUseCases.SaleCostingStore(db);
             Assert.Empty(await store.LoadStockConsumingSalesAsync(
                 new StockConsumingSaleSelection(), forUpdate: true, CancellationToken.None));
             Assert.Equal(0, (await TestCostingUseCases.BackfillNayaxHistoricalSaleCosts(db).Handle(dryRun: false)).SalesReviewed);
@@ -141,6 +141,13 @@ public class EfSaleCostingStoreTests
         Assert.Equal(1.10m, saleA.UnitCostAtSale);
         Assert.Equal(SaleCostingStatus.Costed, saleA.CostingStatus);
         Assert.Equal(SaleCostSource.NayaxTransactionExport, saleA.CostSource);
+
+        // The apply recorded the product's cost rebuild with the cost it wrote (issue #1261), and the
+        // repeat - which wrote nothing - added no further work to it.
+        var pending = Assert.Single(await final.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+        Assert.Equal(
+            (BusinessA, ProductA, OpeningAt.AddDays(1), 1L),
+            (pending.BusinessId, pending.ProductId, pending.FromInstantUtc, pending.Revision));
     }
 
     [Fact]
@@ -155,6 +162,85 @@ public class EfSaleCostingStoreTests
         var result = await controller.Backfill(dryRun: false, force: false);
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    /// <summary>
+    /// Issue #1261: a backfill rewrites historical sale costs, which is exactly the history the
+    /// product's costing position is derived from, so every product it changed needs its cost
+    /// replayed. Before this the tool wrote the sale costs and enqueued nothing, so the product's
+    /// `CostingQuantity`/`InventoryValue` stayed as the old costs left them until its next sale. The
+    /// row is written from the earliest changed sale's instant, in the same transaction as the costs.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_backfill_enqueues_a_rebuild_for_each_product_it_changed()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await SeedTwoBusinessesAsync(connection);
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            var dryRun = await TestCostingUseCases.BackfillSaleCosts(db).Handle(dryRun: true, force: true);
+            Assert.Equal(1, dryRun.CostedCount);
+        }
+
+        // A dry run decides and reports; it stages no cost, so there is no work to record either.
+        await using (var afterDryRun = TestAppDbContext.Unrestricted(options))
+            Assert.Empty(await afterDryRun.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+            Assert.Equal(1, (await TestCostingUseCases.BackfillSaleCosts(db).Handle(dryRun: false, force: true)).CostedCount);
+
+        await using (var afterApply = TestAppDbContext.Unrestricted(options))
+        {
+            var pending = Assert.Single(await afterApply.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+            Assert.Equal(
+                (BusinessA, ProductA, OpeningAt.AddDays(1), 1L),
+                (pending.BusinessId, pending.ProductId, pending.FromInstantUtc, pending.Revision));
+        }
+
+        // Repeating the forced run recomputes the same ledger cost, so the precedence rule stages
+        // nothing and no further work is recorded: the row stays at the revision the first run wrote.
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+            await TestCostingUseCases.BackfillSaleCosts(db).Handle(dryRun: false, force: true);
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        var unchanged = Assert.Single(await verify.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+        Assert.Equal(1L, unchanged.Revision);
+    }
+
+    /// <summary>
+    /// Issue #1261: the cost update and the rebuild it makes necessary are one transaction. A failure
+    /// after the sale's cost was written leaves neither behind - a committed cost with no recorded
+    /// rebuild is a product whose costing position silently disagrees with its sale history, which is
+    /// the defect the row exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task A_failure_while_saving_a_cost_leaves_neither_the_cost_nor_the_rebuild()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await SeedTwoBusinessesAsync(connection);
+        await using (var refuse = TestAppDbContext.Unrestricted(options))
+        {
+            // The database refuses the sale's cost update, which is the one failure that can land
+            // between the two writes.
+            await refuse.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TRIGGER "RefuseSaleCostUpdate" AFTER UPDATE OF "UnitCostAtSale" ON "NayaxSales"
+                BEGIN SELECT RAISE(ABORT, 'refused'); END
+                """);
+        }
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(() =>
+                TestCostingUseCases.BackfillSaleCosts(db).Handle(dryRun: false, force: true));
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        var sale = await verify.NayaxSales.AsNoTracking().SingleAsync(s => s.BusinessId == BusinessA);
+        Assert.Null(sale.UnitCostAtSale);
+        Assert.Equal(SaleCostingStatus.Pending, sale.CostingStatus);
+        Assert.Empty(await verify.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
     }
 
     [Fact]

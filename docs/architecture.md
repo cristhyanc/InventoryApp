@@ -9235,7 +9235,36 @@ costing invariants holds the authoritative wording):
    `UncostedSale` issue (issue #1239).
 
 The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
-and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards. **A forced
+backfill asks for the complete precedence instead** (issue #1261): it passes
+`SaleCostPrecedenceScope.Complete`, so `CostSale` reads step 2 for it through
+`IRebuildProductCost.GetLatestPurchaseUnitCostBeforeAsync` - the same replay's answer for that one
+sale - because no rebuild runs inside the backfill's own transaction to apply step 2 for it, and
+re-costing a step-2 sale through step 3 is what let that tool downgrade a cost it recomputed.
+
+**Precedence is also what a forced backfill may do at all** (issue #1261).
+`Inventory.Application.Costing.SaleCostPrecedence` is the one rule: it ranks a stored cost's
+`CostSource` by the step that produced it (ledger 1, latest purchase 2, Nayax cost 3, uncosted - and a
+costed sale with no recorded provenance - 4) and answers whether a newly decided cost may be written
+over it. Only a better step may, or the same step with a different value (a corrected Nayax export
+cost, a corrected ledger cost); a stored cost of a better step is left exactly as it is, and a decision
+that costs nothing never clears one. `force` used to mean "overwrite", which is how a repair tool could
+replace a sale's internal AVCO cost with the cost Nayax sent with the transaction. See
+[Sale import and costing](#sale-import-and-costing) for the two tools.
+
+**And the same rule decides again at the moment the cost is written** (issue #1261). A backfill decides
+on sales it read before `EfSaleCostingStore.SaveChangesAsync` takes SQLite's write lock, so another
+writer - a cost rebuild, the other repair tool - can commit a cost on one of those sales in that gap,
+and the staged decision would be saved over a comparison it had already lost (with a cost rebuild
+enqueued for it). `SaleCostPrecedence.StillReplaces` is therefore asked inside the write-locked
+transaction, against the latest persisted row read by the database rather than from the tracked
+instance the cost was staged onto: with nothing committed in the gap the decision stands as its caller
+made it, and with something committed only a **strictly better** precedence step still writes - an
+equal-step decision is a correction of a value (a recomputed ledger cost, a corrected export cost), and
+this one was computed from a history that has moved since, so the committed cost stands and the next
+run recomputes the correction from the history that is actually stored. That is also what makes an
+identical cost committed in the gap a refusal rather than a rewrite, so no rebuild is recorded for a
+sale nothing changed on.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -9330,6 +9359,11 @@ in behaviour:
   untracked rows, stages nothing and never throws for data quality. No rounding is applied and a
   repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
   the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
+  `GetLatestPurchaseUnitCostBeforeAsync` (issue #1261) is that same replay reporting the other value it
+  already computes for that one sale - the unit cost of the latest costed purchase replayed before it,
+  precedence step 2, as `WeightedAverageCostReplayResult.TargetSaleLatestPurchaseUnitCost` - and
+  returns `null` on the same terms. It exists for the forced sale-cost backfill and is not a second
+  costing rule.
   It also returns `InventoryCostRebuildResult` and its `InventoryCostDataQualityIssue`s.
 - `RebuildCostingOnlyAsync` is the same replay and the same decide-before-staging rule with a
   narrower mandate, and exists for the [costing repair](#costing-repairs-issue-359) apply: it stages
@@ -9498,9 +9532,14 @@ and it never substitutes for a real purchase, correction or write-off.
   Because the preview stores nothing, the stale-preview model of
   `PreviewInventoryCostTransition`/`ApplyInventoryCostTransition` is carried by
   `Inventory.Domain.Costing.CostLedgerFingerprint` rather than a stored draft: a deterministic
-  SHA-256 over everything the replay consumes (product position, movements, completed sales, existing
-  repairs, baseline), with timestamps as ticks and decimals normalised, which the preview reports and
-  the apply recomputes and requires to match. It then enforces the placement rule, appends the
+  SHA-256 over everything the replay consumes (product position, movements, completed sales **with
+  each sale's own transaction-level Nayax cost**, existing repairs, baseline), with timestamps as
+  ticks and decimals normalised, which the preview reports and
+  the apply recomputes and requires to match. The sale's Nayax cost is part of it since issue #1261,
+  with the fingerprint version bumped to `v2` so no older preview can match a newer rendering: the
+  replay costs a sale from that number when the ledger has no known cost before it (issue #1176), so a
+  cost corrected between the preview and the apply changes the projection the operator approved and is
+  refused with the same stale-preview `400` as a new sale. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
   fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
@@ -13961,6 +14000,28 @@ count, which is the authority on its own instant, then source id) on top of a ba
    `AwaitingOpeningCount`. The refilled, returned and sold quantities are still reported, because
    they are facts; what cannot be derived from them is a physical level.
 
+**A Nayax-sourced refill is placed at the event's own time** (issue #1243, finding INV-06 of audit
+#1222). A Sync Restock event is applied by an operator days after the machine was physically
+refilled, and the apply used to be the only instant recorded, so a 10 November event for 20 units
+applied on 13 November was replayed *after* a 12 November count of 15: expected machine stock became
+35, and the next comparison reported 20 units of shrinkage that never happened. The apply now records
+the event's own `EventDateTimeGMT` on the movement as `StockAdjustment.MachineLedgerEffectiveAt`, and
+`EfMachineStockLedgerStore` - the only reader of that column - replays the refill there, falling back
+to `EffectiveAt` when it is `NULL`. **Only the machine ledger uses it**: the movement's `EffectiveAt`
+stays the apply instant, which is what the cost replay, Stock History and every storage-stock query
+read, so a late apply cannot take units out of storage at an earlier instant and drive physical stock
+negative there (see
+[the Sync Restock timestamp contract](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183)).
+The column is nullable with no backfill, so a manual refill - and every movement recorded before it
+existed - is replayed exactly where it always was; re-dating refills that were already applied is a
+separate repair.
+
+**The same-instant ordering is unchanged, and it is what makes the above safe.** `ReplayOrder` sorts
+by instant, then refill → return → sale → count, then source id, so a count is replayed last at its
+own instant and absorbs a refill that happened there: a Nayax refill whose event time equals a
+count's time leaves the expected level at the counted quantity. That rule was not relaxed for this
+change; it is pinned by its own test.
+
 A count supersedes rather than corrects: it sets the level from its own instant onward, resets the
 movement totals to "since the baseline", and reports the difference it absorbed as
 `unexplainedChangeAtLastCount` (positive means units were missing). That figure is **derived on
@@ -14332,11 +14393,17 @@ child 3 of #149), moved unchanged in behaviour from the removed
   reported name, which is what stops a rename or a duplicate name moving historical COGS. Its
   Application-owned
   `SaleCostStatus`/`SaleCostOrigin` mirror the persisted `SaleCostingStatus`/`SaleCostSource`
-  ordinal-for-ordinal (a parity test enforces this).
+  ordinal-for-ordinal (a parity test enforces this). Its `precedence` argument is how many of the
+  four steps to apply (issue #1261): the default `SaleCostPrecedenceScope.WithoutLatestPurchase` is
+  the sale-time path above, and `Complete` adds step 2 - the latest costed purchase replayed before
+  the sale, stored as `CostSource = Estimated` - for the forced backfill, which has no following
+  rebuild inside its transaction to apply it. Neither step reads the ledger for a sale at or before
+  the product's transition-baseline cutoff, where the baseline is the opening.
 - `CostPendingSales` costs every pending completed sale, optionally for one product it is
   persisted against, and saves once.
 - `BackfillSaleCosts` (`POST api/sale-costing/backfill`) re-costs completed sales through
-  `CostSale`. Without `force` it counts already costed or legacy-estimated sales as finalized and
+  `CostSale`, asking for the complete four-step precedence. Without `force` it counts already costed
+  or legacy-estimated sales as finalized and
   leaves them untouched. `BackfillNayaxHistoricalSaleCosts` (`POST
   api/sale-costing/nayax-cost-backfill/dry-run` and `/apply`) costs pending or error sales (any status
   with `force`) that have a non-negative persisted Nayax export cost, optionally within an
@@ -14344,10 +14411,44 @@ child 3 of #149), moved unchanged in behaviour from the removed
   already persisted and makes no Nayax API call, so a Nayax outage cannot fail or partially apply
   it. For both backfills a dry run loads untracked rows and stages and saves nothing, and repeating
   an applied run yields the same costs.
+- **Neither backfill may lower a sale's cost precedence** (issue #1261). Every decision passes
+  `SaleCostPrecedence.Replaces` before it is staged, so a forced run fills an uncosted sale, improves
+  a weaker-sourced one, and rewrites an equal-sourced one only when the value differs; a
+  ledger-costed (step 1) or latest-purchase-costed (step 2) sale is left exactly as it is. A sale
+  nothing is written for is reported by the state it is already in - `alreadyFinalizedCount` /
+  `salesAlreadyCosted` for a final cost that stood, pending or error for a sale the run left as it
+  found it - and a repeated forced run stages nothing at all, so it asks for no cost rebuild either.
+  `force` remains what the non-dry-run ledger backfill
+  requires (the controller still refuses `dryRun=false` without it); what changed is that it no
+  longer means "overwrite".
+  **The decision is re-asked when it is written** (`SaleCostPrecedence.StillReplaces`, see
+  [Historical inventory cost](#historical-inventory-cost)), because both tools decide on sales they
+  read before the store takes the write lock. A staged cost the lock refuses writes nothing, records
+  no rebuild and is counted by the state the row now holds instead of as a sale the run changed -
+  `salesAlreadyCosted`/`alreadyFinalizedCount` when the cost committed in the gap is final, pending or
+  error when it is not - and the next run recomputes it. The reported counts therefore stay what the
+  run actually did.
 - The narrow `ISaleCostingStore` port (product candidates, transition cutoff, completed-sale
   selection, stage and save) is implemented by
   `Inventory.Infrastructure.Persistence.EfSaleCostingStore`, which keeps the former EF queries behind
   `AppDbContext`'s business query filter and writes each decision back onto exactly the loaded row.
+  **A staged cost also records the rebuild it makes necessary** (issue #1261): the adapter collects
+  each staged sale's product and earliest changed instant and writes one
+  `PendingInventoryCostRebuilds` row per product through the shared
+  `PendingInventoryCostRebuildRecorder`, inside one `BEGIN IMMEDIATE` transaction and the same
+  `SaveChanges` as the costs - so the costs and their recorded rebuild commit together or not at all,
+  and the drain replays each touched product afterwards (see
+  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). Before this, a backfill
+  rewrote sale costs and enqueued nothing: the product's `CostingQuantity`/`InventoryValue` stayed as
+  the costs it replaced had left them until its next sale. A dry run stages no cost and so records no
+  work, and an unresolved sale belongs to no product and records none either. **The precedence
+  decision is re-asked inside that transaction** before anything is written: the adapter reads the
+  staged sales' costing columns again - projected, so the answer is the database's and not the tracked
+  instances the costs were staged onto - asks `SaleCostPrecedence.StillReplaces`, and takes a refused
+  cost back off its row (each costing property returns to the value the row was loaded with, so the
+  save writes nothing for that sale), records no rebuild for it and reports it in the
+  `SaleCostSaveOutcome` its caller reclassifies. A staged sale whose row the lock cannot find at all is
+  left to EF Core's own concurrency check, which refuses the whole save.
   The `NayaxSaleCosting` mapping lets `EfNayaxSalesImportStore` (the uploaded transaction
   export, issue #301) and
   `EfLatestNayaxSalesStore` cost the `NayaxSales` entity they are importing through `ICostSale`
@@ -17849,6 +17950,27 @@ that meaning.
    (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
    documented meanings and are not substituted for one another. Only Event 501 rows are relevant
    to this feature.
+
+   **The timestamp contract: which instant each side uses** (issue #1243). `EventDateTimeGMT` is the
+   instant the machine was physically refilled, and `EventDateTimeVMC` - the machine's own clock - is
+   source data that drives nothing. An apply therefore records **two** instants, deliberately, and
+   each one has exactly one set of readers:
+
+   | Instant | Stored as | Read by |
+   | --- | --- | --- |
+   | The apply instant | `StockAdjustment.EffectiveAt` | the inventory-cost replay, Stock History, and every storage-stock query |
+   | The event's `EventDateTimeGMT` | `StockAdjustment.MachineLedgerEffectiveAt` (nullable, no backfill) | `EfMachineStockLedgerStore` alone, for the machine-stock ledger |
+
+   Storage and costing keep the apply instant because the units left the storeroom when the operator
+   applied the event, and dating that movement earlier could make physical stock negative at an
+   instant where the storeroom had not yet received the purchase. The machine ledger needs the other
+   answer, because a machine count sets the expected level from its own instant onward and a refill
+   the count already absorbed must not be added on top of it (see
+   [Machine stock ledger and shrinkage reconciliation](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56)).
+   A manual refill records no second instant and is unchanged. The event row itself keeps both
+   provider instants verbatim, and `NayaxMachineStockEvent.EventDateTimeGmt` is normalised to a UTC
+   instant on import and marked UTC on every read, so the instant the ledger replays at is the
+   instant the alert reported.
 2. **Parse.** `Inventory.Domain.Nayax.NayaxStockAdjustmentEventParser` is a deterministic, EF/HTTP-
    free parser for the alert's `EventData` text. It anchors on the literal `Product MDB:` marker
    rather than the free-text employee/user-name prefix that precedes it, so it does not depend on
@@ -17957,12 +18079,13 @@ that meaning.
    `IRebuildProductCost.RebuildAsync` for that product - replaying a product's whole movement and
    sale history is what an apply actually costs, so ten ticked events for one product mean one
    replay of it, not ten. Every event is still its own `StockAdjustmentReason.MachineRefill`
-   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note and
-   its own `StockAdjustmentId` on the event row, so each one stays individually auditable, and the
-   response still reports one result per distinct requested event id in request order. Entities the
-   batch left tracked - including the history its rebuild loaded - are dropped once its transaction
-   has ended, so what each later product's `SaveChanges` has to examine does not grow with the
-   products already applied.
+   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note, its
+   own `EventDateTimeGMT` recorded as the machine ledger's instant for it (the timestamp contract in
+   step 1) and its own `StockAdjustmentId` on the event row, so each one stays individually
+   auditable, and the response still reports one result per distinct requested event id in request
+   order. Entities the batch left tracked - including the history its rebuild loaded - are dropped
+   once its transaction has ended, so what each later product's `SaveChanges` has to examine does not
+   grow with the products already applied.
 
    `NayaxMachineStockApplyPolicy` is the deterministic Domain rule that decides each event, and it
    is applied **inside** that product's write lock: the transaction is `BEGIN IMMEDIATE` on SQLite
@@ -19207,9 +19330,12 @@ forgotten — the next import found the transaction already stored, reported no 
 that product's costing position stayed stale until its next sale. A queue reader deleting a message on
 "already stored" would have lost it for good.
 
-- The row is written in the **same transaction as the sale**, and removed in the **same transaction as
+- The row is written in the **same transaction as the sale** — or, for a backfill, as the sale cost it
+  rewrote (issue #1261) — and removed in the **same transaction as
   the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
-  disagree.
+  disagree. A backfill writes a row only for a cost its write lock actually wrote: a staged cost the
+  precedence rule refuses inside that transaction changed nothing, and a product nobody's history
+  moved must not be queued for a replay.
 - **A drain acknowledges only the work it actually replayed, over the history it replayed.** The
   replay runs *outside* the write lock on purpose (step 8 above), so another writer — the other sales
   path, a second drain (both drain every pending row of the business), or any writer that changes the
@@ -19254,8 +19380,12 @@ that product's costing position stayed stale until its next sale. A queue reader
   not do this job: a purchase edit rewrites a movement's quantity, cost or instant *in place* and adds
   no new one. The column records no quantity, cost or value, needs no backfill (`0` is right for every
   existing product, because what is compared is whether the value changed and never what it is), and
-  is deliberately off the published `Product` payload. Forced backfill tools and the repair fingerprint
-  are a separate task (issue #1261).
+  is deliberately off the published `Product` payload. The forced backfill tools and the repair
+  fingerprint were issue #1261, which made the sale-cost backfills enqueue a pending rebuild for every
+  product they changed — see [Sale import and costing](#sale-import-and-costing) — so "only a sale
+  enqueues one" above now reads "only a write to a sale's own cost does": the two backfills are the
+  other such writer, they write through the same recorder under the same rules, and nothing else about
+  this table changed.
 - **Each claim's replay starts from the stored costing inputs, which is what makes that comparison
   mean anything on the second drain of one scope** (issue #1245). A drain runs more than once in one
   scope — the hourly reconciliation drains before the synchronization and again after the comparison,

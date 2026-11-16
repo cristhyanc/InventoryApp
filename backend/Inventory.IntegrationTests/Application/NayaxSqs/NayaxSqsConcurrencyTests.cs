@@ -907,6 +907,13 @@ public class NayaxSqsConcurrencyTests
             long? saleTransactionId = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<decimal?>(null);
+
+        public Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+            long productId,
+            DateTime saleTime,
+            long? saleTransactionId = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<decimal?>(null);
     }
 
     /// <summary>
@@ -920,7 +927,10 @@ public class NayaxSqsConcurrencyTests
         public int Calls { get; private set; }
 
         public Task<SaleCostAssignment?> Handle(
-            CostableSale sale, bool force = false, CancellationToken cancellationToken = default)
+            CostableSale sale,
+            bool force = false,
+            SaleCostPrecedenceScope precedence = SaleCostPrecedenceScope.WithoutLatestPurchase,
+            CancellationToken cancellationToken = default)
         {
             Calls++;
 
@@ -931,7 +941,7 @@ public class NayaxSqsConcurrencyTests
                         "SQLite Error 19: 'UNIQUE constraint failed: NayaxSales.BusinessId, "
                             + "NayaxSales.TransactionID'.",
                         19))
-                : inner.Handle(sale, force, cancellationToken);
+                : inner.Handle(sale, force, precedence, cancellationToken);
         }
     }
 }

@@ -53,7 +53,12 @@ public class AddNayaxMachineStockEventsMigrationTests
             Assert.Contains("Source", await MigrationSchemaProbe.ColumnNamesAsync(connection, "StockAdjustments"));
             Assert.Contains("NayaxMachineStockEvents", await MigrationSchemaProbe.TableNamesAsync(connection));
 
-            var preserved = await after.StockAdjustments.SingleAsync();
+            // Projected rather than materialised: this test stops at an older schema, and a column a
+            // later additive migration adds to StockAdjustments (issue #1243's
+            // MachineLedgerEffectiveAt) is in the model and not here.
+            var preserved = await after.StockAdjustments
+                .Select(candidate => new { candidate.QuantityChange, candidate.MachineId, candidate.Source })
+                .SingleAsync();
             Assert.Equal(-3, preserved.QuantityChange);
             Assert.Equal(42, preserved.MachineId);
             // Existing rows default to Manual (0): the migration never reinterprets prior history

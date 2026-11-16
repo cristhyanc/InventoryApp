@@ -170,6 +170,13 @@ public sealed record CostReplaySaleCost(
 /// reached; <see cref="Adjustments"/> lists every replayed stock movement, <see cref="Repairs"/>
 /// every replayed costing repair, <see cref="SaleCosts"/> every completed sale the replay costed
 /// and <see cref="UncostableSales"/> every completed sale it could not cost, all in replay order.
+///
+/// <para><see cref="TargetSaleLatestPurchaseUnitCost"/> is the unit cost of the latest costed
+/// purchase (a positive <c>Restock</c> with a valid unit cost) replayed before that same target sale
+/// - historical sale-cost precedence step 2 - and is <see langword="null"/> when no target sale was
+/// requested or reached, or no such purchase precedes it. It is reported rather than applied: the
+/// replay costs the sales it reaches itself, and this is what a caller asking about one sale needs in
+/// order to apply the same step (issue #1261).</para>
 /// </summary>
 public sealed record WeightedAverageCostReplayResult(
     int PhysicalQuantity,
@@ -177,6 +184,7 @@ public sealed record WeightedAverageCostReplayResult(
     decimal InventoryValue,
     decimal? AverageUnitCost,
     decimal? TargetSaleUnitCost,
+    decimal? TargetSaleLatestPurchaseUnitCost,
     IReadOnlyList<CostReplayAdjustmentOutcome> Adjustments,
     IReadOnlyList<CostReplayRepairOutcome> Repairs,
     IReadOnlyList<CostReplaySaleCost> SaleCosts,

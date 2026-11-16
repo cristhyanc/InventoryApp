@@ -254,12 +254,19 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 // Each event keeps its own movement, with its own EventLogID note: the batch is one
                 // transaction and one rebuild, never one merged movement. Each one is staged against
                 // the quantity the previous one left, exactly as separate saves left it.
+                //
+                // The movement's own EffectiveAt stays the apply instant, which is what the cost
+                // replay and Stock History read, so applying a late event cannot take units out of
+                // storage at an earlier instant. The machine ledger needs the other instant - when
+                // the machine was physically refilled - so the event's own EventDateTimeGMT travels
+                // with the movement for it alone (issue #1243).
                 var movement = await _recordMovement.RecordAsync(
                     new InventoryMovement(
                         productId, -refill.Quantity, DomainStock.StockAdjustmentReason.MachineRefill,
                         $"Nayax Sync Restock (EventLogID {refill.NayaxEventLogId})",
                         MachineId: machine.LocalMachineId,
-                        Source: DomainStock.StockAdjustmentSource.Nayax),
+                        Source: DomainStock.StockAdjustmentSource.Nayax,
+                        MachineLedgerEffectiveAt: entity.EventDateTimeGmt),
                     cancellationToken);
 
                 applied.Add((refill, entity, movement));
