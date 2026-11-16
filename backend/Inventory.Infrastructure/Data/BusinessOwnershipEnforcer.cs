@@ -578,6 +578,23 @@ internal static class BusinessOwnershipEnforcer
             return;
         }
 
+        foreach (var principals in GroupPrincipalsThisSaveDoesNotHold(checks, entries))
+        {
+            principals.Resolve(context);
+        }
+
+        JudgeRelationshipChecks(context, checks);
+    }
+
+    /// <summary>
+    /// Answers every check the tracked graph can answer, and groups the rest by principal type,
+    /// principal key and dependent business - one group is one set of statements, whatever number of
+    /// foreign keys landed in it.
+    /// </summary>
+    private static IEnumerable<UntrackedPrincipals> GroupPrincipalsThisSaveDoesNotHold(
+        IReadOnlyList<RelationshipCheck> checks,
+        IReadOnlyList<EntityEntry<IBusinessOwned>> entries)
+    {
         var tracked = new TrackedPrincipalIndex(entries);
         var untracked = new Dictionary<(Type PrincipalType, IKey PrincipalKey, int DependentBusinessId), UntrackedPrincipals>();
 
@@ -604,11 +621,17 @@ internal static class BusinessOwnershipEnforcer
             check.UntrackedPrincipals = principals;
         }
 
-        foreach (var principals in untracked.Values)
-        {
-            principals.Resolve(context);
-        }
+        return untracked.Values;
+    }
 
+    /// <summary>
+    /// The comparison itself, over the checks in change-tracker order - which is the order the
+    /// key-by-key check judged them in, so the first refusal is the same row with the same message.
+    /// </summary>
+    private static void JudgeRelationshipChecks(
+        AppDbContext context,
+        IReadOnlyList<RelationshipCheck> checks)
+    {
         foreach (var check in checks)
         {
             int? principalBusinessId;
@@ -677,22 +700,7 @@ internal static class BusinessOwnershipEnforcer
                     continue;
                 }
 
-                var keyValues = new object?[foreignKey.Properties.Count];
-                var set = true;
-
-                for (var i = 0; i < keyValues.Length; i++)
-                {
-                    keyValues[i] = entry.Property(foreignKey.Properties[i].Name).CurrentValue;
-
-                    if (keyValues[i] is null)
-                    {
-                        // An optional relationship that is not set cannot cross anything.
-                        set = false;
-                        break;
-                    }
-                }
-
-                if (set)
+                if (TryReadKeyValues(entry, foreignKey.Properties, out var keyValues))
                 {
                     checks.Add(new RelationshipCheck(
                         entry, principalType, foreignKey.PrincipalKey, keyValues, dependentBusinessId));
@@ -704,27 +712,29 @@ internal static class BusinessOwnershipEnforcer
     }
 
     /// <summary>
-    /// The exact owner of one principal, read key by key. Unchanged from the per-key lookup this
-    /// rule used before issue #1282, and now reached only when a group's own statement has already
-    /// shown that some row under one of its keys belongs to another business - so a refusal names
-    /// the same row, with the same message, as it always did.
+    /// The current values of one key of one entry, in the key's own order, or <c>false</c> when any
+    /// of them is not set: an optional relationship that is not set cannot cross anything, and a key
+    /// value that is not set matches no foreign key, because every value this rule compares is
+    /// non-null.
     /// </summary>
-    private static int? ReadPrincipalBusinessId(
-        AppDbContext context,
-        Type principalType,
-        string[] keyNames,
-        object?[] keyValues)
+    private static bool TryReadKeyValues(
+        EntityEntry entry,
+        IReadOnlyList<IProperty> keyProperties,
+        out object?[] keyValues)
     {
-        var parameter = Expression.Parameter(typeof(IBusinessOwned), "e");
-        var typed = Expression.Convert(parameter, principalType);
-        var predicate = Expression.Lambda<Func<IBusinessOwned, bool>>(
-            KeyValuesPredicate(typed, keyNames, keyValues), parameter);
+        keyValues = new object?[keyProperties.Count];
 
-        return PrincipalQuery(context, principalType)
-            .IgnoreQueryFilters()
-            .Where(predicate)
-            .Select(entity => (int?)entity.BusinessId)
-            .FirstOrDefault();
+        for (var i = 0; i < keyValues.Length; i++)
+        {
+            keyValues[i] = entry.Property(keyProperties[i].Name).CurrentValue;
+
+            if (keyValues[i] is null)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -797,7 +807,6 @@ internal static class BusinessOwnershipEnforcer
                 return existing;
             }
 
-            var keyNames = KeyNamesOf(principalKey);
             var index = new Dictionary<object?[], int>(KeyValuesComparer.Instance);
 
             foreach (var candidate in _entries)
@@ -807,23 +816,7 @@ internal static class BusinessOwnershipEnforcer
                     continue;
                 }
 
-                var keyValues = new object?[keyNames.Length];
-                var set = true;
-
-                for (var i = 0; i < keyNames.Length; i++)
-                {
-                    keyValues[i] = candidate.Property(keyNames[i]).CurrentValue;
-
-                    if (keyValues[i] is null)
-                    {
-                        // A key value that is not set matches no foreign key: every value looked up
-                        // here is non-null.
-                        set = false;
-                        break;
-                    }
-                }
-
-                if (set)
+                if (TryReadKeyValues(candidate, principalKey.Properties, out var keyValues))
                 {
                     index.TryAdd(keyValues, candidate.Entity.BusinessId);
                 }
@@ -919,9 +912,29 @@ internal static class BusinessOwnershipEnforcer
                 return businessId;
             }
 
-            businessId = ReadPrincipalBusinessId(context, _principalType, _keyNames, keyValues);
+            businessId = ReadPrincipalBusinessId(context, keyValues);
             _owners.Add(keyValues, businessId);
             return businessId;
+        }
+
+        /// <summary>
+        /// The exact owner of one principal, read key by key. Unchanged from the per-key lookup this
+        /// rule used before issue #1282, and reached only when a group's own statement has already
+        /// shown that some row under one of its keys belongs to another business - so a refusal names
+        /// the same row, with the same message, as it always did.
+        /// </summary>
+        private int? ReadPrincipalBusinessId(AppDbContext context, object?[] keyValues)
+        {
+            var parameter = Expression.Parameter(typeof(IBusinessOwned), "e");
+            var typed = Expression.Convert(parameter, _principalType);
+            var predicate = Expression.Lambda<Func<IBusinessOwned, bool>>(
+                KeyValuesPredicate(typed, _keyNames, keyValues), parameter);
+
+            return PrincipalQuery(context, _principalType)
+                .IgnoreQueryFilters()
+                .Where(predicate)
+                .Select(entity => (int?)entity.BusinessId)
+                .FirstOrDefault();
         }
 
         private Expression<Func<IBusinessOwned, bool>> OfAnotherBusinessPredicate(object?[][] batch)
@@ -940,79 +953,79 @@ internal static class BusinessOwnershipEnforcer
             return Expression.Lambda<Func<IBusinessOwned, bool>>(
                 Expression.AndAlso(underOneOfTheKeys, ofAnotherBusiness), parameter);
         }
-    }
 
-    /// <summary>
-    /// <c>key IN (...)</c> for a single-column principal key. The ids are reached through a property
-    /// of a holder rather than written in as a constant list, which is the shape of an ordinary
-    /// closure: EF Core parameterises it, so one batch of any size is one statement and the compiled
-    /// query is reused across saves instead of recompiled for every set of ids.
-    /// </summary>
-    private static Expression OneOfPredicate(Expression typed, string keyName, object?[][] keyValues)
-    {
-        var property = Expression.Property(typed, keyName);
-        var listType = typeof(List<>).MakeGenericType(property.Type);
-        var values = (System.Collections.IList)Activator.CreateInstance(listType, keyValues.Length)!;
-
-        foreach (var keyValue in keyValues)
+        /// <summary>
+        /// <c>key IN (...)</c> for a single-column principal key. The ids are reached through a
+        /// property of a holder rather than written in as a constant list, which is the shape of an
+        /// ordinary closure: EF Core parameterises it, so one batch of any size is one statement and
+        /// the compiled query is reused across saves instead of recompiled for every set of ids.
+        /// </summary>
+        private static Expression OneOfPredicate(Expression typed, string keyName, object?[][] keyValues)
         {
-            values.Add(keyValue[0]);
+            var property = Expression.Property(typed, keyName);
+            var listType = typeof(List<>).MakeGenericType(property.Type);
+            var values = (System.Collections.IList)Activator.CreateInstance(listType, keyValues.Length)!;
+
+            foreach (var keyValue in keyValues)
+            {
+                values.Add(keyValue[0]);
+            }
+
+            var holder = Activator.CreateInstance(
+                typeof(KeyValueBatch<>).MakeGenericType(property.Type), values)!;
+            var held = Expression.Property(Expression.Constant(holder), nameof(KeyValueBatch<object>.Values));
+
+            return Expression.Call(held, listType.GetMethod(nameof(List<object>.Contains), [property.Type])!, property);
         }
 
-        var holder = Activator.CreateInstance(
-            typeof(KeyValueBatch<>).MakeGenericType(property.Type), values)!;
-        var held = Expression.Property(Expression.Constant(holder), nameof(KeyValueBatch<object>.Values));
-
-        return Expression.Call(held, listType.GetMethod(nameof(List<object>.Contains), [property.Type])!, property);
-    }
-
-    /// <summary>Any one of several key tuples, for a composite principal key.</summary>
-    private static Expression AnyKeyValuesPredicate(Expression typed, string[] keyNames, object?[][] keyValues)
-    {
-        Expression? anyOfThem = null;
-
-        foreach (var keyValue in keyValues)
+        /// <summary>Any one of several key tuples, for a composite principal key.</summary>
+        private static Expression AnyKeyValuesPredicate(Expression typed, string[] keyNames, object?[][] keyValues)
         {
-            var one = KeyValuesPredicate(typed, keyNames, keyValue);
-            anyOfThem = anyOfThem is null ? one : Expression.OrElse(anyOfThem, one);
+            Expression? anyOfThem = null;
+
+            foreach (var keyValue in keyValues)
+            {
+                var one = KeyValuesPredicate(typed, keyNames, keyValue);
+                anyOfThem = anyOfThem is null ? one : Expression.OrElse(anyOfThem, one);
+            }
+
+            return anyOfThem!;
         }
 
-        return anyOfThem!;
-    }
-
-    /// <summary>One key tuple, compared column by column.</summary>
-    private static Expression KeyValuesPredicate(Expression typed, string[] keyNames, object?[] keyValues)
-    {
-        Expression? predicate = null;
-
-        for (var i = 0; i < keyNames.Length; i++)
+        /// <summary>One key tuple, compared column by column.</summary>
+        private static Expression KeyValuesPredicate(Expression typed, string[] keyNames, object?[] keyValues)
         {
-            var property = Expression.Property(typed, keyNames[i]);
-            var value = Expression.Constant(keyValues[i], property.Type);
-            var comparison = Expression.Equal(property, value);
+            Expression? predicate = null;
 
-            predicate = predicate is null ? comparison : Expression.AndAlso(predicate, comparison);
+            for (var i = 0; i < keyNames.Length; i++)
+            {
+                var property = Expression.Property(typed, keyNames[i]);
+                var value = Expression.Constant(keyValues[i], property.Type);
+                var comparison = Expression.Equal(property, value);
+
+                predicate = predicate is null ? comparison : Expression.AndAlso(predicate, comparison);
+            }
+
+            return predicate!;
         }
 
-        return predicate!;
+        private static string[] KeyNamesOf(IKey key) =>
+            key.Properties.Select(property => property.Name).ToArray();
+
+        private static readonly MethodInfo SetMethod =
+            typeof(DbContext).GetMethod(nameof(DbContext.Set), Type.EmptyTypes)!;
+
+        /// <summary>
+        /// <c>DbContext.Set&lt;T&gt;()</c> per principal type, resolved reflectively once for the
+        /// life of the process rather than on every lookup.
+        /// </summary>
+        private static readonly ConcurrentDictionary<Type, MethodInfo> TypedSetMethods = new();
+
+        private static IQueryable<IBusinessOwned> PrincipalQuery(AppDbContext context, Type principalType) =>
+            (IQueryable<IBusinessOwned>)TypedSetMethods
+                .GetOrAdd(principalType, static type => SetMethod.MakeGenericMethod(type))
+                .Invoke(context, null)!;
     }
-
-    private static string[] KeyNamesOf(IKey key) =>
-        key.Properties.Select(property => property.Name).ToArray();
-
-    private static readonly MethodInfo SetMethod =
-        typeof(DbContext).GetMethod(nameof(DbContext.Set), Type.EmptyTypes)!;
-
-    /// <summary>
-    /// <c>DbContext.Set&lt;T&gt;()</c> per principal type, resolved reflectively once for the life of
-    /// the process rather than on every lookup.
-    /// </summary>
-    private static readonly ConcurrentDictionary<Type, MethodInfo> TypedSetMethods = new();
-
-    private static IQueryable<IBusinessOwned> PrincipalQuery(AppDbContext context, Type principalType) =>
-        (IQueryable<IBusinessOwned>)TypedSetMethods
-            .GetOrAdd(principalType, static type => SetMethod.MakeGenericMethod(type))
-            .Invoke(context, null)!;
 
     /// <summary>
     /// Key values compared the way the per-key scan compared them: element by element, with the
@@ -1061,7 +1074,7 @@ internal static class BusinessOwnershipEnforcer
 
     /// <summary>
     /// One batch of ids, held behind a property so that EF Core treats them as a parameter rather
-    /// than as constants baked into the SQL. See <see cref="OneOfPredicate"/>.
+    /// than as constants baked into the SQL. See <see cref="UntrackedPrincipals.OneOfPredicate"/>.
     /// </summary>
     private sealed class KeyValueBatch<T>
     {
