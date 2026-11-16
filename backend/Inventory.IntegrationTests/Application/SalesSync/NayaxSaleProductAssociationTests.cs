@@ -386,5 +386,9 @@ public class NayaxSaleProductAssociationTests : IDisposable
         public Task<decimal?> GetAverageUnitCostAtAsync(
             long productId, DateTime at, long? excludingTransactionId = null, CancellationToken cancellationToken = default) =>
             inner.GetAverageUnitCostAtAsync(productId, at, excludingTransactionId, cancellationToken);
+
+        public Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+            long productId, DateTime at, long? excludingTransactionId = null, CancellationToken cancellationToken = default) =>
+            inner.GetLatestPurchaseUnitCostBeforeAsync(productId, at, excludingTransactionId, cancellationToken);
     }
 }

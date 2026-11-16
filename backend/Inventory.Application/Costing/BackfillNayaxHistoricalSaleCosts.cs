@@ -10,6 +10,13 @@ namespace Inventory.Application.Costing;
 /// <c>force</c> - and has a non-negative Nayax cost; a candidate is costed at that cost with the
 /// <see cref="SaleCostOrigin.NayaxTransactionExport"/> provenance. A negative Nayax cost is never
 /// applied. A dry run loads untracked rows and stages and saves nothing.
+///
+/// <para><strong>The Nayax cost is precedence step 3, so a forced run fills only a sale no better
+/// step has costed</strong> (issue #1261): every candidate passes
+/// <see cref="SaleCostPrecedence.Replaces"/>, which leaves a ledger-costed (step 1) or
+/// latest-purchase-costed (step 2) sale exactly as it is and rewrites another Nayax-costed sale only
+/// when the export cost itself changed. Before that, <c>force</c> meant "overwrite", and this tool
+/// could replace a sale's internal AVCO cost with the cost Nayax sent with the transaction.</para>
 /// </summary>
 public sealed class BackfillNayaxHistoricalSaleCosts
 {
@@ -37,7 +44,8 @@ public sealed class BackfillNayaxHistoricalSaleCosts
             s.CostingStatus is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated);
         var candidates = sales.Where(s =>
             (force || s.CostingStatus is SaleCostStatus.Pending or SaleCostStatus.Error) &&
-            s.NayaxProductCostPrice is >= 0).ToHashSet();
+            s.NayaxProductCostPrice is >= 0 &&
+            SaleCostPrecedence.Replaces(s, NayaxCost(s))).ToHashSet();
 
         var stillPending = sales.Count(s =>
             !candidates.Contains(s) &&
@@ -48,8 +56,7 @@ public sealed class BackfillNayaxHistoricalSaleCosts
         if (!dryRun)
         {
             foreach (var sale in sales.Where(candidates.Contains))
-                _store.StageCost(sale, new SaleCostAssignment(
-                    sale.NayaxProductCostPrice, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport));
+                _store.StageCost(sale, NayaxCost(sale));
             await _store.SaveChangesAsync(cancellationToken);
         }
 
@@ -57,4 +64,8 @@ public sealed class BackfillNayaxHistoricalSaleCosts
             sales.Count, withNayaxCost, candidates.Count, alreadyCosted,
             stillPending, invalid, errorRows, dryRun);
     }
+
+    /// <summary>The cost this tool would write onto <paramref name="sale"/>, and its provenance.</summary>
+    private static SaleCostAssignment NayaxCost(CostableSale sale) =>
+        new(sale.NayaxProductCostPrice, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport);
 }

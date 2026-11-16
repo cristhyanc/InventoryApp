@@ -97,12 +97,33 @@ public sealed class RebuildProductCost : IRebuildProductCost
         long? saleTransactionId = null,
         CancellationToken cancellationToken = default)
     {
-        var ledger = await _store.LoadAsOfAsync(productId, saleTime, cancellationToken);
-        if (ledger is null)
-            return null;
+        var replay = await ReplayAsOfAsync(productId, saleTime, saleTransactionId, cancellationToken);
+        return replay is null || replay.HasFatalIssue
+            ? null
+            : replay.TargetSaleUnitCost ?? replay.AverageUnitCost;
+    }
 
-        var replay = WeightedAverageCostReplay.Replay(
-            ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Repairs, ledger.Baseline, saleTransactionId, saleTime);
-        return replay.HasFatalIssue ? null : replay.TargetSaleUnitCost ?? replay.AverageUnitCost;
+    public async Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+        long productId,
+        DateTime saleTime,
+        long? saleTransactionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var replay = await ReplayAsOfAsync(productId, saleTime, saleTransactionId, cancellationToken);
+        return replay is null || replay.HasFatalIssue ? null : replay.TargetSaleLatestPurchaseUnitCost;
+    }
+
+    private async Task<WeightedAverageCostReplayResult?> ReplayAsOfAsync(
+        long productId,
+        DateTime saleTime,
+        long? saleTransactionId,
+        CancellationToken cancellationToken)
+    {
+        var ledger = await _store.LoadAsOfAsync(productId, saleTime, cancellationToken);
+        return ledger is null
+            ? null
+            : WeightedAverageCostReplay.Replay(
+                ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Repairs, ledger.Baseline,
+                saleTransactionId, saleTime);
     }
 }

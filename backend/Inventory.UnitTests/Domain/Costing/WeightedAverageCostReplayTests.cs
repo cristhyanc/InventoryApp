@@ -501,6 +501,47 @@ public class WeightedAverageCostReplayTests
         Assert.Equal(3, result.CostingQuantity);
     }
 
+    /// <summary>
+    /// Issue #1261: the replay also reports precedence step 2 for the target sale - the unit cost of
+    /// the latest costed purchase replayed before it - from the same stopping point, so a caller
+    /// costing one sale reads steps 1 and 2 from one replay instead of deriving step 2 itself. A
+    /// purchase after the sale is not it, a purchase with no valid cost is not it, and a target sale
+    /// nothing reached reports nothing.
+    /// </summary>
+    [Fact]
+    public void Target_sale_reports_the_latest_costed_purchase_before_it()
+    {
+        var result = Replay(
+            [
+                Adjustment(1, 0, StockAdjustmentReason.Restock, 2, 2m),
+                Adjustment(2, 2, StockAdjustmentReason.Restock, 2, 6m),
+                Adjustment(3, 5, StockAdjustmentReason.Restock, 2, 9m),
+            ],
+            [Sale(100, 3)],
+            targetSaleTransactionId: 100,
+            targetSaleTime: T0.AddMinutes(3));
+
+        Assert.Equal(6m, result.TargetSaleLatestPurchaseUnitCost);
+
+        // No purchase before the sale at all, so step 2 has nothing to offer and the caller falls
+        // through to the sale's own Nayax cost.
+        var withoutPurchase = Replay(
+            [Adjustment(1, 5, StockAdjustmentReason.Restock, 2, 9m)],
+            [Sale(100, 3)],
+            targetSaleTransactionId: 100,
+            targetSaleTime: T0.AddMinutes(3));
+
+        Assert.Null(withoutPurchase.TargetSaleLatestPurchaseUnitCost);
+
+        // A replay that never reaches a target sale reports no step-2 cost either, whatever it
+        // replayed on the way.
+        var noTarget = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Restock, 2, 2m)],
+            [Sale(100, 1)]);
+
+        Assert.Null(noTarget.TargetSaleLatestPurchaseUnitCost);
+    }
+
     [Fact]
     public void Target_time_without_transaction_stops_at_the_first_sale_at_that_time_and_ignores_later_events()
     {

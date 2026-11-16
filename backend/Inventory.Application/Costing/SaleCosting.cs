@@ -65,6 +65,15 @@ public class CostableSale
     public decimal? UnitCostAtSale { get; init; }
     public decimal? CostOfGoodsSold { get; init; }
     public SaleCostStatus CostingStatus { get; init; }
+
+    /// <summary>
+    /// The provenance of the cost currently stored on the sale, which is what
+    /// <see cref="SaleCostPrecedence"/> compares a newly decided cost against (issue #1261):
+    /// a forced backfill may not replace a better-sourced cost with a worse-sourced one.
+    /// <see cref="SaleCostOrigin.Unknown"/> on a costed sale is a legacy cost with no recorded
+    /// provenance.
+    /// </summary>
+    public SaleCostOrigin CostSource { get; init; }
 }
 
 /// <summary>
@@ -103,10 +112,17 @@ public interface ISaleCostingStore
     Task<IReadOnlyList<CostableSale>> LoadStockConsumingSalesAsync(
         StockConsumingSaleSelection selection, bool forUpdate, CancellationToken cancellationToken);
 
-    /// <summary>Stages <paramref name="cost"/> onto a sale loaded for update.</summary>
+    /// <summary>
+    /// Stages <paramref name="cost"/> onto a sale loaded for update. A staged cost also records the
+    /// inventory-cost rebuild it makes necessary for the sale's product (issue #1261): rewriting a
+    /// sale's historical cost changes the history the product's costing position is derived from.
+    /// </summary>
     void StageCost(CostableSale sale, SaleCostAssignment cost);
 
-    /// <summary>Persists every staged cost.</summary>
+    /// <summary>
+    /// Persists every staged cost, and the pending inventory-cost rebuild each of them made
+    /// necessary, in one transaction - so a failure leaves neither (issue #1261).
+    /// </summary>
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 

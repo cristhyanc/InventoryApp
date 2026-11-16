@@ -60,6 +60,7 @@ public static class WeightedAverageCostReplay
         var costingQuantity = baseline?.OpeningCostingQuantity ?? 0;
         decimal inventoryValue = baseline?.InventoryValue ?? 0;
         decimal? targetSaleUnitCost = null;
+        decimal? targetSaleLastPurchaseUnitCost = null;
         var hasCostedAcquisition = baseline is not null;
         decimal? lastPurchaseUnitCost = null;
 
@@ -78,6 +79,10 @@ public static class WeightedAverageCostReplay
                  (!targetSaleTransactionId.HasValue && entry.Timestamp == targetSaleTime)))
             {
                 targetSaleUnitCost = AverageUnitCost(costingQuantity, inventoryValue);
+
+                // Precedence step 2 for that one sale, reported from the same stopping point as step
+                // 1 so a caller costing a single sale reads both from one replay (issue #1261).
+                targetSaleLastPurchaseUnitCost = lastPurchaseUnitCost;
                 break;
             }
 
@@ -174,7 +179,8 @@ public static class WeightedAverageCostReplay
         }
 
         return new(physicalQuantity, costingQuantity, inventoryValue, AverageUnitCost(costingQuantity, inventoryValue),
-            targetSaleUnitCost, adjustmentOutcomes, repairOutcomes, saleCosts, uncostableSales, issues);
+            targetSaleUnitCost, targetSaleLastPurchaseUnitCost,
+            adjustmentOutcomes, repairOutcomes, saleCosts, uncostableSales, issues);
     }
 
     /// <summary>
