@@ -34,6 +34,10 @@ public enum SaleCostPrecedenceScope
 /// that landed on step 3. A forced backfill may now only improve a sale's cost - or correct a cost of
 /// the same provenance, which is what a corrected Nayax export cost is.</para>
 ///
+/// <para><strong>The same question is asked again at the moment the cost is written</strong>
+/// (<see cref="StillReplaces"/>), because a backfill decides on sales it read before its store took
+/// the write lock, and another writer can commit a cost on one of them in that gap.</para>
+///
 /// <para>It decides nothing about <em>which</em> cost a step produces: <see cref="ICostSale"/> and
 /// <see cref="Inventory.Domain.Costing.WeightedAverageCostReplay"/> stay the only places a cost is
 /// computed. This compares the provenance of what is stored with the provenance of what was
@@ -65,20 +69,28 @@ public static class SaleCostPrecedence
     /// sale uncosted - that records a status and a provenance rather than losing a cost - unless the
     /// decision is already exactly what the row holds, in which case there is nothing to write.
     /// </summary>
-    public static bool Replaces(CostableSale stored, SaleCostAssignment decided)
+    public static bool Replaces(CostableSale stored, SaleCostAssignment decided) =>
+        Replaces(StoredSaleCost.Of(stored), decided);
+
+    /// <summary>
+    /// The same question asked of the four costing columns alone, which is how it is asked of the
+    /// <strong>latest persisted</strong> row inside the write-locked transaction that saves a decision
+    /// (issue #1261).
+    /// </summary>
+    public static bool Replaces(StoredSaleCost stored, SaleCostAssignment decided)
     {
         ArgumentNullException.ThrowIfNull(stored);
         ArgumentNullException.ThrowIfNull(decided);
 
-        if (stored.CostingStatus is not (SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated) ||
-            stored.UnitCostAtSale is null)
+        if (stored.Status is not (SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated) ||
+            stored.UnitCost is null)
         {
             // Nothing final is stored, so any decision may be written - unless it is exactly what is
             // on the row already, which would record a change that did not happen and ask for a cost
             // rebuild nothing needs.
-            return stored.CostingStatus != decided.Status ||
-                stored.CostSource != decided.Source ||
-                stored.UnitCostAtSale != decided.UnitCost ||
+            return stored.Status != decided.Status ||
+                stored.Source != decided.Source ||
+                stored.UnitCost != decided.UnitCost ||
                 stored.CostOfGoodsSold != decided.UnitCost;
         }
 
@@ -87,11 +99,42 @@ public static class SaleCostPrecedence
         if (decided.UnitCost is null)
             return false;
 
-        var storedStep = Step(stored.CostSource);
+        var storedStep = Step(stored.Source);
         var decidedStep = Step(decided.Source);
 
         return decidedStep == storedStep
-            ? stored.UnitCostAtSale != decided.UnitCost
+            ? stored.UnitCost != decided.UnitCost
             : decidedStep < storedStep;
+    }
+
+    /// <summary>
+    /// Whether a cost decided from the sale as it read it (<paramref name="asRead"/>) may still be
+    /// written when the write lock finds <paramref name="asStored"/> on the row (issue #1261).
+    ///
+    /// <para><strong>Why the decision is asked twice.</strong> A backfill reads its sales, asks
+    /// <see cref="Replaces(CostableSale, SaleCostAssignment)"/> and stages what it decided, and only
+    /// then does its store take the write lock. Another writer - a cost rebuild, the other repair tool
+    /// - can commit a cost on the very same sale in that gap, so the comparison the decision passed
+    /// was against a row that no longer exists in that form. This is the same rule asked again, of the
+    /// row rather than of the snapshot.</para>
+    ///
+    /// <para>When nothing was committed in the gap the decision stands exactly as its caller made it.
+    /// When something was, the decision must be a <strong>strictly better</strong> step to survive:
+    /// an equal-step decision is a correction of a value (a recomputed ledger cost, a corrected export
+    /// cost), and this one was computed from a history that has moved since, so the committed cost
+    /// stands and the correction is left to the next run - which recomputes it from the history that
+    /// is actually stored. That is also what makes an identical committed cost a refusal rather than a
+    /// rewrite, so no rebuild is recorded for a sale nothing changed on.</para>
+    /// </summary>
+    public static bool StillReplaces(
+        StoredSaleCost asRead, StoredSaleCost asStored, SaleCostAssignment decided)
+    {
+        ArgumentNullException.ThrowIfNull(asRead);
+        ArgumentNullException.ThrowIfNull(decided);
+
+        if (!Replaces(asStored, decided))
+            return false;
+
+        return asStored == asRead || Step(decided.Source) < Step(asStored.Source);
     }
 }

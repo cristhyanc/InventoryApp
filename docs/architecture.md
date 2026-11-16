@@ -9209,6 +9209,20 @@ that costs nothing never clears one. `force` used to mean "overwrite", which is 
 replace a sale's internal AVCO cost with the cost Nayax sent with the transaction. See
 [Sale import and costing](#sale-import-and-costing) for the two tools.
 
+**And the same rule decides again at the moment the cost is written** (issue #1261). A backfill decides
+on sales it read before `EfSaleCostingStore.SaveChangesAsync` takes SQLite's write lock, so another
+writer - a cost rebuild, the other repair tool - can commit a cost on one of those sales in that gap,
+and the staged decision would be saved over a comparison it had already lost (with a cost rebuild
+enqueued for it). `SaleCostPrecedence.StillReplaces` is therefore asked inside the write-locked
+transaction, against the latest persisted row read by the database rather than from the tracked
+instance the cost was staged onto: with nothing committed in the gap the decision stands as its caller
+made it, and with something committed only a **strictly better** precedence step still writes - an
+equal-step decision is a correction of a value (a recomputed ledger cost, a corrected export cost), and
+this one was computed from a history that has moved since, so the committed cost stands and the next
+run recomputes the correction from the history that is actually stored. That is also what makes an
+identical cost committed in the gap a refusal rather than a rewrite, so no rebuild is recorded for a
+sale nothing changed on.
+
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
 **What still has to be replayed is a row, not a value in memory (issue #1103).** A sale is saved and
@@ -14325,6 +14339,13 @@ child 3 of #149), moved unchanged in behaviour from the removed
   `force` remains what the non-dry-run ledger backfill
   requires (the controller still refuses `dryRun=false` without it); what changed is that it no
   longer means "overwrite".
+  **The decision is re-asked when it is written** (`SaleCostPrecedence.StillReplaces`, see
+  [Historical inventory cost](#historical-inventory-cost)), because both tools decide on sales they
+  read before the store takes the write lock. A staged cost the lock refuses writes nothing, records
+  no rebuild and is counted by the state the row now holds instead of as a sale the run changed -
+  `salesAlreadyCosted`/`alreadyFinalizedCount` when the cost committed in the gap is final, pending or
+  error when it is not - and the next run recomputes it. The reported counts therefore stay what the
+  run actually did.
 - The narrow `ISaleCostingStore` port (product candidates, transition cutoff, completed-sale
   selection, stage and save) is implemented by
   `Inventory.Infrastructure.Persistence.EfSaleCostingStore`, which keeps the former EF queries behind
@@ -14338,7 +14359,14 @@ child 3 of #149), moved unchanged in behaviour from the removed
   [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). Before this, a backfill
   rewrote sale costs and enqueued nothing: the product's `CostingQuantity`/`InventoryValue` stayed as
   the costs it replaced had left them until its next sale. A dry run stages no cost and so records no
-  work, and an unresolved sale belongs to no product and records none either.
+  work, and an unresolved sale belongs to no product and records none either. **The precedence
+  decision is re-asked inside that transaction** before anything is written: the adapter reads the
+  staged sales' costing columns again - projected, so the answer is the database's and not the tracked
+  instances the costs were staged onto - asks `SaleCostPrecedence.StillReplaces`, and takes a refused
+  cost back off its row (each costing property returns to the value the row was loaded with, so the
+  save writes nothing for that sale), records no rebuild for it and reports it in the
+  `SaleCostSaveOutcome` its caller reclassifies. A staged sale whose row the lock cannot find at all is
+  left to EF Core's own concurrency check, which refuses the whole save.
   The `NayaxSaleCosting` mapping lets `EfNayaxSalesImportStore` (the uploaded transaction
   export, issue #301) and
   `EfLatestNayaxSalesStore` cost the `NayaxSales` entity they are importing through `ICostSale`
@@ -19196,7 +19224,9 @@ that product's costing position stayed stale until its next sale. A queue reader
 - The row is written in the **same transaction as the sale** — or, for a backfill, as the sale cost it
   rewrote (issue #1261) — and removed in the **same transaction as
   the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
-  disagree.
+  disagree. A backfill writes a row only for a cost its write lock actually wrote: a staged cost the
+  precedence rule refuses inside that transaction changed nothing, and a product nobody's history
+  moved must not be queued for a replay.
 - **A drain acknowledges only the work it actually replayed, over the history it replayed.** The
   replay runs *outside* the write lock on purpose (step 8 above), so another writer — the other sales
   path, a second drain (both drain every pending row of the business), or any writer that changes the

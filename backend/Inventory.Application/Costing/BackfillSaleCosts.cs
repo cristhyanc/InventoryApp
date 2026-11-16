@@ -14,11 +14,17 @@ namespace Inventory.Application.Costing;
 /// cannot cost takes the latest costed purchase before it (step 2) rather than falling through to
 /// its own Nayax cost (step 3) - the step the sale-time path leaves to the rebuild that follows it,
 /// which a backfill does not have. And every decision passes
-/// <see cref="SaleCostPrecedence.Replaces"/> before it is staged, so a better-sourced stored cost is
+/// <see cref="SaleCostPrecedence.Replaces(CostableSale, SaleCostAssignment)"/> before it is staged,
+/// so a better-sourced stored cost is
 /// never replaced by a worse-sourced one and an equal-sourced one is rewritten only when the value
 /// differs. A sale nothing is written for is reported by the state it is already in - finalized when
 /// a final cost stood, pending or in error when the run left it exactly as it found it - and a
 /// repeated forced run therefore stages nothing and asks for no cost rebuild.</para>
+///
+/// <para>The decisions are made on sales read before the store takes its write lock, so each staged
+/// cost is asked again inside that lock (<see cref="SaleCostPrecedence.StillReplaces"/>): a cost
+/// another writer committed in that gap is not written over, records no rebuild, and is counted by
+/// the state the sale is now in rather than as one this run wrote.</para>
 /// </summary>
 public sealed class BackfillSaleCosts
 {
@@ -62,7 +68,7 @@ public sealed class BackfillSaleCosts
         }
 
         if (!dryRun)
-            await _store.SaveChangesAsync(cancellationToken);
+            counts.Reclassify((await _store.SaveChangesAsync(cancellationToken)).Refused);
 
         return counts.ToResult(dryRun);
     }
@@ -87,14 +93,19 @@ public sealed class BackfillSaleCosts
         public void RecordFinalized() => _finalized++;
 
         /// <summary>Records a sale by the status the run decided for it.</summary>
-        public void RecordDecided(SaleCostStatus status)
+        public void RecordDecided(SaleCostStatus status) => Count(status, 1);
+
+        /// <summary>
+        /// Takes back each cost the write lock refused and records that sale by the state the latest
+        /// persisted row holds instead (issue #1261): the run wrote nothing for it and recorded no
+        /// rebuild for it, so it did not cost it.
+        /// </summary>
+        public void Reclassify(IEnumerable<RefusedSaleCost> refused)
         {
-            switch (status)
+            foreach (var cost in refused)
             {
-                case SaleCostStatus.Costed: _costed++; break;
-                case SaleCostStatus.LegacyEstimated: _estimated++; break;
-                case SaleCostStatus.Error: _errors++; break;
-                default: _pending++; break;
+                Count(cost.Decided.Status, -1);
+                RecordUnchanged(cost.Stored.Status);
             }
         }
 
@@ -109,6 +120,18 @@ public sealed class BackfillSaleCosts
                 RecordFinalized();
             else
                 RecordDecided(stored);
+        }
+
+        /// <summary>Moves the counter for <paramref name="status"/> by <paramref name="delta"/>.</summary>
+        private void Count(SaleCostStatus status, int delta)
+        {
+            switch (status)
+            {
+                case SaleCostStatus.Costed: _costed += delta; break;
+                case SaleCostStatus.LegacyEstimated: _estimated += delta; break;
+                case SaleCostStatus.Error: _errors += delta; break;
+                default: _pending += delta; break;
+            }
         }
 
         public SaleCostingBackfillResult ToResult(bool dryRun) =>

@@ -13,10 +13,16 @@ namespace Inventory.Application.Costing;
 ///
 /// <para><strong>The Nayax cost is precedence step 3, so a forced run fills only a sale no better
 /// step has costed</strong> (issue #1261): every candidate passes
-/// <see cref="SaleCostPrecedence.Replaces"/>, which leaves a ledger-costed (step 1) or
-/// latest-purchase-costed (step 2) sale exactly as it is and rewrites another Nayax-costed sale only
+/// <see cref="SaleCostPrecedence.Replaces(CostableSale, SaleCostAssignment)"/>, which leaves a
+/// ledger-costed (step 1) or latest-purchase-costed (step 2) sale exactly as it is and rewrites
+/// another Nayax-costed sale only
 /// when the export cost itself changed. Before that, <c>force</c> meant "overwrite", and this tool
 /// could replace a sale's internal AVCO cost with the cost Nayax sent with the transaction.</para>
+///
+/// <para>The decision is made on sales read before the store takes its write lock, so each staged
+/// cost is asked again inside that lock (<see cref="SaleCostPrecedence.StillReplaces"/>): a cost
+/// another writer committed in that gap is not written over, records no rebuild, and is reported by
+/// the state the sale is now in rather than as one this run costed.</para>
 /// </summary>
 public sealed class BackfillNayaxHistoricalSaleCosts
 {
@@ -40,8 +46,7 @@ public sealed class BackfillNayaxHistoricalSaleCosts
             .ToList();
         var withNayaxCost = sales.Count(s => s.NayaxProductCostPrice.HasValue);
         var invalid = sales.Count(s => s.NayaxProductCostPrice < 0);
-        var alreadyCosted = sales.Count(s =>
-            s.CostingStatus is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated);
+        var alreadyCosted = sales.Count(s => IsFinal(s.CostingStatus));
         var candidates = sales.Where(s =>
             (force || s.CostingStatus is SaleCostStatus.Pending or SaleCostStatus.Error) &&
             s.NayaxProductCostPrice is >= 0 &&
@@ -53,19 +58,49 @@ public sealed class BackfillNayaxHistoricalSaleCosts
         var errorRows = sales.Count(s =>
             !candidates.Contains(s) && s.CostingStatus == SaleCostStatus.Error);
 
-        if (!dryRun)
-        {
-            foreach (var sale in sales.Where(candidates.Contains))
-                _store.StageCost(sale, NayaxCost(sale));
-            await _store.SaveChangesAsync(cancellationToken);
-        }
-
-        return new NayaxCostBackfillResult(
+        var decided = new NayaxCostBackfillResult(
             sales.Count, withNayaxCost, candidates.Count, alreadyCosted,
             stillPending, invalid, errorRows, dryRun);
+        if (dryRun)
+            return decided;
+
+        foreach (var sale in sales.Where(candidates.Contains))
+            _store.StageCost(sale, NayaxCost(sale));
+
+        var saved = await _store.SaveChangesAsync(cancellationToken);
+        return WithRefusedCostsReclassified(decided, saved.Refused);
     }
 
     /// <summary>The cost this tool would write onto <paramref name="sale"/>, and its provenance.</summary>
     private static SaleCostAssignment NayaxCost(CostableSale sale) =>
         new(sale.NayaxProductCostPrice, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport);
+
+    /// <summary>Whether a stored costing status is a final cost.</summary>
+    private static bool IsFinal(SaleCostStatus status) =>
+        status is SaleCostStatus.Costed or SaleCostStatus.LegacyEstimated;
+
+    /// <summary>
+    /// <paramref name="decided"/> with every staged cost the write lock refused moved out of the
+    /// costed count and into the state the latest persisted row holds (issue #1261): another writer
+    /// had committed a cost on that sale, this run wrote none and recorded no rebuild for it, so it
+    /// must not report that it costed it either.
+    /// </summary>
+    private static NayaxCostBackfillResult WithRefusedCostsReclassified(
+        NayaxCostBackfillResult decided, IReadOnlyCollection<RefusedSaleCost> refused)
+    {
+        if (refused.Count == 0)
+            return decided;
+
+        return decided with
+        {
+            SalesWouldBeCosted = decided.SalesWouldBeCosted - refused.Count,
+
+            // Already costed unless this run had counted the sale there to begin with, and still
+            // pending - or in error - when the cost that was committed is not a final one.
+            SalesAlreadyCosted = decided.SalesAlreadyCosted
+                + refused.Count(r => IsFinal(r.Stored.Status) && !IsFinal(r.Sale.CostingStatus)),
+            SalesStillPending = decided.SalesStillPending + refused.Count(r => !IsFinal(r.Stored.Status)),
+            ErrorRows = decided.ErrorRows + refused.Count(r => r.Stored.Status == SaleCostStatus.Error),
+        };
+    }
 }

@@ -618,10 +618,10 @@ public class SaleCostingUseCaseTests
 
         public void StageCost(CostableSale sale, SaleCostAssignment cost) => Staged[sale.TransactionId] = cost;
 
-        public Task SaveChangesAsync(CancellationToken cancellationToken)
+        public Task<SaleCostSaveOutcome> SaveChangesAsync(CancellationToken cancellationToken)
         {
             SaveCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(SaleCostSaveOutcome.NothingRefused);
         }
     }
 }

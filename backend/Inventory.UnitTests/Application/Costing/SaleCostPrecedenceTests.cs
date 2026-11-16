@@ -13,6 +13,11 @@ namespace InventoryApi.Tests.Application.Costing;
 /// sale costed from the inventory ledger (step 1), and the ledger backfill re-costed a
 /// latest-purchase estimate (step 2) through a path that skips step 2 and so landed on step 3. A
 /// forced backfill may now only improve a sale's cost, or correct a cost of the same provenance.
+///
+/// The same rule is asked again at the moment the cost is written, against the row rather than
+/// against the snapshot the decision was made from, because the store takes its write lock after the
+/// caller has decided: see the write-time region below, and
+/// <c>SaleCostBackfillConcurrencyTests</c> for the two-writer regression over a real database.
 /// </summary>
 public class SaleCostPrecedenceTests
 {
@@ -154,8 +159,91 @@ public class SaleCostPrecedenceTests
             Cost(1.20m, SaleCostOrigin.NayaxTransactionExport)));
     }
 
+    #region The same decision, asked again at write time
+
+    /// <summary>
+    /// Nothing was committed between the read the decision was made from and the write lock, so the
+    /// decision is exactly the one its caller made.
+    /// </summary>
+    [Fact]
+    public void An_unchanged_row_keeps_the_decision_the_caller_made()
+    {
+        var asRead = Stored(1.20m, SaleCostOrigin.NayaxTransactionExport);
+
+        Assert.True(SaleCostPrecedence.StillReplaces(
+            asRead, asRead, Cost(1.30m, SaleCostOrigin.NayaxTransactionExport)));
+        Assert.True(SaleCostPrecedence.StillReplaces(
+            asRead, asRead, Cost(1.50m, SaleCostOrigin.InventoryLedger)));
+        Assert.False(SaleCostPrecedence.StillReplaces(
+            asRead, asRead, Cost(1.20m, SaleCostOrigin.NayaxTransactionExport)));
+    }
+
+    /// <summary>
+    /// The race the write-time question exists for: a better-sourced cost was committed on the sale
+    /// after the decision was made, and the decision has lost the comparison it passed.
+    /// </summary>
+    [Fact]
+    public void A_better_cost_committed_after_the_read_is_never_written_over()
+    {
+        Assert.False(SaleCostPrecedence.StillReplaces(
+            Uncosted(),
+            Stored(2m, SaleCostOrigin.InventoryLedger),
+            Cost(1.20m, SaleCostOrigin.NayaxTransactionExport)));
+        Assert.False(SaleCostPrecedence.StillReplaces(
+            Stored(0.90m, SaleCostOrigin.Unknown),
+            Stored(1.40m, SaleCostOrigin.Estimated),
+            Cost(1.20m, SaleCostOrigin.NayaxTransactionExport)));
+    }
+
+    /// <summary>
+    /// An equal-step decision is a correction of a value, and a correction computed from a history
+    /// that has moved since stands down - whether the cost committed in the gap differs from it or is
+    /// exactly it. The next run recomputes from the history that is actually stored, and meanwhile no
+    /// cost rebuild is recorded for a sale this run changed nothing on.
+    /// </summary>
+    [Fact]
+    public void An_equal_step_correction_stands_down_once_a_cost_was_committed()
+    {
+        // A different value: the committed correction is the one computed from the stored history.
+        Assert.False(SaleCostPrecedence.StillReplaces(
+            Uncosted(),
+            Stored(2.50m, SaleCostOrigin.InventoryLedger),
+            Cost(2m, SaleCostOrigin.InventoryLedger)));
+
+        // And exactly the same value, which is the case that must record no rebuild.
+        Assert.False(SaleCostPrecedence.StillReplaces(
+            Uncosted(),
+            Stored(2m, SaleCostOrigin.InventoryLedger),
+            Cost(2m, SaleCostOrigin.InventoryLedger)));
+    }
+
+    /// <summary>
+    /// But a strictly better step still improves the sale: the cost committed in the gap is a weaker
+    /// claim than the decision, whatever history produced either of them.
+    /// </summary>
+    [Fact]
+    public void A_better_step_still_replaces_a_cost_committed_after_the_read()
+    {
+        Assert.True(SaleCostPrecedence.StillReplaces(
+            Uncosted(),
+            Stored(1.10m, SaleCostOrigin.NayaxTransactionExport),
+            Cost(2m, SaleCostOrigin.InventoryLedger)));
+        Assert.True(SaleCostPrecedence.StillReplaces(
+            Uncosted(),
+            Stored(0.90m, SaleCostOrigin.Unknown),
+            Cost(1.10m, SaleCostOrigin.NayaxTransactionExport)));
+    }
+
+    #endregion
+
     private static SaleCostAssignment Cost(decimal unitCost, SaleCostOrigin source) =>
         new(unitCost, SaleCostStatus.Costed, source);
+
+    private static StoredSaleCost Stored(decimal unitCost, SaleCostOrigin source) =>
+        new(unitCost, unitCost, SaleCostStatus.Costed, source);
+
+    private static StoredSaleCost Uncosted() =>
+        new(null, null, SaleCostStatus.Pending, SaleCostOrigin.Unknown);
 
     private static CostableSale Costed(decimal unitCost, SaleCostOrigin source) =>
         Sale(SaleCostStatus.Costed, source, unitCost);
