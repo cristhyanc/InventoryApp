@@ -14995,7 +14995,27 @@ end an agreement and an Operator is `403`, another business's agreement is `404`
 body that omits the end date is refused with `400` and leaves the agreement open-ended, and
 the committed change - and only the committed change - appears in the audit log.
 `FinancialAdapterTenancyTests` adds the two-business proof that neither new store method can reach
-another business's agreement. `CapabilityAuthorizationApiTests`,
+another business's agreement.
+
+`SiteCommissionAgreementConcurrencyTests` is what proves the write lock itself, because a call-order
+test over a hand-written store cannot: it races two genuine writers - one `AppDbContext`, and
+therefore one connection, each - against a real SQLite **file**, the way
+`InventoryCountApplyConcurrencyTests` and `SupplierPresetConcurrencyTests` do. A create that arrives
+while "end the 10% agreement on 30 June" is written but uncommitted waits, re-checks overlap against
+the state that end committed, and is **allowed** - where an unlocked check would have read the
+still-open-ended agreement and refused a perfectly good rate change. An end that waits behind another
+end is decided on the end date that one committed, so bringing an agreement forward to 31 March and
+then "ending" it on 30 June is refused with the policy's own sentence instead of silently *extending*
+it. A competing create driven from a `DbCommandInterceptor` at the instant the first create's overlap
+check has executed - on its own deliberately impatient connection, so the answer comes in a second
+rather than after SQLite's default thirty - cannot even begin, and a create that waits for the lock
+is refused with the overlap conflict rather than inserting a second agreement over the same dates;
+both are the race the unlocked create lost, and an agreement is a date range with no unique index to
+catch it. The last test is the production shape: both creates released together by a `Barrier`, one
+created and one refused. Each of the four staged tests was confirmed to fail against the unlocked
+code it guards.
+
+`CapabilityAuthorizationApiTests`,
 `EndpointAuthorizationClassificationTests`, `EndpointPlanRequirementTests` and
 `SupportSessionRequestApiTests` carry the new route in their matrices.
 
