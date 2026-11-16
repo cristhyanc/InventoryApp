@@ -1976,7 +1976,8 @@ is read once at startup from the assembly's informational version (`BuildMetadat
 `InventoryApi/Http/HealthChecks`), which `InventoryApi.csproj` stamps with the git commit via the
 SDK's `SourceRevisionId` property — no SourceLink package and no change to the `dotnet publish`
 command. The deploy workflow does not wait for this header to match the release commit yet; that is
-a separate, human-reviewed change. See `docs/architecture.md` § Health checks for the mechanism.
+a separate, human-reviewed change. See `docs/architecture.md` § Current repository structure (the
+`InventoryApi/Http/` entry) for where `BuildMetadata` and the middleware that sets the header live.
 
 **Azure App Service configuration.** Set the App Service **Health check** path (Portal: App
 Service → Monitoring → Health check; or the `healthCheckPath` site configuration property) to

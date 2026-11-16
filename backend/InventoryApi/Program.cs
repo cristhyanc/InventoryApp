@@ -225,6 +225,12 @@ builder.Services.AddInfrastructureServices();
 builder.Services.AddHealthChecks()
     .AddCheck<AppDbContextHealthCheck>("database", tags: new[] { "ready" });
 
+// Issue #1308 (audit OPS-04, #1228/#1231): the build's commit for the health endpoints'
+// X-Build-Sha header. Reading BuildMetadata.BuildSha here is the one read of the assembly, and it
+// happens during startup rather than on the first probe; BuildShaHeaderMiddleware below takes the
+// value from this registration. A build with no git revision to stamp reports "unknown".
+builder.Services.AddSingleton(new BuildShaSource(BuildMetadata.BuildSha));
+
 // Uploaded business documents (issue #39). The composition root is the only place that knows
 // the host's content and web roots and reads configuration: the Application layer sees the
 // IDocumentStorage port and the Infrastructure adapters see plain paths and settings, so
@@ -695,9 +701,9 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 // "ready" and returns 503 when one of them is unhealthy - see AppDbContextHealthCheck.
 //
 // Issue #1308 (audit OPS-04, #1228/#1231): both endpoints also carry the build's commit in an
-// X-Build-Sha header, read once at startup from BuildMetadata, so a deploy can eventually tell a
-// reply from the old process apart from the new one instead of trusting the first 200/503. The
-// read happens here, before app.Run(), rather than on the first probe; the header itself is set by
+// X-Build-Sha header, read once at startup from BuildMetadata (the BuildShaSource registered with
+// the health checks above), so a deploy can eventually tell a reply from the old process apart
+// from the new one instead of trusting the first 200/503. The header is set by
 // BuildShaHeaderMiddleware, which only adds it and otherwise calls next(), touching neither
 // endpoint's status code nor its body.
 //
@@ -705,7 +711,6 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 // each one carries, rather than with a comparison against their path text: routing matches a
 // template case-insensitively and ignores a trailing slash, so it sends /HEALTH/READY and
 // /health/ready/ to the same endpoint, and a probe spelled either way has to get the same commit.
-_ = BuildMetadata.BuildSha;
 app.UseMiddleware<BuildShaHeaderMiddleware>();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions

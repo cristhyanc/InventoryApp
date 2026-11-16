@@ -12,9 +12,9 @@ namespace InventoryApi.Http.HealthChecks;
 /// must carry the same commit. Anything the health registrations do not carry this marker on - a
 /// controller, or a path no endpoint matches at all - is untouched.</para>
 /// </summary>
-internal sealed class BuildShaHeaderMetadata
+public sealed class BuildShaHeaderMetadata
 {
-    internal static readonly BuildShaHeaderMetadata Instance = new();
+    public static readonly BuildShaHeaderMetadata Instance = new();
 
     private BuildShaHeaderMetadata()
     {
@@ -25,7 +25,9 @@ internal sealed class BuildShaHeaderMetadata
 /// Issue #1308 (audit OPS-04, #1228/#1231): puts the build's commit on the two health endpoints'
 /// responses in an <c>X-Build-Sha</c> header, so an operator can tell a reply from the old process
 /// finishing its restart apart from the new release instead of trusting the first 200/503. The
-/// value is <see cref="BuildMetadata.BuildSha"/>, read from the assembly once.
+/// value arrives as the registered <see cref="BuildShaSource"/>, which <c>Program.cs</c> builds
+/// from <see cref="BuildMetadata.BuildSha"/> at startup, so the assembly is read exactly once and
+/// a test host can substitute a build that carries no commit at all.
 ///
 /// <para>It is its own middleware rather than a lambda in <c>Program.cs</c> for the same reason
 /// every other middleware in this pipeline is: the composition root registers the pipeline, it does
@@ -52,11 +54,18 @@ internal sealed class BuildShaHeaderMetadata
 /// </summary>
 public sealed class BuildShaHeaderMiddleware
 {
-    internal const string HeaderName = "X-Build-Sha";
+    public const string HeaderName = "X-Build-Sha";
 
     private readonly RequestDelegate _next;
+    private readonly string _buildSha;
 
-    public BuildShaHeaderMiddleware(RequestDelegate next) => _next = next;
+    public BuildShaHeaderMiddleware(RequestDelegate next, BuildShaSource buildSha)
+    {
+        ArgumentNullException.ThrowIfNull(buildSha);
+
+        _next = next;
+        _buildSha = buildSha.BuildSha;
+    }
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -64,7 +73,7 @@ public sealed class BuildShaHeaderMiddleware
 
         if (ReportsBuildSha(context.GetEndpoint()))
         {
-            context.Response.Headers[HeaderName] = BuildMetadata.BuildSha;
+            context.Response.Headers[HeaderName] = _buildSha;
         }
 
         await _next(context);

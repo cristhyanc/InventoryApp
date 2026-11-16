@@ -1,5 +1,6 @@
 using System.Net;
 using Inventory.Infrastructure.Data;
+using InventoryApi.Http.HealthChecks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -297,6 +298,117 @@ public sealed class HealthEndpointsDatabaseUnavailableTests : IClassFixture<Heal
                 {
                     Directory.Delete(_directory, recursive: true);
                 }
+            }
+        }
+    }
+}
+
+/// <summary>
+/// Issue #1308, acceptance criterion 3: "A build with no commit information (for example a local
+/// build outside git) returns <c>unknown</c>, and the endpoints still work." This is the second
+/// half of it - that the health endpoints keep answering normally while reporting
+/// <c>unknown</c>; <see cref="BuildMetadataTests"/> is the first half, the parser itself.
+///
+/// A separate fixture because the whole point is a host built without the commit this repository's
+/// own checkout always stamps: the assembly attribute of a loaded assembly cannot be changed, so
+/// the fixture substitutes the registered <see cref="BuildShaSource"/> with exactly what
+/// <see cref="BuildMetadata.ResolveBuildSha"/> produces for a build that carries no revision at
+/// all. Everything else is the real application - the real routing, the real
+/// <c>BuildShaHeaderMetadata</c> markers on the two registrations, the real middleware and the
+/// real health checks - so what these tests assert is the response an operator would actually get
+/// from such a build.
+/// </summary>
+public sealed class HealthEndpointsWithoutBuildMetadataTests : IClassFixture<HealthEndpointsWithoutBuildMetadataTests.ApiFactory>
+{
+    private readonly ApiFactory _factory;
+
+    public HealthEndpointsWithoutBuildMetadataTests(ApiFactory factory)
+    {
+        _factory = factory;
+    }
+
+    /// <summary>
+    /// Both endpoints, and the route variants routing sends to the same two registrations, report
+    /// the literal "unknown" - and still answer with their normal 200 and body, which is the
+    /// "the endpoints still work" half of the criterion.
+    /// </summary>
+    [Theory]
+    [InlineData("/health/live")]
+    [InlineData("/health/live/")]
+    [InlineData("/HEALTH/LIVE")]
+    [InlineData("/health/ready")]
+    [InlineData("/health/ready/")]
+    [InlineData("/HEALTH/READY")]
+    public async Task Health_endpoints_report_unknown_and_still_answer_normally(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Healthy", await response.Content.ReadAsStringAsync());
+
+        Assert.True(response.Headers.TryGetValues("X-Build-Sha", out var values), "X-Build-Sha header is missing.");
+        Assert.Equal("unknown", Assert.Single(values));
+    }
+
+    /// <summary>
+    /// The fallback does not leak the header onto anything else either: a path no endpoint matches
+    /// and a real, unrelated API endpoint still carry no build commit.
+    /// </summary>
+    [Theory]
+    [InlineData("/health")]
+    [InlineData("/api/products")]
+    public async Task Other_responses_still_do_not_carry_the_build_commit(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.DoesNotContain(
+            response.Headers,
+            header => string.Equals(header.Key, "X-Build-Sha", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public sealed class ApiFactory : WebApplicationFactory<Program>
+    {
+        private readonly SqliteConnection _connection = new("Data Source=:memory:");
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            _connection.Open();
+
+            builder.ConfigureServices(services =>
+            {
+                var dbContextOptions = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
+                if (dbContextOptions is not null)
+                {
+                    services.Remove(dbContextOptions);
+                }
+
+                services.AddDbContext<AppDbContext>(options =>
+                {
+                    options.UseSqlite(_connection);
+                });
+
+                var buildSha = services.SingleOrDefault(d => d.ServiceType == typeof(BuildShaSource));
+                if (buildSha is not null)
+                {
+                    services.Remove(buildSha);
+                }
+
+                // What a build made outside a git checkout reports: no revision stamped into the
+                // informational version at all, resolved by the same parser the application uses.
+                services.AddSingleton(new BuildShaSource(BuildMetadata.ResolveBuildSha(informationalVersion: null)));
+            });
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                _connection.Dispose();
             }
         }
     }
