@@ -776,5 +776,11 @@ public class EfProductCatalogueWriteTests : IDisposable
             DateTime saleTime,
             long? saleTransactionId = null,
             CancellationToken cancellationToken = default) => throw failure;
+
+        public Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+            long productId,
+            DateTime saleTime,
+            long? saleTransactionId = null,
+            CancellationToken cancellationToken = default) => throw failure;
     }
 }
