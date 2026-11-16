@@ -693,6 +693,24 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 // checks (Predicate returns false for every registration), so it reports the process is up
 // regardless of the database or any other dependency. /health/ready runs only checks tagged
 // "ready" and returns 503 when one of them is unhealthy - see AppDbContextHealthCheck.
+//
+// Issue #1308 (audit OPS-04, #1228/#1231): both endpoints also carry the build's commit in an
+// X-Build-Sha header, read once at startup from BuildMetadata, so a deploy can eventually tell a
+// reply from the old process apart from the new one instead of trusting the first 200/503. This
+// middleware only sets the header and otherwise calls next(): it does not touch either
+// endpoint's status code or body.
+_ = BuildMetadata.BuildSha;
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.Equals("/health/live", StringComparison.Ordinal) ||
+        context.Request.Path.Equals("/health/ready", StringComparison.Ordinal))
+    {
+        context.Response.Headers["X-Build-Sha"] = BuildMetadata.BuildSha;
+    }
+
+    await next();
+});
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = _ => false,

@@ -42,6 +42,45 @@ public sealed class HealthEndpointsTests : IClassFixture<HealthEndpointsTests.Ap
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Liveness_endpoint_reports_the_build_commit()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/health/live");
+
+        AssertBuildShaHeader(response);
+    }
+
+    [Fact]
+    public async Task Readiness_endpoint_reports_the_build_commit_when_healthy()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        AssertBuildShaHeader(response);
+    }
+
+    /// <summary>
+    /// Issue #1308: the header must be a full 40-character hex commit SHA, or the literal
+    /// "unknown" for a build with no git revision to stamp (for example a local build outside a
+    /// git checkout) - never empty, and never any other build or environment detail.
+    /// </summary>
+    internal static void AssertBuildShaHeader(HttpResponseMessage response)
+    {
+        Assert.True(response.Headers.TryGetValues("X-Build-Sha", out var values), "X-Build-Sha header is missing.");
+        var value = Assert.Single(values);
+
+        if (value == "unknown")
+        {
+            return;
+        }
+
+        Assert.Equal(40, value.Length);
+        Assert.Matches("^[0-9a-f]{40}$", value);
+    }
+
     public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         private readonly SqliteConnection _connection = new("Data Source=:memory:");
@@ -105,6 +144,17 @@ public sealed class HealthEndpointsDatabaseUnavailableTests : IClassFixture<Heal
         var response = await client.GetAsync("/health/ready");
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_endpoint_reports_the_build_commit_on_a_503()
+    {
+        var client = _factory.CreateClient();
+        _factory.MakeDatabaseUnreachable();
+
+        var response = await client.GetAsync("/health/ready");
+
+        HealthEndpointsTests.AssertBuildShaHeader(response);
     }
 
     [Fact]

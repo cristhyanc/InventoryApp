@@ -1967,6 +1967,17 @@ actually serve Inventory App requests:
 Both endpoints allow anonymous access (`AllowAnonymous()` in `Program.cs`) and are unaffected by
 `BusinessScopeMiddleware`, which already leaves unauthenticated requests alone.
 
+Both endpoints also carry an **`X-Build-Sha`** response header (issue #1308, audit OPS-04,
+#1228/#1231): the full 40-character commit SHA the running build was made from, or `unknown` for a
+build with no git revision to stamp (for example a local build outside a git checkout). This lets
+an operator confirm after a deploy that the API now answering is the new release rather than the
+old process still finishing its restart, instead of trusting the first `200`/`503` reply. The value
+is read once at startup from the assembly's informational version (`BuildMetadata` in
+`InventoryApi/Http/HealthChecks`), which `InventoryApi.csproj` stamps with the git commit via the
+SDK's `SourceRevisionId` property — no SourceLink package and no change to the `dotnet publish`
+command. The deploy workflow does not wait for this header to match the release commit yet; that is
+a separate, human-reviewed change. See `docs/architecture.md` § Health checks for the mechanism.
+
 **Azure App Service configuration.** Set the App Service **Health check** path (Portal: App
 Service → Monitoring → Health check; or the `healthCheckPath` site configuration property) to
 `/health/ready`, so App Service routes traffic only to instances that can reach the database and
