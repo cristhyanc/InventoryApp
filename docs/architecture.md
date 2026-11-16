@@ -1692,7 +1692,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
-| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
+| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, and `POST api/site-commissions/agreements/{agreementId}/end` since issue #1254) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -5460,6 +5460,23 @@ both halves of a delete, the ask and the write, check the flag - and `onSave` on
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
 
+**Since issue #1254 the agreements page has a second write control, and it is hidden rather than
+disabled.** Each row of the current-agreements table offers **End agreement**, which opens a date
+picker, warns when the chosen date has already passed and asks for an explicit confirmation - the
+whole of it, and the Actions column heading above it, is withheld while a session is active, on
+Record Payment's reasoning rather than Save agreement's: there is no read-only value in a date
+picker nobody may submit, and nothing mid-edit for the control being merely inert to protect. The
+page's `endAgreement` handler checks `sessionActive` itself and returns before calling the API, the
+same belt-and-suspenders as `saveCommissionAgreement` beside it. The action itself is a dedicated
+child component, `EndCommissionAgreementComponent`, composed back in through `@Input`/`@Output`
+rather than grown inside the routed page, because it is a distinct workflow with its own open/close,
+date, warning and confirmation state (see [Page composition boundary](#page-composition-boundary-issue-191));
+the page keeps the API call, the toast and the reload, and the component persists nothing. Who may
+see the action at all is unchanged and is not decided here: the whole page is behind
+`requireCapability('SiteCommissions.Manage')` in `app.routes.ts`, so a role without the capability
+never reaches the table the action sits in, and the endpoint refuses that role with `403` regardless.
+See [Ending a site commission agreement](#ending-a-site-commission-agreement-issue-1254).
+
 **Read-only listings and reports are unaffected.** The expense table, the current-agreements table
 and the commission report's rows, details and Print details stay visible and interactive during a
 session; only the controls that attempt a write are touched. Since issue #1251 the commission report
@@ -5474,7 +5491,9 @@ no Add form, a read-only Edit, `onSave` refusing to call the service when invoke
 one shared notice being the same sentence on both addresses.
 `site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
 agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
-is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
+is active, and both staying available while none is; issue #1254 added End agreement being hidden
+and `endAgreement` refusing to call the service while a session is active, and the action being
+offered on every stored agreement while none is. `site-commissions-report.component.spec.ts`,
 added by this slice, covered Record Payment being hidden and `recordPayment` refusing to call the
 service while a session is active; issue #1251 replaced that block with the proof that the page
 carries no payment control at all.
@@ -15042,6 +15061,110 @@ is the period's own, and the row is still in the database afterwards.
 `site-commissions-report.component.spec.ts` covers the three absent columns, the absent Outstanding
 figure, Payment history and Record Payment control, the machine and product sections still being
 there, and the printable page dropping the same two sections.
+
+### Ending a site commission agreement (issue #1254)
+
+A commission agreement is effective-dated financial configuration, and until now it could only be
+added. `SaveSiteCommissionAgreement` refuses any overlap, so an open-ended 10% agreement from 1
+January 2026 blocked a 12% agreement from 1 July 2026 for ever and a rate change meant editing the
+database. `POST api/site-commissions/agreements/{agreementId}/end` sets an agreement's end date,
+under the repository owner's decision of 14 November 2026 that **only ending is added**: correcting
+a mistyped rate or start date, and deleting an agreement, stay out, because each would rewrite
+commission already reported for periods that have been settled.
+
+**Ending only ever narrows, and that is why a Manager may do it.**
+`Inventory.Domain.FinancialConfiguration.SiteCommissionAgreementEndPolicy` is the one rule: the end
+date must be on or after the agreement's own start date, and an agreement that already carries an
+end date may be brought forward but never pushed out. Both comparisons are by calendar date, because
+`EffectiveFinancialConfiguration.ResolveAgreement` resolves by date. The consequence is what makes
+the action safe on the capability that already adds an agreement: every date the agreement used to
+cover either still belongs to it or belongs to no agreement at all, so no sale silently moves onto a
+different rate, and the narrowing itself cannot create the overlap the add refuses. Each breach is a
+`400` carrying the rule's own caller-safe sentence through `DomainExceptionHandler`
+(`DomainValidationException`), and an agreement the caller's business does not hold - another
+business's key included - is `404` rather than a refusal. The request body's `endDate` is marked
+`JsonRequiredAttribute`, the way this repository's other value-typed write fields are, so a body
+that omits it is refused outright instead of binding to `default(DateTime)` and reaching the rule as
+1 January 0001 - an answer about the agreement's start date, which is not what went wrong.
+
+**The authoritative read, the comparison and the write are one operation.**
+`ISiteCommissionStore.BeginWriteTransactionAsync` opens `SqliteWriteLockTransaction`
+(`BEGIN IMMEDIATE`) over the request's own `AppDbContext`, and `EndSiteCommissionAgreement` re-reads
+the agreement *inside* it before measuring the end date against it; the instant the row's
+`UpdatedAt` is stamped with, and the audit event records, is sampled inside that lock too (the
+pattern issue #681 established), because the only interesting thing that can happen before it is a
+wait. `SaveSiteCommissionAgreement` now takes the same lock around its overlap check and its insert,
+which it did not before: two callers adding overlapping agreements are serialised into a refusal
+rather than both passing a check and both inserting, and an end cannot commit between another
+request's overlap check and its insert. "End the 10% agreement on 30 June, then add 12% from 1 July"
+is therefore two writes that cannot interleave. Both store methods save inside the caller's
+transaction and deliberately do not commit: the use case opened it before the read the write was
+decided from, and owns the commit, so a refusal after that point discards everything staged.
+
+**Nothing stored is recalculated.** Commission is calculated on read (see [The commission report
+states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251)),
+so commission due for dates up to the end date is unchanged and only later dates move onto whatever
+agreement covers them next - which is also why an end date in the past is a real decision rather
+than a correction, and why the page warns about one before it is confirmed.
+
+**It is audited, and the audit is a log event rather than a row.**
+`ISiteCommissionAgreementAudit` records the actor's Entra `(tid, oid)` pair, the business, the
+agreement, the site, the previous end date (or none) and the new one, at the instant sampled inside
+the lock, and only **after** the commit - a refused change was rolled back and did not happen.
+`InventoryApi.Adapters.Commissions.LoggingSiteCommissionAgreementAudit` satisfies it with one
+structured `ILogger` event plus the request's correlation id, on exactly the terms
+`LoggingBusinessSettingsAudit` and `LoggingMemberManagementAudit` are satisfied on, and the entry
+type has no field for a site name, a commission rate or any money figure, which keeps the business's
+financial configuration out of the trail structurally rather than by a sink's discretion.
+
+**Tenancy, authorization and plan are the controller's existing ones.** The route is class 1 - the
+`[RequireCapability(Capability.SiteCommissionsManage)]` and `[RequirePlan(PlanFeature.SiteCommissions)]`
+already declared on `SiteCommissionsController` - so an Operator is `403`, a business without the
+plan is `403 plan_required`, and a read-only support session is refused by the central method rule
+with `read_only_support_session` because it is a `POST`. The business comes from the caller's
+membership and never from the request: `FindAgreementAsync` and `SetAgreementEndDateAsync` are
+ordinary filtered tenant-owned statements, so the route value selects an agreement rather than a
+tenant. There is **no migration and no schema change** - `SiteCommissionAgreement.EffectiveTo`
+already exists and was already nullable - and no stored commission figure is written anywhere.
+
+**What proves it.** `SiteCommissionAgreementEndPolicyTests` covers the rule's boundaries (the start
+date itself, a date before it, an equal and an earlier existing end date, an extension, and the
+time-of-day-insensitive comparison) and, through `EffectiveFinancialConfiguration.ResolveAgreement`,
+that every date up to the end date still resolves to the ended agreement and the day after resolves
+to its replacement. `EndSiteCommissionAgreementTests` pins the use case: the write transaction is
+opened before the authoritative read and committed after the write, a refusal commits and audits
+nothing, an agreement the business does not hold is not found, the audit entry carries the old and
+new end date and the in-lock instant, and a request with no identified actor reads nothing at all.
+`SiteCommissionAgreementEndApiTests` drives the real API: the 12% agreement is refused while the 10%
+one is open-ended and accepted once it has been ended on 30 June, an agreement that still overlaps is
+refused anyway, both refusals answer `400` with the rule's sentence and change nothing, a Manager may
+end an agreement and an Operator is `403`, another business's agreement is `404` and untouched, a
+body that omits the end date is refused with `400` and leaves the agreement open-ended, and
+the committed change - and only the committed change - appears in the audit log.
+`FinancialAdapterTenancyTests` adds the two-business proof that neither new store method can reach
+another business's agreement.
+
+`SiteCommissionAgreementConcurrencyTests` is what proves the write lock itself, because a call-order
+test over a hand-written store cannot: it races two genuine writers - one `AppDbContext`, and
+therefore one connection, each - against a real SQLite **file**, the way
+`InventoryCountApplyConcurrencyTests` and `SupplierPresetConcurrencyTests` do. A create that arrives
+while "end the 10% agreement on 30 June" is written but uncommitted waits, re-checks overlap against
+the state that end committed, and is **allowed** - where an unlocked check would have read the
+still-open-ended agreement and refused a perfectly good rate change. An end that waits behind another
+end is decided on the end date that one committed, so bringing an agreement forward to 31 March and
+then "ending" it on 30 June is refused with the policy's own sentence instead of silently *extending*
+it. A competing create driven from a `DbCommandInterceptor` at the instant the first create's overlap
+check has executed - on its own deliberately impatient connection, so the answer comes in a second
+rather than after SQLite's default thirty - cannot even begin, and a create that waits for the lock
+is refused with the overlap conflict rather than inserting a second agreement over the same dates;
+both are the race the unlocked create lost, and an agreement is a date range with no unique index to
+catch it. The last test is the production shape: both creates released together by a `Barrier`, one
+created and one refused. Each of the four staged tests was confirmed to fail against the unlocked
+code it guards.
+
+`CapabilityAuthorizationApiTests`,
+`EndpointAuthorizationClassificationTests`, `EndpointPlanRequirementTests` and
+`SupportSessionRequestApiTests` carry the new route in their matrices.
 
 ### Provider identity on the local row (issues #732, #759, #760 and #735)
 

@@ -12,6 +12,17 @@ public sealed record SaveSiteCommissionAgreementInput(
     CommissionBasis Basis,
     int? PaymentDueDaysAfterPeriodEnd);
 
+/// <summary>
+/// Adds a site commission agreement, refusing one that overlaps an agreement the site already has.
+///
+/// <para><strong>The overlap check and the insert are one operation</strong> (issue #1254). Both run
+/// inside the store's <c>BEGIN IMMEDIATE</c> transaction, so the write lock is held before the check
+/// reads the site's agreements: two callers adding overlapping agreements are serialised into a
+/// refusal rather than both passing a check and both inserting, and an agreement being ended
+/// (<see cref="EndSiteCommissionAgreement"/>) cannot commit between this check and this insert.
+/// Ending the 10% agreement on 30 June and adding 12% from 1 July therefore either sees the ended
+/// agreement or waits for it - never the state in between.</para>
+/// </summary>
 public sealed class SaveSiteCommissionAgreement
 {
     private readonly ISiteCommissionStore _store;
@@ -25,13 +36,20 @@ public sealed class SaveSiteCommissionAgreement
         SaveSiteCommissionAgreementInput input,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(input);
+
         var effectiveFrom = input.EffectiveFrom.Date;
         var effectiveTo = input.EffectiveTo?.Date;
+
+        await using var transaction = await _store
+            .BeginWriteTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         if (await _store.HasOverlappingAgreementAsync(
-                input.SiteId, effectiveFrom, effectiveTo, cancellationToken))
+                input.SiteId, effectiveFrom, effectiveTo, cancellationToken).ConfigureAwait(false))
             throw new DomainConflictException("The agreement overlaps an existing agreement for this site.");
 
-        return await _store.AddAgreementAsync(
+        var added = await _store.AddAgreementAsync(
             new CommissionAgreement(
                 0,
                 input.SiteId,
@@ -43,6 +61,10 @@ public sealed class SaveSiteCommissionAgreement
                 input.PaymentDueDaysAfterPeriodEnd,
                 default,
                 default),
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return added;
     }
 }

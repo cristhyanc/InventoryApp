@@ -345,6 +345,7 @@ public class EndpointPlanRequirementTests
         new("SiteCommissionsController.Agreements", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions/agreements
         new("SiteCommissionsController.Get", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions
         new("SiteCommissionsController.SaveAgreement", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/agreements
+        new("SiteCommissionsController.EndAgreement", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/agreements/{agreementId:int}/end
 
         // A site is known only from the provider's fleet read, so all three site reads are behind
         // the credential gate and already have their own no-provider answers.

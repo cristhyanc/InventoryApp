@@ -179,6 +179,65 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
             Assert.Single(await otherStore.GetAgreementsAsync(SiteId, CancellationToken.None)).CommissionRate);
     }
 
+    /// <summary>
+    /// Issue #1254: the agreement an end date is written to is found only through the central tenant
+    /// filter, so the route value selects an agreement of the caller's own business and never a
+    /// tenant. Each business holds an agreement here, so the other one's key is a real key that
+    /// simply is not theirs - which is the case a filter has to answer, rather than a missing row.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(2, 1)]
+    public async Task Another_businesss_agreement_can_neither_be_found_nor_ended(int businessId, int otherBusinessId)
+    {
+        int otherAgreementId;
+        using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            otherAgreementId = (await seed.SiteCommissionAgreements
+                .SingleAsync(row => row.BusinessId == otherBusinessId)).Id;
+        }
+
+        using var db = TestAppDbContext.For(_options, businessId);
+        var store = new EfSiteCommissionStore(db);
+
+        Assert.Null(await store.FindAgreementAsync(otherAgreementId, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => store.SetAgreementEndDateAsync(
+            otherAgreementId, Day.AddDays(5), Day, CancellationToken.None));
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(
+            Day,
+            (await verify.SiteCommissionAgreements.SingleAsync(row => row.Id == otherAgreementId)).EffectiveTo);
+    }
+
+    /// <summary>
+    /// The caller's own agreement is found by its key and ends on the written date, with the
+    /// <c>UpdatedAt</c> stamp the use case sampled inside the write lock and nothing else changed.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task The_callers_own_agreement_is_found_and_ended_on_the_written_date(int businessId)
+    {
+        using var db = TestAppDbContext.For(_options, businessId);
+        var store = new EfSiteCommissionStore(db);
+        var own = await store.AddAgreementAsync(
+            new Agreement(0, 77, Day.AddDays(1), null, .25m, CommissionFrequency.Monthly,
+                CommissionBasis.GrossSales, 14, default, default),
+            CancellationToken.None);
+        var stamped = new DateTime(2026, 11, 16, 3, 0, 0, DateTimeKind.Utc);
+
+        Assert.Null((await store.FindAgreementAsync(own.Id, CancellationToken.None))!.EffectiveTo);
+        var ended = await store.SetAgreementEndDateAsync(
+            own.Id, Day.AddDays(30), stamped, CancellationToken.None);
+
+        Assert.Equal(Day.AddDays(30), ended.EffectiveTo);
+        Assert.Equal(stamped, ended.UpdatedAt);
+        Assert.Equal(.25m, ended.CommissionRate);
+        Assert.Equal(Day.AddDays(1), ended.EffectiveFrom);
+        Assert.Equal(14, ended.PaymentDueDaysAfterPeriodEnd);
+    }
+
     [Fact]
     public async Task Unresolved_business_reads_no_financial_facts_and_cannot_write()
     {
