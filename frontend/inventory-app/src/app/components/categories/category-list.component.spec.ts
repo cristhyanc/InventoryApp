@@ -374,3 +374,58 @@ describe('CategoryListComponent write controls during a support session (issue #
     expect(component.confirmingCategory).toBeNull();
   });
 });
+
+/**
+ * A double click on Create/Update while the request is still in flight (issue #1280, audit #1225
+ * finding FE-09). The duplicate check on the server is a read before insert, so two
+ * near-simultaneous creates can both succeed; the guard here is that the second click never sends
+ * a second request in the first place.
+ */
+describe('CategoryListComponent duplicate-submit guard (issue #1280)', () => {
+  const submitButton = (host: HTMLElement) => host.querySelector('button[type="submit"]') as HTMLButtonElement;
+
+  it('disables the submit button, shows a saving label, and ignores a second submit while the create request is in flight', async () => {
+    const pending = new Subject<Category>();
+    const { fixture, component, host, create } = await render({ create: jest.fn(() => pending.asObservable()) });
+
+    component.form.name = 'Frozen';
+    component.save();
+    fixture.detectChanges();
+
+    expect(submitButton(host).disabled).toBe(true);
+    expect(submitButton(host).textContent?.trim()).toBe('Saving...');
+
+    // A second click, or a direct second call, before the first request has answered.
+    component.save();
+    expect(create).toHaveBeenCalledTimes(1);
+
+    pending.next(category({ id: 2, name: 'Frozen' }));
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(submitButton(host).disabled).toBe(false);
+    expect(submitButton(host).textContent?.trim()).toBe('Create');
+  });
+
+  it('clears the saving state and shows the error when the create request fails, then sends exactly one new request on retry', async () => {
+    const create = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 400, error: 'This business already has a category called "Drinks".' }))
+    );
+    const { fixture, component, host } = await render({ create });
+
+    component.form.name = 'Drinks';
+    component.save();
+    fixture.detectChanges();
+
+    expect(component.error).toBe('This business already has a category called "Drinks".');
+    expect(submitButton(host).disabled).toBe(false);
+    expect(submitButton(host).textContent?.trim()).toBe('Create');
+    expect(create).toHaveBeenCalledTimes(1);
+
+    component.save();
+    fixture.detectChanges();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(component.error).toBe('This business already has a category called "Drinks".');
+  });
+});
