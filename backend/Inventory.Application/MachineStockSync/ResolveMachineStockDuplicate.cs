@@ -53,7 +53,7 @@ public sealed class ResolveMachineStockDuplicate
             && state.MatchedProductId is long matchedProductId
             && state.ParsedQuantity is > 0
                 ? NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-                    matchedProductId, state.ParsedQuantity.Value, state.EventDateTimeGmt, manualRefills)
+                    matchedProductId, state.EventDateTimeGmt, manualRefills)
                 : null;
 
         if (duplicate is null)
@@ -68,9 +68,9 @@ public sealed class ResolveMachineStockDuplicate
         return choice switch
         {
             NayaxDuplicateResolutionChoice.AlreadyRecordedManually =>
-                await ReconcileAsync(machine, state, duplicate.Value, cancellationToken),
+                await ReconcileAsync(machine, state, duplicate.Value.Match, cancellationToken),
             NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock =>
-                await ApplyAsSeparateRestockAsync(machine, state, duplicate.Value, cancellationToken),
+                await ApplyAsSeparateRestockAsync(machine, state, duplicate.Value.Match, cancellationToken),
             _ => new(eventId, NayaxStockEventApplyOutcome.Error, "Unknown duplicate resolution.", null)
         };
     }

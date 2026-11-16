@@ -164,17 +164,33 @@ public class NayaxMachineStockSyncPoliciesTests
     public void A_matching_manual_refill_inside_the_window_is_a_possible_duplicate()
     {
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
-            [new ManualRefillEvidence(200, -4, EventTime.AddHours(-1))]);
+            200, EventTime,
+            [new ManualRefillEvidence(200, -4, EventTime.AddHours(-1), 11)]);
 
         Assert.NotNull(duplicate);
+        Assert.Equal(11, duplicate.Value.Match.StockAdjustmentId);
+        Assert.Equal(0, duplicate.Value.OtherQualifyingCount);
+    }
+
+    [Fact]
+    public void A_manual_refill_of_an_unequal_quantity_inside_the_window_is_a_possible_duplicate()
+    {
+        // Issue #1244: packed 20, loaded 15. The quantities disagree exactly when the double
+        // deduction this flag exists to prevent is most likely, so quantity is no longer part of
+        // the rule.
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, EventTime,
+            [new ManualRefillEvidence(200, -20, EventTime.AddHours(-1), 11)]);
+
+        Assert.NotNull(duplicate);
+        Assert.Equal(-20, duplicate.Value.Match.QuantityChange);
     }
 
     [Fact]
     public void A_matching_manual_refill_outside_the_window_is_not_a_duplicate()
     {
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
+            200, EventTime,
             [new ManualRefillEvidence(200, -4, EventTime.AddDays(-30))]);
 
         Assert.Null(duplicate);
@@ -185,17 +201,34 @@ public class NayaxMachineStockSyncPoliciesTests
     {
         // The established rule is inclusive of the boundary itself; this locks that in.
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
+            200, EventTime,
             [new ManualRefillEvidence(200, -4, EventTime - NayaxMachineStockDuplicatePolicy.DetectionWindow)]);
 
         Assert.NotNull(duplicate);
     }
 
     [Fact]
+    public void A_manual_refill_one_second_past_the_24_hour_boundary_is_not_a_duplicate()
+    {
+        // The other side of the same boundary, to the second (issue #1244): 24 hours qualifies,
+        // 24 hours and one second does not.
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, EventTime,
+            [
+                new ManualRefillEvidence(
+                    200,
+                    -4,
+                    EventTime - NayaxMachineStockDuplicatePolicy.DetectionWindow - TimeSpan.FromSeconds(1)),
+            ]);
+
+        Assert.Null(duplicate);
+    }
+
+    [Fact]
     public void A_manual_refill_genuinely_more_than_24_hours_away_is_not_a_duplicate()
     {
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
+            200, EventTime,
             [new ManualRefillEvidence(200, -4, EventTime - NayaxMachineStockDuplicatePolicy.DetectionWindow - TimeSpan.FromMinutes(1))]);
 
         Assert.Null(duplicate);
@@ -211,21 +244,77 @@ public class NayaxMachineStockSyncPoliciesTests
         var sameInstantUnspecifiedKind = DateTime.SpecifyKind(EventTime, DateTimeKind.Unspecified);
 
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
+            200, EventTime,
             [new ManualRefillEvidence(200, -4, sameInstantUnspecifiedKind)]);
 
         Assert.NotNull(duplicate);
     }
 
     [Fact]
-    public void A_nearby_manual_movement_of_another_product_or_quantity_is_not_a_duplicate()
+    public void A_nearby_manual_movement_of_another_product_is_not_a_duplicate()
     {
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-            200, 4, EventTime,
+            200, EventTime,
+            [new ManualRefillEvidence(201, -4, EventTime)]);
+
+        Assert.Null(duplicate);
+    }
+
+    [Fact]
+    public void The_nearest_qualifying_manual_refill_is_chosen_and_the_others_are_counted()
+    {
+        // Deliberately out of time order, and with the nearest one last, so an implementation that
+        // returns the first match in list order cannot pass.
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, EventTime,
             [
-                new ManualRefillEvidence(201, -4, EventTime),   // different product
-                new ManualRefillEvidence(200, -6, EventTime),   // different quantity
+                new ManualRefillEvidence(200, -20, EventTime.AddHours(-10), 11),
+                new ManualRefillEvidence(201, -5, EventTime, 12),               // another product
+                new ManualRefillEvidence(200, -7, EventTime.AddHours(20), 13),
+                new ManualRefillEvidence(200, -15, EventTime.AddMinutes(-30), 14),
             ]);
+
+        Assert.NotNull(duplicate);
+        Assert.Equal(14, duplicate.Value.Match.StockAdjustmentId);
+        Assert.Equal(2, duplicate.Value.OtherQualifyingCount);
+    }
+
+    [Fact]
+    public void Equally_near_manual_refills_are_broken_by_the_lowest_movement_id()
+    {
+        // One before and one after the event, the same distance away: the tie-break is the movement
+        // id, so the answer does not depend on the evidence's order.
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, EventTime,
+            [
+                new ManualRefillEvidence(200, -8, EventTime.AddHours(2), 31),
+                new ManualRefillEvidence(200, -9, EventTime.AddHours(-2), 17),
+            ]);
+
+        Assert.NotNull(duplicate);
+        Assert.Equal(17, duplicate.Value.Match.StockAdjustmentId);
+        Assert.Equal(1, duplicate.Value.OtherQualifyingCount);
+    }
+
+    [Fact]
+    public void Only_refills_inside_the_window_are_counted_as_other_candidates()
+    {
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, EventTime,
+            [
+                new ManualRefillEvidence(200, -4, EventTime.AddHours(-1), 11),
+                new ManualRefillEvidence(200, -4, EventTime.AddDays(-30), 12),
+            ]);
+
+        Assert.NotNull(duplicate);
+        Assert.Equal(11, duplicate.Value.Match.StockAdjustmentId);
+        Assert.Equal(0, duplicate.Value.OtherQualifyingCount);
+    }
+
+    [Fact]
+    public void No_manual_refill_at_all_is_not_a_duplicate()
+    {
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(200, EventTime, []);
 
         Assert.Null(duplicate);
     }

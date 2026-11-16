@@ -262,7 +262,7 @@ public sealed class ApplyMachineStockSync
             && state.MatchedProductId is long matchedProductId
             && state.ParsedQuantity is > 0
             && NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-                matchedProductId, state.ParsedQuantity.Value, state.EventDateTimeGmt, manualRefills) is not null;
+                matchedProductId, state.EventDateTimeGmt, manualRefills) is not null;
 
         return NayaxMachineStockApplyPolicy.Decide(
             state.ProcessingStatus,

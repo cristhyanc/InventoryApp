@@ -82,11 +82,11 @@ public sealed class ResolveMachineStockEventsAsAlreadyRecorded
             && state.MatchedProductId is long matchedProductId
             && state.ParsedQuantity is > 0
                 ? NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-                    matchedProductId, state.ParsedQuantity.Value, state.EventDateTimeGmt, manualRefills)
+                    matchedProductId, state.EventDateTimeGmt, manualRefills)
                 : null;
 
         await _store.ReconcileAsManualDuplicateAsync(
-            state.Id, nayaxMachineId, duplicate?.StockAdjustmentId, cancellationToken);
+            state.Id, nayaxMachineId, duplicate?.Match.StockAdjustmentId, cancellationToken);
 
         return new(
             state.Id,

@@ -1006,6 +1006,15 @@ export interface NayaxStockEventPreview {
   isPossibleDuplicate: boolean;
   possibleDuplicateNotes: string | null;
   duplicateResolution: NayaxDuplicateResolution;
+  /**
+   * How many units the matching manual refill put into the machine, so it can be compared with
+   * `parsedQuantity` (issue #1244). Null when the event is not flagged as a possible duplicate.
+   */
+  possibleDuplicateQuantity: number | null;
+  /** When that manual refill was effective; null when the event is not flagged. */
+  possibleDuplicateEffectiveAt: string | null;
+  /** How many other manual refills also qualified inside the 24-hour window. */
+  otherPossibleDuplicateCount: number;
 }
 
 export interface NayaxProductImpactPreview {

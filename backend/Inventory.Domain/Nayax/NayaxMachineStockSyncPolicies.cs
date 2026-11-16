@@ -110,6 +110,14 @@ public static class NayaxMachineStockImpactPolicy
 }
 
 /// <summary>
+/// The manual refill chosen as one event's possible duplicate, with how many <em>other</em> manual
+/// refills also qualified (issue #1244). The count is reported rather than hidden because the
+/// operator, not this policy, decides what the event really records: knowing a second refill of the
+/// same product is in the window is part of that decision.
+/// </summary>
+public readonly record struct NayaxPossibleDuplicate(ManualRefillEvidence Match, int OtherQualifyingCount);
+
+/// <summary>
 /// Duplicate detection between an imported Nayax event and an operator's earlier manual refill
 /// (issue #183). It only ever produces an informational flag for human resolution: nothing here
 /// blocks, merges, or automatically deducts.
@@ -117,34 +125,60 @@ public static class NayaxMachineStockImpactPolicy
 public static class NayaxMachineStockDuplicatePolicy
 {
     /// <summary>
-    /// A manual refill recorded within this window of a Nayax event for the same machine, product,
-    /// and quantity is a plausible duplicate requiring human resolution, not an automatic double
+    /// A manual refill recorded within this window of a Nayax event for the same machine and
+    /// product is a plausible duplicate requiring human resolution, not an automatic double
     /// deduction. This is a deliberately generous same-day-or-so window.
     /// </summary>
     public static readonly TimeSpan DetectionWindow = TimeSpan.FromHours(24);
 
     /// <summary>
-    /// The first manual refill that plausibly records the same physical restock, or <c>null</c>.
-    /// Only an exact same-product, same-quantity movement inside the window qualifies, so an
-    /// unrelated nearby manual movement is not reported as a duplicate.
+    /// The manual refill that most plausibly records the same physical restock, or <c>null</c>.
+    ///
+    /// <para><strong>Quantity is deliberately not part of the rule</strong> (issue #1244, audit
+    /// finding INV-07). Requiring an exact quantity match let the common packed-versus-loaded case
+    /// through unflagged - an operator packs 20 for the machine, 15 go in, and the machine's own
+    /// event of 15 deducted a second time from storage that had already paid for the refill. Any
+    /// manual refill of the same product on the same machine inside the window therefore qualifies,
+    /// whatever its quantity, and both quantities are shown so the operator can tell a partial load
+    /// from a genuinely separate restock.</para>
+    ///
+    /// <para>The choice among several qualifying refills is deterministic: the one nearest in time
+    /// to the event, ties broken by the lowest movement id, so the same preview, the same apply and
+    /// the same resolution all act on the same movement however the evidence happens to be ordered.
+    /// The window is inclusive of its boundary, as it has always been.</para>
     /// </summary>
-    public static ManualRefillEvidence? FindPossibleDuplicate(
+    public static NayaxPossibleDuplicate? FindPossibleDuplicate(
         long matchedProductId,
-        int positiveQuantity,
         DateTime eventTimestamp,
         IReadOnlyList<ManualRefillEvidence> manualRefills)
     {
+        ArgumentNullException.ThrowIfNull(manualRefills);
+
+        ManualRefillEvidence? nearest = null;
+        var nearestDistance = TimeSpan.Zero;
+        var qualifying = 0;
+
         foreach (var refill in manualRefills)
         {
-            if (refill.ProductId == matchedProductId
-                && refill.QuantityChange == -positiveQuantity
-                && (refill.EffectiveAt - eventTimestamp).Duration() <= DetectionWindow)
+            if (refill.ProductId != matchedProductId)
+                continue;
+
+            var distance = (refill.EffectiveAt - eventTimestamp).Duration();
+            if (distance > DetectionWindow)
+                continue;
+
+            qualifying++;
+
+            if (nearest is null
+                || distance < nearestDistance
+                || (distance == nearestDistance && refill.StockAdjustmentId < nearest.Value.StockAdjustmentId))
             {
-                return refill;
+                nearest = refill;
+                nearestDistance = distance;
             }
         }
 
-        return null;
+        return nearest is { } match ? new NayaxPossibleDuplicate(match, qualifying - 1) : null;
     }
 }
 
