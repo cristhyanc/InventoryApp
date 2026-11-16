@@ -60,8 +60,24 @@ function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPrevi
     isPossibleDuplicate: false,
     possibleDuplicateNotes: null,
     duplicateResolution: NayaxDuplicateResolution.None,
+    possibleDuplicateQuantity: null,
+    possibleDuplicateEffectiveAt: null,
+    otherPossibleDuplicateCount: 0,
     ...overrides
   };
+}
+
+/** The business wall-clock rendering the dialog uses for an instant, for the comparison line. */
+function inBusinessTime(instant: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone: BUSINESS_TIME_ZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).format(new Date(instant));
 }
 
 function preview(
@@ -1179,6 +1195,59 @@ describe('MachineRestockSyncComponent dialog', () => {
     // manually" action alongside events the app never flagged.
     expect(checkbox.disabled).toBe(false);
     expect(host.querySelector('[data-testid="possible-duplicate-badge"]')).not.toBeNull();
+  });
+
+  it('shows both quantities and the matching manual refill time on a flagged possible duplicate', async () => {
+    // Issue #1244: packed 20, loaded 15. The operator decides, so the screen has to show the two
+    // quantities rather than only asserting that the event looks like a duplicate.
+    const duplicate = event({
+      id: 5,
+      parsedQuantity: 15,
+      isPossibleDuplicate: true,
+      possibleDuplicateNotes: 'Manual refill',
+      possibleDuplicateQuantity: 20,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z'
+    });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([duplicate]))));
+
+    openDialog();
+
+    const comparison = requireElement('[data-testid="possible-duplicate-comparison"]');
+    expect(comparison.textContent).toContain('Nayax event 15');
+    expect(comparison.textContent).toContain('manual refill 20');
+    expect(comparison.textContent).toContain(inBusinessTime('2026-09-27T09:00:00Z'));
+  });
+
+  it('says how many other manual refills also qualified', async () => {
+    const duplicate = event({
+      id: 5,
+      parsedQuantity: 15,
+      isPossibleDuplicate: true,
+      possibleDuplicateQuantity: 20,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z',
+      otherPossibleDuplicateCount: 2
+    });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([duplicate]))));
+
+    openDialog();
+
+    expect(requireElement('[data-testid="possible-duplicate-others"]').textContent)
+      .toContain('2 other manual refills also qualified');
+  });
+
+  it('says nothing about other manual refills when only one qualified', async () => {
+    const alone = event({
+      id: 6,
+      isPossibleDuplicate: true,
+      possibleDuplicateQuantity: 4,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z'
+    });
+    const { host, openDialog } = await render(jest.fn(() => of(preview([alone]))));
+
+    openDialog();
+
+    expect(host.querySelector('[data-testid="possible-duplicate-comparison"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="possible-duplicate-others"]')).toBeNull();
   });
 
   it('resolves a possible duplicate as already recorded manually and refreshes the preview', async () => {

@@ -18015,16 +18015,40 @@ that meaning.
    discrepancy** (`NayaxMachineStockImpactPolicy`), and - for a positive refill that exceeds
    available storage - the unaccounted difference. A positive event is also flagged **possible
    duplicate** (`NayaxMachineStockDuplicatePolicy`) when a manual (`StockAdjustmentSource.Manual`)
-   `MachineRefill` for the same machine/product/quantity was recorded within a 24-hour window; this
+   `MachineRefill` for the same machine and product was recorded within a 24-hour window; this
    is a signal for human resolution, not an automatic merge or block - the ordinary Apply action
    refuses it until the operator explicitly resolves it (issue #196, next step).
+
+   **Quantity is deliberately not part of that rule** (issue #1244, audit #1222 finding INV-07).
+   Requiring the manual refill's quantity to equal the event's let the commonest double deduction
+   through unflagged: an operator packs 20 for the machine, 15 actually go in, and the machine's own
+   event of 15 matched nothing, applied silently, and took storage from 100 to 80 to 65 while the
+   shelf held 80. Any manual refill of the same product on the same machine inside the window now
+   qualifies, whatever its quantity. The window itself is unchanged and stays **inclusive** of its
+   boundary: a refill exactly 24 hours from the event qualifies, one 24 hours and a second away does
+   not.
+
+   **The candidate is chosen deterministically, and the others are counted rather than hidden.**
+   `FindPossibleDuplicate` returns a `NayaxPossibleDuplicate`: the qualifying refill **nearest in
+   time** to the event, ties broken by the **lowest movement id** (`StockAdjustment.Id`), plus
+   `OtherQualifyingCount` - how many other refills also qualified. Nearest-then-lowest-id rather than
+   first-in-list-order is what makes the preview, the ordinary apply and both resolutions act on the
+   same movement whatever order the evidence arrives in, which matters because the chosen one is the
+   `MatchedManualStockAdjustmentId` a resolution records. The preview publishes the comparison the
+   operator decides on - the event's own `ParsedQuantity`, the chosen refill's
+   `PossibleDuplicateQuantity` (its units *into the machine*, the opposite sign of its own storage
+   change) and `PossibleDuplicateEffectiveAt`, with `OtherPossibleDuplicateCount` - and the Sync
+   Restock dialog shows all four beside the **Possible duplicate** badge. Deciding the difference is
+   explicitly not this rule's job: there is no partial "apply the difference" resolution, and the
+   packed-versus-loaded feature (#922) is separate.
 6. **A flagged possible duplicate requires explicit resolution before it can move storage
    (issue #196).** `NayaxStockEventPreviewDto.DuplicateResolution` (`Inventory.Domain.Nayax.
    NayaxDuplicateResolution`: `None`/`ReconciledManually`/`AppliedAsSeparateRestock`) is the
    persisted, auditable outcome of that choice, distinct from `ProcessingStatus` (which only
    tracks whether a storage movement was created). While unresolved, the dialog shows the event
-   visually distinct (its possible-duplicate badge and comparison context, including the matching
-   manual refill) with two explicit per-row actions, alongside the ordinary selectable checkbox -
+   visually distinct (its possible-duplicate badge and comparison context: both quantities, the
+   chosen manual refill's time and how many others qualified) with two explicit per-row actions,
+   alongside the ordinary selectable checkbox -
    the possible-duplicate flag is a suggestion for human resolution, not a precondition (issue
    #242, next step), so the checkbox stays enabled even while unresolved, but the event is never
    pre-selected or presented as an ordinary Apply item until it is resolved:
@@ -18032,7 +18056,8 @@ that meaning.
      with `AlreadyRecordedManually`. `Inventory.Application.MachineStockSync.
      ResolveMachineStockDuplicate` reconciles the event (`DuplicateResolution =
      ReconciledManually`, `DuplicateResolvedAt` stamped, `MatchedManualStockAdjustmentId` set to
-     the matching manual `StockAdjustment.Id`) without ever creating a `MachineRefill`/
+     the chosen manual `StockAdjustment.Id`, whether or not its quantity equals the event's)
+     without ever creating a `MachineRefill`/
      `StockAdjustment`, changing `QuantityInStock`, or touching costing. The event stays
      `Unprocessed` (no movement occurred) but is excluded from the preview's product-impact
      totals, since it will never draw down storage.

@@ -326,7 +326,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
 
         var possibleDuplicate = impact.IsPositiveRefill
             ? NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-                pending.MatchedProductId!.Value, pending.ParsedQuantity!.Value, pending.EventDateTimeGmt, manualRefills)
+                pending.MatchedProductId!.Value, pending.EventDateTimeGmt, manualRefills)
             : null;
 
         return new NayaxStockEventPreviewDto(
@@ -349,9 +349,36 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             impact.UnaccountedDifference,
             impact.IsDiscrepancy,
             possibleDuplicate is not null,
-            possibleDuplicate is not null
-                ? $"A manual machine refill of the same quantity was recorded for this product/machine at {possibleDuplicate.Value.EffectiveAt:O}."
-                : null,
-            pending.DuplicateResolution);
+            possibleDuplicate is { } duplicate ? Describe(duplicate, pending.ParsedQuantity!.Value) : null,
+            pending.DuplicateResolution,
+            possibleDuplicate is { } matched ? -matched.Match.QuantityChange : null,
+            // A movement's EffectiveAt is a persisted UTC instant, but SQLite does not round-trip
+            // DateTimeKind and StockAdjustment.EffectiveAt carries no read conversion, so it is
+            // marked UTC here. Without it the preview would publish an offset-less timestamp the
+            // browser would read as its own local time and show the refill at the wrong hour.
+            possibleDuplicate is { } timed ? AsUtc(timed.Match.EffectiveAt) : null,
+            possibleDuplicate?.OtherQualifyingCount ?? 0);
+    }
+
+    /// <summary>
+    /// What a flagged event says about the manual refill it may duplicate (issue #1244). Both
+    /// quantities are named, because since the rule stopped requiring them to be equal "a manual
+    /// refill was recorded" no longer tells the operator whether this is the same restock loaded
+    /// short or a genuinely separate one. A manual refill's own change is storage's, so the units
+    /// that went into the machine are its opposite.
+    /// </summary>
+    private static string Describe(NayaxPossibleDuplicate duplicate, int eventQuantity)
+    {
+        var notes = $"A manual machine refill of {-duplicate.Match.QuantityChange} was recorded for this "
+            + $"product/machine at {AsUtc(duplicate.Match.EffectiveAt):O}; this Nayax event reports {eventQuantity}.";
+
+        if (duplicate.OtherQualifyingCount == 0)
+        {
+            return notes;
+        }
+
+        var plural = duplicate.OtherQualifyingCount == 1 ? string.Empty : "s";
+
+        return $"{notes} {duplicate.OtherQualifyingCount} other manual refill{plural} also qualified.";
     }
 }
