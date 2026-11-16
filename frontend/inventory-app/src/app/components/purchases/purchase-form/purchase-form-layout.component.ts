@@ -42,15 +42,33 @@ export interface PurchaseFormFields {
   deliveryGstClassification: GstClassification;
   packageCost: number | null;
   packageGstClassification: GstClassification;
+  /**
+   * Whether a person picked the delivery or package GST (issue #1348). Add Purchase pre-fills an
+   * unpicked charge from the supplier's fee default and leaves it out of the request, so the server
+   * applies that default and records where it came from; a picked one is submitted as chosen.
+   */
+  deliveryGstChosen?: boolean;
+  packageGstChosen?: boolean;
   purchaseDate: string;
   supplierId: number | '';
 }
+
+/** Where Add Purchase took a line's pre-filled GST from (issue #1348). */
+export type PurchaseLineGstRuleSource = 'product' | 'supplier';
 
 /** One line as both forms hold it; `id` is set only on a line the saved purchase already has. */
 export interface PurchaseFormLine extends PurchaseLinePrice {
   id?: number;
   productId: number;
   gstClassification: GstClassification;
+
+  /**
+   * Whether a person picked this line's GST (issue #1348). Until they do, Add Purchase may pre-fill
+   * it from the product's GST rule or the supplier's default (`gstRuleSource` says which) and leaves
+   * it out of the request, so the server applies the same rule and records its provenance.
+   */
+  gstChosen?: boolean;
+  gstRuleSource?: PurchaseLineGstRuleSource;
 
   /**
    * What a scanned receipt said about this line (issue #1166), and `undefined` on every line a
@@ -166,6 +184,12 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   /** The person chose to save the purchase without the receipt the storage allowance refused. */
   @Output() readonly saveWithoutReceipt = new EventEmitter<void>();
+
+  /**
+   * A line's product changed (issue #1348), so Add Purchase can pre-fill its GST from that
+   * product's rule. Edit ignores it: an edit never applies a rule.
+   */
+  @Output() readonly lineProductChange = new EventEmitter<PurchaseFormLine>();
 
   /** The supplier or the purchase date changed, which is what a suggested title is made from. */
   @Output() readonly detailsChange = new EventEmitter<void>();
@@ -334,6 +358,35 @@ export class PurchaseFormLayoutComponent implements OnChanges {
     // that is the one change issue #1166 asks for, and it puts the line into the purchase.
     if (productId && item.scan?.skipped) {
       item.scan.skipped = false;
+    }
+    this.lineProductChange.emit(item);
+  }
+
+  /** The person picked this line's GST, which no rule may replace from now on (issue #1348). */
+  onLineGstChange(item: PurchaseFormLine, classification: GstClassification): void {
+    item.gstClassification = classification;
+    item.gstChosen = true;
+    item.gstRuleSource = undefined;
+  }
+
+  /** The person picked a charge's GST, which no supplier default may replace from now on. */
+  onChargeGstChange(charge: 'delivery' | 'package', classification: GstClassification): void {
+    if (charge === 'delivery') {
+      this.form.deliveryGstClassification = classification;
+      this.form.deliveryGstChosen = true;
+    } else {
+      this.form.packageGstClassification = classification;
+      this.form.packageGstChosen = true;
+    }
+  }
+
+  /** The short note under a pre-filled line's GST picker, or `null` when a person picked it. */
+  gstRuleHint(item: PurchaseFormLine): string | null {
+    if (item.gstChosen) return null;
+    switch (item.gstRuleSource) {
+      case 'product': return 'From product';
+      case 'supplier': return 'Supplier default';
+      default: return null;
     }
   }
 

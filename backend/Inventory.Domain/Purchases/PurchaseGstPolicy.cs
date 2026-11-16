@@ -100,7 +100,8 @@ public static class PurchaseGstPolicy
     /// The state to persist for a classification a person submitted (decision D4): an explicit
     /// choice is recorded as <see cref="GstClassificationSource.Manual"/>, and anything omitted or
     /// explicitly unknown stays unclassified. Nothing here infers a classification from a product,
-    /// a supplier or an amount; rule-based classification is issues #430 and #433.
+    /// a supplier or an amount; rule-based classification is issues #430 and #433, and, for a
+    /// component a new purchase omits, issue #1348 (<c>NewPurchaseGstClassificationPolicy</c>).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="requested"/> is not a supported value.</exception>
     public static GstClassificationState Classify(GstClassification? requested) =>

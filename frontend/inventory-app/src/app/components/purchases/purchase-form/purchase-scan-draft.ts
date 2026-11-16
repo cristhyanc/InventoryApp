@@ -19,9 +19,10 @@ import {
  * the receipt but are **not** purchase lines, which exists so the receipt-total check can explain
  * the difference rather than leave the operator chasing it.
  *
- * **It decides nothing about GST.** A line arrives unclassified and stays that way: input GST comes
- * from an explicit per-component classification a person or a rule makes, never from a receipt's own
- * marker (AGENTS.md § Purchase GST classification). The receipt's GST hint is the receipt's claim.
+ * **It decides nothing about GST.** A line arrives unclassified from here: input GST comes from an
+ * explicit per-component classification a person or a rule makes, never from a receipt's own marker
+ * (AGENTS.md § Purchase GST classification). The receipt's GST hint is the receipt's claim. Add
+ * Purchase then pre-fills a matched line from its product's rule (issue #1348), as it does any line.
  *
  * **Nothing it produces has been saved.** The fill is a suggestion in a form; the purchase is
  * created by the ordinary create request when the operator saves, through the endpoint and the

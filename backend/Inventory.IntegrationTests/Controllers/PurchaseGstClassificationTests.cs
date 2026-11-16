@@ -92,8 +92,10 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     }
 
     /// <summary>
-    /// Decision D4: nothing is inferred. A purchase submitted without classifications - the shape
-    /// every existing client sends - stays entirely unclassified.
+    /// Nothing is inferred from an amount. A purchase submitted without classifications, for a
+    /// product and supplier with no configured GST rule, stays entirely unclassified; a configured
+    /// rule is what classifies an omitted component on a create (issue #1348,
+    /// <c>NewPurchaseGstRuleApiTests</c>).
     /// </summary>
     [Fact]
     public async Task Create_without_classifications_leaves_every_component_unknown()
