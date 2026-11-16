@@ -11531,7 +11531,8 @@ the instant with a fixed precedence:
    it may correct an older stored instant through the ordinary update and cost-rebuild path (the
    affected product is replayed from the earlier of its old and new instants).
 2. Otherwise a **stored** sale keeps the instant it already holds; the row's other facts (status,
-   product, settlement value, cost price under the existing rule) still update it. A later export
+   product, settlement value, cost price under the existing rule) still update it — each of them
+   only where the row actually carries a value, since issue #1298. A later export
    without a usable GMT value therefore cannot move a sale the latest-sales synchronization stored at
    its authoritative instant — and since that synchronization never rewrites a stored instant,
    nothing would ever move it back.
@@ -14312,7 +14313,9 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   `MachineAuthorizationTime` column. A transaction this business already holds
   is updated in place rather than counted again, and an update never erases a transaction cost price
   the business already has - a row that simply does not carry the column leaves the stored one in
-  place, while every other imported fact is overwritten, exactly as the legacy loop did. Statuses
+  place. Since issue #1298 that holds for every other imported fact too, which the loop used to
+  overwrite unconditionally; see [What a blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298) below. Statuses
   are classified by the Domain `NayaxTransactionStatusClassifier` and products matched by the Domain
   `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on the store's candidate projection;
   neither status identifiers nor matching rules are reimplemented. Since issue #745 a row's remote
@@ -14336,8 +14339,10 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   it. The adapter keeps the parsing decisions imported financial data depends on: headers matched on
   letters and digits only (so `Product Cost Price`, `ProductCostPrice` and `product_cost_price` are
   one column, with `ProductCost`/`CostPrice` additionally accepted for the transaction cost),
-  invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception
-  being an absent settlement value, which the legacy import read as `0`), and an instant taken from
+  invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception,
+  an absent settlement value the legacy import read as `0`, ended with issue #1298 - see [What a
+  blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298)), and an instant taken from
   a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
   left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
   deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
@@ -14370,7 +14375,8 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   import again; whole-import atomicity would be its own change. Both behaviours are pinned by
   regression tests.
 - `ImportsController.ImportNayaxSales` calls the use case directly; the route, the
-  `NayaxSalesImportResult` response shape, the status codes and both `400 Bad Request` validation
+  `NayaxSalesImportResult` response shape (extended by issue #1298, never narrowed), the status codes
+  and both `400 Bad Request` validation
   messages ("An Excel file is required." for a missing or empty upload, "Only .xlsx, .xls, or .csv
   files are supported." for an unsupported format) are unchanged. The `IFormFile` stays at the HTTP
   boundary: the use case receives only `NayaxSalesFileInput` (the uploaded name and a way to open the
@@ -14380,6 +14386,53 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   change the response body from a bare JSON string to `ProblemDetails`, which is the separate later
   change [Domain and application error mapping](#domain-and-application-error-mapping) already
   records for this action.
+
+##### What a blank cell or a missing column does to a stored sale (issue #1298)
+
+**The file is the source of truth for a transaction's status and amount, and says nothing at all
+through a blank cell.** Those are two different statements, and the import used to make only the
+first: `ClosedXmlNayaxSalesWorkbookReader` turned a blank or missing amount into `0` and a blank
+status into `null`, `EfNayaxSalesImportStore.Update` wrote status, amount, payment method, product
+name and machine name unconditionally, and so a row whose cells were empty - or a file exported
+without those columns - changed a stored completed $3.50 sale into a statusless $0 one and dropped
+it out of every report. The owner's decision of 14 November 2026 is what this now implements: a
+value the file carries wins, in either direction, on a queue-stored sale as much as any other; a
+value it does not carry changes nothing.
+
+- **The reader tells three cases apart** for the status and the settlement value, as
+  `NayaxSalesCellInput` beside each: `Absent` (no column, or a blank or whitespace cell), `Valid`
+  (a readable value, an explicit `0` amount included) and `Malformed` (a non-blank value it cannot
+  read). `NayaxSalesImportRow.SettlementValue` is nullable and is no longer defaulted to `0`. The
+  accepted number formats are unchanged - invariant culture, no currency symbol - so `$3.50` and
+  `abc` are still unreadable; what changed is that being unreadable is now *reported* instead of
+  looking exactly like an empty cell. Each row also carries its own `RowNumber`, counting the
+  header row as row 1.
+- **`ImportNayaxSales` decides what an update writes**, as it already did for the transaction cost
+  price, and `EfNayaxSalesImportStore.Update` still applies no rule of its own: the use case merges
+  the row with the stored sale (read through the import's own `StoredImportedSale`, which carries
+  the `CostableSale` view plus the settlement value, payment method and machine name that view does
+  not) and hands the store the values it decided. A blank or missing status, amount, payment method,
+  product name or machine name leaves the stored one exactly as it is; a product name that is kept
+  is also the name the product association is resolved against, so a kept name keeps the product it
+  names.
+- **A row whose status or amount is `Malformed` is applied nowhere.** The stored sale is untouched,
+  and the row is reported in `NayaxSalesImportResult.InvalidRows` with its row number and
+  transaction id so an operator can fix the file. It is never counted as updated, imported or
+  skipped.
+- **A new sale with a blank amount is skipped**, and counted as skipped: there is no stored amount
+  to keep, and `$0` is not a reading of an empty cell.
+- **The result reports two more facts** and keeps its three original counts unchanged:
+  `KeptStoredValues`, the number of *rows* (not fields) that kept a stored status or amount because
+  the file said nothing about it, and `InvalidRows`, with `Invalid` as its count. A kept payment
+  method, product name or machine name is deliberately not counted: an export written without those
+  columns is ordinary and long-standing, so counting it would report every such upload as having
+  kept something. Admin → Imports shows both counts in the toast it already showed the three counts
+  in (`salesImportSummary`); the page decides none of them.
+
+Out of scope, and unchanged: nothing stops a file from changing a stored status (refunded,
+completed or queue-verified) - the file wins; no new number format is accepted; nothing detects an
+older export uploaded after a newer one, because the file carries no export date; and sales an
+earlier upload already changed are not repaired here.
 
 Historical sale costing and its backfills are `Inventory.Application.Costing` use cases (issue #297,
 child 3 of #149), moved unchanged in behaviour from the removed

@@ -3,10 +3,29 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from './config.service';
 
+/**
+ * One row of an uploaded sales file that carried a status or an amount the server could not read
+ * (issue #1298). Nothing of such a row reached a stored sale; it is reported so the operator can
+ * find it in the file by its row number.
+ */
+export interface NayaxSalesImportInvalidRow {
+  readonly rowNumber: number;
+  readonly transactionId: number;
+}
+
+/**
+ * What `POST api/imports/nayax-sales` answers with. The three original counts are unchanged; issue
+ * #1298 added the two facts the counts alone could not say - how many rows kept a stored status or
+ * amount because the file's cell was blank or its column was missing, and which rows carried a
+ * value that could not be read at all. `invalid` is `invalidRows.length`, sent by the server.
+ */
 export interface NayaxSalesImportResult {
   imported: number;
   updated: number;
   skipped: number;
+  keptStoredValues: number;
+  invalid: number;
+  invalidRows: readonly NayaxSalesImportInvalidRow[];
 }
 
 /**

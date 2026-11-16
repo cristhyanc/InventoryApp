@@ -29,6 +29,26 @@ public sealed record ImportedNayaxSale(
     decimal? NayaxProductCostPrice);
 
 /// <summary>
+/// One sale this business already holds, as the import reads it before deciding what the uploaded
+/// row may overwrite (issue #1298). It is the <see cref="Costing.CostableSale"/> view the costing
+/// and replay path already used, plus the three imported facts that view does not carry, because a
+/// blank cell or a missing column in the file must leave each of them exactly as it is.
+///
+/// <para>The costing contract stays what it says it is - the facts historical sale costing reads -
+/// so a settlement value, a payment method and a machine name, which costing never reads, are
+/// carried here instead of being added to it.</para>
+/// </summary>
+/// <param name="Sale">The stored sale's costing view, carrying its status, product and instant.</param>
+/// <param name="SettlementValue">The stored settled amount; the column is not nullable.</param>
+/// <param name="PaymentMethod">The stored raw payment method.</param>
+/// <param name="MachineName">The stored machine name as a previous import or sync reported it.</param>
+public sealed record StoredImportedSale(
+    CostableSale Sale,
+    decimal SettlementValue,
+    string? PaymentMethod,
+    string? MachineName);
+
+/// <summary>
 /// Narrow persistence port for the uploaded Nayax sales import (issue #301), owned by the
 /// Application layer and implemented by
 /// <c>Inventory.Infrastructure.Persistence.EfNayaxSalesImportStore</c>.
@@ -58,7 +78,7 @@ public interface INayaxSalesImportStore
     /// the business has none. The row is loaded for update, so <see cref="Update"/> and
     /// <see cref="StageCost"/> write onto exactly it.
     /// </summary>
-    Task<CostableSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken);
+    Task<StoredImportedSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Stages <paramref name="sale"/> as a new sale of the caller's business and answers it as a
@@ -70,8 +90,9 @@ public interface INayaxSalesImportStore
     /// Overwrites every imported fact of <paramref name="stored"/> with <paramref name="sale"/>'s,
     /// leaving the row's identity and its costing columns alone, and answers the updated row as a
     /// costable sale. It applies no rule of its own: deciding what an update may overwrite -
-    /// notably that a row carrying no cost price must not erase the stored one - belongs to
-    /// <see cref="ImportNayaxSales"/>.
+    /// notably that a row carrying no cost price, no status, no amount, no payment method, no
+    /// product name and no machine name must not erase the stored ones (issue #1298) - belongs to
+    /// <see cref="ImportNayaxSales"/>, which hands this the values it decided.
     /// </summary>
     /// <param name="stored">A sale <see cref="FindByTransactionIdAsync"/> returned.</param>
     /// <param name="sale">The facts to write onto it.</param>

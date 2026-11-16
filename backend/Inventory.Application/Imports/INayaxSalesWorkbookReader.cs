@@ -17,6 +17,13 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// which the file always has to carry), and <see cref="ImportNayaxSales"/> decides which rows that
 /// makes importable. Keeping the raw facts separate from the accounting values derived from them is
 /// the Nayax integration rule in AGENTS.md.
+///
+/// <para>Since issue #1298 the status and the settlement value additionally say <em>what the file
+/// carried</em>, because "the file states nothing" and "the file states something unreadable" are
+/// different facts about a stored sale and used to look identical here. The value property is
+/// non-<c>null</c> exactly when its companion input is
+/// <see cref="NayaxSalesCellInput.Valid"/>, so a present value is what the file actually
+/// stated - an explicit <c>0</c> amount included.</para>
 /// </summary>
 /// <param name="TransactionId">The remote Nayax transaction identifier; <c>0</c> when absent or unparsable.</param>
 /// <param name="MachineId">The remote Nayax machine identifier; <c>0</c> when absent or unparsable.</param>
@@ -27,10 +34,18 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// sale instant only for a new sale whose export carries no usable GMT value (see
 /// <see cref="ImportNayaxSales"/>).
 /// </param>
-/// <param name="TransactionStatusId">The raw Nayax transaction-status identifier, classified centrally.</param>
+/// <param name="TransactionStatusId">
+/// The raw Nayax transaction-status identifier, classified centrally, or <c>null</c> when the file
+/// states none - a blank cell, a missing column, or a cell this reader could not read. Which of
+/// those it was is <paramref name="TransactionStatusInput"/>.
+/// </param>
 /// <param name="NayaxProductId">The raw remote product identifier, matched against the local catalogue.</param>
 /// <param name="MachineName">The machine name as the export reported it.</param>
-/// <param name="SettlementValue">The settled amount; <c>0</c> when the file carries none, as the legacy import read it.</param>
+/// <param name="SettlementValue">
+/// The settled amount the file states, or <c>null</c> when it states none (issue #1298). It is no
+/// longer defaulted to <c>0</c>: a blank cell and a missing column used to be indistinguishable
+/// from an explicit zero, which is how an export without the column wiped a stored sale's amount.
+/// </param>
 /// <param name="PaymentMethod">The raw payment method, classified centrally wherever it is read.</param>
 /// <param name="ProductName">The product name as the export reported it; the name half of product matching.</param>
 /// <param name="NayaxProductCostPrice">The raw transaction-level Nayax <c>Product Cost Price</c>.</param>
@@ -44,6 +59,15 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// a usable instant - so the import can tell a legacy export without the column from an authoritative
 /// value it failed to read, and never treats the latter as permission to fall back.
 /// </param>
+/// <param name="TransactionStatusInput">
+/// What the export carried in the status cell (issue #1298): nothing, a readable status, or a
+/// non-blank value that is not one.
+/// </param>
+/// <param name="SettlementValueInput">What the export carried in the settlement-value cell (issue #1298).</param>
+/// <param name="RowNumber">
+/// The row's own number in the file, counting the header row as row 1, so an invalid row can be
+/// reported where an operator can find it (issue #1298). <c>0</c> for a row no file produced.
+/// </param>
 public sealed record NayaxSalesImportRow(
     long TransactionId,
     long MachineId,
@@ -51,12 +75,31 @@ public sealed record NayaxSalesImportRow(
     int? TransactionStatusId,
     long? NayaxProductId,
     string? MachineName,
-    decimal SettlementValue,
+    decimal? SettlementValue,
     string? PaymentMethod,
     string? ProductName,
     decimal? NayaxProductCostPrice,
     DateTime? AuthorizationDateTimeGmt = null,
-    NayaxSalesGmtInput AuthorizationDateTimeGmtInput = NayaxSalesGmtInput.NotProvided);
+    NayaxSalesGmtInput AuthorizationDateTimeGmtInput = NayaxSalesGmtInput.NotProvided,
+    NayaxSalesCellInput TransactionStatusInput = NayaxSalesCellInput.Absent,
+    NayaxSalesCellInput SettlementValueInput = NayaxSalesCellInput.Absent,
+    int RowNumber = 0);
+
+/// <summary>
+/// What an uploaded export row carried in one cell whose absence must not overwrite a stored sale
+/// (issue #1298). Three cases, because the first two used to be one:
+/// </summary>
+public enum NayaxSalesCellInput
+{
+    /// <summary>The export has no such column, or this row's cell is blank. The file states nothing.</summary>
+    Absent,
+
+    /// <summary>The cell holds a readable value, carried in the row's own value property. An explicit <c>0</c> is one.</summary>
+    Valid,
+
+    /// <summary>The cell holds a non-blank value this reader cannot read. The row is invalid, never blank.</summary>
+    Malformed,
+}
 
 /// <summary>
 /// What an uploaded export row carried in its <c>AuthorizationDateTimeGMT</c> column (issue #380).
