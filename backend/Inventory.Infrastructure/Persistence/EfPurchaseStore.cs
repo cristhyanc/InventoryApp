@@ -3,6 +3,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
 using Inventory.Application.Time;
 using Inventory.Application.SupplierOrders;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
@@ -111,12 +112,46 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return (conflict.ProductId, productName, conflict.CutoffAt);
     }
 
-    public async Task<PurchaseRecord> CreateAsync(
+    /// <inheritdoc />
+    public async Task<PurchaseIdempotentCreate?> FindByIdempotencyKeyAsync(
+        string idempotencyKey, CancellationToken cancellationToken)
+    {
+        // The AppDbContext tenant query filter scopes this read; there is no per-call BusinessId
+        // clause to go stale, and one business's key therefore never finds another's purchase.
+        var purchase = await _db.Receipts
+            .Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.IdempotencyKey == idempotencyKey, cancellationToken);
+        return purchase is null ? null : new PurchaseIdempotentCreate(purchase.IdempotencyFingerprint, ToRecord(purchase));
+    }
+
+    /// <inheritdoc />
+    public async Task<PurchaseDuplicateMatch?> FindPossibleDuplicateAsync(
+        int supplierId,
+        string invoiceNumber,
+        DateTime fromUtcInclusive,
+        DateTime toUtcExclusive,
+        CancellationToken cancellationToken)
+    {
+        // The caller's own purchases only, through the ordinary tenant query filters. The most
+        // recent one, because that is the purchase an operator who just saved this receipt would
+        // recognise; nothing else about the day is reported and no count is taken.
+        return await _db.Receipts.AsNoTracking()
+            .Where(receipt => receipt.SupplierId == supplierId
+                && receipt.InvoiceNumber == invoiceNumber
+                && receipt.PurchaseDate >= fromUtcInclusive
+                && receipt.PurchaseDate < toUtcExclusive)
+            .OrderByDescending(receipt => receipt.PurchaseDate).ThenByDescending(receipt => receipt.Id)
+            .Select(receipt => new PurchaseDuplicateMatch(receipt.Id, receipt.Title, receipt.PurchaseDate))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<PurchaseCreateOutcome> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         AttachmentUploadReservation? attachmentReservation,
+        PurchaseIdempotencyClaim? idempotency,
         CancellationToken cancellationToken)
     {
         var purchase = new Purchase
@@ -135,6 +170,9 @@ public sealed class EfPurchaseStore : IPurchaseStore
             StoredFileName = file?.StoredFileName,
             ContentType = file?.ContentType,
             FileSizeBytes = file?.FileSizeBytes,
+            // Both together, or both null for a create that carries no key (issue #1247).
+            IdempotencyKey = idempotency?.Key,
+            IdempotencyFingerprint = idempotency?.Fingerprint,
         };
         ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
         purchase.Items = items.Select(x =>
@@ -158,11 +196,33 @@ public sealed class EfPurchaseStore : IPurchaseStore
         // A document's storage reservation needs the same lock for the same reason (issue #968):
         // an expired reservation is re-validated against the business's current usage inside this
         // transaction, and that read has to be the one the write is decided on.
-        var needsWriteLock = supplierOrderCompletion is not null || attachmentReservation is not null;
+        //
+        // An idempotency key needs it for the same reason again (issue #1247): "has this key
+        // already saved a purchase?" is a check-then-write rule, and a deferred transaction takes
+        // SQLite's write lock at the first write - after that read - so two copies of one
+        // submission would both read "nothing under this key" and both save a purchase, doubling
+        // the stock and the inventory value of every product on the receipt. With BEGIN IMMEDIATE
+        // the second caller waits, then reads the first one's committed purchase and replays it.
+        var needsWriteLock = supplierOrderCompletion is not null
+            || attachmentReservation is not null
+            || idempotency is not null;
         await using var writeLock = needsWriteLock
             ? await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken)
             : null;
         await using var transaction = needsWriteLock ? null : await BeginTransactionAsync();
+
+        // First inside the lock: has this key already saved a purchase? A retry is answered with
+        // the purchase that was saved, and a different request under a spent key is refused -
+        // neither of them writes a row, a movement or a cost. Returning without committing is what
+        // discards the transaction.
+        if (idempotency is not null
+            && await FindByIdempotencyKeyAsync(idempotency.Key, cancellationToken) is { } recorded)
+        {
+            if (!PurchaseIdempotencySubmission.IsSameRequest(idempotency, recorded))
+                throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+
+            return new PurchaseCreateOutcome(recorded.Purchase, Replayed: true);
+        }
 
         // Read, and refused, before anything at all is written: a stale decision must leave the
         // purchase unsaved rather than roll a committed-looking one back.
@@ -180,7 +240,18 @@ public sealed class EfPurchaseStore : IPurchaseStore
         }
 
         _db.Receipts.Add(purchase);
-        await _db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (PurchaseIdempotencyKeyIndex.IsViolatedBy(exception))
+        {
+            // The index refusing the insert, mapped to the same refusal the claim above produces.
+            // It is reachable even with that claim in place - a database this process did not
+            // serialise with - and when it is reached it must not surface as an unexplained 500.
+            throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+        }
+
         await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
         var physicalChanges = new Dictionary<long, int>();
         foreach (var item in purchase.Items)
@@ -202,7 +273,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
 
-        return ToRecord(purchase);
+        return new PurchaseCreateOutcome(ToRecord(purchase), Replayed: false);
     }
 
     /// <summary>

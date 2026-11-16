@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { GstClassification, Purchase, PurchaseGstSummary, PurchaseResponse, PurchaseValidation } from '../models/models';
 import { ConfigService } from './config.service';
@@ -44,6 +44,20 @@ export interface PurchaseUploadPayload {
    */
   completeSupplierOrderId?: number | null;
   completeSupplierOrderFingerprint?: string | null;
+  /**
+   * The key this create is claimed under (issue #1247). The same key with the same content answers
+   * with the purchase the first attempt saved and writes nothing, so a retry after a timeout cannot
+   * record the receipt twice; the same key with *different* content is refused with `409`. Omitting
+   * it is the create that has always existed.
+   */
+  idempotencyKey?: string | null;
+}
+
+/** A purchase already recorded that the one being entered looks like (issue #1247). */
+export interface PurchaseDuplicateMatch {
+  purchaseId: number;
+  title: string;
+  purchaseDate: string;
 }
 
 export interface PurchaseItemPayload {
@@ -139,6 +153,9 @@ export class PurchaseService {
       formData.append('completeSupplierOrderId', String(payload.completeSupplierOrderId));
       formData.append('completeSupplierOrderFingerprint', payload.completeSupplierOrderFingerprint);
     }
+    // Only on a create, and omitted entirely when there is none (issue #1247): an edit claims no
+    // key, and a request that sends none behaves exactly as every client did before.
+    if (payload.idempotencyKey) formData.append('idempotencyKey', payload.idempotencyKey);
 
     return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
       map(response => {
@@ -147,6 +164,28 @@ export class PurchaseService {
         return response.purchase;
       })
     );
+  }
+
+  /**
+   * Whether a purchase is already recorded for this supplier, with this invoice number, on this
+   * business day (issue #1247). The server decides what counts as a match - and the business day is
+   * the business's own, not the browser's - so nothing is compared here; `null` means there is
+   * nothing to warn about, including when the question could not be asked for want of a supplier,
+   * an invoice number or a date.
+   */
+  possibleDuplicate(
+    supplierId: number | null,
+    invoiceNumber: string | null,
+    purchaseDate: string | null
+  ): Observable<PurchaseDuplicateMatch | null> {
+    let params = new HttpParams();
+    if (supplierId !== null) params = params.set('supplierId', String(supplierId));
+    if (invoiceNumber !== null) params = params.set('invoiceNumber', invoiceNumber);
+    if (purchaseDate !== null) params = params.set('purchaseDate', purchaseDate);
+
+    return this.http
+      .get<{ match: PurchaseDuplicateMatch | null }>(`${this.baseUrl}/possible-duplicate`, { params })
+      .pipe(map(response => response.match ?? null));
   }
 
   /**

@@ -582,8 +582,9 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
             decision,
             attachmentReservation: null,
+            idempotency: null,
             CancellationToken.None);
-        return purchase.Id;
+        return purchase.Purchase.Id;
     }
 
     private static async Task<decimal> OutstandingForProductAsync(AppDbContext db)

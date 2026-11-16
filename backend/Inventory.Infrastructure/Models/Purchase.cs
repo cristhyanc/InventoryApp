@@ -30,6 +30,35 @@ public class Purchase : IBusinessOwned
     /// </summary>
     public string? InvoiceNumber { get; set; }
 
+    /// <summary>
+    /// The client-chosen idempotency key this purchase was created under (issue #1247), and the
+    /// fingerprint of the request that key stands for
+    /// (<c>Inventory.Domain.Purchases.PurchaseCreateFingerprint</c>).
+    ///
+    /// <para>Both are <c>null</c> for a purchase created without a key - every purchase that existed
+    /// before the additive <c>AddPurchaseIdempotencyKey</c> migration, which backfills nothing, and
+    /// every purchase a client that sends no key still creates. They are written together by the
+    /// create and by nothing else: no edit, no document attach and no import touches them, because a
+    /// key records which <em>request</em> saved this purchase rather than anything about the
+    /// purchase itself.</para>
+    ///
+    /// <para>A key is unique per business among the purchases that carry one, through the filtered
+    /// <c>(BusinessId, IdempotencyKey)</c> unique index: two businesses may legitimately choose the
+    /// same string (AGENTS.md § Tenant ownership and data isolation), and a purchase with no key
+    /// constrains nothing.</para>
+    ///
+    /// <para>Neither is ever serialised out, like <see cref="BusinessId"/>: a key identifies the
+    /// <em>request</em> that saved this purchase, the client already holds the one it sent, and the
+    /// fingerprint is a server-side comparison value. The published purchase contract is unchanged
+    /// by this column.</para>
+    /// </summary>
+    [JsonIgnore]
+    public string? IdempotencyKey { get; set; }
+
+    /// <inheritdoc cref="IdempotencyKey"/>
+    [JsonIgnore]
+    public string? IdempotencyFingerprint { get; set; }
+
     public decimal? TotalAmount { get; set; }
     public decimal? DeliveryCost { get; set; }
 

@@ -1184,6 +1184,29 @@ public class AppDbContext : DbContext
             .Property(r => r.InvoiceNumber)
             .HasMaxLength(PurchaseInvoiceNumberPolicy.MaxLength);
 
+        // The create's idempotency key and the fingerprint of the request it stands for (issue
+        // #1247). Both lengths are the Domain's, so the columns and the refusals the use case gives
+        // cannot disagree about what fits; the fingerprint column is exactly as long as the
+        // lowercase hexadecimal SHA-256 it holds.
+        modelBuilder.Entity<Purchase>()
+            .Property(r => r.IdempotencyKey)
+            .HasMaxLength(PurchaseIdempotencyPolicy.MaximumKeyLength);
+
+        modelBuilder.Entity<Purchase>()
+            .Property(r => r.IdempotencyFingerprint)
+            .HasMaxLength(64);
+
+        // What makes the key idempotent: one purchase per key per business, enforced by the database
+        // rather than only by the claim the create makes inside its write transaction. Per business,
+        // because two businesses may legitimately choose the same string (AGENTS.md § Tenant
+        // ownership and data isolation), and filtered to the rows that carry one, because a purchase
+        // created without a key - every purchase before issue #1247, and every one a client that
+        // sends no key still creates - must constrain nothing.
+        modelBuilder.Entity<Purchase>()
+            .HasIndex(r => new { r.BusinessId, r.IdempotencyKey })
+            .IsUnique()
+            .HasFilter(@"""IdempotencyKey"" IS NOT NULL");
+
         modelBuilder.Entity<Purchase>()
             .Property(r => r.TotalAmount)
             .HasColumnType("decimal(18,2)");

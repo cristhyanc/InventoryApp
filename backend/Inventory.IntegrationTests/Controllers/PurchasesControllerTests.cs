@@ -37,6 +37,7 @@ public class PurchasesControllerTests
             new GetPurchase(store),
             new GetPurchaseFile(store, storage),
             TestPurchaseUseCases.Upload(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.FindDuplicate(store),
             TestPurchaseUseCases.Attach(store, storage),
             new UpdatePurchase(store),
             new DeletePurchase(store, storage),
@@ -171,6 +172,7 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFileMetadata?>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
                 It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<PurchaseIdempotencyClaim?>(),
                 It.IsAny<CancellationToken>()))
             .Callback((
                 PurchaseFields _,
@@ -178,8 +180,9 @@ public class PurchasesControllerTests
                 PurchaseFileMetadata? file,
                 Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? _,
                 Inventory.Application.Attachments.AttachmentUploadReservation? _,
+                PurchaseIdempotencyClaim? _,
                 CancellationToken _) => captured = file)
-            .ReturnsAsync(Record(withDocument: false));
+            .ReturnsAsync(Created(withDocument: false));
         var documents = new Mock<IDocumentStorage>();
 
         var result = await UploadThrough(CreateController(store.Object, documents.Object), file: null);
@@ -248,8 +251,9 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFileMetadata>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
                 It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<PurchaseIdempotencyClaim?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Record(totalAmount: 30m));
+            .ReturnsAsync(Created(totalAmount: 30m));
         var documents = new Mock<IDocumentStorage>();
 
         var result = await UploadThrough(
@@ -297,6 +301,7 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFileMetadata>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
                 It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<PurchaseIdempotencyClaim?>(),
                 It.IsAny<CancellationToken>()))
             .Callback((
                 PurchaseFields _,
@@ -304,14 +309,16 @@ public class PurchasesControllerTests
                 PurchaseFileMetadata _,
                 Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? decision,
                 Inventory.Application.Attachments.AttachmentUploadReservation? _,
+                PurchaseIdempotencyClaim? _,
                 CancellationToken _) => captured = decision)
-            .ReturnsAsync(Record(totalAmount: 30m));
+            .ReturnsAsync(Created(totalAmount: 30m));
 
         await CreateController(store.Object).Upload(
             CreateFile("scan.jpg"), "Weekly restock", null, null, 30m, null, null, null, null, null, 4,
             """[{"productId":3,"quantity":24,"unitCost":1.15}]""",
             supplierOrderId,
-            fingerprint);
+            fingerprint,
+            idempotencyKey: null);
 
         if (!expectDecision)
         {
@@ -547,7 +554,7 @@ public class PurchasesControllerTests
         PurchasesController controller, IFormFile? file, string? items = null) =>
         controller.Upload(
             file, "Weekly restock", null, null, 30m, 5m, null, 2m, null, null, 4, items,
-            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null, idempotencyKey: null);
 
     private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
     {
@@ -583,4 +590,13 @@ public class PurchasesControllerTests
         withDocument ? "image/jpeg" : null,
         withDocument ? 3 : null,
         new DateTime(2026, 3, 1, 10, 5, 0, DateTimeKind.Utc));
+
+    /// <summary>
+    /// What the store answers a create with: the purchase, written by this request rather than
+    /// replayed from an idempotency key (issue #1247). The replay itself is a use-case and adapter
+    /// behaviour, covered by <c>UploadPurchaseIdempotencyTests</c> and
+    /// <c>PurchaseIdempotencyApiTests</c>.
+    /// </summary>
+    private static PurchaseCreateOutcome Created(decimal? totalAmount = 30m, bool withDocument = true) =>
+        new(Record(totalAmount, withDocument), Replayed: false);
 }

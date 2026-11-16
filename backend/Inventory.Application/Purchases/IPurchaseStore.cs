@@ -58,13 +58,52 @@ public interface IPurchaseStore
     /// inside that transaction and throws
     /// <see cref="Attachments.AttachmentStorageQuotaExceededException"/> when the upload no longer
     /// fits, persisting nothing at all.</para>
+    ///
+    /// <para><paramref name="idempotency"/> is the key this create is claimed under and the
+    /// fingerprint of the request it stands for (issue #1247), and <c>null</c> for a create that
+    /// carries no key - which behaves exactly as it always has. With one, the implementation reads
+    /// the key <em>inside</em> the write transaction, so the claim, the comparison and the write are
+    /// one operation: a key that already saved this same request returns that purchase with
+    /// <see cref="PurchaseCreateOutcome.Replayed"/> set and writes nothing at all, and a key that
+    /// saved a different request throws
+    /// <see cref="Inventory.Domain.Exceptions.DomainConflictException"/> with
+    /// <see cref="Inventory.Domain.Purchases.PurchaseIdempotencyPolicy.KeyReusedMessage"/>, also
+    /// writing nothing. The per-business unique index on the key backs that up at the write.</para>
     /// </summary>
-    Task<PurchaseRecord> CreateAsync(
+    Task<PurchaseCreateOutcome> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         AttachmentUploadReservation? attachmentReservation,
+        PurchaseIdempotencyClaim? idempotency,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The purchase already saved under <paramref name="idempotencyKey"/> for the caller's business
+    /// and the fingerprint stored beside it, or <c>null</c> when that key has saved nothing (issue
+    /// #1247). Scoped by the ordinary tenant query filters, so one business's key never finds
+    /// another's purchase even when both chose the same string.
+    /// </summary>
+    Task<PurchaseIdempotentCreate?> FindByIdempotencyKeyAsync(
+        string idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A purchase of the caller's business that already records <paramref name="invoiceNumber"/> for
+    /// <paramref name="supplierId"/> on the business day between <paramref name="fromUtcInclusive"/>
+    /// and <paramref name="toUtcExclusive"/>, or <c>null</c> when there is none (issue #1247).
+    ///
+    /// <para>It decides nothing: it is a read behind the warning the Add Purchase form shows before
+    /// saving, and <see cref="Inventory.Domain.Purchases.PurchaseDuplicateWarningPolicy"/> is where
+    /// the rule about what counts lives. The number is matched exactly, on the value the purchase
+    /// would be stored with. The half-open UTC range is the caller's business day
+    /// (<see cref="Time.IBusinessCalendar"/>), never the host's.</para>
+    /// </summary>
+    Task<PurchaseDuplicateMatch?> FindPossibleDuplicateAsync(
+        int supplierId,
+        string invoiceNumber,
+        DateTime fromUtcInclusive,
+        DateTime toUtcExclusive,
         CancellationToken cancellationToken);
 
     /// <summary>

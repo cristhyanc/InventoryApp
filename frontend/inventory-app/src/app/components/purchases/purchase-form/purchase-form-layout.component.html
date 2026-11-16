@@ -86,8 +86,25 @@
           maxlength="100"
           autocomplete="off"
           [(ngModel)]="form.invoiceNumber"
+          (blur)="invoiceNumberEntered.emit()"
         />
       </div>
+
+      @if (duplicateWarning) {
+        <!--
+          The possible-duplicate warning (issue #1247). It is a warning and never a block: Save is
+          untouched, nothing about it is validated here, and the server decided whether there is a
+          match at all - this only shows what it answered.
+        -->
+        <div
+          class="alert alert-warning md:col-span-3"
+          role="status"
+          [attr.data-testid]="testId('purchase-duplicate-warning')"
+        >
+          <p class="alert-title">{{ duplicateWarning }}</p>
+          <p class="m-0">Check it first if this is the same receipt; otherwise save as usual.</p>
+        </div>
+      }
     </div>
     <div class="border-t border-rr-line px-4 py-3">
       <app-purchase-receipt-field

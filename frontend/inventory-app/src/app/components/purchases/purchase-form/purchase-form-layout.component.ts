@@ -149,6 +149,14 @@ export class PurchaseFormLayoutComponent implements OnChanges {
    */
   @Input() gstSummary: PurchaseGstSummary | null = null;
 
+  /**
+   * The "this looks like a purchase you already recorded" sentence (issue #1247), or `null` when
+   * there is nothing to warn about. It is shown and never acted on: Save stays exactly as it is,
+   * because a supplier may reuse an invoice number and a business may legitimately record the same
+   * document twice. Only Add Purchase passes one; duplicate checks on an edit are out of scope.
+   */
+  @Input() duplicateWarning: string | null = null;
+
   @Output() readonly submitted = new EventEmitter<void>();
   @Output() readonly cancelled = new EventEmitter<void>();
   @Output() readonly addLine = new EventEmitter<void>();
@@ -164,6 +172,13 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   /** The person typed in the title, so a suggested one must never replace it again. */
   @Output() readonly titleEdited = new EventEmitter<void>();
+
+  /**
+   * The invoice number has been entered and the field left (issue #1247). It is a separate output
+   * from {@link detailsChange} because the invoice number is no part of a suggested title, and it
+   * fires on blur rather than per keystroke so a half-typed number asks the server nothing.
+   */
+  @Output() readonly invoiceNumberEntered = new EventEmitter<void>();
 
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
   readonly missingProductMessage = MISSING_PRODUCT_MESSAGE;

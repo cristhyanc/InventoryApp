@@ -1,6 +1,7 @@
 using Inventory.Application.Attachments;
 using Inventory.Application.Purchases;
 using Inventory.Application.SupplierOrders;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 
@@ -14,6 +15,10 @@ namespace InventoryApi.Tests.Application.Purchases;
 public sealed class FakePurchaseStore : IPurchaseStore
 {
     private readonly Dictionary<int, PurchaseRecord> _records = [];
+
+    /// <summary>What each idempotency key has already saved (issue #1247), keyed by the key.</summary>
+    private readonly Dictionary<string, PurchaseIdempotentCreate> _byIdempotencyKey = [];
+
     private int _nextId = 1;
 
     public bool SupplierExists { get; set; } = true;
@@ -39,6 +44,24 @@ public sealed class FakePurchaseStore : IPurchaseStore
     public AttachmentUploadReservation? LastAttachReservation { get; private set; }
 
     public PurchaseRecord? LastCreated { get; private set; }
+
+    /// <summary>The idempotency claim the create use case handed the store, or <c>null</c> (issue #1247).</summary>
+    public PurchaseIdempotencyClaim? LastCreateIdempotency { get; private set; }
+
+    /// <summary>
+    /// Makes the next create answer as the real adapter's own claim does when it finds the key
+    /// already used by an identical request: this purchase, and nothing written (issue #1247).
+    /// </summary>
+    public PurchaseRecord? ReplayNextCreateWith { get; set; }
+
+    /// <summary>What the duplicate-warning lookup should answer (issue #1247).</summary>
+    public PurchaseDuplicateMatch? PossibleDuplicate { get; set; }
+
+    /// <summary>
+    /// The arguments the duplicate-warning lookup was made with, so a test can see the business-day
+    /// range the calendar produced rather than only the answer.
+    /// </summary>
+    public DuplicateLookup? LastDuplicateLookup { get; private set; }
 
     /// <summary>The metadata the attach use case handed the store, so a test can see the stored name it generated.</summary>
     public PurchaseFileMetadata? LastAttachedDocument { get; private set; }
@@ -89,18 +112,41 @@ public sealed class FakePurchaseStore : IPurchaseStore
         return Task.FromResult(ConflictingBaseline);
     }
 
-    public Task<PurchaseRecord> CreateAsync(
+    public Task<PurchaseCreateOutcome> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         AttachmentUploadReservation? attachmentReservation,
+        PurchaseIdempotencyClaim? idempotency,
         CancellationToken cancellationToken)
     {
         LastCompletionDecision = supplierOrderCompletion;
         LastCreateReservation = attachmentReservation;
+        LastCreateIdempotency = idempotency;
         if (QuotaExceededOnCreate) throw new AttachmentStorageQuotaExceededException();
         if (ThrowOnCreate) throw new InvalidOperationException("store failure");
+
+        // The claim the real adapter makes inside its write transaction answering with a purchase
+        // another request had already saved under this key, which is the losing concurrent
+        // request's path (issue #1247): nothing is written here either.
+        if (ReplayNextCreateWith is { } alreadyWritten)
+        {
+            ReplayNextCreateWith = null;
+            return Task.FromResult(new PurchaseCreateOutcome(alreadyWritten, Replayed: true));
+        }
+
+        // The claim the real adapter makes inside its write transaction (issue #1247), in memory:
+        // the same key with the same request replays, a different one is the same refusal, and
+        // neither writes a purchase. A test that wants the race itself wants EfPurchaseStore and a
+        // real database - see PurchaseCreateConcurrencyTests.
+        if (idempotency is not null && _byIdempotencyKey.TryGetValue(idempotency.Key, out var alreadySaved))
+        {
+            if (!PurchaseIdempotencySubmission.IsSameRequest(idempotency, alreadySaved))
+                throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+
+            return Task.FromResult(new PurchaseCreateOutcome(alreadySaved.Purchase, Replayed: true));
+        }
 
         var id = _nextId++;
         // The GST classifications are resolved by the same Domain rules the EF store uses, so a use-case
@@ -123,8 +169,31 @@ public sealed class FakePurchaseStore : IPurchaseStore
             file?.FileName, file?.StoredFileName, file?.ContentType, file?.FileSizeBytes, DateTime.UtcNow);
         _records[id] = record;
         LastCreated = record;
-        return Task.FromResult(record);
+        if (idempotency is not null)
+            _byIdempotencyKey[idempotency.Key] = new PurchaseIdempotentCreate(idempotency.Fingerprint, record);
+        return Task.FromResult(new PurchaseCreateOutcome(record, Replayed: false));
     }
+
+    /// <inheritdoc />
+    public Task<PurchaseIdempotentCreate?> FindByIdempotencyKeyAsync(
+        string idempotencyKey, CancellationToken cancellationToken) =>
+        Task.FromResult(_byIdempotencyKey.GetValueOrDefault(idempotencyKey));
+
+    /// <inheritdoc />
+    public Task<PurchaseDuplicateMatch?> FindPossibleDuplicateAsync(
+        int supplierId,
+        string invoiceNumber,
+        DateTime fromUtcInclusive,
+        DateTime toUtcExclusive,
+        CancellationToken cancellationToken)
+    {
+        LastDuplicateLookup = new DuplicateLookup(supplierId, invoiceNumber, fromUtcInclusive, toUtcExclusive);
+        return Task.FromResult(PossibleDuplicate);
+    }
+
+    /// <summary>One duplicate-warning lookup, as the use case asked for it (issue #1247).</summary>
+    public sealed record DuplicateLookup(
+        int SupplierId, string InvoiceNumber, DateTime FromUtc, DateTime ToUtc);
 
     /// <summary>
     /// The in-memory half of "attach only if empty" (issue #976). The real serialisation is the EF

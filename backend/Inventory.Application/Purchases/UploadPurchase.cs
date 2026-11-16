@@ -3,6 +3,7 @@ using Inventory.Application.Documents;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.Tenancy;
 
@@ -41,6 +42,19 @@ namespace Inventory.Application.Purchases;
 /// <see cref="IPurchaseStore.CreateAsync"/> transaction the purchase, its allocations, its stock
 /// movements and its cost rebuild are already written in, so the completion commits with them or not
 /// at all. Nothing here closes an order, and there is no second request that could.</para>
+///
+/// <para><strong>Since issue #1247 the request may carry an idempotency key, and a retry under one
+/// saves nothing twice.</strong> The key is checked here, before the storage reservation and before
+/// a single byte of the document is written, so an ordinary retry costs no storage at all: a key
+/// that already saved this same request answers with that purchase, and a key that saved a
+/// <em>different</em> request is refused with
+/// <see cref="PurchaseIdempotencyPolicy.KeyReusedMessage"/>. That check is not the guarantee,
+/// though - it is the cheap half of it. The authoritative claim is
+/// <see cref="IPurchaseStore.CreateAsync"/>'s, taken inside the write transaction, because two
+/// copies of one submission that arrive together both read "nothing under this key" here. When that
+/// claim replays, this use case removes the bytes and the reservation its own attempt had staged,
+/// exactly as a failed save does - the purchase that was saved keeps its own document, and this
+/// request leaves nothing behind. A create with no key behaves exactly as it always has.</para>
 /// </summary>
 public sealed class UploadPurchase
 {
@@ -77,6 +91,15 @@ public sealed class UploadPurchase
         IReadOnlyList<PurchaseItemInput> items,
         SupplierOrderCompletionRequest? supplierOrderCompletion,
         CancellationToken cancellationToken)
+        => await Handle(file, fields, items, supplierOrderCompletion, idempotencyKey: null, cancellationToken);
+
+    public async Task<PurchaseRecord?> Handle(
+        PurchaseFileInput? file,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        SupplierOrderCompletionRequest? supplierOrderCompletion,
+        string? idempotencyKey,
+        CancellationToken cancellationToken)
     {
         // The document's own rules, unchanged, and only when there is a document (issue #976).
         if (IsDocumentInvalid(file)) return null;
@@ -100,6 +123,21 @@ public sealed class UploadPurchase
         // refused with nothing written, and the number that is accepted is stored trimmed, with
         // blank stored as none (issue #1162).
         fields = PurchaseInvoiceNumberSubmission.Normalized(fields);
+
+        // The key is read from the request as it stands here - the normalised invoice number
+        // included, and the submitted purchase date rather than the clock's default, so two
+        // identical retries render identically. Over-long is refused before anything is written.
+        var idempotency = PurchaseIdempotencySubmission.Claim(
+            idempotencyKey, ToFingerprintContent(file, fields, items, supplierOrderCompletion));
+
+        // The cheap half of the guarantee: a retry that arrives after the first save is answered
+        // here, before any storage is reserved and before any byte is written. The authoritative
+        // claim is the store's, inside its write transaction.
+        if (idempotency is not null
+            && await _store.FindByIdempotencyKeyAsync(idempotency.Key, cancellationToken) is { } recorded)
+        {
+            return Replay(idempotency, recorded);
+        }
 
         // Resolved before the document is saved too, and before the write transaction opens: a
         // completion that cannot name who decided it is not auditable, so an unidentifiable caller
@@ -139,8 +177,48 @@ public sealed class UploadPurchase
         };
 
         return await CreateOrCleanUpAsync(
-            resolvedFields, items, fileMetadata, decision, storedFileName, quota, cancellationToken);
+            resolvedFields, items, fileMetadata, decision, idempotency, storedFileName, quota, cancellationToken);
     }
+
+    /// <summary>
+    /// The purchase an earlier request under this key already saved - or a refusal, when that key
+    /// saved something else. Nothing is written either way.
+    /// </summary>
+    /// <exception cref="DomainConflictException">
+    /// The key has already saved a different purchase (issue #1247).
+    /// </exception>
+    private static PurchaseRecord Replay(PurchaseIdempotencyClaim claim, PurchaseIdempotentCreate recorded) =>
+        PurchaseIdempotencySubmission.IsSameRequest(claim, recorded)
+            ? recorded.Purchase
+            : throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+
+    /// <summary>
+    /// The request as <see cref="PurchaseCreateFingerprint"/> renders it: what the caller submitted,
+    /// including the document's name and length and the supplier-order completion it asked for, and
+    /// never a value this server resolved for it.
+    /// </summary>
+    private static PurchaseFingerprintContent ToFingerprintContent(
+        PurchaseFileInput? file,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        SupplierOrderCompletionRequest? supplierOrderCompletion) =>
+        new(
+            fields.Title,
+            fields.Notes,
+            fields.InvoiceNumber,
+            fields.TotalAmount,
+            fields.DeliveryCost,
+            fields.DeliveryGstClassification,
+            fields.PackageCost,
+            fields.PackageGstClassification,
+            fields.PurchaseDate,
+            fields.SupplierId,
+            file?.FileName,
+            file?.Length,
+            supplierOrderCompletion?.SupplierOrderId,
+            supplierOrderCompletion?.DecisionFingerprint,
+            [.. items.Select(item => new PurchaseFingerprintLine(
+                item.ProductId, item.Quantity, item.UnitCost, item.GstClassification))]);
 
     private static bool IsDocumentInvalid(PurchaseFileInput? file) =>
         file is not null
@@ -169,14 +247,23 @@ public sealed class UploadPurchase
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? fileMetadata,
         SupplierOrderCompletionDecision? decision,
+        PurchaseIdempotencyClaim? idempotency,
         string? storedFileName,
         AttachmentQuotaDecision quota,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await _store.CreateAsync(
-                resolvedFields, items, fileMetadata, decision, quota.Reservation, cancellationToken);
+            var outcome = await _store.CreateAsync(
+                resolvedFields, items, fileMetadata, decision, quota.Reservation, idempotency, cancellationToken);
+            if (!outcome.Replayed) return outcome.Purchase;
+
+            // An earlier request under this key had already saved the purchase, and the store wrote
+            // nothing (issue #1247). The bytes this attempt stored and the storage it reserved are
+            // therefore for a document no purchase will ever name, so they go exactly as they do
+            // when a save fails - the saved purchase keeps whatever document it was saved with.
+            await CleanUpAsync(storedFileName, quota, cancellationToken);
+            return outcome.Purchase;
         }
         catch
         {
@@ -186,11 +273,22 @@ public sealed class UploadPurchase
             // the quota no longer fits - so nothing holds storage for a purchase that was not
             // saved. A failed removal is left for the reconciliation command rather than hiding
             // the failure that produced it.
-            if (storedFileName is not null)
-                await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
-            await _quota.ReleaseAsync(quota, cancellationToken);
+            await CleanUpAsync(storedFileName, quota, cancellationToken);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Removes what this attempt staged for a document that is not going to be recorded: the bytes
+    /// it wrote, and the storage it reserved for them. Only this request's own bytes are ever
+    /// touched.
+    /// </summary>
+    private async Task CleanUpAsync(
+        string? storedFileName, AttachmentQuotaDecision quota, CancellationToken cancellationToken)
+    {
+        if (storedFileName is not null)
+            await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+        await _quota.ReleaseAsync(quota, cancellationToken);
     }
 
     private SupplierOrderCompletionDecision ToDecision(SupplierOrderCompletionRequest request)

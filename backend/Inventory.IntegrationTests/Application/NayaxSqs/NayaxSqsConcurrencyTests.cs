@@ -736,14 +736,15 @@ public class NayaxSqsConcurrencyTests
     private static PurchaseFields Fields() =>
         new("Fictional restock", null, null, null, null, PurchaseDate, null);
 
-    private static Task<PurchaseRecord> RecordPurchaseAsync(AppDbContext db, decimal unitCost) =>
-        PurchaseStore(db).CreateAsync(
+    private static async Task<PurchaseRecord> RecordPurchaseAsync(AppDbContext db, decimal unitCost) =>
+        (await PurchaseStore(db).CreateAsync(
             Fields(),
             [new PurchaseItemInput(NayaxSqsSaleFixture.ProductA, 10m, unitCost)],
             file: null,
             supplierOrderCompletion: null,
             attachmentReservation: null,
-            CancellationToken.None);
+            idempotency: null,
+            CancellationToken.None)).Purchase;
 
     /// <summary>
     /// Corrects the purchase's one line to <paramref name="unitCost"/> at the same quantity, which

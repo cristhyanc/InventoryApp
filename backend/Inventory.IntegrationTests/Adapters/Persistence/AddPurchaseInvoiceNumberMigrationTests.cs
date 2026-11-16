@@ -87,7 +87,24 @@ public class AddPurchaseInvoiceNumberMigrationTests
                 "CK_Receipts_DocumentMetadataAllOrNothing",
                 await MigrationSchemaProbe.CreateTableSqlAsync(connection, "Receipts"));
 
-            var purchase = await after.Receipts.Include(receipt => receipt.Items).SingleAsync();
+            // Projected rather than materialised, for the reason the movement below is: this test
+            // stops at an older schema, and the columns a later additive migration adds to Receipts
+            // (issue #1247's idempotency key and fingerprint) are in the model and not here.
+            var purchase = await after.Receipts
+                .Select(candidate => new
+                {
+                    candidate.InvoiceNumber,
+                    candidate.Title,
+                    candidate.Notes,
+                    candidate.TotalAmount,
+                    candidate.DeliveryCost,
+                    candidate.PackageCost,
+                    candidate.FileName,
+                    candidate.StoredFileName,
+                    candidate.ContentType,
+                    candidate.FileSizeBytes,
+                })
+                .SingleAsync();
             Assert.Null(purchase.InvoiceNumber);
 
             // Nothing else moved: the purchase's own fields, its document, its line, and the costing
@@ -98,7 +115,9 @@ public class AddPurchaseInvoiceNumberMigrationTests
             Assert.Equal(
                 ("scan.jpg", "abc.jpg", "image/jpeg", 2048L),
                 (purchase.FileName, purchase.StoredFileName, purchase.ContentType, purchase.FileSizeBytes));
-            var item = Assert.Single(purchase.Items);
+            var item = await after.ReceiptItems
+                .Select(candidate => new { candidate.Quantity, candidate.UnitCost })
+                .SingleAsync();
             Assert.Equal((12m, 1.10m), (item.Quantity, item.UnitCost));
             var product = await after.Products
                 .Select(candidate => new

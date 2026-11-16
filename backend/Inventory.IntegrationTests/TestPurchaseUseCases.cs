@@ -39,6 +39,16 @@ internal static class TestPurchaseUseCases
             clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc)),
             quota ?? FakeAttachmentQuota.NotEnforced());
 
+    /// <summary>
+    /// Issue #1247's "does this look like a purchase you already recorded?" read, for the controller
+    /// tests that construct the controller directly. It writes nothing and refuses nothing, and it
+    /// defaults to a calendar whose business date is the instant's own UTC date, so a test about
+    /// something else neither needs a time zone nor is surprised by one.
+    /// </summary>
+    public static FindPossibleDuplicatePurchase FindDuplicate(
+        IPurchaseStore store, IBusinessCalendar? calendar = null) =>
+        new(store, calendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 1)));
+
     /// <summary>Issue #976's "add a document later" use case, for the controller tests that construct it.</summary>
     public static AttachPurchaseDocument Attach(
         IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard? quota = null) =>
