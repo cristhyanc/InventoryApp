@@ -607,7 +607,8 @@ Agent evals: PASS
 the same commit and passed, including the new `testExists` coverage (pass on a `[Fact]` method,
 pass on a `[Theory]` followed by several `[InlineData]` lines before the method, pass on a Jest
 `it()` exact-title match, fail on a missing file, fail on a missing/renamed test, fail on a name
-that appears only in a comment, and schema validation of the new `file`/`test` fields).
+that appears only in a `//` comment or only inside a `/* */` block, pass on a `[Fact]` method
+declared after a block comment, and schema validation of the new `file`/`test` fields).
 
 The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
 

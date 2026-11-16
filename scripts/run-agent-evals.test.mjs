@@ -62,6 +62,14 @@ before(() => {
       '    public void Many_cases(int x)',
       '    {',
       '    }',
+      '',
+      '    /*',
+      '     * Block_ghost_test is only described here, inside a block comment.',
+      '     */',
+      '    [Fact]',
+      '    public void After_block_comment()',
+      '    {',
+      '    }',
       '}',
       '',
     ].join('\n'),
@@ -408,6 +416,22 @@ describe('testExists assertions', () => {
       { root },
     );
     assert.equal(result.status, 'FAIL');
+  });
+
+  it('fails when the name appears only inside a /* */ block comment', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Block_ghost_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('passes for a [Fact] method declared after a block comment', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'After_block_comment' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
   });
 });
 

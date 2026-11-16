@@ -231,12 +231,31 @@ export function loadCorpus(dir) {
 // --- testExists detection ----------------------------------------------------------------
 
 function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
+/**
+ * Removes `/* ... *\/` blocks left to right, each ending at its first `*\/`. An unterminated `/*`
+ * is left as text. Scanned with `indexOf` rather than a lazy regex, which backtracks over every
+ * remaining character once per unterminated `/*`.
+ */
+function stripBlockComments(content) {
+  let stripped = '';
+  let scanFrom = 0;
+  for (;;) {
+    const start = content.indexOf('/*', scanFrom);
+    if (start === -1) break;
+    const end = content.indexOf('*/', start + 2);
+    if (end === -1) break;
+    stripped += content.slice(scanFrom, start);
+    scanFrom = end + 2;
+  }
+  return stripped + content.slice(scanFrom);
 }
 
 /** Strips `/* ... *\/` block comments and `//`/`///` line comments (good enough for scanning test source). */
 function stripComments(content) {
-  return content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  return stripBlockComments(content).replace(/\/\/.*$/gm, '');
 }
 
 const XUNIT_TEST_ATTRIBUTES = Object.freeze(['Fact', 'Theory']);
@@ -248,8 +267,8 @@ const XUNIT_TEST_ATTRIBUTES = Object.freeze(['Fact', 'Theory']);
  * a comment never counts, because comments are stripped first.
  */
 function declaresXunitTest(content, testName) {
-  const methodPattern = new RegExp(`\\b${escapeRegExp(testName)}\\s*\\(`);
-  const attributeNamePattern = /\[\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+  const methodPattern = new RegExp(String.raw`\b${escapeRegExp(testName)}\s*\(`);
+  const attributeNamePattern = /\[\s*([A-Za-z_]\w*)/g;
 
   let hasFactOrTheory = false;
   for (const rawLine of stripComments(content).split('\n')) {
