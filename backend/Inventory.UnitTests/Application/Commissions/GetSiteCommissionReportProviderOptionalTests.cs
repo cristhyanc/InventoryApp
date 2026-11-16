@@ -5,6 +5,7 @@ using Inventory.Application.SupportSessions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Subscriptions;
+using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
 
@@ -184,7 +185,10 @@ public class GetSiteCommissionReportProviderOptionalTests
         var names = new Mock<ISiteNameResolver>();
         names.Setup(x => x.Resolve(It.IsAny<IReadOnlyList<NayaxMachine>>(), It.IsAny<long>())).Returns("Site 50");
 
-        return new GetSiteCommissionReport(fleet.Object, store.Object, names.Object)
+        // The trivial identity calendar: these tests are about the availability answers, not about
+        // which business day a sale falls on (that is MoneyReportSydneyBusinessDayTests).
+        return new GetSiteCommissionReport(
+                fleet.Object, store.Object, names.Object, new FakeBusinessCalendar(From))
             .Handle(From, To, null, CancellationToken.None);
     }
 

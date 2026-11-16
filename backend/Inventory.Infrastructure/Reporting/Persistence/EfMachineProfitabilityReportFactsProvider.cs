@@ -1,6 +1,7 @@
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -20,26 +21,39 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// classification is not EF-translatable, so this adapter materializes only the required sale
 /// columns and classifies/groups them in memory, matching the pattern already used by
 /// <see cref="EfBookkeepingReportFactsProvider"/>.
+///
+/// Since issue #1252 it selects its sales by business-date instants, through the same
+/// <see cref="EfReportingSharedQueries.SalesWindow"/> bookkeeping uses, and asks the fee use case for
+/// that window's own business-day period so each sale is estimated at the rate effective on the
+/// business date that counted it. Operating-expense dates are date-only values and keep their plain
+/// calendar-date bounds.
 /// </summary>
 public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitabilityReportFactsProvider
 {
     private readonly AppDbContext _db;
     private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
     private readonly IGetSiteCommissionReport _siteCommissions;
+    private readonly IBusinessCalendar _businessCalendar;
 
     public EfMachineProfitabilityReportFactsProvider(
-        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IGetSiteCommissionReport siteCommissions)
+        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IGetSiteCommissionReport siteCommissions,
+        IBusinessCalendar businessCalendar)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<MachineProfitabilityReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
+        // Two different kinds of boundary (issue #1250's rule, applied to this report by issue
+        // #1252). Sales are selected by instant, over the business days the requested dates name;
+        // operating-expense dates are date-only values and keep plain calendar-date bounds.
+        var window = EfReportingSharedQueries.SalesWindow(_businessCalendar, from, to);
         var endExclusive = to.Date.AddDays(1);
 
-        var saleRows = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
+        var saleRows = await EfReportingSharedQueries.SalesQuery(_db, window, machineId)
             .Select(x => new { x.MachineID, x.MachineName, x.PaymentMethod, x.SettlementValue, x.CostOfGoodsSold })
             .ToListAsync(cancellationToken);
 
@@ -63,7 +77,7 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
             .ToList();
 
         var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(
-            _db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
+            _db, _siteCommissions, window, machineId, cancellationToken);
         var operatingExpensesByMachine = await OperatingExpensesByMachineAsync(
             from, endExclusive, machineGroups.Select(group => group.MachineID).ToList(), cancellationToken);
 
@@ -71,7 +85,11 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
         var missingFeeRateTransactions = 0;
         foreach (var group in machineGroups)
         {
-            var fees = await _nayaxProcessingFees.Handle(from, to, group.MachineID, cancellationToken);
+            // The fees are charged to exactly the sales this machine's revenue counts, and each one
+            // is estimated at the rate effective on the business date that counted it (issue #1252,
+            // on issue #310's contract and issue #1250's window).
+            var fees = await _nayaxProcessingFees.HandleBusinessPeriod(
+                window.FeePeriod, group.MachineID, cancellationToken);
             missingFeeRateTransactions += fees.MissingRateTransactionCount;
             var commission = commissions.Machines.GetValueOrDefault(group.MachineID);
             machines.Add(new MachineProfitabilityMachineFacts(
@@ -86,11 +104,14 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
         // any imported settlement row overlapping the period (issue #731). A machine with only
         // cancelled rows produces no row at all, which is unverified rather than a measured zero.
         var containsSalesRows = await EfReportingSharedQueries
-            .AllSalesQuery(_db, from, endExclusive, machineId).AnyAsync(cancellationToken);
+            .AllSalesQuery(_db, window, machineId).AnyAsync(cancellationToken);
+        // Reimbursement coverage dates are date-only values, so the imported summary keeps the
+        // plain calendar range; coverage is judged over exactly the instants the sales above were
+        // selected between (issue #1250's rule).
         var imported = await EfReportingSharedQueries.ImportedSummaryAsync(
             _db, from, endExclusive, machineId, cancellationToken);
         var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
-            _db, from, endExclusive, containsSalesRows, imported.ContainsRows, cancellationToken);
+            _db, window, containsSalesRows, imported.ContainsRows, cancellationToken);
 
         return new MachineProfitabilityReportFacts(machines, missingFeeRateTransactions, commissions.IsComplete, commissions.Warnings)
         {

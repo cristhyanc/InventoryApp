@@ -5,7 +5,9 @@ using TransactionSaleStatus = Inventory.Domain.FinancialConfiguration.NayaxTrans
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
+using Inventory.Application.Time;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -16,9 +18,19 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// Relational SQLite tests: the transaction sales report needs every transaction status (not only
 /// completed sales, unlike the already-migrated aggregate reports), date-range/machine scoping, and
 /// raw effective-dated fee/commission facts, which depend on SQL translation.
+///
+/// <para>The provider runs the real <c>Australia/Sydney</c> calendar here, because since issue #1252
+/// the requested dates are inclusive <em>business</em> dates and the sales are selected between the
+/// UTC instants those Sydney days cover.</para>
 /// </summary>
 public class EfTransactionSalesReportFactsProviderTests
 {
+    private static readonly IBusinessCalendar Sydney =
+        new FixedSydneyTime(new DateTime(2025, 8, 1, 3, 0, 0)).Calendar;
+
+    private static EfTransactionSalesReportFactsProvider Provider(
+        AppDbContext db, INayaxLynxClient? nayax = null) => new(db, Sydney, nayax);
+
     // The provider now returns Transactions as an asynchronous stream (see
     // TransactionSalesReportFacts), so tests materialise it explicitly instead of using it as a list.
     private static async Task<List<TransactionSalesReportFactsRow>> ToListAsync(
@@ -70,7 +82,7 @@ public class EfTransactionSalesReportFactsProviderTests
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, TransactionStatusId = NayaxTransactionStatusIds.Refunded, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, TransactionStatusId = null, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
@@ -81,22 +93,42 @@ public class EfTransactionSalesReportFactsProviderTests
         Assert.Contains(transactions, x => x.TransactionId == 4 && x.Status == TransactionSaleStatus.Unknown);
     }
 
+    /// <summary>
+    /// The requested range is a pair of inclusive <em>business</em> dates and its day boundary is
+    /// Sydney midnight, not UTC midnight (issue #1252; this test asserted the UTC boundary before,
+    /// which is the behaviour the repository owner's 13 November 2026 decision replaced).
+    ///
+    /// Sydney is +10 in August, so the business days 1 and 2 August 2025 run from 2025-07-31T14:00Z
+    /// up to, exclusively, 2025-08-02T14:00Z. The instant one second before that start and the
+    /// instant at the exclusive end are out; the start itself and the last instant before the next
+    /// Sydney midnight are in.
+    /// </summary>
     [Fact]
-    public async Task Date_range_is_inclusive_of_both_boundary_days_and_excludes_the_day_after()
+    public async Task Date_range_is_inclusive_of_both_boundary_business_days_and_excludes_the_day_after()
     {
+        var startUtc = new DateTime(2025, 7, 31, 14, 0, 0, DateTimeKind.Utc);
+        var endExclusiveUtc = new DateTime(2025, 8, 2, 14, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(startUtc, Sydney.StartOfBusinessDayUtc(new DateTime(2025, 8, 1)));
+        Assert.Equal(endExclusiveUtc, Sydney.StartOfBusinessDayUtc(new DateTime(2025, 8, 3)));
+
         await using var db = await CreateSqliteAsync();
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 1m, MachineAuthorizationTime = new DateTime(2025, 7, 31, 23, 59, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
-            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 2m, MachineAuthorizationTime = new DateTime(2025, 8, 1, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
-            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, MachineAuthorizationTime = new DateTime(2025, 8, 2, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
-            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 8m, MachineAuthorizationTime = new DateTime(2025, 8, 3, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed });
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 1m, MachineAuthorizationTime = startUtc.AddSeconds(-1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 2m, MachineAuthorizationTime = startUtc, TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, MachineAuthorizationTime = endExclusiveUtc.AddSeconds(-1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 8m, MachineAuthorizationTime = endExclusiveUtc, TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 2), null, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
 
         Assert.Equal(new long[] { 2, 3 }, transactions.Select(x => x.TransactionId).OrderBy(x => x));
+        // Each row also carries the Sydney date its instant falls on, which is what the use case
+        // resolves the sale's fee rate and commission agreement by.
+        Assert.Equal(
+            [new DateTime(2025, 8, 1), new DateTime(2025, 8, 2)],
+            transactions.OrderBy(x => x.TransactionId).Select(x => x.BusinessDate).ToList());
     }
 
     [Fact]
@@ -107,7 +139,7 @@ public class EfTransactionSalesReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
@@ -131,7 +163,7 @@ public class EfTransactionSalesReportFactsProviderTests
             CostSource = SaleCostSource.InventoryLedger
         });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
@@ -156,7 +188,7 @@ public class EfTransactionSalesReportFactsProviderTests
             Basis = CommissionBasis.CardSales
         });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -184,7 +216,7 @@ public class EfTransactionSalesReportFactsProviderTests
         });
         await db.SaveChangesAsync();
         var nayax = new FakeNayaxLynxClient(new NayaxMachine { MachineID = 10, MachineName = "Alpha One", CustomerID = 91 });
-        var provider = new EfTransactionSalesReportFactsProvider(db, nayax);
+        var provider = Provider(db, nayax);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
@@ -209,7 +241,7 @@ public class EfTransactionSalesReportFactsProviderTests
             TransactionStatusId = NayaxTransactionStatusIds.Completed
         });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db, null);
+        var provider = Provider(db, nayax: null);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
         var transactions = await ToListAsync(facts.Transactions);
@@ -227,7 +259,7 @@ public class EfTransactionSalesReportFactsProviderTests
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfTransactionSalesReportFactsProvider(db);
+        var provider = Provider(db);
         using var cts = new CancellationTokenSource();
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, cts.Token);

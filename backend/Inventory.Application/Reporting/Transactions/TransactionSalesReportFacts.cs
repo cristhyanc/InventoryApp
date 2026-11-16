@@ -35,6 +35,11 @@ public sealed record TransactionSalesReportFacts(
 public sealed record TransactionSalesReportFactsRow(
     long TransactionId,
     DateTime TransactionDate,
+    // The business date TransactionDate's instant falls on, derived by the adapter through the one
+    // business calendar port (issue #1252). The sale's effective-dated fee rate and commission
+    // agreement are resolved by this date, never by the UTC date the instant happens to land on: a
+    // sale at 00:01 in the business's own zone belongs to the new day's rate, not the previous day's.
+    DateTime BusinessDate,
     long MachineId,
     // Raw persisted machine name; null when the imported sale never carried one. The use case
     // applies the "Machine {id}" display fallback, so search matching (against the raw value) and

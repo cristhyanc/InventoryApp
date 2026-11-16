@@ -78,7 +78,8 @@ public class TransactionSalesTimestampContractTests
         }
 
         await using var db = Context(connection);
-        var useCase = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db));
+        var useCase = new GetTransactionSalesReport(
+            new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar));
 
         var report = await useCase.Handle(
             new TransactionSalesFilterDto(From: utcInstant.Date, To: utcInstant.Date),

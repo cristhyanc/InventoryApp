@@ -11,7 +11,10 @@ public readonly record struct TransactionRowInputs(
     decimal Sale,
     NayaxPaymentType PaymentType,
     NayaxTransactionStatus Status,
-    DateTime AuthorizationDate,
+    // The sale's business date, which is the only date the effective-dated fee rate and commission
+    // agreement below are resolved by (issue #1252). The caller converts the stored UTC instant
+    // through the business calendar; this policy never reads a date out of an instant itself.
+    DateTime BusinessDate,
     long? SiteId,
     decimal? CostOfGoodsSold,
     // Whether a persisted cost is recorded for this sale (independent of completion status),
@@ -39,7 +42,9 @@ public readonly record struct TransactionRowResult(
 /// <summary>
 /// Per-transaction row-building policy: the effective-dated Nayax fee-rate lookup and
 /// fee-unavailable rule, the effective-dated site commission-agreement lookup and its
-/// overlapping/unavailable rules, and the resulting gross/direct profit derivation. Distinct from
+/// overlapping/unavailable rules, and the resulting gross/direct profit derivation. Both
+/// effective-dated lookups are made on the sale's <em>business</em> date (issue #1252), which the
+/// caller resolves through the business calendar before building the inputs. Distinct from
 /// (but consistent with) the aggregate bookkeeping/machine-profitability completeness rules in
 /// <c>Inventory.Domain.Reporting.Bookkeeping</c>/<c>Profitability</c>: here, each transaction is
 /// judged on its own effective-dated coverage rather than period-level completeness.
@@ -56,7 +61,7 @@ public static class TransactionRowPolicy
         var feeUnavailable = false;
         if (sale.Status == NayaxTransactionStatus.Completed && sale.PaymentType == NayaxPaymentType.Card)
         {
-            var rate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, sale.AuthorizationDate);
+            var rate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, sale.BusinessDate);
             if (rate is null)
             {
                 feeExGst = feeGst = feeIncGst = null;
@@ -99,7 +104,7 @@ public static class TransactionRowPolicy
                         default,
                         default)),
                     sale.SiteId.Value,
-                    sale.AuthorizationDate);
+                    sale.BusinessDate);
             }
             catch (InvalidOperationException)
             {

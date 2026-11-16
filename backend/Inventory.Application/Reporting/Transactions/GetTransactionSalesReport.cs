@@ -20,6 +20,11 @@ namespace Inventory.Application.Reporting.Transactions;
 /// An unpaginated (export) request intentionally retains every filtered row, since the complete
 /// result set is the answer. Builds the authoritative <see cref="TransactionSalesReportDto"/>
 /// consumed by both the API response and the CSV/XLSX export.
+///
+/// <para>The requested <c>from</c>/<c>to</c> are inclusive <em>business</em> dates since issue
+/// #1252: the adapter selects the sales between the UTC instants those business days cover, and
+/// each row's fee rate and commission agreement are resolved by the sale's own business date, so
+/// this report's completed-sale totals agree with bookkeeping's for the same range.</para>
 /// </summary>
 public sealed class GetTransactionSalesReport
 {
@@ -97,8 +102,11 @@ public sealed class GetTransactionSalesReport
                 ? catalogueName
                 : string.IsNullOrWhiteSpace(detail.RawProductName) ? "Unmapped product" : ProductMatcher.NormalizeName(detail.RawProductName);
 
+            // The sale's business date, not its UTC instant, answers the two effective-dated
+            // questions (issue #1252): which fee rate estimates it and which commission agreement
+            // covers it. The adapter derived that date through the one business calendar port.
             var result = TransactionRowPolicy.Calculate(
-                new TransactionRowInputs(detail.Sale, detail.PaymentType, detail.Status, detail.TransactionDate,
+                new TransactionRowInputs(detail.Sale, detail.PaymentType, detail.Status, detail.BusinessDate,
                     detail.SiteId, detail.CostOfGoodsSold, detail.HasPersistedCost),
                 facts.FeeRates, facts.CommissionAgreements);
 

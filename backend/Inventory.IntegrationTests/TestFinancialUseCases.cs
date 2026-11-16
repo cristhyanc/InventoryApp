@@ -31,11 +31,19 @@ internal static class TestFinancialUseCases
     /// </summary>
     public static IBusinessCalendar TrivialCalendar => new FakeBusinessCalendar(new DateTime(2026, 3, 12));
 
+    /// <summary>
+    /// The commission report use case over a test database. Since issue #1252 it resolves the
+    /// requested dates to business-day instants and each sale's agreement to that sale's business
+    /// date, so a test about <c>Australia/Sydney</c> boundaries passes <see cref="FixedSydneyTime"/>'s
+    /// calendar; the rest may leave it at the trivial identity fake.
+    /// </summary>
     public static GetSiteCommissionReport SiteCommissions(
         AppDbContext db,
-        INayaxLynxClient nayax) =>
+        INayaxLynxClient nayax,
+        IBusinessCalendar? businessCalendar = null) =>
         new(
             nayax,
             new EfSiteCommissionStore(db),
-            new SiteNameResolver());
+            new SiteNameResolver(),
+            businessCalendar ?? TrivialCalendar);
 }

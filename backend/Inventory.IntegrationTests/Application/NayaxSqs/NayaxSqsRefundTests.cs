@@ -741,7 +741,7 @@ public class NayaxSqsRefundTests
         await using var db = fixture.Context();
 
         var report = await new GetProductProfitabilityReport(
-                new EfProductProfitabilityReportFactsProvider(db),
+                new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
                 new EfProductPurchaseCostFactsProvider(db))
             .Handle(
                 new ReportingFilterDto(
@@ -757,7 +757,8 @@ public class NayaxSqsRefundTests
     {
         await using var db = fixture.Context();
 
-        var report = await new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db))
+        var report = await new GetTransactionSalesReport(
+                new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar))
             .Handle(
                 new TransactionSalesFilterDto(
                     From: NayaxSqsSaleFixture.SaleInstant.Date.AddDays(-7),
