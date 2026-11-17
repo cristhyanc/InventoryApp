@@ -10,6 +10,7 @@ import {
   GstClassification,
   Product,
   Supplier,
+  SupplierGstDefaults,
   SupplierOrder,
   SupplierOrderCompletionPreview
 } from '../../models/models';
@@ -33,7 +34,11 @@ import {
 } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { SupplierOrderCompletionDialogComponent } from './supplier-order-completion-dialog/supplier-order-completion-dialog.component';
-import { PurchaseFormLayoutComponent, missingProductErrorMessage } from './purchase-form/purchase-form-layout.component';
+import {
+  PurchaseFormLayoutComponent,
+  PurchaseLineGstRuleSource,
+  missingProductErrorMessage
+} from './purchase-form/purchase-form-layout.component';
 import { purchaseTitleSuggestion } from './purchase-form/purchase-title-suggestion';
 import {
   PurchaseScannedLevy,
@@ -105,11 +110,14 @@ interface DraftPurchaseItem {
   /** The per-unit cost the request carries: entered while `unit` wins, calculated while `total` does. */
   unitCost: number | null;
   /**
-   * This line's GST classification (issue #431). A new line starts as `Unknown`/Not classified and
-   * stays that way unless a person picks something: nothing here pre-fills a classification from the
-   * product, the supplier or the amount (parent issue #62, decision D4).
+   * This line's GST classification (issue #431). Until a person picks one (`gstChosen`), it is
+   * pre-filled from the product's GST rule, else the supplier's product-line default (issue #1348,
+   * which reverses parent issue #62's decision D4 for new purchases), and left out of the request so
+   * the server applies the same rule. Nothing is ever inferred from an amount.
    */
   gstClassification: GstClassification;
+  gstChosen?: boolean;
+  gstRuleSource?: PurchaseLineGstRuleSource;
 
   /**
    * What a scanned receipt said about this line (issue #1166), and absent on a line somebody typed.
@@ -217,6 +225,19 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   /** The in-flight duplicate lookup, cancelled whenever a newer one starts or the form is reset. */
   private duplicateLookup: Subscription | null = null;
 
+  /**
+   * Product GST rules already read for this page (issue #1348), by product id. A product whose
+   * rule could not be read is recorded as having none: the line then shows Not classified, and the
+   * server still applies the real rule when the untouched line is saved.
+   */
+  private readonly productGstRules = new Map<number, GstClassification>();
+  private readonly productGstRuleRequests = new Set<number>();
+
+  /** The chosen supplier's GST defaults (issue #1348), or `null` while none is chosen or known. */
+  private supplierGstDefaults: SupplierGstDefaults | null = null;
+  private supplierGstDefaultsFor: number | null = null;
+  private supplierGstDefaultsLookup: Subscription | null = null;
+
   form = {
     title: '',
     notes: '',
@@ -226,6 +247,8 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     deliveryGstClassification: GstClassification.Unknown,
     packageCost: null as number | null,
     packageGstClassification: GstClassification.Unknown,
+    deliveryGstChosen: false,
+    packageGstChosen: false,
     purchaseDate: PurchaseUploadComponent.localDate(new Date()),
     supplierId: '' as number | ''
   };
@@ -246,6 +269,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
     this.duplicateLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup?.unsubscribe();
   }
 
   ngOnInit(): void {
@@ -319,9 +343,15 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       deliveryGstClassification: GstClassification.Unknown,
       packageCost: null,
       packageGstClassification: GstClassification.Unknown,
+      deliveryGstChosen: false,
+      packageGstChosen: false,
       purchaseDate: PurchaseUploadComponent.localDate(new Date()),
       supplierId: ''
     };
+    this.supplierGstDefaultsLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup = null;
+    this.supplierGstDefaults = null;
+    this.supplierGstDefaultsFor = null;
 
     this.supplierOrderId = null;
     this.supplierOrder = null;
@@ -342,6 +372,89 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   onDetailsChange(): void {
     this.refreshSuggestedTitle();
     this.checkForPossibleDuplicate();
+    this.loadSupplierGstDefaults();
+  }
+
+  /** A line's product changed, so its GST follows that product's rule until a person picks one. */
+  onLineProductChange(): void {
+    this.loadGstRules();
+  }
+
+  /**
+   * Reads whatever product rules and supplier defaults the current lines and supplier need, then
+   * pre-fills every GST picker nobody has picked (issue #1348).
+   */
+  private loadGstRules(): void {
+    this.loadSupplierGstDefaults();
+    for (const productId of new Set(this.items.map((item) => Number(item.productId)).filter((id) => id > 0))) {
+      if (this.productGstRules.has(productId) || this.productGstRuleRequests.has(productId)) continue;
+      this.productGstRuleRequests.add(productId);
+      this.productService.getGstRule(productId).subscribe({
+        next: (rule) => this.recordProductGstRule(productId, rule.gstRule),
+        error: () => this.recordProductGstRule(productId, GstClassification.Unknown)
+      });
+    }
+    this.applyGstRules();
+  }
+
+  private recordProductGstRule(productId: number, rule: GstClassification): void {
+    this.productGstRuleRequests.delete(productId);
+    this.productGstRules.set(productId, rule);
+    this.applyGstRules();
+  }
+
+  /** Reads the chosen supplier's GST defaults, once per supplier, and drops a stale answer. */
+  private loadSupplierGstDefaults(): void {
+    const supplierId = this.form.supplierId === '' ? null : Number(this.form.supplierId);
+    if (supplierId === this.supplierGstDefaultsFor) return;
+
+    this.supplierGstDefaultsLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup = null;
+    this.supplierGstDefaultsFor = supplierId;
+    this.supplierGstDefaults = null;
+    this.applyGstRules();
+    if (supplierId === null) return;
+
+    this.supplierGstDefaultsLookup = this.supplierService.getGstDefaults(supplierId).subscribe({
+      next: (defaults) => {
+        if (this.supplierGstDefaultsFor !== supplierId) return;
+        this.supplierGstDefaults = defaults;
+        this.applyGstRules();
+      },
+      // Unknown defaults pre-fill nothing; the server still applies the real ones on save.
+      error: () => undefined
+    });
+  }
+
+  /**
+   * Pre-fills every GST picker a person has not picked, with the server's precedence: a line takes
+   * the product's rule, then the supplier's product-line default; a charge takes only the supplier's
+   * matching fee default. It is only what the picker shows: an unpicked component is left out of the
+   * request, and the server classifies it from the rules as they stand when it saves.
+   */
+  private applyGstRules(): void {
+    const defaults = this.supplierGstDefaults;
+    for (const item of this.items) {
+      if (item.gstChosen) continue;
+      const productRule = this.productGstRules.get(Number(item.productId)) ?? GstClassification.Unknown;
+      const supplierDefault = defaults?.productLineGstDefault ?? GstClassification.Unknown;
+      if (item.productId && productRule !== GstClassification.Unknown) {
+        item.gstClassification = productRule;
+        item.gstRuleSource = 'product';
+      } else if (item.productId && supplierDefault !== GstClassification.Unknown) {
+        item.gstClassification = supplierDefault;
+        item.gstRuleSource = 'supplier';
+      } else {
+        item.gstClassification = GstClassification.Unknown;
+        item.gstRuleSource = undefined;
+      }
+    }
+    if (!this.form.deliveryGstChosen) {
+      this.form.deliveryGstClassification = defaults?.deliveryGstDefault ?? GstClassification.Unknown;
+    }
+    if (!this.form.packageGstChosen) {
+      this.form.packageGstClassification = defaults?.packageGstDefault ?? GstClassification.Unknown;
+    }
   }
 
   /** The supplier or the date changed, so a title the person has not typed follows them. */
@@ -411,8 +524,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Use draft items with nullable unitCost - do NOT convert null to 0. The GST classification
-    // stays Not classified: a supplier order says nothing about a line's GST status.
+    // Use draft items with nullable unitCost - do NOT convert null to 0. A supplier order says
+    // nothing about a line's GST status: each line's GST follows its product's rule or the
+    // supplier's default (issue #1348), read below.
     //
     // The line opens with Total price as the winning field, on the total that prefilled unit price
     // already implies, and the unit cost itself is left exactly as the order recorded it: receiving
@@ -425,6 +539,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       unitCost: line.unitPrice ?? null,
       gstClassification: GstClassification.Unknown
     }));
+    this.loadGstRules();
   }
 
   /**
@@ -465,6 +580,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     this.items = fill.lines;
     this.scannedLevies = fill.levies;
+    // The receipt's GST marker is the receipt's claim, never a classification; a matched line's GST
+    // follows its product's rule or the supplier's default (issue #1348).
+    this.loadGstRules();
     this.selectedFile = result.file;
     this.scannedReceipt = result.file;
     this.error = '';
@@ -571,7 +689,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       productId: item.productId,
       quantity: item.quantity as number,  // Safe to cast after validation
       unitCost: item.unitCost as number,  // Safe to cast after validation
-      gstClassification: PurchaseUploadComponent.submittedClassification(item.gstClassification)
+      gstClassification: item.gstChosen ? item.gstClassification : undefined
     }));
 
     // Before the final save, when this purchase was started from a supplier order, ask the server
@@ -594,10 +712,10 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         totalAmount: this.form.totalAmount,
         deliveryCost: this.form.deliveryCost,
         deliveryGstClassification: this.chargeClassification(
-          this.form.deliveryCost, this.form.deliveryGstClassification),
+          this.form.deliveryCost, this.form.deliveryGstClassification, this.form.deliveryGstChosen),
         packageCost: this.form.packageCost,
         packageGstClassification: this.chargeClassification(
-          this.form.packageCost, this.form.packageGstClassification),
+          this.form.packageCost, this.form.packageGstClassification, this.form.packageGstChosen),
         purchaseDate: this.purchaseTimestamp(),
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
         items: validItems,
@@ -785,20 +903,12 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   /**
    * The classification to submit for a delivery or package charge: nothing at all unless the charge
-   * exists and a person actually picked a state for it.
+   * exists and a person actually picked a state for it - including Not classified, which then stays
+   * unresolved rather than taking the supplier's default (issue #1348).
    */
   private chargeClassification(
-    amount: number | null, classification: GstClassification): GstClassification | undefined {
-    return isChargePresent(amount) ? PurchaseUploadComponent.submittedClassification(classification) : undefined;
-  }
-
-  /**
-   * What a new purchase submits for one component. `Unknown` is left out of the request rather than
-   * sent: it is already the server's state for a component nobody classified, and omitting it keeps
-   * the request free of choices the person did not make.
-   */
-  private static submittedClassification(classification: GstClassification): GstClassification | undefined {
-    return classification === GstClassification.Unknown ? undefined : classification;
+    amount: number | null, classification: GstClassification, chosen: boolean | undefined): GstClassification | undefined {
+    return isChargePresent(amount) && chosen ? classification : undefined;
   }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
 

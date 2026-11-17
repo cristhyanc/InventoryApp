@@ -13,6 +13,7 @@ import {
   PurchaseUploadPayload
 } from '../../services/purchase.service';
 import {
+  SupplierGstDefaults,
   GstClassification,
   Product,
   Purchase,
@@ -79,10 +80,20 @@ function completionPreview(
   };
 }
 
+/**
+ * The GST rules the page reads (issue #1348), by product id and supplier id. Nothing configured is
+ * every product and supplier's starting state, which is what every test but the rule ones is about.
+ */
+interface GstRuleConfig {
+  productRules?: Record<number, GstClassification>;
+  supplierDefaults?: Record<number, Partial<SupplierGstDefaults>>;
+}
+
 function createHarness(
   supplierOrderId: string | null,
   sessionActive: Observable<boolean> = of(false),
-  preview: Observable<SupplierOrderCompletionPreview> = of(completionPreview())
+  preview: Observable<SupplierOrderCompletionPreview> = of(completionPreview()),
+  rules: GstRuleConfig = {}
 ) {
   const route = {
     queryParamMap: of(convertToParamMap(supplierOrderId ? { supplierOrderId } : {}))
@@ -93,13 +104,22 @@ function createHarness(
   // duplicate-warning ones is about (issue #1247).
   const possibleDuplicate = jest.fn(() => of(null as PurchaseDuplicateMatch | null));
   const purchaseService = { upload, possibleDuplicate } as unknown as PurchaseService;
-  const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
+  const getGstDefaults = jest.fn((id: number) => of({
+    supplierId: id,
+    productLineGstDefault: GstClassification.Unknown,
+    deliveryGstDefault: GstClassification.Unknown,
+    packageGstDefault: GstClassification.Unknown,
+    ...rules.supplierDefaults?.[id]
+  } as SupplierGstDefaults));
+  const supplierService = { getAll: jest.fn(() => of([])), getGstDefaults } as unknown as SupplierService;
   const completionPreviewRequest = jest.fn(() => preview);
   const supplierOrderService = {
     getById: jest.fn(() => of(supplierOrder())),
     completionPreview: completionPreviewRequest
   } as unknown as SupplierOrderService;
-  const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
+  const getGstRule = jest.fn((id: number) =>
+    of({ productId: id, gstRule: rules.productRules?.[id] ?? GstClassification.Unknown }));
+  const productService = { getAll: jest.fn(() => of([])), getGstRule } as unknown as ProductService;
   const toastService = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
   const supportSession = { active$: sessionActive } as unknown as SupportSessionService;
 
@@ -122,7 +142,9 @@ function createHarness(
     toastService,
     upload,
     possibleDuplicate,
-    completionPreviewRequest
+    completionPreviewRequest,
+    getGstRule,
+    getGstDefaults
   };
 }
 
@@ -209,6 +231,120 @@ describe('PurchaseUploadComponent invoice number (issue #1162)', () => {
   });
 });
 
+describe('PurchaseUploadComponent GST from product rules and supplier defaults (issue #1348)', () => {
+  /** A form with one line for product 5, filled the way the template does it. */
+  function withLine(rules: GstRuleConfig, supplierOrderId: string | null = null) {
+    const harness = createHarness(supplierOrderId, of(false), of(completionPreview()), rules);
+    harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
+    harness.component.form.title = 'Weekly restock';
+    harness.component.addItem();
+    const item = harness.component.items[0];
+    item.productId = 5;
+    harness.component.onLineProductChange();
+    harness.component.onLineQuantityChange(item, 3);
+    harness.component.onLineTotalChange(item, 6);
+    return harness;
+  }
+
+  it('pre-fills a line from its product\'s rule, says so, and leaves it for the server to classify', () => {
+    const { component, upload, getGstRule } = withLine({ productRules: { 5: GstClassification.Taxable } });
+
+    expect(getGstRule).toHaveBeenCalledWith(5);
+    expect(component.items[0].gstClassification).toBe(GstClassification.Taxable);
+    expect(component.items[0].gstRuleSource).toBe('product');
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 3, unitCost: 2 }]);
+  });
+
+  it('reads one product\'s rule only once', () => {
+    const { component, getGstRule } = withLine({ productRules: { 5: GstClassification.Taxable } });
+
+    component.onLineProductChange();
+
+    expect(getGstRule).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the supplier\'s product-line default and pre-fills the charges from its fee defaults', () => {
+    const { component, upload } = withLine({
+      supplierDefaults: {
+        1: {
+          productLineGstDefault: GstClassification.GstFree,
+          deliveryGstDefault: GstClassification.Taxable,
+          packageGstDefault: GstClassification.Unknown
+        }
+      }
+    });
+    component.form.supplierId = 1;
+    component.onDetailsChange();
+    component.form.deliveryCost = 5;
+    component.form.packageCost = 2;
+
+    expect(component.items[0].gstClassification).toBe(GstClassification.GstFree);
+    expect(component.items[0].gstRuleSource).toBe('supplier');
+    expect(component.form.deliveryGstClassification).toBe(GstClassification.Taxable);
+    expect(component.form.packageGstClassification).toBe(GstClassification.Unknown);
+
+    component.upload();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.deliveryGstClassification).toBeUndefined();
+    expect(payload.packageGstClassification).toBeUndefined();
+    expect(uploadedItems(upload)[0].gstClassification).toBeUndefined();
+  });
+
+  it('never replaces a GST the person picked, and submits it, including Not classified', () => {
+    const { component, upload } = withLine({
+      productRules: { 6: GstClassification.Taxable },
+      supplierDefaults: { 1: { deliveryGstDefault: GstClassification.Taxable } }
+    });
+    const item = component.items[0];
+    item.gstClassification = GstClassification.Unknown;
+    item.gstChosen = true;
+    component.form.deliveryCost = 5;
+    component.form.deliveryGstClassification = GstClassification.GstFree;
+    component.form.deliveryGstChosen = true;
+
+    item.productId = 6;
+    component.onLineProductChange();
+    component.form.supplierId = 1;
+    component.onDetailsChange();
+
+    expect(item.gstClassification).toBe(GstClassification.Unknown);
+    expect(component.form.deliveryGstClassification).toBe(GstClassification.GstFree);
+
+    component.upload();
+
+    expect(uploadedPayload(upload).deliveryGstClassification).toBe(GstClassification.GstFree);
+    expect(uploadedItems(upload)[0].gstClassification).toBe(GstClassification.Unknown);
+  });
+
+  it('pre-fills the lines of a purchase started from a supplier order', () => {
+    const { component } = createHarness('9', of(false), of(completionPreview()), {
+      productRules: { 5: GstClassification.Taxable }
+    });
+
+    expect(component.items.length).toBeGreaterThan(0);
+    for (const item of component.items.filter((line) => line.productId === 5)) {
+      expect(item.gstClassification).toBe(GstClassification.Taxable);
+      expect(item.gstRuleSource).toBe('product');
+    }
+  });
+
+  it('shows Not classified when a product\'s rule cannot be read, and still leaves it to the server', () => {
+    const harness = createHarness(null);
+    (harness.getGstRule as jest.Mock).mockImplementation(() => throwError(() => new Error('offline')));
+    harness.component.addItem();
+    harness.component.items[0].productId = 5;
+
+    harness.component.onLineProductChange();
+
+    expect(harness.component.items[0].gstClassification).toBe(GstClassification.Unknown);
+    expect(harness.component.items[0].gstChosen).toBeFalsy();
+  });
+});
+
 describe('PurchaseUploadComponent GST classification mapping (issue #431)', () => {
   it('starts a new line and both charges as Not classified', () => {
     const { component } = readyToUpload();
@@ -232,10 +368,13 @@ describe('PurchaseUploadComponent GST classification mapping (issue #431)', () =
   it('submits each classification the person picked', () => {
     const { component, upload } = readyToUpload();
     component.items[0].gstClassification = GstClassification.Taxable;
+    component.items[0].gstChosen = true;
     component.form.deliveryCost = 5;
     component.form.deliveryGstClassification = GstClassification.Taxable;
+    component.form.deliveryGstChosen = true;
     component.form.packageCost = 2;
     component.form.packageGstClassification = GstClassification.GstFree;
+    component.form.packageGstChosen = true;
 
     component.upload();
 
@@ -470,9 +609,9 @@ describe('PurchaseUploadComponent price entry controls (issue #878)', () => {
       imports: [PurchaseUploadComponent],
       providers: [
         { provide: PurchaseService, useValue: { upload } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]), getGstDefaults: () => of(null) } },
         { provide: SupplierOrderService, useValue: { getById: jest.fn() } },
-        { provide: ProductService, useValue: { getAll: () => of([]) } },
+        { provide: ProductService, useValue: { getAll: () => of([]), getGstRule: (id: number) => of({ productId: id, gstRule: GstClassification.Unknown }) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: PurchaseScanService, useValue: { scan: jest.fn() } },
@@ -615,9 +754,9 @@ describe('PurchaseUploadComponent write controls during a support session (issue
       imports: [PurchaseUploadComponent],
       providers: [
         { provide: PurchaseService, useValue: { upload: jest.fn(() => of({} as Purchase)) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]), getGstDefaults: () => of(null) } },
         { provide: SupplierOrderService, useValue: { getById: jest.fn() } },
-        { provide: ProductService, useValue: { getAll: () => of([]) } },
+        { provide: ProductService, useValue: { getAll: () => of([]), getGstRule: (id: number) => of({ productId: id, gstRule: GstClassification.Unknown }) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive$ } },
         { provide: PurchaseScanService, useValue: { scan: jest.fn() } },

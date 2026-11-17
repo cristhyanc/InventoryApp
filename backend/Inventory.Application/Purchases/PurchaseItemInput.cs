@@ -8,7 +8,9 @@ namespace Inventory.Application.Purchases;
 /// <see cref="GstClassification"/> is nullable for the same reason the purchase's charge
 /// classifications are (issue #429): on an edit, a <c>null</c> keeps the line's stored
 /// classification, while an explicit value replaces it and is persisted with provenance
-/// <see cref="GstClassificationSource.Manual"/>. The caller never submits the provenance itself.
+/// <see cref="GstClassificationSource.Manual"/>. On a create, a <c>null</c> lets the product's GST
+/// rule, then the supplier's product-line default, classify the line (issue #1348). The caller
+/// never submits the provenance itself.
 ///
 /// <see cref="Id"/> is that stored line's stable identity, as returned by the purchase read. It is
 /// optional: a create ignores it, and an edit that omits it falls back to matching by product, the

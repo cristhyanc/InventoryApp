@@ -174,17 +174,11 @@ public sealed class EfPurchaseStore : IPurchaseStore
             IdempotencyKey = idempotency?.Key,
             IdempotencyFingerprint = idempotency?.Fingerprint,
         };
-        ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
-        purchase.Items = items.Select(x =>
+        purchase.Items = items.Select(x => new PurchaseItem
         {
-            var item = new PurchaseItem
-            {
-                ProductId = x.ProductId,
-                Quantity = x.Quantity,
-                UnitCost = x.UnitCost,
-            };
-            ApplyItemClassification(item, x.GstClassification);
-            return item;
+            ProductId = x.ProductId,
+            Quantity = x.Quantity,
+            UnitCost = x.UnitCost,
         }).ToList();
 
         // BEGIN IMMEDIATE when a completion decision rides along (issue #974), the deferred
@@ -238,6 +232,11 @@ public sealed class EfPurchaseStore : IPurchaseStore
             await AttachmentQuotaCommit.ConsumeAsync(
                 _db, _clock, attachmentReservation, null, null, cancellationToken);
         }
+
+        // Classified inside the transaction, from the rules as this write reads them (issue #1348):
+        // a component the person submitted is their choice, and one they left out takes the
+        // product rule or supplier default, recorded with that provenance.
+        await ClassifyNewPurchaseAsync(purchase, fields, items, cancellationToken);
 
         _db.Receipts.Add(purchase);
         try
@@ -851,6 +850,66 @@ public sealed class EfPurchaseStore : IPurchaseStore
                     new GstClassificationState(item.GstClassification, item.GstClassificationSource)))
                 .ToList(),
             submitted.Select(item => new SubmittedPurchaseLine(item.Id, item.ProductId)).ToList());
+
+    /// <summary>
+    /// Classifies a purchase being created (issue #1348): every line and present charge through
+    /// <see cref="NewPurchaseGstClassificationPolicy"/>, with the product rules and the supplier's
+    /// defaults read from this business's own rows. Only a create calls this; an edit never reads a
+    /// rule.
+    /// </summary>
+    private async Task ClassifyNewPurchaseAsync(
+        Purchase purchase,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        CancellationToken cancellationToken)
+    {
+        var supplierDefaults = SupplierGstDefaults.None;
+        if (purchase.SupplierId is { } supplierId)
+        {
+            var supplier = await _db.Suppliers.AsNoTracking()
+                .Where(candidate => candidate.Id == supplierId)
+                .Select(candidate => new { candidate.ProductLineGstDefault, candidate.DeliveryGstDefault, candidate.PackageGstDefault })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (supplier is not null)
+            {
+                supplierDefaults = new SupplierGstDefaults(
+                    supplier.ProductLineGstDefault, supplier.DeliveryGstDefault, supplier.PackageGstDefault);
+            }
+        }
+
+        var unclassifiedProductIds = items
+            .Where(item => item.GstClassification is null)
+            .Select(item => item.ProductId)
+            .Distinct()
+            .ToList();
+        var productRules = unclassifiedProductIds.Count == 0
+            ? new Dictionary<long, GstClassification>()
+            : await _db.Products.AsNoTracking()
+                .Where(product => unclassifiedProductIds.Contains(product.Id))
+                .ToDictionaryAsync(product => product.Id, product => product.GstRule, cancellationToken);
+
+        var lines = purchase.Items.ToList();
+        for (var index = 0; index < items.Count; index++)
+        {
+            var input = items[index];
+            var state = NewPurchaseGstClassificationPolicy.ClassifyLine(
+                input.GstClassification,
+                productRules.GetValueOrDefault(input.ProductId, GstRules.None),
+                supplierDefaults);
+            lines[index].GstClassification = state.Classification;
+            lines[index].GstClassificationSource = state.Source;
+        }
+
+        var delivery = NewPurchaseGstClassificationPolicy.ClassifyCharge(
+            GstComponentKind.DeliveryCharge, purchase.DeliveryCost, fields.DeliveryGstClassification, supplierDefaults);
+        purchase.DeliveryGstClassification = delivery.Classification;
+        purchase.DeliveryGstClassificationSource = delivery.Source;
+
+        var package = NewPurchaseGstClassificationPolicy.ClassifyCharge(
+            GstComponentKind.PackageCharge, purchase.PackageCost, fields.PackageGstClassification, supplierDefaults);
+        purchase.PackageGstClassification = package.Classification;
+        purchase.PackageGstClassificationSource = package.Source;
+    }
 
     /// <summary>
     /// Applies a submitted line GST classification (issue #429). A <c>null</c> submission keeps the
