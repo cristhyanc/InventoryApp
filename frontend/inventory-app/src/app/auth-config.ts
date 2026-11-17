@@ -47,10 +47,10 @@ export interface ExternalIdSettings {
  * `README.md` § Signing in with Google.
  */
 export const externalIdSettings: ExternalIdSettings = {
-  instance: '',
-  tenantId: '',
-  clientId: '',
-  apiClientId: ''
+  instance: 'https://cristhyanoutlook.ciamlogin.com/',
+  tenantId: 'bdf50096-9e43-44bd-b4a8-d0c089b456a6',
+  clientId: '0d451a7e-c66b-4550-be18-c36dc2753baf',
+  apiClientId: '3dd61784-7289-4c2d-b0aa-3bb586a92004'
 };
 
 /**
