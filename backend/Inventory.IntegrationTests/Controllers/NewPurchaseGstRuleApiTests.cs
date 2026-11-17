@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using Inventory.Domain.Gst;
 using InventoryApi.Auth.E2ETesting;
-using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
