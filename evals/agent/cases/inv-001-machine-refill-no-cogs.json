@@ -18,6 +18,11 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "`MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS."
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.UnitTests/Domain/Costing/WeightedAverageCostReplayTests.cs",
+      "test": "Machine_refill_changes_physical_stock_only_and_carries_no_cost"
     }
   ]
 }

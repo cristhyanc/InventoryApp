@@ -23,6 +23,16 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "**Fail closed.** An unresolved business reads nothing and writes nothing."
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Adapters/Persistence/BusinessDataIsolationTests.cs",
+      "test": "A_caller_without_a_resolved_business_reads_nothing"
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Adapters/Persistence/BusinessDataIsolationTests.cs",
+      "test": "A_caller_without_a_resolved_business_cannot_write"
     }
   ]
 }

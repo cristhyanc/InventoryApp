@@ -31,7 +31,12 @@ export const REQUIRED_CATEGORIES = Object.freeze([
 
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high']);
 export const DECISIONS = Object.freeze(['proceed', 'reject', 'stop']);
-export const ASSERTION_TYPES = Object.freeze(['repoFileContains', 'repoFileNotContains', 'requiresModelEvaluation']);
+export const ASSERTION_TYPES = Object.freeze([
+  'repoFileContains',
+  'repoFileNotContains',
+  'testExists',
+  'requiresModelEvaluation',
+]);
 export const ID_PATTERN = /^[A-Z][A-Z0-9]*-\d{3}$/;
 export const MIN_CORPUS_SIZE = 10;
 
@@ -125,6 +130,12 @@ export function validateCase(caseObj, { root = repositoryRoot, source = '<case>'
       } else if (!existsSync(resolve(root, assertion.file))) {
         errors.push(`${assertionPrefix} references a file that does not exist: ${assertion.file}`);
       }
+      if (assertion.type === 'testExists') {
+        if (!isNonEmptyString(assertion.test)) {
+          errors.push(`${assertionPrefix} "test" must be a non-empty test/method name.`);
+        }
+        return;
+      }
       if (!isNonEmptyString(assertion.text)) {
         errors.push(`${assertionPrefix} "text" must be a non-empty substring to check for.`);
       }
@@ -217,6 +228,181 @@ export function loadCorpus(dir) {
   return { cases, malformed };
 }
 
+// --- testExists detection ----------------------------------------------------------------
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
+/**
+ * Removes `/* ... *\/` blocks left to right, each ending at its first `*\/`. An unterminated `/*`
+ * is left as text. Scanned with `indexOf` rather than a lazy regex, which backtracks over every
+ * remaining character once per unterminated `/*`.
+ */
+function stripBlockComments(content) {
+  let stripped = '';
+  let scanFrom = 0;
+  for (;;) {
+    const start = content.indexOf('/*', scanFrom);
+    if (start === -1) break;
+    const end = content.indexOf('*/', start + 2);
+    if (end === -1) break;
+    stripped += content.slice(scanFrom, start);
+    scanFrom = end + 2;
+  }
+  return stripped + content.slice(scanFrom);
+}
+
+/** Strips `/* ... *\/` block comments and `//`/`///` line comments (good enough for scanning test source). */
+function stripComments(content) {
+  return stripBlockComments(content).replace(/\/\/.*$/gm, '');
+}
+
+const XUNIT_TEST_ATTRIBUTES = Object.freeze(['Fact', 'Theory']);
+
+/**
+ * True when `content` declares an xUnit test method named `testName`: a method whose nearest
+ * preceding attribute run (skipping only other attributes such as `[InlineData]`/`[MemberData]`/
+ * `[Trait]`, in any number, on their own lines) includes `[Fact]` or `[Theory]`. A mention inside
+ * a comment never counts, because comments are stripped first.
+ */
+function declaresXunitTest(content, testName) {
+  const methodPattern = new RegExp(String.raw`\b${escapeRegExp(testName)}\s*\(`);
+  const attributeNamePattern = /\[\s*([A-Za-z_]\w*)/g;
+
+  let hasFactOrTheory = false;
+  for (const rawLine of stripComments(content).split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+
+    if (line.startsWith('[')) {
+      let match;
+      attributeNamePattern.lastIndex = 0;
+      while ((match = attributeNamePattern.exec(line)) !== null) {
+        if (XUNIT_TEST_ATTRIBUTES.includes(match[1])) hasFactOrTheory = true;
+      }
+      continue;
+    }
+
+    if (hasFactOrTheory && methodPattern.test(line)) return true;
+    hasFactOrTheory = false;
+  }
+  return false;
+}
+
+const JEST_TEST_FUNCTIONS = Object.freeze(['it', 'test']);
+const JEST_QUOTES = Object.freeze(["'", '"', '`']);
+const IDENTIFIER_CHARACTER = /[\w$]/;
+
+function skipJsWhitespace(content, from) {
+  let index = from;
+  while (index < content.length && /\s/.test(content[index])) index += 1;
+  return index;
+}
+
+/**
+ * Reads the string or template literal that starts at `content[start]`. Returns its body, whether
+ * that body is a plain literal (no escape, no `${}` interpolation), and the index just past the
+ * closing quote — or `null` when the literal is never closed. A quoted literal ends at a newline;
+ * a template literal may span lines.
+ */
+function readStringLiteral(content, start) {
+  const quote = content[start];
+  let escaped = false;
+  let index = start + 1;
+  while (index < content.length) {
+    const character = content[index];
+    if (character === '\\') {
+      escaped = true;
+      index += 2;
+      continue;
+    }
+    if (character === quote) {
+      const body = content.slice(start + 1, index);
+      return { body, plain: !escaped && !body.includes('${'), end: index + 1 };
+    }
+    if (character === '\n' && quote !== '`') return null;
+    index += 1;
+  }
+  return null;
+}
+
+/**
+ * Index just past the comment or string/template literal that starts at `index`, or `-1` when
+ * code (not a comment or a literal) starts there. An unterminated literal is treated as code, so
+ * the scan continues instead of swallowing the rest of the file.
+ */
+function endOfNonCodeSpan(content, index) {
+  if (content[index] === '/' && content[index + 1] === '/') {
+    const lineEnd = content.indexOf('\n', index + 2);
+    return lineEnd === -1 ? content.length : lineEnd + 1;
+  }
+  if (content[index] === '/' && content[index + 1] === '*') {
+    const blockEnd = content.indexOf('*/', index + 2);
+    return blockEnd === -1 ? content.length : blockEnd + 2;
+  }
+  if (JEST_QUOTES.includes(content[index])) {
+    const literal = readStringLiteral(content, index);
+    return literal === null ? -1 : literal.end;
+  }
+  return -1;
+}
+
+/**
+ * True when an `it(`/`test(` call starts exactly at `index` and its complete first argument is a
+ * plain string literal whose text is `testName`. Requiring the literal to be followed by `,` or
+ * `)` is what rejects a computed title such as `test('a' + 'b', ...)`, whose real title is not the
+ * name being looked for. A member call (`suite.test(`) or a longer identifier (`unitTest(`,
+ * `items(`) is not a declaration either.
+ */
+function startsJestTestCall(content, index, testName) {
+  const functionName = JEST_TEST_FUNCTIONS.find((name) => content.startsWith(name, index));
+  if (functionName === undefined) return false;
+
+  const before = index === 0 ? '' : content[index - 1];
+  if (before === '.' || IDENTIFIER_CHARACTER.test(before)) return false;
+
+  let cursor = index + functionName.length;
+  if (cursor < content.length && IDENTIFIER_CHARACTER.test(content[cursor])) return false;
+
+  cursor = skipJsWhitespace(content, cursor);
+  if (content[cursor] !== '(') return false;
+
+  cursor = skipJsWhitespace(content, cursor + 1);
+  if (!JEST_QUOTES.includes(content[cursor])) return false;
+
+  const title = readStringLiteral(content, cursor);
+  if (title === null || !title.plain || title.body !== testName) return false;
+
+  const afterTitle = content[skipJsWhitespace(content, title.end)];
+  return afterTitle === ',' || afterTitle === ')';
+}
+
+/**
+ * True when `content` declares a Jest/node test named exactly `testName`: a real `it(`/`test(`
+ * call whose complete first argument is the literal title. The source is scanned left to right so
+ * that comments and string literals are skipped as text, which is what keeps a commented-out call
+ * or a test-shaped string (`const sample = 'test("x", () => {})'`) from counting as a declaration.
+ * Modified calls such as `it.only(`, `it.skip(` or `it.each(` are deliberately not recognised: an
+ * unrecognised shape fails the case loudly instead of vouching for a test that may not run.
+ * Regular-expression literals are not tracked, so a quote inside one is read as a string; that can
+ * only hide a declaration (a failing case), never invent one.
+ */
+function declaresJestTest(content, testName) {
+  let index = 0;
+  while (index < content.length) {
+    if (startsJestTestCall(content, index, testName)) return true;
+    const endOfSpan = endOfNonCodeSpan(content, index);
+    index = endOfSpan === -1 ? index + 1 : endOfSpan;
+  }
+  return false;
+}
+
+/** Dispatches on file extension: `.cs` is xUnit, everything else is Jest/node. */
+function declaresTest(content, file, testName) {
+  return file.endsWith('.cs') ? declaresXunitTest(content, testName) : declaresJestTest(content, testName);
+}
+
 // --- Evaluation -----------------------------------------------------------------------------
 
 function evaluateAssertion(assertion, root, cache) {
@@ -237,6 +423,12 @@ function evaluateAssertion(assertion, root, cache) {
 
   if (content === null) {
     return `${assertion.file} could not be read.`;
+  }
+
+  if (assertion.type === 'testExists') {
+    return declaresTest(content, assertion.file, assertion.test)
+      ? null
+      : `${assertion.file} does not declare a test named "${assertion.test}" (missing or renamed).`;
   }
 
   const found = content.includes(assertion.text);

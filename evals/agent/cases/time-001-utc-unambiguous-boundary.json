@@ -18,6 +18,11 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "Store true instants consistently and do not introduce server-local or browser-local date shifts"
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.IntegrationTests/Application/Stock/StockHistoryTimestampContractTests.cs",
+      "test": "History_preserves_the_UTC_instant_identity_of_CreatedAt_across_a_real_Sqlite_round_trip"
     }
   ]
 }
