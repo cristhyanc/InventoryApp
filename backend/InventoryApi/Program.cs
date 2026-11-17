@@ -607,8 +607,10 @@ app.Services.GetRequiredService<PriceCollectorAuthenticationDecision>()
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and
 // fails closed unless explicitly opted in. A migration failure always stops startup rather than
-// serving requests against a schema its code does not match. See DatabaseSchemaStartup (including
-// its concurrency note) and docs/tenant-rollout.md.
+// serving requests against a schema its code does not match, and since issue #1299 so does a
+// schema that is *newer* than this build - an applied migration id this build does not contain -
+// which is checked before anything is applied. See DatabaseSchemaStartup (including its
+// concurrency note) and docs/tenant-rollout.md.
 //
 // Schema migrations never assign tenant ownership or perform the business backfill - that is
 // exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and
