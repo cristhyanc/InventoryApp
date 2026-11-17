@@ -57,18 +57,41 @@ this app. A human operator must make and verify this against the live App Servic
 something an automated agent may apply (`AGENTS.md` reserves Azure/App Service configuration
 changes for humans).
 
-**Concurrency and locking limits.** The API opens the database with `Microsoft.Data.Sqlite`'s
-default journal mode (rollback journal, not WAL — nothing in `Program.cs` configures
-`journal_mode`) and the driver's default busy timeout (`Default Timeout=30`, i.e. 30 seconds).
-SQLite allows unlimited concurrent readers but only one writer at a time; a second writer blocks
-for up to the busy timeout and then fails with `SQLITE_BUSY` rather than queuing indefinitely. In
-this single-process deployment that is a soft limit on request latency under write-heavy
-concurrent load (for example simultaneous imports and sale-costing writes), not a hard outage —
-but it does not extend to multiple concurrently writing processes: **the App Service plan for this
-app must stay pinned to a single instance (no scale-out) while SQLite remains the store.** SQLite's
-file locking is unreliable over the kind of shared, network-backed storage `/home` becomes once
-more than one instance mounts it, so running two instances against the same database file is not a
-supported configuration.
+**Journal mode.** No repository code sets `journal_mode` — `Program.cs` configures no PRAGMA, and
+nothing else in this codebase opens the connection any differently. Despite that, a database file
+this application creates is in **WAL** (write-ahead log) mode, not the rollback journal this
+section previously described: EF Core's SQLite database creator sets `journal_mode=WAL` itself
+when it builds a new file (`Database.Migrate()` or `EnsureCreated()` against an empty path), and
+journal mode is stored *in the database file*, not chosen per connection, so every later connection
+to that same file — including the running API's — stays WAL without anything re-asserting it.
+`SqliteBackupRestoreTests.A_database_file_created_by_migrate_is_in_wal_mode` pins this: a file
+`Database.Migrate()` creates on an empty path reports `PRAGMA journal_mode` = `wal`. **Production's
+mode depends on how its live file was first created**, which this repository cannot verify from
+source — only the owner can confirm it, against the live file. The reasoning below assumes WAL
+because that is what this application's own database creator produces, not because the live file
+has been inspected here.
+
+**Concurrency and locking limits.** In WAL mode, readers do not block the writer and the writer
+does not block readers — a reader keeps reading its own consistent snapshot while a write is in
+progress — but there is still only **one writer at a time**: a second concurrent writer blocks for
+up to the busy timeout and then fails with `SQLITE_BUSY` rather than queuing indefinitely. The
+driver's busy timeout is unchanged at the default (`Default Timeout=30`, i.e. 30 seconds) — WAL
+does not alter it. In this single-process deployment the single-writer limit is a soft limit on
+request latency under write-heavy concurrent load (for example simultaneous imports and
+sale-costing writes), not a hard outage — but it does not extend to multiple concurrently writing
+processes: **the App Service plan for this app must stay pinned to a single instance (no
+scale-out) while SQLite remains the store.** SQLite's file locking is unreliable over the kind of
+shared, network-backed storage `/home` becomes once more than one instance mounts it, so running
+two instances against the same database file is not a supported configuration.
+
+**Storage.** WAL relies on shared memory (a `-shm` index file next to the database, plus a `-wal`
+file holding not-yet-checkpointed writes) for readers and the writer to coordinate against the same
+file; SQLite does not support WAL over a network filesystem shared across hosts, because that
+coordination depends on shared-memory primitives a network filesystem does not give multiple hosts
+over the same file. That is one more reason — independent of the single-writer limit above — the
+App Service plan for this app must stay pinned to a single instance: scaling out would not just
+exceed SQLite's single-writer model, it would put WAL's own coordination mechanism on storage it
+does not support.
 
 **Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
 alerting today (that is future work, not part of this change), but are the observable evidence
@@ -147,7 +170,14 @@ new file without requiring the source connection, or the API process holding it,
 backs up a live SQLite file while the source connection that created it stays open (mirroring a
 running API process) and confirms the resulting copy passes `PRAGMA integrity_check` and contains
 exactly the committed rows, then proves a second backup taken later, still without closing that
-connection, reflects the writes committed in between.
+connection, reflects the writes committed in between. This matters more in WAL mode than it would
+in the rollback journal this section used to describe: committed-but-not-yet-checkpointed data can
+live in the `-wal` file next to `inventory.db` rather than in `inventory.db` itself, so **a backup
+must always go through `backup-database` or `sqlite3 ".backup"`, never a plain filesystem copy of
+`inventory.db` on its own while `inventory.db-wal` exists** — that would risk a copy missing writes
+the `-wal` file still holds. The Online Backup API reads the database engine's own consistent view,
+`-wal` included, which is why both supported procedures below are already WAL-safe and need no
+code change for this.
 
 **The supported command (issues #331 and #332).** `backend/InventoryApi`'s published executable has
 a `backup-database` CLI mode, dispatched before the web host is built — the same early-command
@@ -271,9 +301,12 @@ underlying mechanism:
 
 1. **Prefer a quiet window, but do not rely on stopping the app.** The Online Backup API produces
    a consistent snapshot even while writes continue; stopping the App Service first (or scaling to
-   zero) removes any residual risk but is not required for backup correctness. Do not run a plain
-   filesystem `cp` of the `.db` file while the app is running — unlike the backup API, a raw copy
-   can capture a database file mid-write and is not guaranteed consistent.
+   zero) removes any residual risk but is not required for backup correctness. **Never run a plain
+   filesystem `cp` of `inventory.db` on its own while `inventory.db-wal` exists** — unlike the
+   backup API, a raw copy can capture the database file mid-write, and in WAL mode a copy of
+   `inventory.db` alone can also simply miss committed data still sitting in `inventory.db-wal`.
+   Always take the backup through `.backup` (or `backup-database`), never a raw copy, while the app
+   is running.
 2. **Take the backup:**
 
    ```bash
@@ -293,10 +326,14 @@ underlying mechanism:
    `backup-database --upload` is the supported, automated form of this step; this manual
    alternative exists for a host where the published `dotnet` application is not on hand.
 5. **Restore** by stopping the API, replacing the live database file with the verified backup (or
-   pointing the connection string at the restored file), and starting the API again:
+   pointing the connection string at the restored file), removing any leftover
+   `inventory.db-wal` and `inventory.db-shm` left behind by the old database (the restored backup
+   is its own complete snapshot and has no use for the previous database's sidecar files), and
+   starting the API again:
 
    ```bash
    sqlite3 /home/data/backups/inventory-<timestamp>.db ".backup '/home/data/inventory.db'"
+   rm -f /home/data/inventory.db-wal /home/data/inventory.db-shm
    ```
 
    Restoring does overwrite live data and must only be run deliberately, by a human, after
