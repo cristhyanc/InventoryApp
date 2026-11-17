@@ -675,6 +675,10 @@ describe('AppComponent authenticated user control (issue #391)', () => {
   });
 
   it('offers sign-in in the same place when no account is active', async () => {
+    // With a second authority configured, Sign in opens the sign-in page instead (covered under
+    // "AppComponent sign-in choice (issue #711)"); this test is about the workforce-only redirect,
+    // so it clears the committed customer identity settings first.
+    unconfigureExternalId();
     const { host, msal } = await render({ signedIn: false });
 
     const header = host.querySelector('header');

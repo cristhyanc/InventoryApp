@@ -3,11 +3,11 @@ import { ExternalIdSettings, externalIdSettings } from '../auth-config';
 /**
  * A deployment whose customer identity tenant a human has configured (issue #711).
  *
- * `externalIdSettings` is empty in source control - that is the shipped, fail-closed state - so a
- * test that needs the second authority has to stand in for the human portal work. These helpers
- * write the identifiers into that one object and put it back afterwards, which is also what proves
- * the configuration is the only thing that turns the second authority on: nothing else in the
- * application has to change for Google sign-in to appear.
+ * Tests must not depend on whatever identifiers `externalIdSettings` holds in source control, so a
+ * test that needs the second authority writes these test identifiers into that one object, and a
+ * test that needs the workforce-only state clears it with `unconfigureExternalId`. That is also
+ * what proves the configuration is the only thing that turns the second authority on: nothing else
+ * in the application has to change for Google sign-in to appear.
  */
 export const CONFIGURED_EXTERNAL_ID: ExternalIdSettings = {
   instance: 'https://contoso.ciamlogin.com/',
@@ -23,7 +23,7 @@ export function configureExternalId(settings: Partial<ExternalIdSettings> = {}):
   Object.assign(externalIdSettings, CONFIGURED_EXTERNAL_ID, settings);
 }
 
-/** Restores the shipped state: no customer identity tenant at all. */
+/** Clears the customer identity tenant: the unconfigured (rollback) state, no second authority. */
 export function unconfigureExternalId(): void {
   Object.assign(externalIdSettings, UNCONFIGURED);
 }
