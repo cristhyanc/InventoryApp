@@ -14,13 +14,19 @@ namespace Inventory.Infrastructure.Persistence;
 /// <see cref="NayaxSales"/>/<see cref="Product"/> persistence models it depends on, which moved
 /// there in issue #307; this adapter followed them in issue #309 (Persistence 8/8 of #153).
 ///
-/// The queries are unchanged from the former
-/// <c>ImportService.ImportNayaxSalesFromExcelAsync</c>: the untracked product catalogue, the
+/// The queries are the former
+/// <c>ImportService.ImportNayaxSalesFromExcelAsync</c>'s: the untracked product catalogue, the
 /// existing-transaction lookup by the remote <c>TransactionID</c>, and the affected products'
 /// transition baselines, all read through <see cref="AppDbContext"/>'s business query filter with no
 /// business predicate of its own. The existing-transaction lookup being tenant-filtered is what
 /// keeps a <c>TransactionID</c> two businesses both hold an insert for the importing business rather
 /// than an update of somebody else's sale; ownership of a new row is stamped centrally on save.
+///
+/// <para>Issue #1300 changed one thing about them: that lookup is one pass over the file's
+/// transaction identifiers in fixed-size batches, instead of one query per row. It is called inside
+/// the import's write-locked transaction (<see cref="EfNayaxSalesImportTransactions"/>), which is
+/// what makes a row the Nayax SQS queue reader stored while the file was being read an update here
+/// rather than a second insert the unique index refuses.</para>
 ///
 /// Each staged or loaded sale keeps a reference to its row, so <see cref="Update"/> and
 /// <see cref="StageCost"/> write onto exactly that tracked entity. It applies no import or costing
@@ -28,6 +34,15 @@ namespace Inventory.Infrastructure.Persistence;
 /// </summary>
 public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
 {
+    /// <summary>
+    /// How many transaction identifiers one stored-sale lookup statement carries (issue #1300). The
+    /// import reads what the business already holds in one pass over the file's identifiers rather
+    /// than one query per row, and batching that pass keeps each statement a fixed, modest size
+    /// whatever the provider does with a long <c>IN</c> list - a file at the row limit is 40
+    /// statements instead of 20,000.
+    /// </summary>
+    private const int LookupBatchSize = 500;
+
     private readonly AppDbContext _db;
 
     public EfNayaxSalesImportStore(AppDbContext db) => _db = db;
@@ -42,20 +57,32 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
             .Select(conflict => conflict.TransactionId)
             .ToListAsync(cancellationToken);
 
-    public async Task<StoredImportedSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyDictionary<long, StoredImportedSale>> FindByTransactionIdsAsync(
+        IReadOnlyCollection<long> transactionIds, CancellationToken cancellationToken)
     {
-        var existing = await _db.NayaxSales
-            .FirstOrDefaultAsync(x => x.TransactionID == transactionId, cancellationToken);
-        // The costing view the import already used, plus the three imported facts it does not carry
-        // and a blank cell in the file must not erase (issue #1298). Read from the same tracked row,
-        // so what the use case compares against is what Update then writes onto.
-        return existing is null
-            ? null
-            : new StoredImportedSale(
-                new NayaxCostableSale(existing),
-                existing.SettlementValue,
-                existing.PaymentMethod,
-                existing.MachineName);
+        ArgumentNullException.ThrowIfNull(transactionIds);
+
+        var stored = new Dictionary<long, StoredImportedSale>(transactionIds.Count);
+        foreach (var batch in transactionIds.Distinct().Chunk(LookupBatchSize))
+        {
+            var existing = await _db.NayaxSales
+                .Where(x => batch.Contains(x.TransactionID))
+                .ToListAsync(cancellationToken);
+
+            // The costing view the import already used, plus the three imported facts it does not
+            // carry and a blank cell in the file must not erase (issue #1298). Read from the same
+            // tracked rows, so what the use case compares against is what Update then writes onto.
+            foreach (var row in existing)
+            {
+                stored[row.TransactionID] = new StoredImportedSale(
+                    new NayaxCostableSale(row),
+                    row.SettlementValue,
+                    row.PaymentMethod,
+                    row.MachineName);
+            }
+        }
+
+        return stored;
     }
 
     public CostableSale Add(ImportedNayaxSale sale)

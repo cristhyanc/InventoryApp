@@ -285,6 +285,7 @@ public class ImportsControllerReimbursementReportTests
             new ImportNayaxSales(
                 Mock.Of<INayaxSalesWorkbookReader>(),
                 Mock.Of<INayaxSalesImportStore>(),
+                new InventoryApi.Tests.Application.Imports.FakeNayaxSalesImportTransactions(),
                 Mock.Of<Inventory.Application.Costing.ICostSale>(),
                 Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),

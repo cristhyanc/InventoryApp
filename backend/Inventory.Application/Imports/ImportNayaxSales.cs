@@ -1,6 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Imports;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.ProductMatching;
 
@@ -86,6 +87,21 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   <item>A transaction this business already holds is updated in place rather than double
 ///   counted; a transaction another business holds is a new sale of this one, because a remote
 ///   <c>TransactionID</c> is unique only within the operator account that issued it.</item>
+///   <item><b>What this business already holds is read once, for the whole file, inside the
+///   import's own write-locked transaction</b> (issue #1300). It used to be one query per row,
+///   outside any transaction: a 4,000-row upload took 30 seconds and an 8,000-row one 124, and a
+///   transaction the Nayax SQS queue reader stored between a row's lookup and the save failed the
+///   whole upload on the unique index on <c>(BusinessId, TransactionID)</c> with a <c>500</c>. Now
+///   the lookup and the save are one serialised operation, so such a row is found and updated. The
+///   cost replay deliberately stays outside the lock - see
+///   <see cref="INayaxSalesImportTransactions"/> for both halves of that.</item>
+///   <item><b>A file beyond the import's limits is refused before anything is read or written</b>
+///   (issue #1300, <see cref="NayaxSalesFilePolicy"/>): more data rows than
+///   <see cref="NayaxSalesFilePolicy.MaxRows"/>, or an XLSX whose sheet data expands past
+///   <see cref="NayaxSalesFilePolicy.MaxUncompressedSheetBytes"/>. The refusal is the same
+///   <see cref="InvalidOperationException"/> the unsupported-format rule raises, so the operator
+///   gets the same <c>400 Bad Request</c> with the sentence
+///   <see cref="NayaxSalesFilePolicy.TooLargeMessage"/> states, and nothing is stored.</item>
 ///   <item>An update never erases a historical cost the business already has: a row carrying no
 ///   transaction cost price leaves the stored one in place, and the cost actually applied to the
 ///   sale stays <see cref="ICostSale"/>'s decision with its recorded provenance.</item>
@@ -140,8 +156,17 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// </summary>
 public sealed class ImportNayaxSales
 {
+    /// <summary>
+    /// What this import is willing to read, from the Domain policy that owns both numbers
+    /// (issue #1300). Stated once here rather than at each call, so the reader is never asked to
+    /// read an uploaded sales file under some other ceiling.
+    /// </summary>
+    private static readonly NayaxSalesFileLimits Limits = new(
+        NayaxSalesFilePolicy.MaxRows, NayaxSalesFilePolicy.MaxUncompressedSheetBytes);
+
     private readonly INayaxSalesWorkbookReader _workbook;
     private readonly INayaxSalesImportStore _store;
+    private readonly INayaxSalesImportTransactions _transactions;
     private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
     private readonly INayaxProductLinkStore _productLinks;
@@ -149,12 +174,14 @@ public sealed class ImportNayaxSales
     public ImportNayaxSales(
         INayaxSalesWorkbookReader workbook,
         INayaxSalesImportStore store,
+        INayaxSalesImportTransactions transactions,
         ICostSale saleCosting,
         IRebuildProductCost inventoryCostRebuild,
         INayaxProductLinkStore productLinks)
     {
         _workbook = workbook;
         _store = store;
+        _transactions = transactions;
         _saleCosting = saleCosting;
         _inventoryCostRebuild = inventoryCostRebuild;
         _productLinks = productLinks;
@@ -182,11 +209,20 @@ public sealed class ImportNayaxSales
         if (!NayaxSalesExportFormats.IsSupported(file.FileName))
             throw new InvalidOperationException(NayaxSalesExportFormats.UnsupportedMessage);
 
-        IReadOnlyList<NayaxSalesImportRow> rows;
+        NayaxSalesWorkbookReadResult read;
         using (var content = file.OpenReadStream())
         {
-            rows = _workbook.Read(content, file.FileName);
+            read = _workbook.Read(content, file.FileName, Limits);
         }
+
+        // Beyond the limits the Domain policy fixes (issue #1300). The reader stopped instead of
+        // reading the file, so nothing was parsed, nothing is looked up and nothing is written: the
+        // operator gets the sentence that says what to do with the file instead of a server that
+        // spends a gigabyte on it and then holds the database for minutes.
+        if (read.ExceedsLimits)
+            throw new InvalidOperationException(NayaxSalesFilePolicy.TooLargeMessage);
+
+        var rows = read.Rows;
 
         // An export with no data rows reads nothing and writes nothing - not even the catalogue.
         if (rows.Count == 0)
@@ -214,20 +250,79 @@ public sealed class ImportNayaxSales
                 .ToList(),
             cancellationToken);
 
+        // Each affected product mapped to the earliest completed sale that touched it, which is the
+        // instant its cost replay has to restart from.
+        var affected = new Dictionary<long, DateTime>();
+
+        var applied = await ApplyRowsAsync(
+            rows, candidates, conflictingTransactionIds, localProductIdByNayaxId, affected, cancellationToken);
+
+        // Outside the write lock, deliberately (issue #1300): the sales are committed, and replaying
+        // the affected products' cost takes as long as their histories - which is not a wait every
+        // other writer in the application may be made to serve. The order and the failure behaviour
+        // are otherwise exactly what they were: replay, then save the replayed costs, so a fatal
+        // data-quality failure propagates with the sales saved and the rebuilt costs unsaved.
+        if (applied.Imported > 0 || applied.Updated > 0)
+        {
+            await RebuildPostTransitionProductsAsync(affected, cancellationToken);
+            await _store.SaveChangesAsync(cancellationToken);
+        }
+
+        return new NayaxSalesImportResult(
+            applied.Imported, applied.Updated, applied.Skipped, applied.KeptStoredValues)
+        {
+            InvalidRows = applied.InvalidRows,
+        };
+    }
+
+    /// <summary>
+    /// The find-and-save, inside one write-locked transaction (issue #1300): the stored sales of
+    /// every transaction the file names are read <em>there</em>, each row is merged, costed and
+    /// staged against what that read found, and the sales are saved and committed before the
+    /// transaction is released.
+    ///
+    /// <para>What that buys is the race the Nayax SQS queue reader introduced (issue #1103). Both
+    /// paths read "is this transaction stored?" and then insert through the same unique index on
+    /// <c>(BusinessId, TransactionID)</c>; with the read outside a transaction, a row the reader
+    /// stored in between failed this whole upload with a <c>500</c>. Inside it, the reader's row is
+    /// either already visible to the read here - and is updated, which is what the file asked for -
+    /// or waits for this commit and enriches the row this import inserted.</para>
+    ///
+    /// <para>Nothing else moved: the per-row rules, their order and the counts are unchanged, and a
+    /// file that produced no insert and no update still saves nothing at all.</para>
+    /// </summary>
+    private async Task<AppliedRows> ApplyRowsAsync(
+        IReadOnlyList<NayaxSalesImportRow> rows,
+        IReadOnlyList<ProductMatchCandidate> candidates,
+        IReadOnlySet<long> conflictingTransactionIds,
+        IReadOnlyDictionary<long, long> localProductIdByNayaxId,
+        IDictionary<long, DateTime> affected,
+        CancellationToken cancellationToken)
+    {
         var imported = 0;
         var updated = 0;
         var skipped = 0;
         var keptStoredValues = 0;
         var invalidRows = new List<NayaxSalesImportInvalidRow>();
 
-        // Each affected product mapped to the earliest completed sale that touched it, which is the
-        // instant its cost replay has to restart from.
-        var affected = new Dictionary<long, DateTime>();
+        await using var transaction = await _transactions.BeginAsync(cancellationToken);
+
+        // One read for the whole file, inside the lock (issue #1300). It replaces a query per row -
+        // 20,000 of them for a file at the row limit - and, because it is made here rather than
+        // before the lock, what it answers is the state this save is actually decided on. Only the
+        // rows that could be applied are asked about, through the same rule the loop skips on, so
+        // the read is the file's own transactions and not every number in it.
+        var storedByTransactionId = await _store.FindByTransactionIdsAsync(
+            rows
+                .Where(IsIdentifiable)
+                .Select(row => row.TransactionId)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
 
         foreach (var row in rows)
         {
-            if (row.TransactionId <= 0 || row.MachineId <= 0 ||
-                (row.MachineAuthorizationTime is null && row.AuthorizationDateTimeGmtInput != NayaxSalesGmtInput.Valid))
+            if (!IsIdentifiable(row))
             {
                 skipped++;
                 continue;
@@ -244,7 +339,7 @@ public sealed class ImportNayaxSales
                 continue;
             }
 
-            var stored = await _store.FindByTransactionIdAsync(row.TransactionId, cancellationToken);
+            var stored = storedByTransactionId.GetValueOrDefault(row.TransactionId);
             var instant = ResolveInstant(row, stored?.Sale);
             if (instant is null)
             {
@@ -323,17 +418,39 @@ public sealed class ImportNayaxSales
         }
 
         if (imported > 0 || updated > 0)
-        {
             await _store.SaveChangesAsync(cancellationToken);
-            await RebuildPostTransitionProductsAsync(affected, cancellationToken);
-            await _store.SaveChangesAsync(cancellationToken);
-        }
 
-        return new NayaxSalesImportResult(imported, updated, skipped, keptStoredValues)
-        {
-            InvalidRows = invalidRows,
-        };
+        await transaction.CommitAsync(cancellationToken);
+
+        return new AppliedRows(imported, updated, skipped, keptStoredValues, invalidRows);
     }
+
+    /// <summary>
+    /// Whether a row carries the three identity facts the import refuses to guess at: a positive
+    /// transaction identifier, a positive machine identifier and an authorization time. A row
+    /// without them is skipped and stays visible, never imported with a defaulted identity.
+    ///
+    /// <para>It is one rule in one place because two things ask the question (issue #1300): the loop
+    /// below, which skips such a row, and the stored-sale read above, which must ask about exactly
+    /// the rows that could be applied.</para>
+    /// </summary>
+    private static bool IsIdentifiable(NayaxSalesImportRow row) =>
+        row.TransactionId > 0
+        && row.MachineId > 0
+        && (row.MachineAuthorizationTime is not null
+            || row.AuthorizationDateTimeGmtInput == NayaxSalesGmtInput.Valid);
+
+    /// <summary>
+    /// What the write-locked pass over the file's rows did, as the result's counts (issue #1300).
+    /// The counts themselves are unchanged in meaning; this type exists only because the pass is a
+    /// method now rather than the body of <see cref="Handle"/>.
+    /// </summary>
+    private sealed record AppliedRows(
+        int Imported,
+        int Updated,
+        int Skipped,
+        int KeptStoredValues,
+        IReadOnlyList<NayaxSalesImportInvalidRow> InvalidRows);
 
     /// <summary>
     /// Whether an updated row left a stored value in place because the file carried none for it

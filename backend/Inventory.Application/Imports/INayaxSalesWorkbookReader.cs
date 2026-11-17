@@ -144,6 +144,57 @@ public static class NayaxSalesExportFormats
 }
 
 /// <summary>
+/// How much of an upload a caller is willing to read (issue #1300). The numbers themselves are
+/// <c>Inventory.Domain.Imports.NayaxSalesFilePolicy</c>'s; this record is how a caller states them
+/// to the reader, because the limits have to be enforced <em>while</em> the bytes are being read -
+/// the memory a file costs is spent by then, so a use case that checked afterwards would already
+/// have paid it.
+///
+/// <para><see cref="None"/> is what a caller that imports nothing passes: the sale timestamp repair
+/// preview (issue #472) reads an export for its authorization instants alone, and capping it is a
+/// decision of its own rather than a side effect of this one.</para>
+/// </summary>
+/// <param name="MaxDataRows">
+/// How many data rows may be read, excluding the header row, or <c>null</c> for no limit. The reader
+/// stops as soon as it finds one more than this, so the rows past the limit are never converted.
+/// </param>
+/// <param name="MaxUncompressedSheetBytes">
+/// How far a compressed workbook's sheet data may expand, or <c>null</c> for no limit. It is checked
+/// from the package's own entry sizes before the workbook is loaded, which is the only point at
+/// which an XLSX's expansion can still be refused rather than paid for.
+/// </param>
+public sealed record NayaxSalesFileLimits(int? MaxDataRows, long? MaxUncompressedSheetBytes)
+{
+    /// <summary>No limit at all: read whatever the file holds.</summary>
+    public static NayaxSalesFileLimits None { get; } = new(null, null);
+}
+
+/// <summary>
+/// What reading an upload produced (issue #1300): its rows, or the fact that it is beyond the
+/// limits the caller stated and was therefore not read.
+///
+/// <para>The two are deliberately one answer rather than an exception from the adapter: "this file
+/// is too large to import" is the use case's rule and the operator's refusal, and the reader's job
+/// is to say what it found - as it already does for a file carrying no data row at all.</para>
+/// </summary>
+/// <param name="Rows">The data rows, in file order; empty when the file carries none, and empty when it was refused.</param>
+/// <param name="ExceedsLimits">
+/// <see langword="true"/> when the file carries more data rows than
+/// <see cref="NayaxSalesFileLimits.MaxDataRows"/>, or sheet data expanding past
+/// <see cref="NayaxSalesFileLimits.MaxUncompressedSheetBytes"/>. Nothing was parsed, so
+/// <paramref name="Rows"/> is empty and says nothing about the file.
+/// </param>
+public sealed record NayaxSalesWorkbookReadResult(
+    IReadOnlyList<NayaxSalesImportRow> Rows, bool ExceedsLimits)
+{
+    /// <summary>A file that carries no data row at all.</summary>
+    public static NayaxSalesWorkbookReadResult Empty { get; } = new([], false);
+
+    /// <summary>A file beyond the caller's limits: nothing was read.</summary>
+    public static NayaxSalesWorkbookReadResult BeyondLimits { get; } = new([], true);
+}
+
+/// <summary>
 /// Reads an uploaded Nayax transaction export into raw rows (issue #301), behind which the
 /// workbook format lives entirely: ClosedXML, the CSV quoting rules, the header spellings this
 /// export has been seen to use and the cell-to-value conversions are all the adapter's business,
@@ -157,8 +208,13 @@ public interface INayaxSalesWorkbookReader
     /// list when the file carries no data rows at all (no worksheet, no rows, or a header row
     /// only). A file whose bytes are not a readable workbook of the format
     /// <paramref name="fileName"/> claims is a failure and is not reported as an empty import.
+    ///
+    /// <para>A file beyond <paramref name="limits"/> is answered as
+    /// <see cref="NayaxSalesWorkbookReadResult.BeyondLimits"/> and is <em>not</em> read: that is the
+    /// whole point of passing the limits in rather than counting afterwards (issue #1300).</para>
     /// </summary>
     /// <param name="content">The uploaded bytes, positioned at the start.</param>
     /// <param name="fileName">The uploaded file's own name, which decides how the bytes are read.</param>
-    IReadOnlyList<NayaxSalesImportRow> Read(Stream content, string fileName);
+    /// <param name="limits">How much of the file this caller is willing to read.</param>
+    NayaxSalesWorkbookReadResult Read(Stream content, string fileName, NayaxSalesFileLimits limits);
 }

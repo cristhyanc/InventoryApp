@@ -167,7 +167,11 @@ internal sealed class NayaxSaleTimestampRepairProjection
             throw new DomainValidationException(NayaxSalesExportFormats.UnsupportedMessage);
 
         using var content = export.OpenReadStream();
-        return _workbook.Read(content, export.FileName);
+        // No limit (issue #1300): the row and expansion limits are the uploaded sales *import*'s,
+        // decided for the memory and the write lock that import's save costs. This preview imports
+        // nothing and writes nothing, so capping it is a decision of its own rather than a side
+        // effect of that one.
+        return _workbook.Read(content, export.FileName, NayaxSalesFileLimits.None).Rows;
     }
 
     /// <summary>

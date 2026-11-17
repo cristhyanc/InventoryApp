@@ -429,6 +429,7 @@ public class NayaxSaleTimestampRepairReconciliationTests : IDisposable
         var result = await new ImportNayaxSales(
                 new ClosedXmlNayaxSalesWorkbookReader(),
                 new EfNayaxSalesImportStore(db),
+                new EfNayaxSalesImportTransactions(db),
                 TestCostingUseCases.CostSale(db, rebuild),
                 rebuild,
                 new EfNayaxProductLinkStore(db))

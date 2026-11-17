@@ -40,6 +40,7 @@ public class NayaxTransactionStatusTests
         var import = new ImportNayaxSales(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db),
             Mock.Of<IRebuildProductCost>(),
             // Every Nayax id names the local product with the same id, as issue #732's backfill

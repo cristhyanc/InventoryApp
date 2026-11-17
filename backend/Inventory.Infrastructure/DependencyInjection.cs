@@ -492,6 +492,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ICatalogueReviewStore, EfCatalogueReviewStore>();
         services.AddScoped<ILinkedProviderSaleResolutionStore, EfLinkedProviderSaleResolutionStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+        // The uploaded sales import's own write-locked transaction (issue #1300). Scoped like every
+        // other adapter here: it opens BEGIN IMMEDIATE on the request's own AppDbContext, which is
+        // the context the store beside it stages the file's sales on.
+        services.AddScoped<INayaxSalesImportTransactions, EfNayaxSalesImportTransactions>();
         services.AddScoped<IProviderDataCoverageStore, EfProviderDataCoverageStore>();
         services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();
 
