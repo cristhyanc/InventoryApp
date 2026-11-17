@@ -61,4 +61,24 @@
     <ProjectReference Include="..\Inventory.Infrastructure\Inventory.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- Issue #1308 (audit OPS-04, #1228/#1231): stamp the build's git commit into SourceRevisionId
+       so the SDK appends it to AssemblyInformationalVersionAttribute as "+<sha>" (see
+       IncludeSourceRevisionInInformationalVersion, on by default) with no SourceLink package and
+       no change to the `dotnet publish` command or a workflow. BuildMetadata reads it at startup
+       for the health endpoints' X-Build-Sha header. A build with no git checkout (git missing or
+       ".git" absent) leaves SourceRevisionId unset; BuildMetadata then reports "unknown". -->
+  <Target Name="Issue1308SetSourceRevisionId" BeforeTargets="GetAssemblyVersion" Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git rev-parse HEAD"
+          ConsoleToMSBuild="true"
+          IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="Issue1308GitHead" />
+      <Output TaskParameter="ExitCode" PropertyName="Issue1308GitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(Issue1308GitExitCode)' == '0' And '$(Issue1308GitHead.Trim())' != ''">
+      <SourceRevisionId>$(Issue1308GitHead.Trim())</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+
 </Project>

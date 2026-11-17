@@ -126,7 +126,7 @@ public class MachineStockSyncTests
             new SyncMachineStockFromNayax(
                 nayax,
                 store,
-                new EfNayaxProductLinkStore(db),
+                TestMachineStockSyncUseCases.Rematch(store, new EfNayaxProductLinkStore(db), nayax),
                 // The successful-fetch coverage of issue #891 is not what these fixtures are about:
                 // they are given a usable connection and an in-memory coverage store, so the sync
                 // behaves exactly as it does in production and records its claim somewhere nothing
@@ -135,13 +135,16 @@ public class MachineStockSyncTests
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
                 new FakeMachineRestockSyncCoverageStore(),
                 new FakeBusinessCalendar(EventTime)),
-            new ApplyMachineStockSync(store));
+            TestMachineStockSyncUseCases.Apply(
+                store, new EfNayaxProductLinkStore(db), new RecordingMachineStockSyncLog(), nayax));
     }
 
     private static ResolveMachineStockDuplicate ResolveUseCase(
         AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfMachineStockEventStore(
-            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
+        new(
+            new EfMachineStockEventStore(
+                db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)),
+            new RecordingMachineStockSyncLog());
 
     private static ResolveMachineStockEventsAsAlreadyRecorded BulkResolveUseCase(
         AppDbContext db, IRebuildProductCost? rebuild = null) =>
@@ -743,6 +746,44 @@ public class MachineStockSyncTests
     }
 
     [Fact]
+    public async Task A_nayax_event_of_an_unequal_quantity_to_a_recent_manual_refill_is_a_possible_duplicate_and_writes_nothing()
+    {
+        // Issue #1244: packed 20, loaded 15. The quantities disagree precisely because the operator
+        // packed a pick list and the machine reported what actually went in, so the event is the
+        // same physical restock and must never deduct storage a second time.
+        using var db = CreateInMemoryDb(
+            nameof(A_nayax_event_of_an_unequal_quantity_to_a_recent_manual_refill_is_a_possible_duplicate_and_writes_nothing));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 100, unitCost: 1m);
+        await db.SaveChangesAsync();
+
+        await ApplyManualMachineRefillAsync(db, -20, "operator packed 20 for this machine");
+        var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
+        manualMovement.EffectiveAt = EventTime.AddHours(-1);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 15")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, apply) = UseCases(db, nayax.Object);
+
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+
+        var evt = Assert.Single(preview.Events);
+        Assert.True(evt.IsPossibleDuplicate);
+        Assert.Equal(15, evt.ParsedQuantity);
+        Assert.Equal(20, evt.PossibleDuplicateQuantity);
+        Assert.Equal(manualMovement.EffectiveAt, evt.PossibleDuplicateEffectiveAt);
+        Assert.Equal(0, evt.OtherPossibleDuplicateCount);
+
+        // Nothing is written until the operator resolves it: storage still shows only the manual 20.
+        var result = await apply.Handle(Machine, [evt.Id], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, result.Results[0].Outcome);
+        Assert.Equal(80, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
+    }
+
+    [Fact]
     public async Task A_nayax_event_with_gmt_recorded_without_an_offset_matching_the_same_instant_as_a_manual_refill_is_a_possible_duplicate()
     {
         // Nayax's EventDateTimeGMT arrives without an offset (DateTimeKind.Unspecified) and is
@@ -828,6 +869,118 @@ public class MachineStockSyncTests
         Assert.True(evt.IsPossibleDuplicate);
 
         return (sync, apply, resolve, evt.Id, manualMovement.Id);
+    }
+
+    /// <summary>
+    /// The unequal-quantity scenario of issue #1244: the operator packed 20 for this machine, the
+    /// machine reported 15 going in, and the event is flagged all the same. Returns the resolution
+    /// use cases, the flagged event and the manual movement it was matched against.
+    /// </summary>
+    private static async Task<(
+        ApplyMachineStockSync Apply,
+        ResolveMachineStockDuplicate Resolve,
+        int EventId,
+        int ManualStockAdjustmentId)> SeedUnequalDuplicateScenarioAsync(AppDbContext db)
+    {
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 100, unitCost: 1m);
+        await db.SaveChangesAsync();
+
+        await ApplyManualMachineRefillAsync(db, -20, "operator packed 20 for this machine");
+        var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
+        manualMovement.EffectiveAt = EventTime.AddHours(-1);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 15")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, apply) = UseCases(db, nayax.Object);
+        var resolve = ResolveUseCase(db);
+
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+        var evt = Assert.Single(preview.Events);
+        Assert.True(evt.IsPossibleDuplicate);
+
+        return (apply, resolve, evt.Id, manualMovement.Id);
+    }
+
+    [Fact]
+    public async Task Already_recorded_manually_resolves_an_unequal_quantity_match_without_changing_storage()
+    {
+        using var db = CreateInMemoryDb(
+            nameof(Already_recorded_manually_resolves_an_unequal_quantity_match_without_changing_storage));
+        var (_, resolve, eventId, manualAdjustmentId) = await SeedUnequalDuplicateScenarioAsync(db);
+
+        var result = await resolve.Handle(
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Outcome);
+        Assert.Null(result.StockAdjustmentId);
+        Assert.Equal(80, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task Apply_as_separate_restock_resolves_an_unequal_quantity_match_and_deducts_the_event_quantity()
+    {
+        using var db = CreateInMemoryDb(
+            nameof(Apply_as_separate_restock_resolves_an_unequal_quantity_match_and_deducts_the_event_quantity));
+        var (_, resolve, eventId, manualAdjustmentId) = await SeedUnequalDuplicateScenarioAsync(db);
+
+        var result = await resolve.Handle(
+            Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
+        Assert.NotNull(result.StockAdjustmentId);
+        // The override means a second, genuinely separate restock: 100 - 20 packed - 15 loaded.
+        Assert.Equal(65, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxDuplicateResolution.AppliedAsSeparateRestock, stored.DuplicateResolution);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task The_manual_refill_nearest_the_event_is_the_one_shown_counted_against_and_recorded()
+    {
+        using var db = CreateInMemoryDb(nameof(The_manual_refill_nearest_the_event_is_the_one_shown_counted_against_and_recorded));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 100, unitCost: 1m);
+        await db.SaveChangesAsync();
+
+        // Both qualify; the earlier one was recorded first, so an implementation that takes the
+        // first match in list order would choose it instead of the nearer later one.
+        await ApplyManualMachineRefillAsync(db, -20, "packed the night before");
+        await ApplyManualMachineRefillAsync(db, -6, "topped it up on the way past");
+        var refills = await db.StockAdjustments
+            .Where(x => x.Reason == StockAdjustmentReason.MachineRefill)
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        refills[0].EffectiveAt = EventTime.AddHours(-20);
+        refills[1].EffectiveAt = EventTime.AddMinutes(-10);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 15")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var resolve = ResolveUseCase(db);
+
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+
+        var evt = Assert.Single(preview.Events);
+        Assert.True(evt.IsPossibleDuplicate);
+        Assert.Equal(6, evt.PossibleDuplicateQuantity);
+        Assert.Equal(refills[1].EffectiveAt, evt.PossibleDuplicateEffectiveAt);
+        Assert.Equal(1, evt.OtherPossibleDuplicateCount);
+
+        await resolve.Handle(Machine, evt.Id, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+
+        // The movement the resolution records is the same one the preview showed.
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == evt.Id);
+        Assert.Equal(refills[1].Id, stored.MatchedManualStockAdjustmentId);
     }
 
     [Fact]

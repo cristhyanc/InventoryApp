@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { SimpleChange } from '@angular/core';
@@ -60,8 +61,24 @@ function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPrevi
     isPossibleDuplicate: false,
     possibleDuplicateNotes: null,
     duplicateResolution: NayaxDuplicateResolution.None,
+    possibleDuplicateQuantity: null,
+    possibleDuplicateEffectiveAt: null,
+    otherPossibleDuplicateCount: 0,
     ...overrides
   };
+}
+
+/** The business wall-clock rendering the dialog uses for an instant, for the comparison line. */
+function inBusinessTime(instant: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone: BUSINESS_TIME_ZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).format(new Date(instant));
 }
 
 function preview(
@@ -334,6 +351,33 @@ describe('MachineRestockSyncComponent resolveDuplicate', () => {
 
     expect(harness.component.resolvingEventId$.value).toBeNull();
     expect(harness.toast.error).toHaveBeenCalledWith('Failed to resolve the possible duplicate.');
+  });
+
+  // Issue #1248: the other resolution won the race, so the server answered 409 having written
+  // nothing. The server's own sentence says which way the event went, and the list is reloaded so
+  // the row stops offering a decision that has already been taken.
+  it('reports a 409 conflict with the server sentence and re-syncs the preview', () => {
+    const conflict = new HttpErrorResponse({
+      status: 409,
+      error: {
+        eventId: 3,
+        outcome: NayaxStockEventApplyOutcome.ResolutionConflict,
+        message: 'This event has already been applied as a Nayax inventory movement and cannot be marked as already recorded manually.',
+        stockAdjustmentId: null
+      } as NayaxStockEventApplyResult
+    });
+    const syncRestock = jest.fn(() => of(preview([])));
+    const resolveSyncRestockDuplicate = jest.fn(() => throwError(() => conflict));
+    const harness = createHarness(syncRestock, jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(harness.toast.warning).toHaveBeenCalledWith(
+      'This event has already been applied as a Nayax inventory movement and cannot be marked as already recorded manually.');
+    expect(harness.toast.error).not.toHaveBeenCalled();
+    expect(syncRestock).toHaveBeenCalledTimes(1);
+    expect(harness.component.resolvingEventId$.value).toBeNull();
+    expect(harness.applied).toBe(0);
   });
 });
 
@@ -1179,6 +1223,59 @@ describe('MachineRestockSyncComponent dialog', () => {
     // manually" action alongside events the app never flagged.
     expect(checkbox.disabled).toBe(false);
     expect(host.querySelector('[data-testid="possible-duplicate-badge"]')).not.toBeNull();
+  });
+
+  it('shows both quantities and the matching manual refill time on a flagged possible duplicate', async () => {
+    // Issue #1244: packed 20, loaded 15. The operator decides, so the screen has to show the two
+    // quantities rather than only asserting that the event looks like a duplicate.
+    const duplicate = event({
+      id: 5,
+      parsedQuantity: 15,
+      isPossibleDuplicate: true,
+      possibleDuplicateNotes: 'Manual refill',
+      possibleDuplicateQuantity: 20,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z'
+    });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([duplicate]))));
+
+    openDialog();
+
+    const comparison = requireElement('[data-testid="possible-duplicate-comparison"]');
+    expect(comparison.textContent).toContain('Nayax event 15');
+    expect(comparison.textContent).toContain('manual refill 20');
+    expect(comparison.textContent).toContain(inBusinessTime('2026-09-27T09:00:00Z'));
+  });
+
+  it('says how many other manual refills also qualified', async () => {
+    const duplicate = event({
+      id: 5,
+      parsedQuantity: 15,
+      isPossibleDuplicate: true,
+      possibleDuplicateQuantity: 20,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z',
+      otherPossibleDuplicateCount: 2
+    });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([duplicate]))));
+
+    openDialog();
+
+    expect(requireElement('[data-testid="possible-duplicate-others"]').textContent)
+      .toContain('2 other manual refills also qualified');
+  });
+
+  it('says nothing about other manual refills when only one qualified', async () => {
+    const alone = event({
+      id: 6,
+      isPossibleDuplicate: true,
+      possibleDuplicateQuantity: 4,
+      possibleDuplicateEffectiveAt: '2026-09-27T09:00:00Z'
+    });
+    const { host, openDialog } = await render(jest.fn(() => of(preview([alone]))));
+
+    openDialog();
+
+    expect(host.querySelector('[data-testid="possible-duplicate-comparison"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="possible-duplicate-others"]')).toBeNull();
   });
 
   it('resolves a possible duplicate as already recorded manually and refreshes the preview', async () => {

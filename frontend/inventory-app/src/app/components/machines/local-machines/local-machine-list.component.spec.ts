@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { LocalMachine } from '../../../models/models';
 import { LocalMachineService } from '../../../services/local-machine.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
@@ -336,6 +336,65 @@ describe('LocalMachineListComponent deleting an unused machine (issue #896)', ()
     // Only the initial load: a refused delete must not be followed by a reload that looks like
     // success, so the row the refusal is about is still on screen.
     expect(service.getAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Keyboard focus across a confirmed delete (issue #1277). The shared dialog returns focus to the
+ * row's own Delete button the instant it closes, which is what a cancelled or a refused delete
+ * needs; the delete is still in flight at that moment, and the list the success reloads no longer
+ * has that button, so focus is handed on rather than dropped on the document body - where Tab would
+ * start again at the top of the page.
+ */
+describe('LocalMachineListComponent focus after a confirmed delete (issue #1277)', () => {
+  const deletable = () => localMachine({ id: 7, name: 'Added by mistake', canDelete: true });
+
+  /**
+   * The page's own `<h1>`, which the routed `MachineListComponent` renders around this list; this
+   * spec renders the list on its own, so the heading the handoff falls back to is added here.
+   */
+  let heading: HTMLHeadingElement;
+
+  beforeEach(() => {
+    heading = document.createElement('h1');
+    heading.textContent = 'Machines';
+    document.body.prepend(heading);
+  });
+
+  afterEach(() => heading.remove());
+
+  it('hands focus to the page heading once the delete succeeds and the reloaded list drops the row', async () => {
+    const deleted = new Subject<void>();
+    // A list that answers differently per call: the reload after the delete no longer has the row.
+    const answers = [[deletable()], [] as LocalMachine[]];
+    const service: ServiceDouble = {
+      ...serviceDouble([]),
+      getAll: jest.fn(() => of(answers.shift() ?? [])),
+      delete: jest.fn(() => deleted.asObservable())
+    };
+    const { fixture, host } = await render({ service });
+
+    const rowDelete = buttonLabelled(host, 'Delete')!;
+    rowDelete.focus();
+    rowDelete.click();
+    fixture.detectChanges();
+
+    (host.querySelector('.confirm-modal .btn-danger') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    // The delete has not answered yet: the row is still listed, and focus is back on its own Delete
+    // button, which is where a refusal needs it.
+    expect(host.textContent).toContain('Added by mistake');
+    expect(document.activeElement).toBe(rowDelete);
+
+    deleted.next();
+    deleted.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Added by mistake');
+    expect(document.activeElement).toBe(heading);
+    // Given a tabindex only because a heading carries none, so it can be focused at all.
+    expect(heading.getAttribute('tabindex')).toBe('-1');
   });
 });
 

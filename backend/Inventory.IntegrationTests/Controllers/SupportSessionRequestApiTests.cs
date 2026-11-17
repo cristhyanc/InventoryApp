@@ -190,6 +190,10 @@ public class SupportSessionRequestApiTests
     [InlineData("Expenses.Manage", "DELETE", "/api/operating-expenses/999999")]
     [InlineData("Imports.Run", "POST", "/api/catalogue-review")]
     [InlineData("SiteCommissions.Manage", "POST", "/api/site-commissions/agreements")]
+    // Issue #1254's end-agreement action, which declares no rule of its own: the method rule refuses
+    // it under the capability the session does grant, so somebody from outside the business cannot
+    // change what one of its sites is owed from a past date on.
+    [InlineData("SiteCommissions.Manage", "POST", "/api/site-commissions/agreements/999999/end")]
     [InlineData("Integration.Manage", "POST", "/api/settings/nayax-processing-fee-rates")]
     [InlineData("Data.Repair", "POST", "/api/admin/historical-gst-classification/preview")]
     [InlineData("Business.Manage", "PUT", "/api/business/settings")]

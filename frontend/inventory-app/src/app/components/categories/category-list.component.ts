@@ -7,6 +7,7 @@ import { Category } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ToastService } from '../../services/toast.service';
 import { apiErrorMessage } from '../shared/api-error-message';
+import { handOffFocusFromRemovedOpener } from '../shared/confirmation-focus';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
@@ -21,6 +22,9 @@ export class CategoryListComponent implements OnInit, OnDestroy {
   error = '';
   confirmingCategory: Category | null = null;
   form = { name: '', description: '' };
+
+  /** Whether a create or update request is in flight, so a second submit before it answers is ignored (issue #1280). */
+  saving = false;
 
   /**
    * Whether a support session is active (issue #737, extending #554): create/rename and delete are
@@ -82,10 +86,20 @@ export class CategoryListComponent implements OnInit, OnDestroy {
     this.startCreate();
   }
 
+  /** The submit button's label, which names the save in flight while one is outstanding (issue #1280). */
+  get submitLabel(): string {
+    if (this.saving) {
+      return 'Saving...';
+    }
+    return this.editing ? 'Update' : 'Create';
+  }
+
   save(): void {
     // Checked here as well as disabled in the template, so the write is actually unavailable
-    // rather than merely inert - the endpoint refuses it either way.
-    if (this.sessionActive) {
+    // rather than merely inert - the endpoint refuses it either way. `saving` is checked too
+    // (issue #1280), so a double click on the submit button sends only one request rather than
+    // racing a second create or update past the one already in flight.
+    if (this.sessionActive || this.saving) {
       return;
     }
     if (!this.form.name.trim()) {
@@ -93,13 +107,16 @@ export class CategoryListComponent implements OnInit, OnDestroy {
       return;
     }
     this.error = '';
+    this.saving = true;
 
     const payload = { name: this.form.name.trim(), description: this.form.description || null };
     const onSuccess = () => {
+      this.saving = false;
       this.startCreate();
       this.load();
     };
     const onError = (error: unknown) => {
+      this.saving = false;
       this.error = apiErrorMessage(error, this.editing ? 'Failed to update category.' : 'Failed to create category.');
     };
 
@@ -123,7 +140,13 @@ export class CategoryListComponent implements OnInit, OnDestroy {
     this.confirmingCategory = null;
   }
 
-  deleteConfirmed(): void {
+  /**
+   * `opener` is the control the confirmation returned focus to as it closed - this row's own Delete
+   * button. It keeps focus while the delete is in flight, so a refusal leaves it where the user put
+   * it; a success re-reads the list without that row, so focus is handed on to the page heading
+   * rather than dropped on the document body (issue #1277).
+   */
+  deleteConfirmed(opener: HTMLElement | null = null): void {
     if (!this.confirmingCategory) {
       return;
     }
@@ -136,6 +159,7 @@ export class CategoryListComponent implements OnInit, OnDestroy {
           this.startCreate();
         }
         this.load();
+        handOffFocusFromRemovedOpener(opener);
       },
       // Delete is offered unconditionally (issue #737): the API is the only place that knows
       // whether any product still uses the category, so a refusal is explained here rather than

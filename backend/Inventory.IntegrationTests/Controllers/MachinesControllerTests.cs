@@ -91,13 +91,18 @@ public class MachinesControllerTests
             new SyncMachineStockFromNayax(
                 nayaxClient,
                 store,
-                FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+                TestMachineStockSyncUseCases.Rematch(
+                    store, FakeNayaxProductLinkStore.EveryIdLinkedToItself(), nayaxClient),
                 Time.Clock,
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
                 new FakeMachineRestockSyncCoverageStore(),
                 Time.Calendar),
-            new ApplyMachineStockSync(store),
-            new ResolveMachineStockDuplicate(store),
+            TestMachineStockSyncUseCases.Apply(
+                store,
+                FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+                new RecordingMachineStockSyncLog(),
+                nayaxClient),
+            new ResolveMachineStockDuplicate(store, new RecordingMachineStockSyncLog()),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),
             new GetMachineStockReconciliation(ledgerStore, observationSource, Time.Clock),
             new RecordMachineStockCount(ledgerStore, Time.Clock),
@@ -137,6 +142,9 @@ public class MachinesControllerTests
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        // Nothing is waiting for a match, so the list load re-matches nothing (issue #1248).
+        store.Setup(x => x.FindRematchCandidatesAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(
                 MachineId, It.IsAny<CancellationToken>(), It.IsAny<DateTime?>(), It.IsAny<bool>()))
             .ReturnsAsync(new MachineStockEventsPage([], 0));
@@ -161,6 +169,9 @@ public class MachinesControllerTests
             .ReturnsAsync([]);
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        // Nothing is waiting for a match, so the list load re-matches nothing (issue #1248).
+        store.Setup(x => x.FindRematchCandidatesAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, true))
             .ReturnsAsync(new MachineStockEventsPage([], 3));
@@ -194,6 +205,9 @@ public class MachinesControllerTests
             .ReturnsAsync([]);
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        // Nothing is waiting for a match, so the list load re-matches nothing (issue #1248).
+        store.Setup(x => x.FindRematchCandidatesAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, false))
             .ReturnsAsync(new MachineStockEventsPage([], 0));
@@ -250,13 +264,17 @@ public class MachinesControllerTests
     [Fact]
     public async Task ResolveSyncRestockManually_passes_the_requested_event_ids_through()
     {
+        var transaction = new Mock<IMachineStockRefillWriteTransaction>();
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineStockEventState(
                 7, 5001, DateTime.UtcNow, NayaxStockEventMatchStatus.NeedsReview, "Unknown MDB",
-                NayaxStockEventProcessingStatus.Unprocessed, null, null, null, NayaxDuplicateResolution.None));
+                NayaxStockEventProcessingStatus.Unprocessed, null, null, null, NayaxDuplicateResolution.None,
+                ParsedMdb: null, ParsedProductName: null));
+        store.Setup(x => x.BeginRefillWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(transaction.Object);
         store.Setup(x => x.ReconcileAsManualDuplicateAsync(7, MachineId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
@@ -269,6 +287,9 @@ public class MachinesControllerTests
         Assert.Equal(7, resolved.EventId);
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, resolved.Outcome);
         store.VerifyAll();
+
+        // The stamp is committed, not left to the transaction's disposal (issue #1248).
+        transaction.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     /// <summary>

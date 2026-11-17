@@ -37,6 +37,29 @@ public sealed class DatabaseMigrationFailedException : Exception
 }
 
 /// <summary>
+/// Thrown when the API starts against a database whose schema is <i>newer</i> than the code: the
+/// history table holds an applied migration this build does not contain (issue #1299). The
+/// opposite of <see cref="PendingMigrationsException"/>, and fatal for the same reason the failed
+/// apply above is - the code does not know the schema it would be writing to.
+/// </summary>
+public sealed class DatabaseSchemaNewerThanCodeException : Exception
+{
+    public DatabaseSchemaNewerThanCodeException(string message) : base(message)
+    {
+    }
+
+    public DatabaseSchemaNewerThanCodeException()
+        : this("The database schema is newer than this build.")
+    {
+    }
+
+    public DatabaseSchemaNewerThanCodeException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// Decides whether starting the API may change the database schema (issue #64, revised by issue
 /// #201).
 ///
@@ -60,6 +83,20 @@ public sealed class DatabaseMigrationFailedException : Exception
 ///   error naming the exact command to run when migrations are pending and the override is not
 ///   set.</item>
 /// </list>
+///
+/// <b>A schema newer than the code</b> (issue #1299). Both branches above only ever looked at what
+/// is <i>pending</i>, so an older build started against a database a newer build had already
+/// migrated found nothing pending and started normally. Since issue #1299 the applied ids are
+/// compared with the ids this build contains <i>first</i>, before anything is applied: an applied
+/// id this build does not know means the schema is ahead of the code, and the decision follows the
+/// same environment rule as everything else here. Development and <c>Testing</c> - the two
+/// environments whose database this policy already treats as disposable, the developer's own - log
+/// it as an error and carry on. Every other environment, Production included, refuses to start
+/// with a critical log and throws <see cref="DatabaseSchemaNewerThanCodeException"/> having
+/// migrated and written nothing; a Staging-like database is somebody's hosted data, so it fails
+/// closed with Production rather than with the developer's laptop. Recovery is a restore of the
+/// backup taken before that release, or rolling forward (see
+/// <see cref="UnknownAppliedMigrations.RecoveryGuidance"/>).
 ///
 /// <b>Concurrent startup instances.</b> The realistic risk is not two permanently co-running
 /// instances - the App Service plan for this application is pinned to a single instance with no
@@ -95,6 +132,10 @@ public static class DatabaseSchemaStartup
     /// <exception cref="DatabaseMigrationFailedException">
     /// This environment applies migrations automatically and the attempt failed.
     /// </exception>
+    /// <exception cref="DatabaseSchemaNewerThanCodeException">
+    /// The history table holds an applied migration this build does not contain, in an environment
+    /// that refuses to run against a schema newer than its code.
+    /// </exception>
     public static void EnsureSchema(
         AppDbContext db,
         IHostEnvironment environment,
@@ -102,6 +143,11 @@ public static class DatabaseSchemaStartup
         ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger(typeof(DatabaseSchemaStartup).FullName!);
+
+        // Issue #1299, and deliberately the first thing this method does: a database a newer build
+        // has already migrated must be refused before any pending migration is applied, so that a
+        // database holding both an unknown applied id and a pending one is left exactly as it was.
+        VerifyTheSchemaIsNotNewerThanTheCode(db, environment, logger);
 
         if (MayMigrateAutomatically(environment, configuration))
         {
@@ -133,6 +179,60 @@ public static class DatabaseSchemaStartup
 
         throw new PendingMigrationsException(message);
     }
+
+    /// <summary>
+    /// Refuses to start against a schema newer than this build, or - in the two environments whose
+    /// database this policy treats as disposable - reports it and lets startup continue (issue
+    /// #1299). It reads the history table and nothing else: no migration is applied and no row is
+    /// written on either path.
+    /// </summary>
+    private static void VerifyTheSchemaIsNotNewerThanTheCode(
+        AppDbContext db,
+        IHostEnvironment environment,
+        ILogger logger)
+    {
+        var unknownApplied = UnknownAppliedMigrations.Detect(db.Database);
+
+        if (unknownApplied.Count == 0)
+        {
+            return;
+        }
+
+        var finding = UnknownAppliedMigrations.Summarise(unknownApplied);
+
+        if (TreatsItsDatabaseAsDisposable(environment))
+        {
+            logger.LogError(
+                "{Finding} Startup continues in the {Environment} environment, whose database this "
+                + "policy treats as disposable, and applies whatever is pending as usual - a "
+                + "Production startup against this database would refuse to start. {Recovery}",
+                finding,
+                environment.EnvironmentName,
+                UnknownAppliedMigrations.RecoveryGuidance);
+            return;
+        }
+
+        var message =
+            finding
+            + $" This build will not start in the {environment.EnvironmentName} environment against "
+            + "a schema its code does not know; nothing was migrated and nothing was written. "
+            + UnknownAppliedMigrations.RecoveryGuidance
+            + $" Inspect with `{DatabaseMigrationArguments.CommandName} "
+            + $"{DatabaseMigrationArguments.DryRunFlag}`.";
+
+        logger.LogCritical("{Message}", message);
+
+        throw new DatabaseSchemaNewerThanCodeException(message);
+    }
+
+    /// <summary>
+    /// The two environments whose schema state is a developer's own concern rather than somebody's
+    /// data: a local database and the <c>Testing</c> one the automated tests create and throw away.
+    /// Every other environment - Production, and a hosted Staging-like database - holds data a
+    /// human would have to restore, so it fails closed.
+    /// </summary>
+    private static bool TreatsItsDatabaseAsDisposable(IHostEnvironment environment) =>
+        environment.IsDevelopment() || environment.IsEnvironment("Testing");
 
     private static bool MayMigrateAutomatically(IHostEnvironment environment, IConfiguration configuration) =>
         environment.IsDevelopment()

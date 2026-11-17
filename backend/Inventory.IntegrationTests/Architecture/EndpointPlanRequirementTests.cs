@@ -302,6 +302,10 @@ public class EndpointPlanRequirementTests
         new("PurchasesController.Get", PlanRequirementKind.None), // GET api/purchases/{id:int}
         new("PurchasesController.GetAll", PlanRequirementKind.None), // GET api/purchases
         new("PurchasesController.GetFile", PlanRequirementKind.None), // GET api/purchases/{id:int}/file
+        // The duplicate warning (issue #1247) is on no plan for the reason the scan counter below
+        // is: it reads the caller's own purchases, makes no outbound call and spends nothing, and
+        // what it protects - recording the same receipt twice - is Free's own purchasing feature.
+        new("PurchasesController.PossibleDuplicate", PlanRequirementKind.None), // GET api/purchases/possible-duplicate
         new("PurchasesController.Update", PlanRequirementKind.None), // PUT api/purchases/{id:int}
         new("PurchasesController.Upload", PlanRequirementKind.None), // POST api/purchases
         // Reading a receipt is the one purchasing endpoint a plan decides (issue #1163, child of
@@ -323,6 +327,9 @@ public class EndpointPlanRequirementTests
         new("ReportsController.Dashboard", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/dashboard
         new("ReportsController.Export", PlanRequirementKind.PerReport), // GET api/reports/{report}/export
         new("ReportsController.Gst", PlanRequirementKind.Declared, PlanFeature.BookkeepingAndGstReports), // GET api/reports/gst
+        // The BAS summary Bookkeeping shows (issue #1318) is a projection of the aid's own run, so
+        // it belongs to the same feature as both reports it draws on.
+        new("ReportsController.GstBasSummary", PlanRequirementKind.Declared, PlanFeature.BookkeepingAndGstReports), // GET api/reports/gst/bas-summary
         new("ReportsController.MachineProfitability", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/machine-profitability
         new("ReportsController.ProductProfitability", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/product-profitability
         new("ReportsController.Reconciliation", PlanRequirementKind.Declared, PlanFeature.ProviderSalesReports), // GET api/reports/reconciliation
@@ -341,8 +348,8 @@ public class EndpointPlanRequirementTests
         // when a plan stops including it.
         new("SiteCommissionsController.Agreements", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions/agreements
         new("SiteCommissionsController.Get", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // GET api/site-commissions
-        new("SiteCommissionsController.RecordPayment", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/{siteId:long}/payments
         new("SiteCommissionsController.SaveAgreement", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/agreements
+        new("SiteCommissionsController.EndAgreement", PlanRequirementKind.Declared, PlanFeature.SiteCommissions), // POST api/site-commissions/agreements/{agreementId:int}/end
 
         // A site is known only from the provider's fleet read, so all three site reads are behind
         // the credential gate and already have their own no-provider answers.
@@ -584,6 +591,7 @@ public class EndpointPlanRequirementTests
     [Theory]
     [InlineData("ReportsController.Bookkeeping", SubscriptionPlan.Starter)]
     [InlineData("ReportsController.Gst", SubscriptionPlan.Starter)]
+    [InlineData("ReportsController.GstBasSummary", SubscriptionPlan.Starter)]
     [InlineData("ReportsController.Daily", SubscriptionPlan.Pro)]
     [InlineData("ReportsController.Transactions", SubscriptionPlan.Pro)]
     [InlineData("ReportsController.Reconciliation", SubscriptionPlan.Pro)]
@@ -593,7 +601,6 @@ public class EndpointPlanRequirementTests
     [InlineData("SiteCommissionsController.Get", SubscriptionPlan.Pro)]
     [InlineData("SiteCommissionsController.Agreements", SubscriptionPlan.Pro)]
     [InlineData("SiteCommissionsController.SaveAgreement", SubscriptionPlan.Pro)]
-    [InlineData("SiteCommissionsController.RecordPayment", SubscriptionPlan.Pro)]
     [InlineData("ImportsController.ImportNayaxSales", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Test", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Save", SubscriptionPlan.Pro)]

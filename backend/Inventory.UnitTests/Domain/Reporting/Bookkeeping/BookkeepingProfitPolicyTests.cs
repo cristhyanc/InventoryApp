@@ -49,7 +49,7 @@ public class BookkeepingProfitPolicyTests
     }
 
     [Fact]
-    public void Incomplete_cogs_makes_gross_and_all_profit_null_but_still_reports_gst_and_settlement()
+    public void Incomplete_cogs_makes_gross_and_all_profit_null_but_still_reports_the_settlement()
     {
         var inputs = WholeBusinessComplete(sales: 110m) with { IsCogsComplete = false };
 
@@ -59,7 +59,6 @@ public class BookkeepingProfitPolicyTests
         Assert.False(result.IsProfitComplete);
         Assert.Null(result.NetProfit);
         Assert.Null(result.DirectProfit);
-        Assert.Equal(10m, result.GstOnSales);
         Assert.Equal(80m - 5m, result.NetSettlement);
     }
 
@@ -107,13 +106,15 @@ public class BookkeepingProfitPolicyTests
     }
 
     [Fact]
-    public void Gst_on_sales_is_zero_when_sales_are_zero()
+    public void Zero_sales_produce_a_zero_margin_rather_than_a_division_error()
     {
         var inputs = WholeBusinessComplete(sales: 0m, cost: 0m);
 
         var result = BookkeepingProfitPolicy.Calculate(inputs);
 
-        Assert.Equal(0m, result.GstOnSales);
         Assert.Equal(0m, result.NetMarginPercent);
     }
+
+    // GST on sales is no longer this policy's: since issue #1255 it follows each product's own GST
+    // rule and is calculated by SalesGstPolicy, whose own tests pin it.
 }

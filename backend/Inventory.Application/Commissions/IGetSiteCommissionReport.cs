@@ -1,3 +1,5 @@
+using Inventory.Application.Time;
+
 namespace Inventory.Application.Commissions;
 
 /// <summary>
@@ -10,7 +12,7 @@ namespace Inventory.Application.Commissions;
 /// business-day midnights, which fall in the middle of a UTC day, so asking for the whole UTC dates
 /// they touch would charge a period commission on sales its own revenue excludes - and omit the
 /// commission on the sales it does count. The two business dates stay part of the period because an
-/// agreement, a recorded payment and a payment due date are effective-dated, not instants.
+/// agreement is effective-dated, not an instant.
 /// </summary>
 public readonly record struct SiteCommissionBusinessPeriod(
     DateTime StartUtc,
@@ -19,21 +21,33 @@ public readonly record struct SiteCommissionBusinessPeriod(
     DateTime LastBusinessDate)
 {
     /// <summary>
-    /// The period an inclusive range of plain calendar dates names when those dates are read as UTC
-    /// instants: midnight UTC at the start of the first date to, exclusively, midnight UTC at the
-    /// start of the day after the last. This is what the standalone Commission report asks for until
-    /// issue #1252 migrates it, so <see cref="IGetSiteCommissionReport.Handle"/> keeps answering it
-    /// exactly as before.
+    /// The period an inclusive range of requested <em>business</em> dates names: business-day
+    /// midnight at the start of the first date to, exclusively, business-day midnight at the start
+    /// of the day after the last - 23, 24 or 25 hours per business day. This is what the standalone
+    /// Commission report asks for since issue #1252, through the one business calendar port, so
+    /// commission due for a period starts at local midnight rather than at 10 or 11 am.
     /// </summary>
-    public static SiteCommissionBusinessPeriod ForCalendarDates(DateTime from, DateTime to) =>
-        new(from.Date, to.Date.AddDays(1), from.Date, to.Date);
+    public static SiteCommissionBusinessPeriod ForBusinessDates(
+        IBusinessCalendar businessCalendar, DateTime from, DateTime to)
+    {
+        ArgumentNullException.ThrowIfNull(businessCalendar);
+
+        var firstBusinessDate = from.Date;
+        var lastBusinessDate = to.Date;
+        return new(
+            businessCalendar.StartOfBusinessDayUtc(firstBusinessDate),
+            businessCalendar.StartOfBusinessDayUtc(lastBusinessDate.AddDays(1)),
+            firstBusinessDate,
+            lastBusinessDate);
+    }
 }
 
 public interface IGetSiteCommissionReport
 {
     /// <summary>
-    /// The report for an inclusive range of calendar dates, with its completed sales selected
-    /// between those dates read as UTC instants - the standalone Commission report's form.
+    /// The report for an inclusive range of business dates - the standalone Commission report's
+    /// form. Since issue #1252 it resolves those dates to the window below through the business
+    /// calendar, so its completed sales are the ones the business days actually cover.
     /// </summary>
     Task<SiteCommissionReport> Handle(
         DateTime from,

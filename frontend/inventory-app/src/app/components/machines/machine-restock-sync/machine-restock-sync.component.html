@@ -148,6 +148,16 @@
                       class="badge badge-warning mb-1"
                       [title]="event.possibleDuplicateNotes"
                     >Possible duplicate</span>
+                    <div
+                      *ngIf="event.possibleDuplicateEffectiveAt"
+                      data-testid="possible-duplicate-comparison"
+                      class="value-muted"
+                    >
+                      Nayax event {{ event.parsedQuantity }} · manual refill {{ event.possibleDuplicateQuantity }} at {{ event.possibleDuplicateEffectiveAt | businessDateTime }}<span
+                        *ngIf="event.otherPossibleDuplicateCount > 0"
+                        data-testid="possible-duplicate-others"
+                      > · {{ event.otherPossibleDuplicateCount }} other manual refill{{ event.otherPossibleDuplicateCount === 1 ? '' : 's' }} also qualified</span>
+                    </div>
                     <div *ngIf="isUnresolvedDuplicate(event)" class="mt-1 flex flex-col gap-1">
                       <button
                         type="button"

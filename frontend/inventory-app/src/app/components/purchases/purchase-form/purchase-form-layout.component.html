@@ -86,8 +86,24 @@
           maxlength="100"
           autocomplete="off"
           [(ngModel)]="form.invoiceNumber"
+          (blur)="invoiceNumberEntered.emit()"
         />
       </div>
+
+      @if (duplicateWarning) {
+        <!--
+          The possible-duplicate warning (issue #1247). It is a warning and never a block: Save is
+          untouched, nothing about it is validated here, and the server decided whether there is a
+          match at all - this only shows what it answered.
+        -->
+        <output
+          class="alert alert-warning md:col-span-3"
+          [attr.data-testid]="testId('purchase-duplicate-warning')"
+        >
+          <span class="alert-title">{{ duplicateWarning }}</span>
+          <span>Check it first if this is the same receipt; otherwise save as usual.</span>
+        </output>
+      }
     </div>
     <div class="border-t border-rr-line px-4 py-3">
       <app-purchase-receipt-field
@@ -153,7 +169,7 @@
       </span>
       <span class="flex items-center gap-1">
         GST
-        <app-help-toggletip label="About GST">Prices include GST. Choose Taxable or GST-free for each line. Not classified stays unresolved and adds no GST until you choose. GST amounts are worked out when you save.</app-help-toggletip>
+        <app-help-toggletip label="About GST">Prices include GST. On a new purchase each line starts from the product&#39;s GST rule, or the supplier&#39;s default when the product has none; change it if this purchase is different. Not classified stays unresolved and adds no GST until you choose. GST amounts are worked out when you save.</app-help-toggletip>
       </span>
       <span class="sr-only">Remove</span>
     </div>
@@ -255,14 +271,19 @@
             [id]="lineFieldId(index, 'gst')"
             [attr.data-testid]="testId('purchase-item-gst')"
             class="w-full"
-            [(ngModel)]="item.gstClassification"
+            [ngModel]="item.gstClassification"
+            (ngModelChange)="onLineGstChange(item, $event)"
             [attr.name]="fieldId('gstClassification') + index" [ngModelOptions]="{ standalone: true }"
             [attr.aria-label]="'GST classification for item ' + (index + 1)"
+            [attr.aria-describedby]="gstRuleHint(item) ? lineFieldId(index, 'gst-hint') : null"
           >
             @for (option of gstOptions; track option.value) {
               <option [ngValue]="option.value">{{ option.label }}</option>
             }
           </select>
+          @if (gstRuleHint(item); as hint) {
+            <p class="m-0 mt-1 text-xs text-rr-muted" [id]="lineFieldId(index, 'gst-hint')" [attr.data-testid]="testId('purchase-item-gst-hint')">{{ hint }}</p>
+          }
         </div>
 
         <div class="col-start-6 row-start-1 flex justify-end xl:col-start-auto xl:row-start-auto">
@@ -387,7 +408,7 @@
             <input [id]="fieldId('deliveryCost')" [attr.name]="fieldId('deliveryCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.deliveryCost" />
             @if (hasCharge(form.deliveryCost)) {
               <label class="field-label mt-2" [for]="fieldId('deliveryGstClassification')">Delivery GST</label>
-              <select [id]="fieldId('deliveryGstClassification')" [attr.data-testid]="testId('delivery-gst')" [(ngModel)]="form.deliveryGstClassification" [attr.name]="fieldId('deliveryGstClassification')" [ngModelOptions]="{ standalone: true }">
+              <select [id]="fieldId('deliveryGstClassification')" [attr.data-testid]="testId('delivery-gst')" [ngModel]="form.deliveryGstClassification" (ngModelChange)="onChargeGstChange('delivery', $event)" [attr.name]="fieldId('deliveryGstClassification')" [ngModelOptions]="{ standalone: true }">
                 @for (option of gstOptions; track option.value) {
                   <option [ngValue]="option.value">{{ option.label }}</option>
                 }
@@ -399,7 +420,7 @@
             <input [id]="fieldId('packageCost')" [attr.name]="fieldId('packageCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.packageCost" />
             @if (hasCharge(form.packageCost)) {
               <label class="field-label mt-2" [for]="fieldId('packageGstClassification')">Packaging GST</label>
-              <select [id]="fieldId('packageGstClassification')" [attr.data-testid]="testId('package-gst')" [(ngModel)]="form.packageGstClassification" [attr.name]="fieldId('packageGstClassification')" [ngModelOptions]="{ standalone: true }">
+              <select [id]="fieldId('packageGstClassification')" [attr.data-testid]="testId('package-gst')" [ngModel]="form.packageGstClassification" (ngModelChange)="onChargeGstChange('package', $event)" [attr.name]="fieldId('packageGstClassification')" [ngModelOptions]="{ standalone: true }">
                 @for (option of gstOptions; track option.value) {
                   <option [ngValue]="option.value">{{ option.label }}</option>
                 }

@@ -14,6 +14,7 @@ import {
 import { MachineReport, MachineRow } from '../features/reports/machine-profitability/models/machine-report.model';
 import { ProductReport, ProductRow } from '../features/reports/product-profitability/models/product-report.model';
 import { GstReport } from '../features/reports/gst/models/gst-report.model';
+import { GstBasSummary } from '../features/reports/gst/models/gst-bas-summary.model';
 import {
   TransactionSalesFilter, TransactionSalesFilterOption, TransactionSalesReport,
   TransactionSalesRow, TransactionSalesTotals,
@@ -26,14 +27,18 @@ export {
   ReportingFilter, ReportQuality, NayaxProcessingFeeResult,
   BookkeepingReport, DashboardReport, DailyRow, DailyTotals, DailyReport,
   ReconciliationPeriod, ReconciliationTotals, ReconciliationReport,
-  MachineRow, MachineReport, ProductRow, ProductReport, GstReport,
+  MachineRow, MachineReport, ProductRow, ProductReport, GstReport, GstBasSummary,
   TransactionSalesFilter, TransactionSalesFilterOption, TransactionSalesRow, TransactionSalesTotals, TransactionSalesReport,
 };
 
 export interface SiteCommissionMachine { machineId: number; machineName: string; transactionCount: number; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionDue: number; }
 export interface SiteCommissionProduct { productName: string; totalVends: number; totalSales: number; }
-export interface CommissionPayment { id: number; siteId: number; periodStart: string; periodEnd: string; paymentDate: string; amount: number; notes?: string; }
-export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; paid: number; outstanding: number; dueDate?: string; status: string; machines: SiteCommissionMachine[]; products: SiteCommissionProduct[]; payments: CommissionPayment[]; dataQuality?: string; }
+/**
+ * A site's commission for the requested period. It states what the period's sales earned the site
+ * and nothing about payment (issue #1251): the application does not record commission payments, so
+ * there is no paid, outstanding, status or due-date figure to be read as a settled balance.
+ */
+export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; machines: SiteCommissionMachine[]; products: SiteCommissionProduct[]; dataQuality?: string; }
 /**
  * The site commission report, which carries its own availability answer rather than a coverage
  * state (issue #731). A site is known only from the live Nayax machine fleet, so when the provider
@@ -88,17 +93,33 @@ export class ReportingService {
     if (siteId != null) params = params.set('siteId', siteId);
     return this.http.get<SiteCommissionReport>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions`, { params });
   }
-  recordCommissionPayment(siteId: number, periodStart: string, periodEnd: string, paymentDate: string, amount: number, notes?: string): Observable<CommissionPayment> {
-    return this.http.post<CommissionPayment>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/${siteId}/payments`,
-      { paymentDate, amount, notes: notes || null }, { params: { periodStart, periodEnd } });
-  }
   saveSiteCommissionAgreement(agreement: SiteCommissionAgreement): Observable<SiteCommissionAgreement> {
     return this.http.post<SiteCommissionAgreement>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`, agreement);
   }
   siteCommissionAgreements(): Observable<SiteCommissionAgreement[]> {
     return this.http.get<SiteCommissionAgreement[]>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`);
   }
+  /**
+   * Ends one agreement on a date (issue #1254), so a site's rate can change without a database
+   * edit. The body carries the end date and nothing else: a rate or a start date is not editable,
+   * and which agreement is being ended is the route.
+   */
+  endSiteCommissionAgreement(agreementId: number, endDate: string): Observable<SiteCommissionAgreement> {
+    const base = this.config.apiBaseUrl.replace(/\/$/, '');
+    return this.http.post<SiteCommissionAgreement>(
+      `${base}/site-commissions/agreements/${agreementId}/end`,
+      { endDate }
+    );
+  }
   gst(filter: ReportingFilter): Observable<GstReport> { return this.http.get<GstReport>(`${this.baseUrl}/gst`, { params: this.params(filter) }); }
+  /**
+   * The GST and BAS summary Bookkeeping shows for a GST-registered business (issue #1318). The
+   * registration gate and the machine-filter rule are both the server's, so this is called for
+   * every period and the response's own `status` says what to render.
+   */
+  gstBasSummary(filter: ReportingFilter): Observable<GstBasSummary> {
+    return this.http.get<GstBasSummary>(`${this.baseUrl}/gst/bas-summary`, { params: this.params(filter) });
+  }
 
   backfillSaleCosts(dryRun = true, force = false): Observable<SaleCostingBackfillResult> {
     const url = `${this.config.apiBaseUrl.replace(/\/$/, '')}/sale-costing/backfill`;

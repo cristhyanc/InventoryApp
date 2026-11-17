@@ -2,7 +2,18 @@ using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.MachineStockSync;
 
-/// <summary>One Nayax machine-stock event as shown in the Sync Restock reconciliation preview (issue #183).</summary>
+/// <summary>
+/// One Nayax machine-stock event as shown in the Sync Restock reconciliation preview (issue #183).
+///
+/// <para>When <see cref="IsPossibleDuplicate"/> is set, the three duplicate-comparison values
+/// describe the manual refill the rule chose (issue #1244): <see cref="PossibleDuplicateQuantity"/>
+/// is how many units that movement put into the machine - the opposite sign of its own storage
+/// change, so a manual refill of twenty reads as <c>20</c> - <see cref="PossibleDuplicateEffectiveAt"/>
+/// is when it was effective, and <see cref="OtherPossibleDuplicateCount"/> is how many other manual
+/// refills also qualified. They let the operator compare the event's own
+/// <see cref="ParsedQuantity"/> against what was recorded by hand instead of being told only that
+/// the two look alike.</para>
+/// </summary>
 public record NayaxStockEventPreviewDto(
     int Id,
     long NayaxEventLogId,
@@ -24,7 +35,10 @@ public record NayaxStockEventPreviewDto(
     bool IsDiscrepancy,
     bool IsPossibleDuplicate,
     string? PossibleDuplicateNotes,
-    NayaxDuplicateResolution DuplicateResolution
+    NayaxDuplicateResolution DuplicateResolution,
+    int? PossibleDuplicateQuantity,
+    DateTime? PossibleDuplicateEffectiveAt,
+    int OtherPossibleDuplicateCount
 );
 
 /// <summary>
@@ -69,7 +83,17 @@ public enum NayaxStockEventApplyOutcome
     /// Flagged as a possible duplicate of a manual refill and not yet explicitly resolved
     /// (issue #196); the ordinary Apply action refused it.
     /// </summary>
-    DuplicateRequiresResolution
+    DuplicateRequiresResolution,
+
+    /// <summary>
+    /// The event was already settled the <em>other</em> way, so this resolution changed nothing
+    /// (issue #1248): an event that has been applied cannot also be recorded as never applied, and
+    /// one reconciled as already recorded manually cannot also be applied as a separate restock.
+    /// <c>POST /api/machines/{id}/sync-restock/resolve-duplicate</c> answers it with <c>409</c>.
+    /// Repeating the <em>same</em> resolution is not this outcome: that is the established
+    /// idempotent replay and still answers <see cref="Reconciled"/> or <see cref="Applied"/>.
+    /// </summary>
+    ResolutionConflict
 }
 
 public record NayaxStockEventApplyResultDto(

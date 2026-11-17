@@ -59,6 +59,7 @@ using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
+using Inventory.Infrastructure.MachineStockSync;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxSqs;
 using Inventory.Infrastructure.ReceiptScanning;
@@ -144,6 +145,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+        // The one-column GST registration read the Bookkeeping BAS summary gates on (issue #1318).
+        services.AddScoped<IGstRegistrationStore, EfGstRegistrationStore>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
@@ -418,6 +421,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
         services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        // What a failed Sync Restock apply says about itself (issue #1240). The fixed set of events
+        // is the Application port's; this is the one place they become log lines.
+        services.AddSingleton<IMachineStockSyncLog, LoggingMachineStockSyncLog>();
         // The Sync Restock workflow's own successful-fetch coverage and the unresolved-event counts
         // the Dashboard reminder is built from (issue #891).
         services.AddScoped<IMachineRestockSyncCoverageStore, EfMachineRestockSyncCoverageStore>();

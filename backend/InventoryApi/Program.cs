@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.Commissions;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Imports;
 using Inventory.Application.Members;
@@ -20,6 +21,7 @@ using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Commissions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
@@ -225,6 +227,12 @@ builder.Services.AddInfrastructureServices();
 builder.Services.AddHealthChecks()
     .AddCheck<AppDbContextHealthCheck>("database", tags: new[] { "ready" });
 
+// Issue #1308 (audit OPS-04, #1228/#1231): the build's commit for the health endpoints'
+// X-Build-Sha header. Reading BuildMetadata.BuildSha here is the one read of the assembly, and it
+// happens during startup rather than on the first probe; BuildShaHeaderMiddleware below takes the
+// value from this registration. A build with no git revision to stamp reports "unknown".
+builder.Services.AddSingleton(new BuildShaSource(BuildMetadata.BuildSha));
+
 // Uploaded business documents (issue #39). The composition root is the only place that knows
 // the host's content and web roots and reads configuration: the Application layer sees the
 // IDocumentStorage port and the Infrastructure adapters see plain paths and settings, so
@@ -296,6 +304,12 @@ builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
 // transport fact. The event names the fields that changed and never a value - see
 // LoggingBusinessSettingsAudit.
 builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The commission-agreement audit trail (issue #1254), on exactly the same terms. It is a separate
+// port because ending an agreement is a different event with different fields - and because its
+// entry type has no field for a site name, a commission rate or any money figure, which keeps the
+// business's financial configuration out of the audit trail structurally rather than by a sink's
+// discretion.
+builder.Services.AddScoped<ISiteCommissionAgreementAudit, LoggingSiteCommissionAgreementAudit>();
 // The bulk product GST rule audit trail (issue #1076), on exactly the terms the settings one above
 // is satisfied: a structured event at the boundary that knows the request's correlation id, and no
 // audit table, because this issue authorises no schema change. It is a separate port because
@@ -593,8 +607,10 @@ app.Services.GetRequiredService<PriceCollectorAuthenticationDecision>()
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and
 // fails closed unless explicitly opted in. A migration failure always stops startup rather than
-// serving requests against a schema its code does not match. See DatabaseSchemaStartup (including
-// its concurrency note) and docs/tenant-rollout.md.
+// serving requests against a schema its code does not match, and since issue #1299 so does a
+// schema that is *newer* than this build - an applied migration id this build does not contain -
+// which is checked before anything is applied. See DatabaseSchemaStartup (including its
+// concurrency note) and docs/tenant-rollout.md.
 //
 // Schema migrations never assign tenant ownership or perform the business backfill - that is
 // exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and
@@ -693,15 +709,29 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 // checks (Predicate returns false for every registration), so it reports the process is up
 // regardless of the database or any other dependency. /health/ready runs only checks tagged
 // "ready" and returns 503 when one of them is unhealthy - see AppDbContextHealthCheck.
+//
+// Issue #1308 (audit OPS-04, #1228/#1231): both endpoints also carry the build's commit in an
+// X-Build-Sha header, read once at startup from BuildMetadata (the BuildShaSource registered with
+// the health checks above), so a deploy can eventually tell a reply from the old process apart
+// from the new one instead of trusting the first 200/503. The header is set by
+// BuildShaHeaderMiddleware, which only adds it and otherwise calls next(), touching neither
+// endpoint's status code nor its body.
+//
+// The header travels with the two registrations below, through the BuildShaHeaderMetadata marker
+// each one carries, rather than with a comparison against their path text: routing matches a
+// template case-insensitively and ignores a trailing slash, so it sends /HEALTH/READY and
+// /health/ready/ to the same endpoint, and a probe spelled either way has to get the same commit.
+app.UseMiddleware<BuildShaHeaderMiddleware>();
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = _ => false,
-}).AllowAnonymous();
+}).AllowAnonymous().WithMetadata(BuildShaHeaderMetadata.Instance);
 
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
-}).AllowAnonymous();
+}).AllowAnonymous().WithMetadata(BuildShaHeaderMetadata.Instance);
 
 app.MapControllers();
 

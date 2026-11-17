@@ -57,18 +57,41 @@ this app. A human operator must make and verify this against the live App Servic
 something an automated agent may apply (`AGENTS.md` reserves Azure/App Service configuration
 changes for humans).
 
-**Concurrency and locking limits.** The API opens the database with `Microsoft.Data.Sqlite`'s
-default journal mode (rollback journal, not WAL — nothing in `Program.cs` configures
-`journal_mode`) and the driver's default busy timeout (`Default Timeout=30`, i.e. 30 seconds).
-SQLite allows unlimited concurrent readers but only one writer at a time; a second writer blocks
-for up to the busy timeout and then fails with `SQLITE_BUSY` rather than queuing indefinitely. In
-this single-process deployment that is a soft limit on request latency under write-heavy
-concurrent load (for example simultaneous imports and sale-costing writes), not a hard outage —
-but it does not extend to multiple concurrently writing processes: **the App Service plan for this
-app must stay pinned to a single instance (no scale-out) while SQLite remains the store.** SQLite's
-file locking is unreliable over the kind of shared, network-backed storage `/home` becomes once
-more than one instance mounts it, so running two instances against the same database file is not a
-supported configuration.
+**Journal mode.** No repository code sets `journal_mode` — `Program.cs` configures no PRAGMA, and
+nothing else in this codebase opens the connection any differently. Despite that, a database file
+this application creates is in **WAL** (write-ahead log) mode, not the rollback journal this
+section previously described: EF Core's SQLite database creator sets `journal_mode=WAL` itself
+when it builds a new file (`Database.Migrate()` or `EnsureCreated()` against an empty path), and
+journal mode is stored *in the database file*, not chosen per connection, so every later connection
+to that same file — including the running API's — stays WAL without anything re-asserting it.
+`SqliteBackupRestoreTests.A_database_file_created_by_migrate_is_in_wal_mode` pins this: a file
+`Database.Migrate()` creates on an empty path reports `PRAGMA journal_mode` = `wal`. **Production's
+mode depends on how its live file was first created**, which this repository cannot verify from
+source — only the owner can confirm it, against the live file. The reasoning below assumes WAL
+because that is what this application's own database creator produces, not because the live file
+has been inspected here.
+
+**Concurrency and locking limits.** In WAL mode, readers do not block the writer and the writer
+does not block readers — a reader keeps reading its own consistent snapshot while a write is in
+progress — but there is still only **one writer at a time**: a second concurrent writer blocks for
+up to the busy timeout and then fails with `SQLITE_BUSY` rather than queuing indefinitely. The
+driver's busy timeout is unchanged at the default (`Default Timeout=30`, i.e. 30 seconds) — WAL
+does not alter it. In this single-process deployment the single-writer limit is a soft limit on
+request latency under write-heavy concurrent load (for example simultaneous imports and
+sale-costing writes), not a hard outage — but it does not extend to multiple concurrently writing
+processes: **the App Service plan for this app must stay pinned to a single instance (no
+scale-out) while SQLite remains the store.** SQLite's file locking is unreliable over the kind of
+shared, network-backed storage `/home` becomes once more than one instance mounts it, so running
+two instances against the same database file is not a supported configuration.
+
+**Storage.** WAL relies on shared memory (a `-shm` index file next to the database, plus a `-wal`
+file holding not-yet-checkpointed writes) for readers and the writer to coordinate against the same
+file; SQLite does not support WAL over a network filesystem shared across hosts, because that
+coordination depends on shared-memory primitives a network filesystem does not give multiple hosts
+over the same file. That is one more reason — independent of the single-writer limit above — the
+App Service plan for this app must stay pinned to a single instance: scaling out would not just
+exceed SQLite's single-writer model, it would put WAL's own coordination mechanism on storage it
+does not support.
 
 **Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
 alerting today (that is future work, not part of this change), but are the observable evidence
@@ -147,7 +170,14 @@ new file without requiring the source connection, or the API process holding it,
 backs up a live SQLite file while the source connection that created it stays open (mirroring a
 running API process) and confirms the resulting copy passes `PRAGMA integrity_check` and contains
 exactly the committed rows, then proves a second backup taken later, still without closing that
-connection, reflects the writes committed in between.
+connection, reflects the writes committed in between. This matters more in WAL mode than it would
+in the rollback journal this section used to describe: committed-but-not-yet-checkpointed data can
+live in the `-wal` file next to `inventory.db` rather than in `inventory.db` itself, so **a backup
+must always go through `backup-database` or `sqlite3 ".backup"`, never a plain filesystem copy of
+`inventory.db` on its own while `inventory.db-wal` exists** — that would risk a copy missing writes
+the `-wal` file still holds. The Online Backup API reads the database engine's own consistent view,
+`-wal` included, which is why both supported procedures below are already WAL-safe and need no
+code change for this.
 
 **The supported command (issues #331 and #332).** `backend/InventoryApi`'s published executable has
 a `backup-database` CLI mode, dispatched before the web host is built — the same early-command
@@ -271,9 +301,12 @@ underlying mechanism:
 
 1. **Prefer a quiet window, but do not rely on stopping the app.** The Online Backup API produces
    a consistent snapshot even while writes continue; stopping the App Service first (or scaling to
-   zero) removes any residual risk but is not required for backup correctness. Do not run a plain
-   filesystem `cp` of the `.db` file while the app is running — unlike the backup API, a raw copy
-   can capture a database file mid-write and is not guaranteed consistent.
+   zero) removes any residual risk but is not required for backup correctness. **Never run a plain
+   filesystem `cp` of `inventory.db` on its own while `inventory.db-wal` exists** — unlike the
+   backup API, a raw copy can capture the database file mid-write, and in WAL mode a copy of
+   `inventory.db` alone can also simply miss committed data still sitting in `inventory.db-wal`.
+   Always take the backup through `.backup` (or `backup-database`), never a raw copy, while the app
+   is running.
 2. **Take the backup:**
 
    ```bash
@@ -293,10 +326,14 @@ underlying mechanism:
    `backup-database --upload` is the supported, automated form of this step; this manual
    alternative exists for a host where the published `dotnet` application is not on hand.
 5. **Restore** by stopping the API, replacing the live database file with the verified backup (or
-   pointing the connection string at the restored file), and starting the API again:
+   pointing the connection string at the restored file), removing any leftover
+   `inventory.db-wal` and `inventory.db-shm` left behind by the old database (the restored backup
+   is its own complete snapshot and has no use for the previous database's sidecar files), and
+   starting the API again:
 
    ```bash
    sqlite3 /home/data/backups/inventory-<timestamp>.db ".backup '/home/data/inventory.db'"
+   rm -f /home/data/inventory.db-wal /home/data/inventory.db-shm
    ```
 
    Restoring does overwrite live data and must only be run deliberately, by a human, after
@@ -742,7 +779,14 @@ must not be given a role that could).
    `migrate-database --dry-run` is an early CLI mode that never builds the web host and never
    applies anything, so it reports whether the snapshot's schema matches the deployed code —
    "already up to date", or the exact list of migrations a restore of this snapshot would need —
-   while leaving the copy unmodified. Follow it with business-level spot checks that compare the
+   while leaving the copy unmodified. Since issue #1299 it answers the **other** direction too: if
+   the snapshot's `__EFMigrationsHistory` holds a migration id the build running the dry run does
+   not contain, the schema is *newer* than that build, and the command lists those unknown applied
+   ids and **exits non-zero** instead of reporting "already up to date". Treat that as the signal it
+   is — the build in hand must not run against this snapshot, and starting the API against it in
+   Production would refuse to start, before any pending migration was applied (see [Build and
+   delivery](#build-and-delivery)) — rather than as a rehearsal failure: restore it with a build
+   that contains those migrations. Follow it with business-level spot checks that compare the
    copy against figures already known for a **closed** period: machine, product, sale and purchase
    row counts, the latest sale date, that every tenant-owned row still carries its owning business,
    and one or two report totals (a closed month's bookkeeping figures, for example) against what
@@ -751,7 +795,8 @@ must not be given a role that could).
    non-production Nayax, Entra and storage settings, never production ones.
 6. **Record the evidence.** A rehearsal that leaves no record cannot be relied on later. Note the
    date and operator, the object name and its `createdutc`/`kind`, the checksum comparison result,
-   the `integrity_check` and `foreign_key_check` results, the pending-migration result, which
+   the `integrity_check` and `foreign_key_check` results, the dry run's pending-migration and
+   unknown-applied result and its exit code, which
    business figures were compared, and the **elapsed wall-clock time from step 2 to the end of step
    5**. That duration is the measured input to the recovery-time trigger in [Measurable triggers to
    migrate to a server database](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above —
@@ -791,7 +836,10 @@ preference, and it binds every participant:
 - **Recovery from a bad schema migration is a restore, decided by a human** (see
   [Build and delivery](#build-and-delivery)): neither startup nor `migrate-database` rolls a
   migration back, and a failed deployment never gives an agent authority to restore, revert or
-  deploy (`AGENTS.md` § Security and deployment safeguards).
+  deploy (`AGENTS.md` § Security and deployment safeguards). Since issue #1299 redeploying the
+  older build instead is not a way around it either: that build refuses to start against the
+  migrated schema, so the way back is the restore first and then the older build, or rolling
+  forward (`docs/automation.md` § Deploy Production).
 
 ##### Human production setup, and how to verify it
 
@@ -845,7 +893,7 @@ InventoryApp/
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
 │   │   ├── DTOs/                    API-owned transport contracts
-│   │   ├── Http/                    Exception handlers (ProblemDetails mapping) and the liveness/readiness health checks
+│   │   ├── Http/                    Exception handlers (ProblemDetails mapping), the liveness/readiness health checks, and HealthChecks/BuildMetadata with BuildShaHeaderMiddleware (the X-Build-Sha header's commit, read once at startup, set on whichever responses the health registrations' BuildShaHeaderMetadata marker selects — issue #1308)
 │   │   ├── Observability/           Application Insights telemetry registration (issue #165)
 │   │   ├── Properties/              Launch and service-dependency settings
 │   │   ├── Swagger/                 OpenAPI configuration and the published-schema compatibility boundary
@@ -960,6 +1008,7 @@ Contains stable business language and deterministic rules:
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
+- The GST accounting-aid derivation and the BAS labels over it (`Reporting.Gst.GstAccountingAidPolicy`, which owns the one credit total and the one net-GST subtraction, and `Reporting.Gst.BasGstSummaryPolicy`, which names them G1/1A/1B and decides the payable/credit/nil answer — or that there is no such answer, for a net amount nothing measured — and whether the estimate is incomplete; see [Bookkeeping GST and BAS summary](#bookkeeping-gst-and-bas-summary-issue-1318)).
 - The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
@@ -1332,8 +1381,10 @@ now fails to compile rather than failing a review. `ApiLayerOwnershipTests` asse
 is not externally visible and that `Inventory.Domain`/`Inventory.Application` declare no `IQueryable`
 or expression tree of their own, which is the general form of the same rule.
 
-`Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement/payment use cases
-orchestrate the commission endpoints through `ISiteCommissionStore`.
+`Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement use cases
+orchestrate the commission endpoints through `ISiteCommissionStore` (issue #1251 removed the payment
+use case, its port methods and its route — see
+[The commission report states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251)).
 `Inventory.Application.NayaxProcessingFees.GetNayaxProcessingFees` uses
 `INayaxProcessingFeeFactsProvider` and the existing `INayaxFeeRateStore`.
 `Inventory.Domain.FinancialConfiguration.NayaxProcessingFeePolicy` owns the actual-versus-estimated
@@ -1580,6 +1631,8 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads. Since issue #849 the denied-scope refusal has reviewed exceptions, each narrower than the rule rather than a way around it — the supplier provisioning write below, and since issue #941 the collector's automatic match beside it. Since issue #551 it enforces one rule before the other four: a request in `BusinessScopeState.SupportReadOnly` may write **nothing at all** — every table, not only the tenant-owned ones — because in that state there is no write this application wants. The other four rules are about ownership: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
 
+**How the relationship rule resolves a principal, and why it is linear (issue #1282).** The rule is unchanged — a foreign key between tenant-owned entities must point inside the dependent row's own business, a principal that does not exist is left to the foreign key constraint, and a denied or support-session scope still writes nothing — but *how* it finds each principal decides what a batch write costs, and the enforcer runs inside the one SQLite write lock the whole process shares. It used to ask `ChangeTracker.Entries<IBusinessOwned>()` again for every foreign key (each call runs change detection) and scan that whole sequence for the principal, then make one `IgnoreQueryFilters` query per untracked principal: one save of N new rows cost about N², measured on a real SQLite file as 0.45 s at 500 rows, 1.5 s at 1,000, 5.7 s at 2,000 and **26.0 s at 4,000** (audit #1226 finding PERF-01, at audit SHA `0db9f507`). A save that slow is not only slow: every other business's write in the process waits behind that lock and fails on the 30-second busy timeout. Three things make it linear, and none of them moves the boundary. **The tracked graph is read once per save**: `Enforce` takes the entry list once and hands it to every rule, including the lease windows. **Tracked principals are indexed, not scanned**: one dictionary per principal type and principal key, built on first use from that same list, keyed by the key values, first entry winning and `Deleted` entries skipped — exactly what the scan found, in one pass instead of N. **Untracked principals are asked about in one statement per principal type and dependent business**, in fixed-size batches of ids (1,000 for a single-column key, 100 key tuples for a composite one), and the question is the narrow one the rule actually has: *does any stored row under these keys belong to a different business?* A "no" clears every key in the batch at once, because each of them then points either inside the dependent's own business or at no row at all. Only a "yes" — a genuine violation, where the whole save is abandoned anyway — falls back to the old key-by-key resolution, which is what keeps the refusal naming the first offending row in change-tracker order with the message it has always had. `BusinessOwnershipRelationshipScaleTests` (`backend/Inventory.IntegrationTests/Adapters/Persistence/`) guards all of it: a two-business save of 3,000 rows mixing principals that are tracked, inserted in the same save and only in the database succeeds and is stamped, the same save with one row pointing at the other business's category is refused and writes nothing, 4,000 rows sharing one untracked principal cost exactly one statement over that table and 4,000 rows with 4,000 distinct untracked principals cost one per batch, and two timing tests on real SQLite files hold one save of 4,000 rows under 10 seconds and within about three times the 2,000-row time. `BusinessDataIsolationTests` remains the relational proof of what the enforcer allows and refuses.
+
 **Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the five structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous. The support-session id hash of issue #550 is deliberately the other way round — unique across the whole table — and that is not an exception either: the rule is about values a *business* supplies, and a session id is generated by this server, supplied by nobody, and matched by a request that carries no business to narrow the lookup with, so global uniqueness is what makes "which session is this?" have one answer.
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. Adding a purchase document (`POST /api/purchases/{id}/file`, issue #976) resolves it the same way and writes the stored name the server generated, so another business's purchase id is simply not found and the bytes that request had written are removed again. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
@@ -1689,7 +1742,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
-| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
+| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, and `POST api/site-commissions/agreements/{agreementId}/end` since issue #1254) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -1817,6 +1870,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | Capability | Endpoints | Restricted figures returned | Outcome |
 | --- | --- | --- | --- |
 | `Dashboard.View` | `GET api/dashboard/summary` | `salesThisWeek` (and its `sales`/`comparisonSales`), `inventory.inventoryValueAtCost` | Withheld by [#527](#dashboard-financial-redaction-issue-527) — the property is **absent** from the redacted shape, and the week's sales are not read |
+| `Dashboard.View` | `GET api/nayax-sale-review`, `GET api/nayax-sale-review/summary` (issue #1105) | each sale's `settlementValue`, its latest evidence's `providerSettlementValue`, each history entry's `reconciledPeriodDifference` — the summary itself carries two counts of sales and no amount | Withheld by #1306 (**the Nayax sales review** below) |
 | `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
 | `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, `200` with the last-synced instant (issue #843), or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
@@ -1843,9 +1897,11 @@ Nothing was deferred: the audit found no leak that needed a frontend change or a
 
 **One decision per request, from the one capability service, at the mapping boundary.** This follows #698 rather than #527: `InventoryApi.Adapters.Mapping.FinancialFigureVisibility` is the two-valued answer with `Redacted` as the enum's zero, and `CurrentCapabilities.ForCurrentRequestAsync` is the only thing that produces it, by asking `Inventory.Application.Access.CurrentCapabilities` for `Dashboard.ViewFinancials`. `StockController`, `StockHistoryController`, `PurchasesController` and `SupplierOrdersController` resolve it once per request and hand it to the mapper; they strip and recompute nothing, no use case changed, no endpoint's authorization class changed, and nothing was added to `EndpointAuthorizationClassificationTests`. The mapping boundary is right here for #698's reason: neither figure is a separate read — `inventoryValueAfter` is a column of the movement row the history is, and the nested product is a navigation the purchase read already loaded — so there is nothing to avoid reading, and the Application layer keeps one answer for every caller. `StockAdjustmentResponseMapper.ToResponse`, `StockHistoryResponseMapper.ToResponse`, `PurchaseResponseMapper.ToResponse` and `SupplierOrderResponseMapper.ToResponse` all take the visibility as a **required** argument, so a new call site cannot publish a figure by forgetting to ask, and a support session needs no rule of its own: its fixed capability set grants `Dashboard.ViewFinancials`, read through the same service.
 
-**The standing guard, which is the part that outlives the sweep.** `OperatorReadableFinancialFigureTests` (`backend/Inventory.IntegrationTests/Architecture/`) walks the response type of every Operator-readable endpoint — resolved by comparing each endpoint's declared `[RequireCapability]` attributes against `RoleCapabilities.For(Operator)`, plus the two endpoint classes that declare no capability — collects every property whose name contains `revenue`, `profit`, `margin`, `inventoryvalue`, `valuation` or `sales`, and asserts the result equals a maintained list in which each entry records its outcome and the reason for it. A new revenue, profit, margin, sales or inventory-value property anywhere in that type graph fails the build until the same pull request decides what happens to it; an entry for a property that no longer exists fails too, so the list stays an audit rather than accumulating. Three further facts keep the guard honest about its own reach: the Operator-readable endpoints whose payload reflection cannot inspect (an `IActionResult` returning a status code, a `ProblemDetails` or the purchase's stored document) are a separately reviewed list rather than a silent skip; the scan is asserted to be taken over exactly the four capabilities #328's table gives an Operator, so narrowing that table cannot quietly narrow the scan; and the walk is asserted to reach the endpoints at all, so a reflection change that matched nothing would fail rather than pass. It is an allow-list of **names**: it cannot prove a figure is withheld at runtime, which is what the four per-surface API tests do.
+**The standing guard, which is the part that outlives the sweep.** `OperatorReadableFinancialFigureTests` (`backend/Inventory.IntegrationTests/Architecture/`) walks the response type of every Operator-readable endpoint — resolved by comparing each endpoint's declared `[RequireCapability]` attributes against `RoleCapabilities.For(Operator)`, plus the two endpoint classes that declare no capability — collects every property whose name contains `revenue`, `profit`, `margin`, `inventoryvalue`, `valuation`, `sales`, `saleamount` (issue #768) or — since issue #1306 — `settlement` or `difference`, and asserts the result equals a maintained list in which each entry records its outcome and the reason for it. A new revenue, profit, margin, sales, settlement, difference or inventory-value property anywhere in that type graph fails the build until the same pull request decides what happens to it; an entry for a property that no longer exists fails too, so the list stays an audit rather than accumulating. Three further facts keep the guard honest about its own reach: the Operator-readable endpoints whose payload reflection cannot inspect (an `IActionResult` returning a status code, a `ProblemDetails` or the purchase's stored document) are a separately reviewed list rather than a silent skip; the scan is asserted to be taken over exactly the four capabilities #328's table gives an Operator, so narrowing that table cannot quietly narrow the scan; and the walk is asserted to reach the endpoints at all, so a reflection change that matched nothing would fail rather than pass. It is an allow-list of **names**: it cannot prove a figure is withheld at runtime, which is what the four per-surface API tests do.
 
 **What proves this slice.** `StockAndPurchasingFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded catalogue, movement, purchase and supplier order: `inventoryValueAfter` `null` for an Operator on the product detail's nested history, both stock endpoints — the `POST` included, because recording a restock answers the movement that was created — and the global history page; the nested product's `inventoryValue` `null` on the purchase list and detail and the supplier-order list and detail; the real figures for a Manager and an Owner on all five, which is what makes the Operator's `null` a withheld figure rather than an empty one; the movement's own unit cost, total cost and resulting average unit cost, and the purchase's own line cost, extended total and invoice total, carrying their values throughout; whole-body comparison of each read response against a Manager's with the withheld figures replaced by `null`, which asserts every key, its order and every nested value at once; and neither seeded value appearing anywhere in any of seven Operator bodies under any name), `OperatorReadableFinancialFigureTests` as described above, and at the mapper the three byte-for-byte contract suites — `StockAdjustmentResponseJsonContractTests`, `PurchaseResponseJsonContractTests` and `SupplierOrderJsonContractTests` — which now pin the `Visible` projection explicitly, so a Manager's and an Owner's response is asserted unchanged, and each add one test for the redacted projection withholding its single figure with every other key and value intact.
+
+**The Nayax sales review (issue #1306), the surface the guard's vocabulary could not see.** The review list and summary of [issue #1105](#owner-decisions-about-flagged-nayax-sales-issue-1105) arrived after #700 and require only `Dashboard.View`, so an Operator reached them — correctly, because seeing which sales need attention is work an Operator does — and their response carried three amounts: the stored sale's `settlementValue`, the `providerSettlementValue` Nayax's own record carried, and the `reconciledPeriodDifference` an Owner's decision moved an already reconciled reimbursement period by. The guard did not catch them because its vocabulary had no fragment that matches those names, which is the failure mode #700 predicted in the only place it could not close by itself. Audit AI-02 (#1221, #1231) found them and the owner decided on 14 November 2026 to hide them. The endpoints stay open and the three figures are `null` for a caller without `Dashboard.ViewFinancials`, through `NayaxSaleReviewResponseMapper` and the same `FinancialFigureVisibilityResolution.Withhold` every other mapper uses — never `0`. **Everything else about the two responses is unchanged for every caller**: which sales each view holds, their order, the view's total and paging, each sale's machine, instant, product, state and whether it is counted, each evidence row's own fields and each compared field's answer (`matches`, `differs`, `not compared`) — that answer is what says *why* a sale is listed and carries no amount — the decision history including the period a decision moved, and the decisions the table allows. The summary needed no projection: it is two counts of sales. Who may open the page or take a decision is untouched (#1105's rules stay). The Angular page leaves the amount lines out altogether rather than rendering them empty or as `0.00`, reading `Dashboard.ViewFinancials` from `GET /api/me/access` like every other hidden figure, and for a caller without it shows the comparison alone ("Amount: differs"). The guard's vocabulary gained `settlement` and `difference`, which also reached four purchase-cost figures that were already there — `ProductPriceComparisonDto.AbsoluteDifference` and `PercentageDifference`, `PurchaseValidationDto.TotalDifference` and the unit count `NayaxStockEventPreviewDto.UnaccountedDifference` — each a difference between figures the recorded decision deliberately keeps visible to an Operator, or no amount at all; they are recorded with that reason and are unchanged. `NayaxSaleReviewRedactionApiTests` proves the slice over the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded set of flagged, investigated and decided sales: the three figures `null` for an Operator on both views, every seeded figure for a Manager and an Owner, no seeded amount anywhere in an Operator's body under any name, and a whole-body comparison of each view against a Manager's with the withheld figures replaced by `null`, so paging, counts, evidence and available decisions are asserted identical.
 
 #### One active membership per identity (issue #522)
 
@@ -3160,7 +3216,7 @@ reads Free.
 
 **The second enforcement point is the endpoint, for what a plan refuses outright.** `InventoryApi.Auth.RequirePlanAttribute` declares the feature an endpoint needs and is an **MVC authorization filter, not an authorization policy**. That is the design rather than a detail: a second `AuthorizeAttribute` would be evaluated together with the capability policy by one middleware in no defined order, and a caller holding neither could be told about the plan instead of simply being refused. An MVC filter runs after the authorization middleware has finished, so **a role refusal stays exactly the bodiless `403` it is today**, a plan is only ever asked about for a caller the role already allowed, and the check happens before model binding and before the action — which is what makes "a refused save leaves the stored credentials unchanged" and "a refused import stores nothing" properties of the pipeline rather than of a use case. A plan never grants a role more access: every endpoint that declares a plan requirement still declares its capability, which an architecture test asserts. The refusal is one shape everywhere, `InventoryApi.Auth.PlanRequirement`: `403` with the stable code `plan_required`, the plan the business would need and the feature, and nothing about the caller, their role, the capability or a price.
 
-**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report, the agreements and the payments — a site is known only from the live fleet read, so commission is a provider feature throughout), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. Pro also, since issue #1163: `POST /api/purchases/scan` — the one purchasing endpoint a plan decides, and the one that is refused while enforcement is off ([Receipt scanning](#receipt-scanning-issue-975)). **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
+**The endpoint requirements, as the issue decides them** (issue #977 adds one more to the Starter row, `POST /api/cheapest-suppliers/summary`). Starter and Pro: `GET /api/reports/bookkeeping`, `/gst` and, since issue #1318, `/gst/bas-summary` — a projection of the aid's own run, so it cannot belong to another feature ([Bookkeeping GST and BAS summary](#bookkeeping-gst-and-bas-summary-issue-1318)). Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report and the agreements — a site is known only from the live fleet read, so commission is a provider feature throughout; issue #1251 removed the payment route that used to be the third member of this set), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. Pro also, since issue #1163: `POST /api/purchases/scan` — the one purchasing endpoint a plan decides, and the one that is refused while enforcement is off ([Receipt scanning](#receipt-scanning-issue-975)). **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
 
 **A report and its own export cannot need different plans.** `GET /api/reports/{report}/export` is one endpoint serving every report family, so its requirement cannot be a constant: it declares `[RequirePlanPerReport]` and resolves the feature through `Inventory.Domain.Subscriptions.ReportPlanRequirements`, the same table the report actions' declared features are asserted against. A report name this application does not recognise resolves to the **most restricted** feature, because the export's own row builder falls through to product profitability for one — so misspelling a URL is not a way to download a Pro report.
 
@@ -4885,17 +4941,21 @@ Issue #59 replaced ad hoc, per-controller exception handling with a small typed 
 | Layer | Owns | Examples | Escapes to the caller as |
 | --- | --- | --- | --- |
 | `Inventory.Domain` (`Inventory.Domain.Exceptions`) | Domain invariants: a deliberate business-rule/input check, or a request that conflicts with the current state of the data | `DomainException` (abstract root), `DomainValidationException`, `DomainConflictException`, `InsufficientStockException` | `400`/`409` via `DomainExceptionHandler`, message verbatim |
-| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation, an access-control refusal, or an integration the current business has not made usable | `Tenancy.BusinessAccessDeniedException`; `Nayax.NayaxNotConnectedException` and `Nayax.NayaxPermissionNotGrantedException` (issue #520) | The two Nayax connection failures become `409` via `NayaxConnectionExceptionHandler`, which publishes the fixed, caller-safe sentence each type declares as a constant. Anything else here is not claimed by a handler and propagates to `GlobalExceptionHandler` as a generic `500` unless a use case's controller catches it deliberately |
+| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation, an access-control refusal, or an integration the current business has not made usable | `Tenancy.BusinessAccessDeniedException`; `Nayax.NayaxNotConnectedException` and `Nayax.NayaxPermissionNotGrantedException` (issue #520); `Costing.InventoryCostDataQualityException` (issue #1240) | The two Nayax connection failures become `409` via `NayaxConnectionExceptionHandler`, which publishes the fixed, caller-safe sentence each type declares as a constant. `InventoryCostDataQualityException` becomes `409` via `DomainExceptionHandler`, message verbatim, logged once at `Warning`. Anything else here is not claimed by a handler and propagates to `GlobalExceptionHandler` as a generic `500` unless a use case's controller catches it deliberately |
 | `Inventory.Infrastructure` | Provider-specific failures (EF Core, Azure Blob, filesystem, HTTP, Nayax), translated to a plain answer or a narrow typed exception at that layer's own boundary so the provider SDK's exception type and message never cross it | `Nayax.NayaxUpstreamException`; `Documents.AzureBlobContainer` translates `Azure.RequestFailedException` by `ErrorCode` into a `bool`/`null` return and lets every other Azure failure propagate untranslated (never re-wrapped, never given a caller-safe message) | `502` via `NayaxUpstreamExceptionHandler` for Nayax; an untranslated provider failure (a missing container, a revoked role assignment) reaches `GlobalExceptionHandler` as a generic `500` with no SDK detail |
 | `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxConnectionExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
 
-The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException`, a developer-facing `InvalidOperationException` subclass rather than a caller-safe type, was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it; the HTTP boundary still does not map it.
+The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), `Bootstrap.DatabaseSchemaNewerThanCodeException` (issue #1299, the mirror of the pending-migrations guard: the schema is ahead of the code instead of behind it, thrown from the same method on the same startup decision), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException` was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it, and issue #1240 then mapped it at the HTTP boundary (below): it derives from `InvalidOperationException`, but its message is the cost replay's own product-named sentence rather than a developer's, so the handler claims that one sealed type by name and nothing else under that base.
 
 `Inventory.Domain.Exceptions` defines a small, documented hierarchy with no ASP.NET Core reference, matching the Clean Architecture rule that a Domain failure must not know about HTTP: the abstract `DomainException` root (a deliberate business-rule failure, never a programming error, an infrastructure fault, or an unexpected condition), `DomainValidationException` for a deliberate business-rule/input check, `DomainConflictException` for a request that cannot proceed because of the current state of the data (an overlapping agreement, a concurrent change), and `InsufficientStockException`, which specializes `DomainConflictException` because the conflicting state it reports is a stock level rather than an overlapping record. Their messages are written for the caller and must never carry an internal path, identifier, or another actor's data. `DomainValidationException` and `InsufficientStockException` are sealed; `DomainConflictException` stays unsealed so a future specialization can join it the same way `InsufficientStockException` did.
 
-`InventoryApi/Http/DomainExceptionHandler.cs` publishes an exception's own message to the caller, so it may only claim exception types whose contract guarantees that message is caller-safe. Exactly three qualify: `DomainValidationException` and `InsufficientStockException` become `400 Bad Request`, and `DomainConflictException` becomes `409 Conflict`. `InsufficientStockException` qualifies because its message is a fixed sentence plus an available-stock count the caller is already entitled to see; its arm in the handler's `Classify` switch must stay listed ahead of `DomainConflictException`'s, because a C# type-pattern switch matches in source order and `InsufficientStockException` is now a subclass of `DomainConflictException` - without that ordering (and a matching exclusion in the conflict-logging check) it would silently fall back to `DomainConflictException`'s `409`-and-log-a-warning behaviour instead of keeping its own established `400`, unlogged one. Every `ProblemDetails` response carries the current trace ID and a `message` extension equal to `detail`, kept for the existing frontend error handling that already reads `error.message` for this migration (see `machine-detail.component.ts`). A validation outcome is not logged; a conflict is logged once at `Warning` with the trace ID, because it may indicate a real race between two callers, but it is still an expected outcome rather than a server error - `InsufficientStockException` is excluded from that logging despite being a `DomainConflictException` by inheritance, because its established behaviour predates that inheritance.
+`InventoryApi/Http/DomainExceptionHandler.cs` publishes an exception's own message to the caller, so it may only claim exception types whose contract guarantees that message is caller-safe. Exactly four qualify: `DomainValidationException` and `InsufficientStockException` become `400 Bad Request`, and `DomainConflictException` and `Inventory.Application.Costing.InventoryCostDataQualityException` become `409 Conflict`. `InsufficientStockException` qualifies because its message is a fixed sentence plus an available-stock count the caller is already entitled to see; its arm in the handler's `Classify` switch must stay listed ahead of `DomainConflictException`'s, because a C# type-pattern switch matches in source order and `InsufficientStockException` is now a subclass of `DomainConflictException` - without that ordering (and a matching exclusion in the conflict-logging check) it would silently fall back to `DomainConflictException`'s `409`-and-log-a-warning behaviour instead of keeping its own established `400`, unlogged one. Every `ProblemDetails` response carries the current trace ID and a `message` extension equal to `detail`, kept for the existing frontend error handling that already reads `error.message` for this migration (see `machine-detail.component.ts`). A validation outcome is not logged; a conflict is logged once at `Warning` with the trace ID, because it may indicate a real race between two callers, but it is still an expected outcome rather than a server error - `InsufficientStockException` is excluded from that logging despite being a `DomainConflictException` by inheritance, because its established behaviour predates that inheritance.
 
-**The handler must never claim a framework-wide base type such as `ArgumentException` or `InvalidOperationException`, and it must never claim a provider-specific infrastructure exception.** Because `UseExceptionHandler()` is registered ahead of the rest of the request pipeline, a type-based rule here applies to the whole application, not only to the controllers that were migrated. `ArgumentException` and `InvalidOperationException` are thrown throughout the BCL, EF Core, and this application's own infrastructure — `BusinessScope.Resolve`'s tenant-scope double-resolve guard, `BusinessId.From`, `EffectiveFinancialConfiguration.ResolveAgreement`, `GetReportExportRows`, `InventoryCostDataQualityException` — with messages written for a developer, not an API client. Claiming them would turn unrelated internal failures into public `400` responses that echo an internal message and are never logged, and would silently downgrade a tenant-isolation bug from a loud `500` to a quiet `400`. They therefore fall through to `GlobalExceptionHandler` as logged, generic `500`s, and `DomainExceptionHandlerTests` locks that in for `ArgumentException`, `ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`, and an `InvalidOperationException` subclass. A provider SDK exception (an Azure `RequestFailedException` `AzureBlobContainer` did not recognize, an EF Core `DbUpdateException`) that reaches this far is exactly the same case: it is neither claimed here nor given a caller-safe message anywhere, so it reaches `GlobalExceptionHandler` as a logged, generic `500` with no SDK type name, error code, or connection detail in the response body - the policy that keeps infrastructure-specific exceptions from ever escaping into the API's public contract.
+**A fatal cost history is the fourth claim, and it is claimed by name** (issue #1240). `InventoryCostDataQualityException` is what `RebuildProductCost` raises when a product's replayed history has a fatal data-quality issue - an uncosted positive `Restock`, physically or cost-negative stock, stored stock that does not reconcile - and until this issue nothing mapped it, so the manual stock adjustment (`POST api/products/{id}/stock`), both pick-list refills (`POST api/pick-list/refills`, `POST api/pick-list/multi-machine-refills`) and the Take Inventory apply (`POST api/products/{id}/inventory-count/apply`) all answered a generic `500` that named no product. Each of them now answers `409 Conflict` with the replay's own sentence as `detail` (and as the `message` extension the frontend reads), and the handler logs it once at `Warning` so moving it off `GlobalExceptionHandler`'s `500` does not make a blocked product silent. The status is `409` because the refusal depends on the product's *current history*, exactly like a `DomainConflictException`. Nothing is written by any of them: each endpoint's write transaction is left uncommitted, so a batch is still all or nothing. **No controller catches it** - `PurchasesController` is unchanged and keeps its existing `400`, because its own `catch (InvalidOperationException)` runs before any exception handler does.
+
+**A refused pick names the row, not just the product.** The replay's message names the product through `Inventory.Domain.Products.ProductLabel`, which is half of "which row do I fix?" when a pick is a matrix of products against machines. So both refill adapters re-raise the refusal through the shared `Inventory.Infrastructure.Persistence.PickListRefillCostRefusal`, which composes `Inventory.Domain.Stock.PickListRefillPolicy.CostHistoryRefusalMessage` - "Nothing in this pick was recorded. *&lt;the replay's sentence&gt;* That row was being picked for machine Front Lobby (7)." - with the machine named by `Inventory.Domain.Machines.MachineLabel`, beside `ProductLabel` and with the same id-always rule. The multi-machine batch names *that allocation's own* machine rather than the batch's first, and a single-machine refill that names no machine at all (which that contract allows) names the product alone. The machine's name is read only on the failure path: every other picker waits on the refill's write lock, so a pick that is about to succeed must not pay for a message it will not use. What proves this slice: `DomainExceptionHandlerTests` (the mapping, the warning, and the base `InvalidOperationException` still unclaimed beside it) and `CostDataQualityRefusalApiTests` (all four endpoints through the real pipeline over a seeded uncosted restock, both refills naming product and machine, and the healthy product in the same batch left with its stock, its movement absent and no refill row recorded).
+
+**The handler must never claim a framework-wide base type such as `ArgumentException` or `InvalidOperationException`, and it must never claim a provider-specific infrastructure exception.** Because `UseExceptionHandler()` is registered ahead of the rest of the request pipeline, a type-based rule here applies to the whole application, not only to the controllers that were migrated. `ArgumentException` and `InvalidOperationException` are thrown throughout the BCL, EF Core, and this application's own infrastructure — `BusinessScope.Resolve`'s tenant-scope double-resolve guard, `BusinessId.From`, `EffectiveFinancialConfiguration.ResolveAgreement`, `GetReportExportRows` — with messages written for a developer, not an API client. (`InventoryCostDataQualityException` is a subclass of `InvalidOperationException` that *is* claimed, by its own sealed type and because its message is written for the operator; claiming the base type would publish every one of the others.) Claiming them would turn unrelated internal failures into public `400` responses that echo an internal message and are never logged, and would silently downgrade a tenant-isolation bug from a loud `500` to a quiet `400`. They therefore fall through to `GlobalExceptionHandler` as logged, generic `500`s, and `DomainExceptionHandlerTests` locks that in for `ArgumentException`, `ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`, and an `InvalidOperationException` subclass. A provider SDK exception (an Azure `RequestFailedException` `AzureBlobContainer` did not recognize, an EF Core `DbUpdateException`) that reaches this far is exactly the same case: it is neither claimed here nor given a caller-safe message anywhere, so it reaches `GlobalExceptionHandler` as a logged, generic `500` with no SDK type name, error code, or connection detail in the response body - the policy that keeps infrastructure-specific exceptions from ever escaping into the API's public contract.
 
 The consequence for a throw site is explicit: **a check whose message is meant for the caller must throw `DomainValidationException` or `DomainConflictException` itself.** Migrating a controller to the centralized mapping therefore means converting the deliberate validation throws in the service behind it, not widening the handler. Anything else stays an ordinary framework exception and stays a generic `500`.
 
@@ -5410,6 +5470,14 @@ tracked every remaining write control as follow-up under #513. This slice closes
 Operating Expenses and site commissions: `OperatingExpenseComponent`, `SiteCommissionAgreementsComponent`
 and the commission payment control on `SiteCommissionsReportComponent`.
 
+**Since issue #1251 the commission report page is not one of them.** Payment recording is gone from
+the application, so `SiteCommissionsReportComponent` has no write control for a session to hide, no
+longer reads `SupportSessionService.active$` at all, and is a read-only page like the expense table
+and the current-agreements table below. Everything this section says about
+`OperatingExpenseComponent`, `ExpenseFormPageComponent` and `SiteCommissionAgreementsComponent` is
+unchanged. See
+[The commission report states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251).
+
 **The same wrong signal, for two more capabilities.** `SupportSessionAccessPolicy` grants a session
 `Capability.ExpensesManage` and `Capability.SiteCommissionsManage` alongside the capabilities #554
 already named, so a page that gates its own write controls on either of those - exactly as Products
@@ -5433,17 +5501,36 @@ deliberately not a sentence worded per page: Add and Edit refuse the same thing 
 expense from outside the business - and one sentence is what issue #1167 asks both pages for.
 `SiteCommissionAgreementsComponent` disables its single Save agreement
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
-Payment control - the input group and the button together - hides rather than disables, since (like
-Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
+Payment control - the input group and the button together - hid rather than disabled, since (like
+Products' Delete) there was no mid-edit state the control being merely inert would protect; that
+control is gone entirely since issue #1251. Every
 guarded handler (`confirmDelete` and `deleteConfirmed` on the expense register - since issue #1170
 both halves of a delete, the ask and the write, check the flag - and `onSave` on the expense form page;
-`saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
+`saveCommissionAgreement`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
 
+**Since issue #1254 the agreements page has a second write control, and it is hidden rather than
+disabled.** Each row of the current-agreements table offers **End agreement**, which opens a date
+picker, warns when the chosen date has already passed and asks for an explicit confirmation - the
+whole of it, and the Actions column heading above it, is withheld while a session is active, on
+Record Payment's reasoning rather than Save agreement's: there is no read-only value in a date
+picker nobody may submit, and nothing mid-edit for the control being merely inert to protect. The
+page's `endAgreement` handler checks `sessionActive` itself and returns before calling the API, the
+same belt-and-suspenders as `saveCommissionAgreement` beside it. The action itself is a dedicated
+child component, `EndCommissionAgreementComponent`, composed back in through `@Input`/`@Output`
+rather than grown inside the routed page, because it is a distinct workflow with its own open/close,
+date, warning and confirmation state (see [Page composition boundary](#page-composition-boundary-issue-191));
+the page keeps the API call, the toast and the reload, and the component persists nothing. Who may
+see the action at all is unchanged and is not decided here: the whole page is behind
+`requireCapability('SiteCommissions.Manage')` in `app.routes.ts`, so a role without the capability
+never reaches the table the action sits in, and the endpoint refuses that role with `403` regardless.
+See [Ending a site commission agreement](#ending-a-site-commission-agreement-issue-1254).
+
 **Read-only listings and reports are unaffected.** The expense table, the current-agreements table
 and the commission report's rows, details and Print details stay visible and interactive during a
-session; only the controls that attempt a write are touched. Server-side enforcement - the method
+session; only the controls that attempt a write are touched. Since issue #1251 the commission report
+is *entirely* in that category. Server-side enforcement - the method
 rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
 
 **What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
@@ -5454,9 +5541,12 @@ no Add form, a read-only Edit, `onSave` refusing to call the service when invoke
 one shared notice being the same sentence on both addresses.
 `site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
 agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
-is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
-added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
-service while a session is active, and both working normally while none is.
+is active, and both staying available while none is; issue #1254 added End agreement being hidden
+and `endAgreement` refusing to call the service while a session is active, and the action being
+offered on every stored agreement while none is. `site-commissions-report.component.spec.ts`,
+added by this slice, covered Record Payment being hidden and `recordPayment` refusing to call the
+service while a session is active; issue #1251 replaced that block with the proof that the page
+carries no payment control at all.
 
 ### Extending the read-only support-view guard to machines and stock (issue #658)
 
@@ -5651,10 +5741,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 - `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, and
   `onSalesSelected` returns before calling `ImportService`. Download template stays enabled: it
-  builds a CSV in the browser and calls no API. Its two cards that are links — Import products to
-  `/products/import` since issue #888, and Reimbursement Report to
-  `/admin/imports/reimbursement-report` since issue #1152 — are left in place, because a link starts
-  nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
+  builds a CSV in the browser and calls no API. The page no longer links to Import products
+  (`/products/import`, issue #888) or the Reimbursement Report (`/admin/imports/reimbursement-report`,
+  issue #1152) — both cards were removed at the owner's request on 17 November 2026 — and each of
+  those destinations applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
   `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
@@ -7953,30 +8043,29 @@ exactly where they were (see [Uploaded transaction export import (issue
 reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
 
-**Import products is a link to its own page** (issue #888). The product catalogue import is the
+**Import products has its own page** (issue #888). The product catalogue import is the
 catalogue review (issue #739, parent #329 decision C2) and no catalogue import of its own exists:
 `POST api/imports/products` does not exist any more. The review used to be a panel this page
 rendered below its cards when a local `reviewing` flag was set — by its own button or, since issue
-#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own, so this
-page keeps the Import products card with its title and description and the card's control is a
-`routerLink` to `/products/import`. The page reads no `review` query parameter any more and renders
-no review; see [The dedicated Import products page](#the-dedicated-import-products-page-issue-888)
-and [The catalogue review screen](#the-catalogue-review-screen-issue-739). The link is deliberately
-neither hidden nor disabled during a support session: it starts nothing, and the destination
-withholds the review and shows its own notice (see
-[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
-the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
-import went rather than implying it still runs here.
+#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own; this
+page reads no `review` query parameter any more and renders no review. See
+[The dedicated Import products page](#the-dedicated-import-products-page-issue-888) and
+[The catalogue review screen](#the-catalogue-review-screen-issue-739).
 
-**And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
-is now a short **Reimbursement Report** card whose control is a `routerLink` to
+**And so does the reimbursement report** (issue #1152). The `Import XML files` card moved to
 `/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
 page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
 pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
-so the upload is the only way in. The link is neither hidden nor disabled during a support
-session, for the reason the Import products link is not. See
-[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
-card description names that destination too.
+so the upload is the only way in. See
+[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152).
+
+**The Imports page no longer links to either of them** (owner's request, 17 November 2026). The
+short **Import products** and **Reimbursement Report** cards that used to link to those pages were
+removed, so the Imports page shows the Nayax sales card alone. Each destination is still reached
+from its own sidebar entry — Import products under **Inventory**, directly after Products, and
+Reimbursement Report in **Admin**, directly after Imports — and Import products also from All
+Products' **Import products** button; their routes, access rules and menu visibility switches are
+unchanged. The Admin hub's `Imports` card description still names where both imports went.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -8254,7 +8343,7 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
-**The shared dialog UI.** `components/shared/confirmation-dialog.component.ts` (`ConfirmationDialogComponent`) is the one shared confirmation: a title, a message, and a confirm/cancel pair, with the caller owning the write it guards. `components/shared/modal-dialog/modal-dialog.component.ts` (`ModalDialogComponent`, issue #1174) is the shared **shell** for a dialog that holds a workflow rather than a question: a labelled, centred panel of at most 600px that becomes a full-screen sheet below 640px, with a fixed header carrying the heading and a labelled Close control, a scrollable body (the default content slot) and a fixed action row (anything projected with `dialog-actions`). It is a native modal `<dialog>` opened with `showModal()`, so the top layer, the inert page behind it and the `::backdrop` are the platform's, and it carries **no** `role` or `aria-modal` of its own because the platform maps a modal `<dialog>` to both; its Tab cycle, its Escape handling and its focus return to the control that opened it are written in the component so a regression test can hold it to them. It never closes itself: Escape, the backdrop and Close all report `closeRequested` and the owner decides, which is what lets a dirty form ask before it is discarded. A dialog that needs a question *over* an open dialog uses a second instance of this shell rather than `ConfirmationDialogComponent`, because a `z-index` backdrop cannot paint above the top layer. `ConfirmationDialogComponent` still has the focus-trap gap described under [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930) and its own follow-up; new dialog UI should use the shell.
+**The shared dialog UI.** `components/shared/confirmation-dialog.component.ts` (`ConfirmationDialogComponent`) is the one shared confirmation: a title, a message, and a confirm/cancel pair, with the caller owning the write it guards. It is a self-contained `alertdialog` (audit #1225 finding FE-06, issue #1277): `role="alertdialog"`, `aria-modal="true"`, labelled by its title and described by its message; opening it moves focus to Cancel; Tab and Shift+Tab wrap between Cancel and the confirm action without ever leaving it; Escape cancels; and closing it returns focus to whatever opened it, or to a caller-supplied `[returnFocusTo]` (or, failing both, the page's own `<h1>`, given a `tabindex="-1"` if it has none yet) when that opener is no longer in the document. `[restoreFocus]="false"` lets a caller skip all of that and manage its own opener instead - the one caller that needs to is `ExpenseDeleteConfirmationComponent`, whose opener can be a row menu item the shared `action-menu` has already removed by the time this dialog would otherwise capture it. **A confirmed delete finishes that handoff in the caller**, because the dialog cannot: a delete is answered after the dialog has already closed and put focus back on the row's own control, and the list the success re-reads no longer has that control, so focus would fall to the document body. `confirmed` therefore carries the control focus was returned to, and the caller passes it to `handOffFocusFromRemovedOpener` in `components/shared/confirmation-focus.ts` from the delete's **success** path - the one moment that knows the row is going away - which moves focus to the caller's fallback or that same page `<h1>`. It moves focus whenever what would otherwise be stranded is the row's to lose: focus still on that opener, focus already dropped, or focus the user moved to another control of the same record while the request was in flight (its own table `tr` or card `li` - the row being deleted takes its Edit button with it just as surely as the Delete button the dialog returned focus to). Focus the user moved *outside* that record is left exactly where they put it, because what holds it will still be there. A refusal calls nothing, so focus stays on the row the refusal is about, and cancelling is unchanged. The callers that do this are the four whose confirmed delete removes the row it was asked from: Products, Suppliers, Categories and Local machines; `ExpenseDeleteConfirmationComponent`'s register keeps its own choice (focus to **Add expense**) and the confirmations that only change a row in place (the Super Admin and Admin Users ones, product deactivation, the Business settings time zone) leave focus where the dialog put it. `components/shared/modal-dialog/modal-dialog.component.ts` (`ModalDialogComponent`, issue #1174) is the shared **shell** for a dialog that holds a workflow rather than a question: a labelled, centred panel of at most 600px that becomes a full-screen sheet below 640px, with a fixed header carrying the heading and a labelled Close control, a scrollable body (the default content slot) and a fixed action row (anything projected with `dialog-actions`). It is a native modal `<dialog>` opened with `showModal()`, so the top layer, the inert page behind it and the `::backdrop` are the platform's, and it carries **no** `role` or `aria-modal` of its own because the platform maps a modal `<dialog>` to both; its Tab cycle, its Escape handling and its focus return to the control that opened it are written in the component so a regression test can hold it to them. It never closes itself: Escape, the backdrop and Close all report `closeRequested` and the owner decides, which is what lets a dirty form ask before it is discarded. A dialog that needs a question *over* an open dialog uses a second instance of this shell rather than `ConfirmationDialogComponent`, because a `z-index` backdrop cannot paint above the top layer. `product-price-history` and `MachineRestockSyncComponent` still have the focus-trap gap described under [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930) and their own follow-up; new dialog UI should use the shell.
 
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 
@@ -8534,9 +8623,9 @@ The two kinds are not the same thing and are never merged. An absent or unrecogn
 
 **Unresolved historical COGS reuses the authoritative facts.** The incomplete-COGS note names `UncostedTransactionCount` and `UncostedSalesAmount` as the report already reports them, rather than recounting or recosting anything; cost-of-goods completeness, partial COGS and the null-profit rules are untouched.
 
-**Calculation help, and the GST-on-sales estimate.** The Angular bookkeeping report carries a collapsed, keyboard-accessible native `<details>`/`<summary>` "How this report is calculated" disclosure explaining, in plain language, that only completed transactions count as sales, that COGS and profit use the cost recorded on each sale (an uncosted sale leaves profit unavailable, never estimated from today's cost), that commission comes from the effective-dated site commission agreement covering each sale's date, and how the fee sources combine. The GST-on-sales limitation is *not* only in there: GST classification is still not persisted per sale, so the GST card labels the figure "GST on Sales (estimated)" with the estimate stated beside it, and the help is explicit that GST on Nayax fees and operating-expense GST come from imported and recorded amounts instead. An empty data-quality note list means no problem was detected in that period — never that GST classification has been verified.
+**Calculation help, and how GST on sales is stated.** The Angular bookkeeping report carries a collapsed, keyboard-accessible native `<details>`/`<summary>` "How this report is calculated" disclosure explaining, in plain language, that only completed transactions count as sales, that COGS and profit use the cost recorded on each sale (an uncosted sale leaves profit unavailable, never estimated from today's cost), that commission comes from the effective-dated site commission agreement covering each sale's date, and how the fee sources combine. How GST on sales is arrived at is *not* only in there: the GST card states the rule beside the figure, and the help is explicit that GST on Nayax fees and operating-expense GST come from imported and recorded amounts instead. (Until issue #1255 that statement was the "assumes all included sales are taxable at 10%" estimate and the card read "GST on Sales (estimated)"; since then the figure follows each product's GST rule and the card shows the taxable, GST-free and no-rule sales behind it — see [GST on sales by product rule](#gst-on-sales-by-product-rule-issue-1255). GST is still not classified per sale, which is why the rule is stated on screen either way.) An empty data-quality note list means no problem was detected in that period — never that GST classification has been verified. Since issue #1318 the help also points at the page's own GST summary for a GST-registered business, naming it as the same server calculation the GST accounting aid uses and as an estimate for reviewing a BAS rather than a lodgement figure — see [Bookkeeping GST and BAS summary](#bookkeeping-gst-and-bas-summary-issue-1318).
 
-**Export parity.** The bookkeeping CSV/XLSX row adds `GstOnSalesBasis` (the same estimate statement), `IsCogsComplete`, `UncostedTransactionCount`, `UncostedSalesAmount`, the five status counts and `DataQualityNotes`, all taken from the same `BookkeepingReportDto` the API returns. Moving an explanation out of the on-screen notes must never leave a downloaded file implying a verified figure.
+**Export parity.** The bookkeeping CSV/XLSX row adds `GstOnSalesBasis` (the same statement of the rule), `IsCogsComplete`, `UncostedTransactionCount`, `UncostedSalesAmount`, the five status counts and `DataQualityNotes`, all taken from the same `BookkeepingReportDto` the API returns. Moving an explanation out of the on-screen notes must never leave a downloaded file implying a verified figure.
 
 ### Bookkeeping transaction count and average sale (issue #804)
 
@@ -8834,15 +8923,19 @@ read from a confirmed empty register, which the page previously could not do at 
 `/expenses/:id/edit` link, carrying the return context) and holds **Delete** in the shared
 `action-menu` (`kind="menu"`). Opening the menu writes nothing; choosing Delete opens
 `ExpenseDeleteConfirmationComponent`, which composes the shared `confirmation-dialog`, names the
-expense by description, date and total, and adds the keyboard behaviour that dialog does not own —
-initial focus on **Cancel**, Tab contained, Escape to cancel, and focus returned to the menu that
-opened it. "The menu that opened it" is the menu's **trigger**, not the focused **Delete** item: the
+expense by description, date and total. Initial focus on **Cancel**, Tab contained and Escape to
+cancel are the shared dialog's own behaviour since issue #1277 (see
+[Interaction and presentation](#interaction-and-presentation)); what this wrapper still adds on top is
+`[restoreFocus]="false"` plus its own resolution of what focus should return to, because the dialog's
+own default (whatever has focus when it opens) resolves wrongly here. "The opener" is the menu's
+**trigger**, not the focused **Delete** item: the
 shared `action-menu` removes its whole panel as it closes, so the item focus actually came from is
 gone by the time the confirmation is dismissed, and the component resolves the trigger the panel
 names with `aria-labelledby` instead. A real browser is the only thing that shows this — jsdom keeps
-a detached element focusable — so the visual run below is what proved it. The shared dialog itself is
-unchanged (out of scope for issue #1170), and the page
-authors no dialog markup of its own (`page-composition.guard.ts`). A confirmed delete re-reads the
+a detached element focusable — so the visual run below is what proved it. A **confirmed** delete
+still restores no focus at all, deliberately, since the row the trigger belonged to is about to
+disappear with the expense and the register decides where focus goes once the list has reloaded. The
+page authors no dialog markup of its own (`page-composition.guard.ts`). Beyond that focus, a confirmed delete re-reads the
 register with the same filters and stays on the same page, stepping back one when the page it was on
 no longer exists; a refusal keeps the row exactly as it was fetched and states the server's own
 message in a page-level `role="alert"`, never a success. A failed **View document** read is stated
@@ -8850,6 +8943,75 @@ the same way rather than only logged. Rendered evidence:
 `frontend/inventory-app/e2e/visual/expenses-register-redesign.visual.ts`, written to
 `docs/screenshots/issue-1170/`; like every visual run it is human-invoked and runs in neither
 `scripts/validate.sh` nor CI.
+
+### Expense and fee GST amounts add up (issue #1257)
+
+Two bookkeeping figures used to be able to disagree with the amounts they were derived from, in the
+same way and for the same reason: an ex-GST amount and a GST amount were each derived on their own,
+so nothing held them to the total beside them. Issue #1257 (audit #1223, findings REP-09 and REP-10)
+closed both. Neither half changes the schema, and neither repairs data that already exists —
+listing existing inconsistent expenses is explicitly a person's job, out of scope here.
+
+**An expense's three amounts have to describe one expense.**
+`Inventory.Domain.Expenses.OperatingExpenseDetails.TryCreate` — the one rule create and update
+share — refuses a submission whose ex GST plus GST is more than `$0.01` from its total, with
+`OperatingExpenseDetails.AmountsMustAddUpMessage`, and `POST`/`PUT api/operating-expenses` answer
+that sentence as a `400` with nothing stored. The tolerance is `OperatingExpenseDetails.AmountTolerance`
+(`0.01m`, the same cent a reimbursement period is reconciled to): a difference of exactly a cent is
+accepted, because a supplier's own document legitimately carries that rounding, and two cents is
+refused. It matters because the bookkeeping report reads the **total** for profit and the **GST
+amount** for the GST credit, so ex GST `100`, GST `50`, total `110` — accepted before this change —
+reported a `110` cost and a `50` credit from one expense that could only be one of them. The rule is
+deliberately a cross-check and not a calculation: nothing is rounded, derived or filled in, so what
+is stored is still what the document says. A negative amount keeps its own, more specific refusal.
+`ExpenseFormComponent` applies the same rule before it submits, with the server's own sentence
+beside the Amounts section and `aria-invalid`/`aria-describedby` on all three inputs, so an operator
+is told by the form rather than by the request, and reads a cleared input as nothing rather than as a
+reason to refuse. It judges **the three values as entered**, to their last decimal: each amount and
+the tolerance are put on one shared decimal scale and compared as integers (`exactAmount`,
+`amountsFurtherApartThanTolerance`), which keeps the boundary off binary floating point — `1.4 + 0 -
+1.39` is `0.010000000000000009` as a double, a cent the API accepts — and keeps it the API's own
+boundary rather than a stricter or a looser one. Rounding each input to cents first, which the form
+did when the rule arrived, did both: it refused `1.006 + 0.006` against `1.003` (`0.009`, which the
+API accepts) and accepted `1.004 + 0.004` against `0.993` (`0.015`, which the API refuses). The
+`step="0.01"` on the three number inputs is a stepper convenience and never a cent-only contract for
+what is submitted. The form's copy of the rule is a courtesy and never the enforcement: the endpoint
+refuses the same submission whatever a client does with it.
+
+**A processing fee's GST is the GST of the total it was imported with.**
+`Inventory.Domain.FinancialConfiguration.NayaxProcessingFeePolicy` derives one imported fee row's
+ex-GST amount from its GST rather than beside it, so the two always add back up to the amount the
+import recorded. The GST comes from the strongest evidence the row carries — both amounts (their
+difference), then the row's own VAT percentage, and otherwise the inclusive amount through the
+central `ReportingCalculations.GstFromInclusive` — and a row that records neither amount is still
+nothing, never a zero-GST fee. The **inclusive-only** case is what was wrong: the ex-GST half
+already removed one eleventh while the GST half answered `0`, so an `11.00` fee was reported as
+`10.00` ex GST, `0.00` GST and `10.00` including GST, losing a dollar of the business's own fee GST
+credit and stating a total Nayax never sent. It is now `10.00`, `1.00` and `11.00`. A fee that
+states its VAT percentage, and one that records both amounts, are unchanged, and nothing recalculates
+a fee total from the configured estimate rate. The per-machine branch, which has only a device-level
+ex-GST figure and adds `GstFromExcluding` to it, is untouched. See AGENTS.md § Nayax processing fees
+and GST for the invariant.
+
+**What proves it.** `OperatingExpenseDetailsTests` covers the rule itself with both boundaries (a
+cent accepted, two cents refused, in both directions), the two sub-cent submissions the form is held
+to the same way (`1.006/0.006/1.003` accepted, `1.004/0.004/0.993` refused) and the negative amount
+keeping its own message; `OperatingExpensesControllerTests` covers the `400` on create and on update
+with the stored expense left exactly as it was, and the cent that is accepted;
+`expense-form.component.spec.ts` covers the form's refusal, its wiring to the three inputs, both
+boundaries, the same two sub-cent submissions, the cent that binary floating point puts just over
+the boundary, that it says nothing before the primary action is pressed, and the cleared input.
+`NayaxProcessingFeePolicyTests` covers the inclusive-only fee's three figures and the two shapes
+that are unchanged.
+
+**The fee report's own field semantics are not Nayax-documented.** The fee rows come from an
+uploaded Nayax reimbursement XML file (`Inventory.Infrastructure.Imports.ReimbursementXmlParser`,
+attributes `total_sum`, `total_sum_with_vat` and `vat_percentage`), not from a Nayax API response,
+and the Nayax developer portal documents no such report — a search of it for those attribute names
+and for a reimbursement report returned nothing. That contract is therefore **unverified** and is
+treated as such: issue #1257 defined, renamed and accepted no field, and added no assumption about
+the provider. The only rule it applies is this application's own existing Australian GST
+calculation, which the ex-GST half was already using for exactly these rows.
 
 ### A product carries no selling price (issue #792)
 
@@ -8897,7 +9059,7 @@ Purchase amounts are GST-inclusive, and input GST is derived from an explicit cl
 - A purchase's GST is the sum of the individually rounded component amounts. It is never `invoiceTotal / 11`: a real supplier invoice can make the two differ by a cent, so the component-level rounding is the authoritative one.
 - `GstFree` contributes `$0`. `Unknown` contributes no GST and is returned separately as an unresolved count and amount, so a report can show the known GST beside a clear incomplete status instead of inferring `1/11`.
 - A delivery or package charge that is null or zero has no classification and never counts as unresolved; clearing a charge clears its classification with it.
-- A classification a person submits is persisted with provenance `Manual`. Nothing is pre-filled from a product, a supplier or an amount — rule-based classification arrives with #430 and #433, and a manual classification is never overwritten by a rule.
+- A classification a person submits is persisted with provenance `Manual`, and a manual classification is never overwritten by a rule. Nothing is ever inferred from an amount. Rules (issue #430) classify a component in exactly two places: the historical Preview/Apply workflow (#433) for already-recorded purchases, and the **create** of a new purchase for a component the request leaves out (see [New purchases take the configured rules](#new-purchases-take-the-configured-rules-issue-1348)).
 - Only a declared classification is accepted. A C# enum constrains a compiler, not a request: `deliveryGstClassification=999` as a form field and `"gstClassification": 999` inside the `items` JSON both bind to a `GstClassification` no rule describes. Framework enum binding already refuses the form fields; the `items` field is deserialized by the controller itself, so every submitted classification is checked against `GstClassifications` in the Application layer before anything is stored, and an unsupported one is answered `400`. `PurchaseGstPolicy` refuses one as well, so an unvalidated value cannot reach a calculation and be counted as a resolved `$0` component instead of an unresolved one.
 - Updating a purchase keeps the classifications the caller did not resubmit, so editing quantities, costs or dates never silently reclassifies anything.
 - Keeping a classification requires knowing which line it belongs to, so `PurchaseItemInput`/the posted item JSON carry an optional `id`: the stored line's own id, as a purchase read returns it. An identified line is matched by that id — it must belong to this purchase, appear once, and keep its product — and a line with no id falls back to matching by product in order, which is what every client did before. The fallback refuses to guess: when several unclaimed stored lines of one product disagree about their classification state, the edit is rejected (`PurchaseLineIdentityPolicy.AmbiguousLineMessage`) rather than handing one line's classification and provenance to another. Duplicate-product lines that agree — every purchase that predates #429, all `Unknown`/`Unknown` — still match exactly as they did, because whichever line is matched carries the same state.
@@ -8916,16 +9078,26 @@ The purchase form sets the classifications and the purchase list displays what t
 
 **The form.** `purchase-upload.component.ts` (entry) and `purchase-edit/purchase-edit-form.component.ts` (edit, moved out of `purchase-list.component.ts` by issue #475 — see [Purchase edit page](#purchase-edit-page-issue-475)) share the picker vocabulary in `components/purchases/gst-classification-options.ts`, so the two pages cannot drift on the options they offer (`Not classified`, `Taxable`, `GST-free`) or on what a stored state is called.
 
-- A new line and a new charge start as `Unknown`/Not classified and stay there unless a person picks something. Nothing is pre-filled from the product, the supplier, the amount or a received supplier order (decision D4).
+- **Add Purchase pre-fills each GST picker from the configured rules** (issue #1348, which reverses decision D4 for new purchases). When a line's product is known - typed, matched by a receipt scan, or carried from a supplier order - its picker shows the product's rule from `GET /api/products/{id}/gst-rule`, else the supplier's product-line default from `GET /api/suppliers/{id}/gst-defaults`, with a short "From product" / "Supplier default" note; delivery and package pickers show the supplier's matching fee default. Each rule is read once per page. A picker the person changes (`gstChosen`, `deliveryGstChosen`, `packageGstChosen`) is never replaced by a later rule read or a supplier change. **An unpicked component is left out of the request**, so the server classifies it from the rules as they stand when it saves and records `ProductRule`/`SupplierDefault`/`SupplierFeeDefault`; a picked one is submitted as chosen, including an explicit Not classified, which stays unresolved. A rule that cannot be read shows Not classified and still leaves the component to the server. The edit page applies no rule.
 - A charge's picker appears only while the charge has a value, mirroring the server's absent-charge rule. `isChargePresent` is a visibility decision, not a calculation: an absent charge has no classification and the form never submits one for it, nor warns that it is unresolved (decision D3).
 - **An edit submits only what the person changed.** Each edit line keeps the classification the purchase was read with and the request omits any classification that still matches it, so a `ProductRule`/`SupplierDefault`/`SupplierFeeDefault` provenance survives an edit of a quantity, a cost or a date. An explicit move back to Not classified is a change like any other and is submitted.
 - **Each edit line carries its stored `id`.** A line added in the form has none. That is what keeps a classification on its own line when duplicate-product lines are reordered or one of them is removed; line identity is never substituted by the product or by the array position (`PurchaseLineIdentityPolicy`).
 - **A stored line keeps its product, so the form offers no product picker for one.** An identified line submitted with a different product is refused (`PurchaseLineIdentityPolicy.ProductChangedMessage`), because re-pointing it would carry its classification, its provenance and its restock movement onto another product's costing history. The edit form therefore names a stored line's product as text (`isStoredLine`) and states the workflow the server's message names: remove the line and add the new product as its own line, which is a line with no `id`, no classification and no inherited provenance. A line added during the edit still has its picker, and quantity, unit cost and classification stay editable on every line.
 - A refused save — the `400` a rejected classification or an ambiguous line set produces — leaves the edit page open with the person's selections and shows the API's own message, so a rejected classification never looks like a saved one.
 
+#### New purchases take the configured rules (issue #1348)
+
+The repository owner reversed parent issue #62's decision D4 for **new** purchases on 17 November 2026: entering every line's GST by hand when the product already says it is taxable was the work the rules exist to save.
+
+- `Inventory.Domain.Gst.NewPurchaseGstClassificationPolicy` is the rule. A component the create request **omits** is classified with the one precedence `HistoricalGstClassificationPolicy.Resolve` owns - the product's rule, then the supplier's product-line default for a line; only the supplier's matching fee default for a delivery or package charge, never a product rule or the product-line default - and recorded with `ProductRule`, `SupplierDefault` or `SupplierFeeDefault`. A component no rule covers stays `Unknown`/`Unknown`. A **submitted** classification, including an explicit `Unknown`, is the person's and goes through `PurchaseGstPolicy.Classify` exactly as before. An absent or zero charge still carries no classification.
+- `EfPurchaseStore.CreateAsync` reads the products' rules and the supplier's defaults inside the create's own transaction, after the idempotency check and before the insert, so the stored provenance is decided from the rules as that write sees them. A replayed idempotent create answers with the purchase already stored and classifies nothing again.
+- **Only the create.** An edit never reads a rule: an omitted classification on an edit still keeps the stored one, and a line added during an edit is classified only by what the person submits. Already-recorded purchases are reached by rules only through the historical Preview/Apply workflow below.
+- Accounting data only, as everywhere else: no cost, AVCO, costing quantity, inventory value or stock movement changes.
+- Tests: `NewPurchaseGstClassificationPolicyTests` (unit: precedence, explicit choice and explicit unknown kept, charge isolation, absent charge, undefined value), `NewPurchaseGstRuleApiTests` (the whole multipart pipeline: product rule, supplier defaults for a line and the charges, a submitted choice kept, an edit applying no rule) and, on the page, `purchase-upload.component.spec.ts` and `purchase-form-layout.component.spec.ts` (pre-fill, the note, a picked value never replaced, and what is submitted).
+
 ### Product and supplier GST rules (issue #430)
 
-A classification says what a recorded purchase component *is*. A **rule** says what a component *would* be, and the two are deliberately different things. Issue #430 added the rule configuration the approved GST design of parent issue #62 requires before historical Preview/Apply (#433) can classify anything: a GST rule on a product, and three explicit defaults on a supplier. It applies no rule to any purchase, and pre-fills no new purchase (decision D4) - both are out of its scope.
+A classification says what a recorded purchase component *is*. A **rule** says what a component *would* be, and the two are deliberately different things. Issue #430 added the rule configuration the approved GST design of parent issue #62 requires before historical Preview/Apply (#433) can classify anything: a GST rule on a product, and three explicit defaults on a supplier. It applies no rule to any recorded purchase. Since issue #1348 a rule also classifies a component a **new** purchase leaves unclassified, at create time; see below.
 
 **Where each piece lives**, following the same slice ownership as the purchase classification above:
 
@@ -8941,7 +9113,8 @@ A classification says what a recorded purchase component *is*. A **rule** says w
 
 **The rules themselves:**
 
-- Precedence, for whoever reads a rule (today only the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which applies it through `HistoricalGstClassificationPolicy`): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
+- Precedence, for whoever reads a rule **to classify a purchase component** (the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which applies it through `HistoricalGstClassificationPolicy`): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
+- **A product's rule also drives one report figure that is not a purchase classification: GST on sales** (issue #1255, see [GST on sales by product rule](#gst-on-sales-by-product-rule-issue-1255)). That reader consults the product's own rule and nothing else - a sale has no supplier and no manual classification - and an absent rule makes the sale **taxable** rather than `Unknown`, because GST payable must not fall to nothing on the products nobody has configured yet. It classifies nothing, stores nothing and changes no purchase; it only decides which of a period's sales are taxable, from the rule as it stands when the report runs.
 - A supplier default is explicit configuration. GST registration, GST elsewhere on an invoice, a product's price - none of them configure a default, and nothing in the code derives one.
 - Saving a rule or a default changes no recorded purchase: not its classification, provenance, amounts, costing or stock movements. `ProductAndSupplierGstRuleApiTests` compares every purchase and purchase line of both synthetic businesses across each request, and the migration upgrade test asserts the same across the schema change.
 - Only a declared value is a rule. `{"gstRule": 999}` binds to a `GstClassification` no policy describes, so it is refused with `400` and nothing is written - including the rule the row already had.
@@ -9029,6 +9202,63 @@ The GST accounting aid (`GET api/reports/gst` and its CSV/XLSX export) reports p
 - A machine-filtered report excludes purchases altogether, because a purchase is a whole-business record with no machine — the same exclusion bookkeeping applies to its delivery/package totals, and the same reason whole-business net profit is unavailable for a machine-filtered report.
 - The CSV/XLSX export carries `PurchaseLineGst`, `PurchaseChargeGst`, `PurchaseInputGst`, `PurchaseUnresolvedComponents`, `PurchaseUnresolvedAmount` and `PurchaseGstIncomplete` beside the existing columns, from the same result object the API returns. The Angular GST report displays those values and the incomplete warning and calculates nothing.
 - Delivery and package costs remain GST-inclusive wherever bookkeeping presents them as expenses (decision D5); this issue added no GST-exclusive expense figure.
+- The **sales** side of the aid is issue #1255's, below: `taxableSales` is still the GST-exclusive value of the taxable sales, but "taxable" is now each sold product's own GST rule rather than every included sale, and `gstFreeSales` and `noGstRuleSales` sit beside it.
+
+#### GST on sales by product rule (issue #1255)
+
+Until this issue, GST on sales was one eleventh of *every* included sale, and the export said so: "assumes all included sales are taxable at 10%". A business that sells GST-free goods — plain bottled water, for example — therefore overstated its GST payable, while the *purchases* of the same products were already classified properly. The repository owner decided on 13 November 2026 that GST on sales follows each product's GST rule, and on 14 November 2026 that a product with **no** rule stays taxable and its sales are reported separately: every product starts at `GstRules.None` and most have never been given a rule, so treating "no rule" as GST-free would have dropped GST on sales to almost nothing.
+
+**Where each piece lives:**
+
+- `Inventory.Domain.Reporting.Gst.SalesGstPolicy` is the one calculation and the one statement of the rule. Its input is `SalesByGstRule` — a period's sales already aggregated per *stored* product rule, where `null` is a sale whose product could not be resolved — and its `SalesGstResult` carries `TaxableSales`, `GstFreeSales`, `NoGstRuleSales` and `GstOnSales`. Only an explicit `GstFree` rule leaves the taxable total; `Taxable`, no rule, an unresolved product and a stored value outside the declared vocabulary are all taxable, and the last three are counted in `NoGstRuleSales`, which is a *subset* of `TaxableSales` rather than a fourth bucket. A report reads what is stored, so an undeclared value is reported as "no rule" rather than refused the way a submitted one is (`GstClassifications.Require`).
+- GST on sales is `round(taxable sales / 11, 2)` away from zero, taken **once from the period total**. That is deliberately the opposite choice from `PurchaseGstPolicy`, where each invoice component's own rounded GST is authoritative: a purchase component is an amount somebody checks against an invoice line, while a sale is one of thousands of rows that only ever add up to a BAS figure, and a rounded eleventh per sale would drift by up to half a cent each time. `BookkeepingProfitPolicy` no longer computes GST at all — it was deriving it from the sales total, which this rule makes impossible — and `ReportingCalculations.GstFromInclusive` stays the one GST-inclusive division.
+- `BookkeepingReportFacts.SalesByProductGstRule` carries the groups, and `Inventory.Infrastructure.Reporting.Persistence.EfBookkeepingReportFactsProvider` builds them from exactly the rows its gross, card and cash totals are summed from, so the groups cannot disagree with `GrossSales`. It reads each sold product's rule through the sale's own `ProductId` (issue #758) and the ordinary tenant query filters, and decides nothing: which rules are taxable is the Domain's. A sale with no `ProductId` has no rule to read.
+- `Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport` applies the policy once and publishes `taxableSales`, `gstFreeSales` and `noGstRuleSales` beside the existing `gstOnSales` (all GST-inclusive, like `sales`). `GetGstAccountingAid` takes that split from the bookkeeping result — `GstAccountingAidInputs.TaxableSalesIncludingGst`, not gross sales — and derives nothing a second time; `GstAccountingAidPolicy` still answers the GST-exclusive `TaxableSales` as the inclusive taxable sales less the GST on them, and `gstFreeSales` (a previously reserved, always-zero contract field) and `noGstRuleSales` are published as they came.
+- Both exports carry `TaxableSales`, `GstFreeSales` and `SalesWithNoGstRule` from the same results, and the bookkeeping export's `GstOnSalesBasis` column states the rule instead of the old assumption. The Angular bookkeeping GST card and the GST aid's cards show the same three figures with the sales availability state (issue #730) and calculate nothing.
+
+**What the rule does not do.** No GST classification is persisted per sale and no history of a product's rule is kept: the rule is read when the report runs, so changing a product's rule changes what every period's report says about that product's past sales, and both reports' help says so. GST on sales for a past period therefore changes only where products now marked GST-free were sold, which matters for a BAS already lodged. Nothing here touches purchase classification, the historical Preview/Apply workflow, inventory, costing or profit, and the site-commission `SalesExGst` basis keeps its own established meaning (`FinancialConfigurationRules`, AGENTS.md § Site commissions) — a commission basis is not a GST figure, and changing it would be its own decision.
+
+#### Bookkeeping GST and BAS summary (issue #1318)
+
+Business Settings has recorded a business's GST registration since issue #548, and the GST accounting aid has combined sales GST, purchase input GST, operating-expense GST and Nayax fee GST since issues #432, #1255 and #1257 — but Bookkeeping, the page an operator actually does a month's books on, had no consolidated GST view. This surfaces the **same server-calculated figures** there under the BAS labels a reader is looking for, and says plainly when the estimate is not final.
+
+**It is one calculation with two projections, not two calculations.** `Inventory.Application.Reporting.Gst.GetGstAccountingAid` now publishes its run twice: `Handle` returns the aid report as before, and `Compose` returns that same report inside a `GstAccountingAidComposition` together with the few facts a second projection needs beside it — the period's GST-inclusive total sales (G1), the credit total, the estimated part of the fee GST, and the run's **conditional** data-quality notes without the standing disclaimers the aid's own `DataQuality` prefixes. `Handle` is literally `(await Compose(...)).Report`, so the two surfaces cannot diverge. `IGetGstAccountingAid` is the Application-owned interface that lets the summary reuse the result without depending on the concrete class, the same precedent `IGetBookkeepingReport` set for the aid's own dependency on bookkeeping.
+
+**Where each piece lives:**
+
+- `Inventory.Domain.Reporting.Gst.GstAccountingAidPolicy` gained `GstCredits` — `GstOnFees + OperatingExpenseGst + PurchaseInputGst`, each source counted once — and now answers `NetGst` as `GstOnSales − GstCredits`. That is the same subtraction it always made (`GstOnSales − GstOnFees − OperatingExpenseGst − PurchaseInputGst`), written so the credit total a reader sees as 1B and the net figure beside it come from one place. An unclassified purchase component contributes nothing, because `PurchaseInputGst` already carries only what an explicit classification resolved (issue #432).
+- `Inventory.Domain.Reporting.Gst.BasGstSummaryPolicy` is the BAS-labelled view. It calls the policy above for 1B and the net figure and owns exactly two rules of its own: `BasNetGstOutcome` (`Payable` when the net figure is above zero, `Credit` below, `Nil` at zero — an answer, so no presentation reads the sign itself) and `IsIncomplete`, which is true when any purchase component is unclassified, when sales or fee coverage is not `Complete`, when part of the fee GST was estimated from the configured rate, or when any taxable sales are taxable only by issue #1255's no-rule default.
+- `Inventory.Application.Reporting.Gst.GetGstBasSummary` is the use case. It resolves the requested range, gates on registration, refuses a machine-filtered scope, and otherwise projects `Compose`'s result through the Domain policy. It adds two conditional notes of its own — the amount of no-rule sales 1A rests on, and the estimated part of the fee GST credit — to the shared ones.
+- `Inventory.Application.Reporting.Gst.IGstRegistrationStore` is the narrowest possible read of the gate: one `bool?` for one resolved business. It is deliberately **not** `IBusinessSettingsStore`, which is the Owner-only settings surface and also carries the business's name, contact address and ABN: the summary is a `Reports.View` surface a Manager may read, and a port that cannot return a contact address cannot leak one. `Inventory.Infrastructure.Reporting.Persistence.EfGstRegistrationStore` is its adapter, projecting the single column and reading `Businesses` **by primary key** — that table is the owner rather than owned, so no query filter scopes it and the resolved key is what confines the read, exactly as `EfBusinessSettingsStore` does.
+- `GET api/reports/gst/bas-summary` is a second action on `ReportsController`, so it carries the same `Reports.View` capability and the same `PlanFeature.BookkeepingAndGstReports` plan as the GST accounting aid it projects.
+
+**Registration gates it, and the gate fails closed.** `Registered for GST = Yes` is the only value that produces a summary. `No`, never recorded, and a business row that is gone are all answered `NotGstRegistered` with **no figures at all** and no calculation run — a business that is not registered has no BAS GST section, so there is nothing to show and nothing to prompt for.
+
+**A machine filter is refused rather than estimated.** Stock purchases and operating expenses are whole-business records with no machine of their own — the same exclusion the GST accounting aid already applies — so a machine-scoped 1B would be a *wrong* credit total rather than a partial one. The response is `MachineFiltered` with no figures, and the page asks the reader to select all machines.
+
+**What the summary shows, and what governs each figure:**
+
+| Label | Figure | Availability (issue #730) |
+| --- | --- | --- |
+| G1 — Total sales | The period's whole GST-inclusive sales, GST-free sales included | Sales |
+| 1A — GST on sales | Issue #1255's rule: one eleventh of the period's taxable sales, taken once from the total | Sales |
+| 1B — GST credits | Purchase input GST + operating-expense GST + Nayax fee GST, each counted once | Fees, because fee GST is one of the three |
+| …stock purchases, delivery and packaging | Resolved purchase input GST (issue #432) | None — the business's own records, so exact |
+| …operating expenses | Recorded operating-expense GST | None — the business's own records, so exact |
+| …Nayax processing fees | Fee GST (issue #1257) | Fees |
+| Estimated net GST | 1A − 1B, signed, labelled payable, credit or nil — or named without an outcome when nothing measured it | The combined state the aid already derived |
+
+**Nothing is estimated into existence, and no unavailable amount reads as a balance.** Unclassified purchase components are reported as a count and a GST-inclusive amount and add no credit. A figure whose family is not `Complete` is rendered as that state instead of `$0.00`, through the same `moneyOrState` rule every other report uses, and the net estimate carries the least complete of its inputs. Sales taxable only because those products have no GST rule are shown as their own amount beside 1A, so the reader can see how much of it rests on that default.
+
+**The outcome is withheld with the amount.** A period whose sales or fee coverage never accounted for it leaves the subtraction at an internal zero — the zero every presentation replaces with the coverage state — so `BasGstSummaryPolicy.Outcome` is `null` for it and `GstBasSummaryFiguresDto.NetGstOutcome` is absent. The screen then names the row `Estimated net GST` with no payable/credit/nil word, and the export's `BasNetGstOutcome` cell is empty: `Estimated net GST (nil)` beside `No provider data`, or `Nil` beside an amount cell reading `Missing`, announces a balanced BAS GST section for a period nobody measured. The rule is decided once in the Domain policy rather than in each presentation, which is what keeps the screen and the file from disagreeing. Two behaviours are deliberately untouched: a **non-zero** net figure in an incomplete period is real partial data and keeps its amount and its outcome, and a zero that `Complete` coverage measured is still `Nil`. Incompleteness of the business's *own* records — an unclassified purchase component — never withholds the outcome, because those figures are never substituted in the first place.
+
+**Date range, date basis and scope are stated on the page.** The summary's footer names the resolved period, says the figures are counted on each sale's **business date** in the business's own configured time zone (issue #1250), says the scope is the whole business and every machine, and names the sources behind each side. It then says what the figures are: Restockroo's own estimate for reviewing the GST section of a BAS, not a lodgement figure and not accounting advice. Restockroo has no cash/non-cash accounting mode — everything is counted on the date it was recorded — so the footer tells a reader who reports on a cash basis, or who has GST on income or purchases Restockroo does not hold, to reconcile before lodging. BAS lodgement, ATO integration and a cash/non-cash mode remain out of scope.
+
+**Angular calculates nothing.** `features/reports/gst/gst-bas-summary.component.ts` is a dedicated feature component — it has its own request, loading and error lifecycle, so it is composed into the Bookkeeping page through an `@Input` rather than grown inside it (AGENTS.md § Frontend rules). The page hands it the filter it actually reported on, never the live filter controls, so the summary and the figures beside it always describe the same period. The component branches on the response's `status` and renders the amounts, the credit total, the net estimate, its payable/credit/nil label and the incomplete marker exactly as the server decided them.
+
+**Both sides stay on the latest applied filter, whatever order the two requests answer in.** Handing the child the applied filter is not enough on its own: two requests can be in flight at once, and accepting every response let the slower earlier one answer last. `ReportPageBase` therefore puts every load through one `Subject` and a `switchMap`, so applying a new date range or machine scope cancels the report request it supersedes — a superseded response is unreachable rather than merely unlikely — and the summary component does the same with its own request. Without that, narrowing Bookkeeping to one machine before the whole-business report answered could leave whole-business figures on screen beside a summary asking the reader to select all machines. The cancellation is in the shared base, so every report page gains it; `bookkeeping-report.component.spec.ts` and `gst-bas-summary.component.spec.ts` each hold a delayed, out-of-order regression over it.
+
+**Export parity.** The bookkeeping CSV/XLSX row carries `BasSummaryStatus`, `BasG1TotalSales`, `Bas1AGstOnSales`, `Bas1BGstCredits`, `BasGstCreditsFromPurchases`, `BasGstCreditsFromOperatingExpenses`, `BasGstCreditsFromNayaxFees`, `BasEstimatedNetGst`, `BasNetGstOutcome` and `BasEstimateIncomplete`, from the same use case the screen reads, and its `DataQualityNotes` cell appends the summary's notes to the report's own. A period with no summary carries its status and **empty** cells, never zeros: a downloaded zero in a BAS column is exactly what a reader pasting a file into a working paper would take for a nil BAS. `BasNetGstOutcome` is empty for the same reason whenever the amount cell beside it holds a coverage state rather than a number (see "The outcome is withheld with the amount" above). The GST accounting aid's own export is unchanged — it already carried `GstOnSales`, `PurchaseInputGst`, `GstOnFees` and `NetGst`, and a unit test pins the bookkeeping BAS cells to those columns for the same period. One consequence is worth naming: `GetReportExportRows` now reaches the registration gate for the bookkeeping family, so its dependency graph includes the tenancy ports the gate resolves the business through (`IAuthenticatedActorAccessor` and `IBusinessScope`, both supplied by the InventoryApi boundary), and `ReportingRegressionTests` registers them for the same reason it already registers the per-request business time zone. The bookkeeping export therefore computes the bookkeeping report twice — once for its own row and once inside the aid's run — which is a download-time cost, not a report-time one.
 
 ### Historical GST classification: Preview and Apply (issue #433)
 
@@ -9063,6 +9293,11 @@ Physical storage stock and costing inventory answer different questions:
 - `QuantityInStock`: stock physically held in storage/home and available to refill machines.
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
+- `CostingVersion`: the version of those three values, not a value of its own (issue #1245). Every cost
+  rebuild moves it on by one in the same transaction as the position it writes, so a writer that rebuilt
+  a product's cost while a sales drain was replaying it can be told apart from one that did not. It
+  holds no quantity, cost or value and is read by nothing but that comparison (see
+  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)).
 
 A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Sales that dispensed a unit and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
 
@@ -9081,7 +9316,36 @@ costing invariants holds the authoritative wording):
    `UncostedSale` issue (issue #1239).
 
 The sale-time `CostSale` use case goes straight from step 1 to step 3; steps 2 and 4 are the replay's,
-and the inventory-cost rebuild that follows a stored sale applies them straight afterwards.
+and the inventory-cost rebuild that follows a stored sale applies them straight afterwards. **A forced
+backfill asks for the complete precedence instead** (issue #1261): it passes
+`SaleCostPrecedenceScope.Complete`, so `CostSale` reads step 2 for it through
+`IRebuildProductCost.GetLatestPurchaseUnitCostBeforeAsync` - the same replay's answer for that one
+sale - because no rebuild runs inside the backfill's own transaction to apply step 2 for it, and
+re-costing a step-2 sale through step 3 is what let that tool downgrade a cost it recomputed.
+
+**Precedence is also what a forced backfill may do at all** (issue #1261).
+`Inventory.Application.Costing.SaleCostPrecedence` is the one rule: it ranks a stored cost's
+`CostSource` by the step that produced it (ledger 1, latest purchase 2, Nayax cost 3, uncosted - and a
+costed sale with no recorded provenance - 4) and answers whether a newly decided cost may be written
+over it. Only a better step may, or the same step with a different value (a corrected Nayax export
+cost, a corrected ledger cost); a stored cost of a better step is left exactly as it is, and a decision
+that costs nothing never clears one. `force` used to mean "overwrite", which is how a repair tool could
+replace a sale's internal AVCO cost with the cost Nayax sent with the transaction. See
+[Sale import and costing](#sale-import-and-costing) for the two tools.
+
+**And the same rule decides again at the moment the cost is written** (issue #1261). A backfill decides
+on sales it read before `EfSaleCostingStore.SaveChangesAsync` takes SQLite's write lock, so another
+writer - a cost rebuild, the other repair tool - can commit a cost on one of those sales in that gap,
+and the staged decision would be saved over a comparison it had already lost (with a cost rebuild
+enqueued for it). `SaleCostPrecedence.StillReplaces` is therefore asked inside the write-locked
+transaction, against the latest persisted row read by the database rather than from the tracked
+instance the cost was staged onto: with nothing committed in the gap the decision stands as its caller
+made it, and with something committed only a **strictly better** precedence step still writes - an
+equal-step decision is a correction of a value (a recomputed ledger cost, a corrected export cost), and
+this one was computed from a history that has moved since, so the committed cost stands and the next
+run recomputes the correction from the history that is actually stored. That is also what makes an
+identical cost committed in the gap a refusal rather than a rewrite, so no rebuild is recorded for a
+sale nothing changed on.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
@@ -9090,9 +9354,12 @@ its cost replay is a longer step afterwards, so the same transaction that stores
 `PendingInventoryCostRebuilds` row for every product it affected — one row per
 `(BusinessId, ProductId)`, whose `FromInstantUtc` only ever moves *earlier* — and the replay removes
 each row in the same transaction as the costs it rebuilt, and only while that row still holds the
-`Revision` it replayed: the replay itself runs outside the write lock, so a sale another writer
-recorded meanwhile — at *any* instant, which is why the comparison is a revision and not the instant —
-is replayed by the next drain instead of being cleared by this one (see
+`Revision` it replayed *and* the product still holds the `CostingVersion` it replayed over: the replay
+itself runs outside the write lock, so a sale another writer recorded meanwhile — at *any* instant,
+which is why the comparison is a revision and not the instant — is replayed by the next drain instead
+of being cleared by this one, and a stock write, purchase edit or purchase delete committed meanwhile
+is not overwritten by it, because every cost rebuild moves `Products.CostingVersion` in the same
+transaction as the position it writes (issue #1245; see
 [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). A replay that fails keeps its
 row with its attempt count and a short failure code and is retried by the next run of either sales
 path. That
@@ -9173,6 +9440,11 @@ in behaviour:
   untracked rows, stages nothing and never throws for data quality. No rounding is applied and a
   repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
   the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
+  `GetLatestPurchaseUnitCostBeforeAsync` (issue #1261) is that same replay reporting the other value it
+  already computes for that one sale - the unit cost of the latest costed purchase replayed before it,
+  precedence step 2, as `WeightedAverageCostReplayResult.TargetSaleLatestPurchaseUnitCost` - and
+  returns `null` on the same terms. It exists for the forced sale-cost backfill and is not a second
+  costing rule.
   It also returns `InventoryCostRebuildResult` and its `InventoryCostDataQualityIssue`s.
 - `RebuildCostingOnlyAsync` is the same replay and the same decide-before-staging rule with a
   narrower mandate, and exists for the [costing repair](#costing-repairs-issue-359) apply: it stages
@@ -9341,9 +9613,14 @@ and it never substitutes for a real purchase, correction or write-off.
   Because the preview stores nothing, the stale-preview model of
   `PreviewInventoryCostTransition`/`ApplyInventoryCostTransition` is carried by
   `Inventory.Domain.Costing.CostLedgerFingerprint` rather than a stored draft: a deterministic
-  SHA-256 over everything the replay consumes (product position, movements, completed sales, existing
-  repairs, baseline), with timestamps as ticks and decimals normalised, which the preview reports and
-  the apply recomputes and requires to match. It then enforces the placement rule, appends the
+  SHA-256 over everything the replay consumes (product position, movements, completed sales **with
+  each sale's own transaction-level Nayax cost**, existing repairs, baseline), with timestamps as
+  ticks and decimals normalised, which the preview reports and
+  the apply recomputes and requires to match. The sale's Nayax cost is part of it since issue #1261,
+  with the fingerprint version bumped to `v2` so no older preview can match a newer rendering: the
+  replay costs a sale from that number when the ledger has no known cost before it (issue #1176), so a
+  cost corrected between the preview and the apply changes the projection the operator approved and is
+  refused with the same stale-preview `400` as a new sale. It then enforces the placement rule, appends the
   repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
   effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
   fatal data-quality issue - an uncosted positive restock, negative stock, a write-off or correction
@@ -11031,12 +11308,12 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
-**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below. The calendar-date `Handle` overload remains for the reports that still filter by calendar date — machine and product profitability — where `FeeDate` is null, which means the date part of the sale instant exactly as before.
+**A dashboard period's revenue and its Nayax processing fees cover the same period (issue #310).** The fee lookup (`IGetNayaxProcessingFees`/`NayaxProcessingFeePolicy`) is a **date-range** contract — imported fee data is authoritative per day it covers, and an uncovered completed card transaction is estimated at the rate effective on its day — so it cannot simply be handed two instants: truncating a Sydney period's boundaries to whole UTC dates widens the fee window to every UTC day the period touches, and a sale from the previous Sydney evening is then excluded from today's revenue while still being charged against today's profit. The dashboard therefore asks for a `NayaxProcessingFeeBusinessPeriod`: the period's exact UTC instants *and* the Sydney business dates it covers. `GetNayaxProcessingFees.HandleBusinessPeriod` selects the completed sales between those instants — the same selection the revenue total makes — and buckets each by its Sydney business date (`CompletedCardTransaction.FeeDate`, resolved through `IBusinessCalendar`, not by the adapter that read the sale) so that the day whose imported fee covers a sale and the rate that estimates it are the day the period counted its revenue in; the imported-reimbursement day allocation is bounded by the same business dates. Since issue #1250 the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation ask for a business-day period too, over the window described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below, and since issue #1252 machine profitability does as well. **No report asks for the calendar-date `Handle` overload any more**: it remains as the direct expression of the date-range fee contract (with `FeeDate` null, which means the date part of the sale instant), and a money report must not use it. Transaction Sales estimates a fee per row rather than through this engine, and since issue #1252 it resolves that rate from the sale's business date too.
 
-What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. They behave identically for every business zone, and both remain open follow-up work:
+What issue #310 did **not** change is how an already-stored instant is resolved to a business date further down the calculation, and the guard above does not cover it: it is scoped to how the *current* time is acquired. Issue #499 did not change these either - replacing the fixed calendar with the business's own does not fix them, because they never consult a calendar at all. Issues #1250 and #1252 closed this for the reports; **no report selects sales by UTC date, and no report resolves a sale's fee rate or commission agreement from its UTC date, any more.** What remains open is narrower:
 
-- Per-sale effective-dated resolution compares a sale's raw UTC instant (or its UTC date) against agreement and rate effective dates rather than against the sale's business date — `EfMachineDashboardFactsStore`'s per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call and the equivalent per-sale commission coverage checks `GetSiteCommissionReport` makes. Issue #1250 changed which sales a money report's commission is calculated over, not how an already-selected sale's instant is compared with an agreement's effective dates.
-- Machine profitability, product profitability, the standalone Commission report and Transaction Sales filter their requested `from`/`to` by the **UTC date** of a sale's instant rather than by the sale's business date — `EfMachineProfitabilityReportFactsProvider`, `EfProductProfitabilityReportFactsProvider`, `GetSiteCommissionReport.Handle` (the calendar-date entry point `GET /api/site-commissions` asks, migrated by issue #1252) and `EfTransactionSalesReportFactsProvider`. A sale in the first hours of a business day whose UTC date is the previous one is therefore matched against the previous day's filter. Issue #1250 fixed the four money reports named above — including the commission amounts they consume, through `GetSiteCommissionReport.HandleBusinessPeriod` — and is explicitly part 1 of 2; these four are part 2.
+- **Reports: closed.** Every money report selects its sales by business-date instants, and both effective-dated per-sale lookups are made on the sale's own business date. Issue #1250 moved the daily report, bookkeeping, the GST accounting aid, the reports dashboard and reconciliation; issue #1252 moved machine profitability (`EfMachineProfitabilityReportFactsProvider`), product profitability (`EfProductProfitabilityReportFactsProvider`), the standalone Commission report (`GetSiteCommissionReport.Handle`, the entry point `GET /api/site-commissions` asks) and Transaction Sales (`EfTransactionSalesReportFactsProvider`), and made `GetSiteCommissionReport` resolve each sale's agreement, and `TransactionRowPolicy` each sale's fee rate and agreement, from that sale's business date. Transaction Sales carries the derived date on each streamed fact row (`TransactionSalesReportFactsRow.BusinessDate`), so the Domain policy still reads a date and never a calendar.
+- **Open: the Machines dashboard's per-sale agreement resolution.** `EfMachineDashboardFactsStore` still compares a sale's raw UTC instant against an agreement's effective dates in its per-sale `EffectiveFinancialConfiguration.ResolveAgreement` call. Its *periods* are already business-day windows (issue #310), so this affects only which agreement a sale near a rate change is priced at, not which sales a period holds. It is not part of issue #1252's reports and remains open follow-up work.
 
 **Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
 Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
@@ -11216,7 +11493,7 @@ changed.
 **4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
 timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
 ([the dashboard rule above](#time)), the money reports select their sales between the same kind of
-boundaries (issue #1250, below), the Nayax processing fee engine buckets a sale by
+boundaries (issues #1250 and #1252, below), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
@@ -11235,9 +11512,10 @@ the previous day's row; the owner decided on PR #392 that this belongs to #380's
 criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
 day and the 23- and 25-hour daylight-saving days.
 
-**Bookkeeping, the GST accounting aid, the reports dashboard and reconciliation follow the same rule
-(issue #1250, the owner's decision of 13 November 2026: every money report counts a sale on its
-business date).** They selected sales by comparing the stored UTC instant with the requested calendar
+**Every other money report follows the same rule (issue #1250 for bookkeeping, the GST accounting
+aid, the reports dashboard and reconciliation; issue #1252 for machine profitability, product
+profitability, the standalone Commission report and Transaction Sales — the owner's decision of
+13 November 2026: every money report counts a sale on its business date).** They selected sales by comparing the stored UTC instant with the requested calendar
 dates as if those dates were UTC, so each "day" ran from 10 or 11 am to 10 or 11 am in
 `Australia/Sydney`: a $3.50 sale at 00:30 on Monday 5 October (13:30Z on Sunday the 4th) was counted
 in bookkeeping for the 4th and not the 5th, while the daily report counted it on the 5th, and sales,
@@ -11265,27 +11543,44 @@ and the provider-coverage query. Four things follow it:
   counted the $3.50 sale on the 5th while the commission on it stayed in the 4th and the direct and
   net profit derived from both disagreed about the same sale. `SiteCommissionBusinessPeriod` is what
   separates the two questions the calculation asks: its two UTC instants select the completed sales,
-  and its two business dates resolve the effective-dated agreement, the recorded payments and the
-  payment due date. The standalone Commission report (`GET /api/site-commissions`) keeps the
-  calendar-date `Handle`, whose behaviour is unchanged, and migrating it is issue #1252; machine and
-  product profitability and Transaction Sales keep their calendar-date selection and are part 2.
+  and its two business dates are what the report reports itself as covering. (They resolved the
+  recorded payments and the payment due date too until issue #1251 removed both from the report.)
+
+**Issue #1252 is part 2, and it finishes the move.** Machine profitability
+(`EfMachineProfitabilityReportFactsProvider`), product profitability
+(`EfProductProfitabilityReportFactsProvider`) and Transaction Sales
+(`EfTransactionSalesReportFactsProvider`) resolve their requested dates through the same
+`EfReportingSharedQueries.SalesWindow` and select their sales, their all-status row check and their
+provider coverage between its instants; machine profitability asks the fee use case for
+`BusinessDateSalesWindow.FeePeriod` instead of a calendar-date range. The standalone Commission
+report's own entry point (`IGetSiteCommissionReport.Handle`, what `GET /api/site-commissions` asks)
+resolves the requested dates with `SiteCommissionBusinessPeriod.ForBusinessDates` through
+`IBusinessCalendar`, so commission due for a month starts at local midnight; the calendar-date
+`ForCalendarDates` factory is gone, as is the calendar-date `GetMachineCommissionsAsync` overload, so
+no report can ask for a sales figure over the whole UTC dates a business day straddles.
+
+**Both effective-dated per-sale lookups move with it.** `GetSiteCommissionReport` resolves each
+sale's agreement from `IBusinessCalendar.ToBusinessDate(sale.MachineAuthorizationTime)`, and
+`TransactionRowPolicy` resolves each row's fee rate *and* agreement from
+`TransactionRowInputs.BusinessDate`, which the adapter derived once per row and published as
+`TransactionSalesReportFactsRow.BusinessDate` — the Domain policy still reads a date and never
+touches a calendar. So an agreement or a rate that changes at business-day midnight charges a sale at
+23:59 the old value and a sale at 00:01 the new one, which comparing the stored instant's UTC date
+could not express: both sit on the same UTC date.
 
 Date-only values are deliberately untouched: reimbursement coverage dates, operating-expense dates
 and purchase dates keep their plain calendar-date bounds in these reports too.
-`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the four reports, both
-daylight-saving transition days, bookkeeping totalling to the sum of the daily report's rows, the
-date-only filters, the CSV/XLSX exports showing the same figures as the screens, and - over the real
+`MoneyReportSydneyBusinessDayTests` covers the 00:30 Sydney sale in each of the eight reports, both
+daylight-saving transition days (4 October 2026 and 5 April 2026) across every one of them,
+bookkeeping totalling to the sum of the daily report's rows, machine profitability, product
+profitability and Transaction Sales (completed filter) totalling to bookkeeping's sales for one
+range, the date-only filters, the CSV/XLSX exports showing the same figures as the screens, the
+agreement and the fee rate that change at Sydney midnight, and - over the real
 `EfSiteCommissionStore` and an active 10% agreement - the $0.35 of commission that sale owes landing
-on the 5th in bookkeeping, in the reports dashboard and in bookkeeping's machine-filtered view, with
-the standalone Commission report still answering $0.35 for the 4th. Figures for past
-ranges change for sales between midnight and 10–11 am Sydney; that is a release-note matter for
-anyone who has exported or lodged figures from these reports.
-
-Transaction Sales still filters its `from`/`to` by the UTC date of the instant
-(`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
-on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
-outside the requested range, and one in the same hours of the day after the last requested day is
-inside it. That filter was left unchanged by #380 and #1250 and is part 2 of the latter.
+on the 5th in bookkeeping, in the reports dashboard, in bookkeeping's machine-filtered view and in
+the standalone Commission report. Figures for past ranges change for sales between midnight and
+10–11 am Sydney, including commission due; that is a release-note matter for anyone who has exported
+or lodged figures from these reports.
 
 **The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
 Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
@@ -11706,6 +12001,84 @@ client-side filter/paging.
    same transaction and without recording anything for the goods that never arrived (see
    [Completing a partially delivered supplier order](#completing-a-partially-delivered-supplier-order-issue-974)).
 
+**A purchase create may carry an idempotency key, and a retry under one saves nothing twice (issue
+#1247).** Create records the purchase, its lines, one restock movement per line and the cost rebuild
+those movements cause, so a phone that lost the response and retried - or an operator who pressed
+Save twice on one receipt - used to record all of it again and double the stock and inventory value
+of every product on it. The form now sends an opaque `idempotencyKey` form field with the create,
+following the pick list's pattern (`PickListRefillPolicy`, `PickListRefillFingerprint`):
+
+- **Same key, same content** answers `201` with the purchase the first request saved and writes
+  nothing at all - no purchase, no line, no movement, no cost rebuild and no document.
+- **Same key, different content** is `409` with
+  `Inventory.Domain.Purchases.PurchaseIdempotencyPolicy.KeyReusedMessage` ("This purchase was
+  already saved with different details. Reload the page.", the repository owner's decision of 14
+  November 2026), also writing nothing. Returning the first purchase instead would hide a purchase
+  the operator believes they saved.
+- **No key** is the create that always existed, which is what every client that predates the issue
+  sends. The column is nullable and its unique index is filtered to the rows that carry one.
+
+What "the same content" means is `Inventory.Domain.Purchases.PurchaseCreateFingerprint`: a SHA-256
+over the request **as submitted** - title, notes, invoice number, the receipt total and both
+charges with their classifications, the purchase date, the supplier, the document's name, length and
+digest, the supplier-order completion decision, and every line's product, quantity, unit cost and
+classification in the order they were sent. It renders no value this server resolved (the clock's
+default purchase date, the file-name title fallback), because a default would make two identical
+retries render differently and turn the second into a conflict. Lines are *not* sorted: a purchase
+may legitimately hold two lines for one product, so there is no total ordering to sort into.
+
+**The document is compared by its own bytes.** A name and a byte count do not identify a receipt -
+a phone that names every photo the same way submits two different ones of the same size as a matter
+of course - so `UploadPurchase` hashes the upload (SHA-256) and renders that digest into the
+fingerprint, and a *different* receipt under a spent key is refused rather than replayed as the
+first purchase. The hash is read through a stream of its own and that stream is closed again, so the
+bytes storage writes are read from a stream opened fresh and nothing the document needs is consumed;
+it is computed **only when the request carries a key**, because a digest exists to be compared with
+one stored beside a key, so a create with no key never opens the upload a second time.
+
+**The claim is taken inside the write transaction, and that is the point.** `UploadPurchase` reads
+the key first, before storage is reserved and before a byte of the document is written, so an
+ordinary retry costs no storage - but that read is only the cheap half. `EfPurchaseStore.CreateAsync`
+opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) whenever a key is present and re-reads the key
+inside it, so two copies of one submission arriving together are serialised: the loser waits, reads
+the winner's committed purchase and is answered with it, having written nothing. The filtered
+per-business unique index on `(BusinessId, IdempotencyKey)` is the backstop under that claim, and
+`EfPurchaseStore` translates its violation into the same `409` rather than a `500`. When the store
+replays, the use case removes the bytes and the storage reservation its own attempt had staged, the
+same way a failed save does. Keys are tenant-owned: two businesses may choose the same string, and
+one business's key never finds another's purchase. `PurchaseCreateConcurrencyTests` proves the race
+on a real SQLite file with two connections; `PurchaseIdempotencyApiTests` proves the contract over
+HTTP.
+
+**A keyed create and its replay are one projection.** "The same response" has to hold as it is
+serialized, not merely as a row: a create answered from the entity the write built renders the
+purchase date as the instant the request handed over (a UTC value, with the `Z` SQLite's stored value
+does not carry) and carries whichever navigations the write happened to load, while a replay is an
+ordinary read of the stored row. `EfPurchaseStore.CreateAsync` therefore reads a keyed create's
+purchase back through the same includes every read uses and answers with that, so an unchanged
+request receives the same purchase from both paths - a purchase dated exactly on a business-day
+boundary included. A create with **no** key is projected exactly as it always was, which is the
+backwards-compatible behaviour that criterion asks for.
+
+**The form keeps one key per purchase.** `PurchaseUploadComponent` creates a key when it opens, sends
+it with every attempt at that purchase - so a failed or timed-out attempt is retried under the same
+key, which is what makes the retry safe - and creates a new one after a save succeeds and whenever
+the form is reset. A refused save leaves the key alone, because it recorded nothing.
+
+**And before saving, the form warns when the purchase looks like one already recorded (issue
+#1247).** `GET api/purchases/possible-duplicate?supplierId=&invoiceNumber=&purchaseDate=` answers
+with the caller's own most recent purchase that has the same supplier, the same non-empty invoice
+number and the same business date, or no match. It is a **warning and never a block**: the operator
+saves anyway or does not, the create endpoint is unaffected by what it says, and blocking a duplicate
+outright is explicitly out of the issue's scope. `Inventory.Domain.Purchases.PurchaseDuplicateWarningPolicy`
+is the rule - all three facts must be there, because warning on "same date" alone would fire on
+every second delivery of a normal day and teach an operator to ignore the warning - and the invoice
+number is matched exactly, on the value `PurchaseInvoiceNumberPolicy.Normalize` produces. The day is
+the **business's own**, through `IBusinessCalendar`, so the same receipt entered at 9am and at 11pm
+is the same question. The Add Purchase form asks when the supplier, the date or the invoice number
+is entered, and after a scan fills them; the warning it shows names the recorded purchase and
+nothing about what it cost. Duplicate checks on a purchase *edit* are out of scope.
+
 A purchase line is recorded as a quantity and a unit cost, and that contract is unchanged. How the
 operator *arrives* at that unit cost is theirs to decide per line on the Add and Edit purchase forms,
 which offer both of the line's prices as linked inputs: type the amount paid for the whole line and
@@ -11740,14 +12113,50 @@ write their movements as before. All five then rebuild the affected product's co
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
 
+**Each manual adjustment reason moves stock in one direction only (issue #1242).**
+`Inventory.Domain.Stock.ManualStockAdjustmentPolicy` is the one rule, applied by `AdjustStock`
+before anything is written, so a refused combination is a `400` through `DomainExceptionHandler`
+that records no movement and changes no quantity:
+
+| Reason | Allowed quantity change | Refusal |
+| --- | --- | --- |
+| `Restock` | positive, with a non-negative unit cost | `RestockAddsStockMessage` - names the sign and points at Correction, Damaged or Expired for removing stock |
+| `Damaged`, `Expired`, `Sale` | negative | `RemovesStockMessage(reason)` - names the reason and the sign it expects |
+| `Correction` | negative, as it always had to | `CorrectionRemovesStockMessage`, the sentence this policy has always thrown |
+| `MachineRefill` | either sign, including zero | none; see below |
+
+`MachineRefill` is deliberately the one reason that keeps both signs: it is an internal transfer
+whose sign is storage's point of view - negative out to a machine, positive for units returned - and
+it is costing-neutral in both directions (`AGENTS.md` § Inventory and historical costing
+invariants). The direction of the others is a financial rule rather than a form convenience,
+because `WeightedAverageCostReplay` gives a *positive* write-off and a *negative*
+`Restock` no costing effect at all: "Damaged 5", the natural way to type it, added 5 units to
+storage and recorded no loss, and "Restock -4" lowered physical stock while `CostingQuantity` and
+`InventoryValue` stayed where they were, so storage and costing quantities drifted apart from a
+mistyped sign. The replay's treatment of the rows already stored is **unchanged** - re-valuing a
+historical negative `Restock` or positive write-off is a separate decision after a read-only count -
+and the rule binds only what is recorded from now on.
+
+**The Adjust stock form applies the same direction** (`stock-adjustment-form.component.ts`). It
+opens with **no reason chosen** (`Select a reason…`, and Apply is disabled until one is picked), it
+takes a **positive** quantity for every reason that removes stock - Damaged, Expired, Sale and
+Correction - and submits it negative the way Correction alone used to, and for a Restock it requires
+a positive quantity and a unit cost, refusing a negative one in the same sentence the endpoint
+would. The quantity hint follows the chosen reason and no longer offers a negative number as the way
+to remove stock: it names Correction, Damaged and Expired instead. The form still creates no
+movement of its own and the endpoint stays the sole authority (see [Page composition
+boundary](#page-composition-boundary-issue-191)).
+
 **A manual adjustment's stock check runs inside the write lock** (issue #1241).
 `EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
 it stages the movement, because staging it is what reads the stored quantity that
 `StockMovementCostPolicy`'s "this would make physical stock negative" check is decided on. Read
 before the transaction opened, two simultaneous write-offs of 4 against a stock of 5 both read 5,
 both computed a new stock of 1, and the loser's movement was then refused by the cost replay as
-*becomes physically negative* — an `InventoryCostDataQualityException`, which no HTTP handler claims,
-so an operator whose adjustment simply no longer fitted got a `500`. Inside the lock the loser reads
+*becomes physically negative* — an `InventoryCostDataQualityException`, which at the time no HTTP
+handler claimed, so an operator whose adjustment simply no longer fitted got a `500` (since issue
+#1240 it would be a `409` naming the product, which is still the wrong answer for a losing writer:
+the lock is what makes it the established not-enough-stock `400`). Inside the lock the loser reads
 the quantity the winner left and is refused with the established `InsufficientStockException`
 (`400`, "Not enough products in stock. Available stock: 1"), and two adjustments that both fit are
 both recorded, the second against the quantity the first left.
@@ -12055,8 +12464,15 @@ section (`PurchaseFormLayoutComponent`), labelled "Invoice number (optional)" an
 the input itself; it is never validated in the browser, because the server is the only thing that decides what
 is too long. Both pages send what was typed rather than trimming it themselves, and send nothing for an empty
 field. The Purchases list has its own **Invoice number** column showing the number where there is one and the
-same muted dash the table already uses elsewhere where there is none. There is no search, no filter and no
-duplicate warning: those are explicitly out of this issue's scope.
+same muted dash the table already uses elsewhere where there is none. There is no search and no filter: those
+are explicitly out of this issue's scope.
+
+**A duplicate warning was left out of #1162 and was added by issue #1247**, which is the only thing
+that reads this number for anything but display: the Add Purchase form asks the server whether a
+purchase with the same supplier, the same non-empty invoice number and the same business date is
+already recorded, and shows what it answers. It is a warning and never a block, the number is still
+never made unique, and an edit is still never checked - see [Product purchase and
+restock](#product-purchase-and-restock).
 
 #### Reorder-alert machine-product fan-out (issue #47)
 
@@ -13750,6 +14166,28 @@ count, which is the authority on its own instant, then source id) on top of a ba
    `AwaitingOpeningCount`. The refilled, returned and sold quantities are still reported, because
    they are facts; what cannot be derived from them is a physical level.
 
+**A Nayax-sourced refill is placed at the event's own time** (issue #1243, finding INV-06 of audit
+#1222). A Sync Restock event is applied by an operator days after the machine was physically
+refilled, and the apply used to be the only instant recorded, so a 10 November event for 20 units
+applied on 13 November was replayed *after* a 12 November count of 15: expected machine stock became
+35, and the next comparison reported 20 units of shrinkage that never happened. The apply now records
+the event's own `EventDateTimeGMT` on the movement as `StockAdjustment.MachineLedgerEffectiveAt`, and
+`EfMachineStockLedgerStore` - the only reader of that column - replays the refill there, falling back
+to `EffectiveAt` when it is `NULL`. **Only the machine ledger uses it**: the movement's `EffectiveAt`
+stays the apply instant, which is what the cost replay, Stock History and every storage-stock query
+read, so a late apply cannot take units out of storage at an earlier instant and drive physical stock
+negative there (see
+[the Sync Restock timestamp contract](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183)).
+The column is nullable with no backfill, so a manual refill - and every movement recorded before it
+existed - is replayed exactly where it always was; re-dating refills that were already applied is a
+separate repair.
+
+**The same-instant ordering is unchanged, and it is what makes the above safe.** `ReplayOrder` sorts
+by instant, then refill → return → sale → count, then source id, so a count is replayed last at its
+own instant and absorbs a refill that happened there: a Nayax refill whose event time equals a
+count's time leaves the expected level at the counted quantity. That rule was not relaxed for this
+change; it is pinned by its own test.
+
 A count supersedes rather than corrects: it sets the level from its own instant onward, resets the
 movement totals to "since the baseline", and reports the difference it absorbed as
 `unexplainedChangeAtLastCount` (positive means units were missing). That figure is **derived on
@@ -13917,9 +14355,11 @@ out on the Products list's `rr` scale and changes no request, rule or contract a
   adjustment is saving, and the form ignores a second Apply while the first is in flight. A failed
   save keeps everything entered and shows the server's message. Since this issue the **Machine field
   is enabled only for Machine refill**: changing the reason away from it drops the chosen machine,
-  and the form never submits a machine with another reason. After a successful save the panel
-  closes, a status message is announced, and the product list and the history are re-read with the
-  filters unchanged, so a new movement outside them stays outside the results.
+  and the form never submits a machine with another reason. Since issue #1242 the form opens with
+  **no reason chosen** and each reason moves stock in one direction only; see [Product purchase and
+  restock](#product-purchase-and-restock). After a successful save the panel closes, a status
+  message is announced, and the product list and the history are re-read with the filters
+  unchanged, so a new movement outside them stays outside the results.
 
 Tenant isolation is the central query filter's, as everywhere else: the query adds no `BusinessId`
 predicate of its own, and `EfStockHistoryQueryTests` proves with two synthetic businesses (plus an
@@ -14119,11 +14559,17 @@ child 3 of #149), moved unchanged in behaviour from the removed
   reported name, which is what stops a rename or a duplicate name moving historical COGS. Its
   Application-owned
   `SaleCostStatus`/`SaleCostOrigin` mirror the persisted `SaleCostingStatus`/`SaleCostSource`
-  ordinal-for-ordinal (a parity test enforces this).
+  ordinal-for-ordinal (a parity test enforces this). Its `precedence` argument is how many of the
+  four steps to apply (issue #1261): the default `SaleCostPrecedenceScope.WithoutLatestPurchase` is
+  the sale-time path above, and `Complete` adds step 2 - the latest costed purchase replayed before
+  the sale, stored as `CostSource = Estimated` - for the forced backfill, which has no following
+  rebuild inside its transaction to apply it. Neither step reads the ledger for a sale at or before
+  the product's transition-baseline cutoff, where the baseline is the opening.
 - `CostPendingSales` costs every pending completed sale, optionally for one product it is
   persisted against, and saves once.
 - `BackfillSaleCosts` (`POST api/sale-costing/backfill`) re-costs completed sales through
-  `CostSale`. Without `force` it counts already costed or legacy-estimated sales as finalized and
+  `CostSale`, asking for the complete four-step precedence. Without `force` it counts already costed
+  or legacy-estimated sales as finalized and
   leaves them untouched. `BackfillNayaxHistoricalSaleCosts` (`POST
   api/sale-costing/nayax-cost-backfill/dry-run` and `/apply`) costs pending or error sales (any status
   with `force`) that have a non-negative persisted Nayax export cost, optionally within an
@@ -14131,10 +14577,44 @@ child 3 of #149), moved unchanged in behaviour from the removed
   already persisted and makes no Nayax API call, so a Nayax outage cannot fail or partially apply
   it. For both backfills a dry run loads untracked rows and stages and saves nothing, and repeating
   an applied run yields the same costs.
+- **Neither backfill may lower a sale's cost precedence** (issue #1261). Every decision passes
+  `SaleCostPrecedence.Replaces` before it is staged, so a forced run fills an uncosted sale, improves
+  a weaker-sourced one, and rewrites an equal-sourced one only when the value differs; a
+  ledger-costed (step 1) or latest-purchase-costed (step 2) sale is left exactly as it is. A sale
+  nothing is written for is reported by the state it is already in - `alreadyFinalizedCount` /
+  `salesAlreadyCosted` for a final cost that stood, pending or error for a sale the run left as it
+  found it - and a repeated forced run stages nothing at all, so it asks for no cost rebuild either.
+  `force` remains what the non-dry-run ledger backfill
+  requires (the controller still refuses `dryRun=false` without it); what changed is that it no
+  longer means "overwrite".
+  **The decision is re-asked when it is written** (`SaleCostPrecedence.StillReplaces`, see
+  [Historical inventory cost](#historical-inventory-cost)), because both tools decide on sales they
+  read before the store takes the write lock. A staged cost the lock refuses writes nothing, records
+  no rebuild and is counted by the state the row now holds instead of as a sale the run changed -
+  `salesAlreadyCosted`/`alreadyFinalizedCount` when the cost committed in the gap is final, pending or
+  error when it is not - and the next run recomputes it. The reported counts therefore stay what the
+  run actually did.
 - The narrow `ISaleCostingStore` port (product candidates, transition cutoff, completed-sale
   selection, stage and save) is implemented by
   `Inventory.Infrastructure.Persistence.EfSaleCostingStore`, which keeps the former EF queries behind
   `AppDbContext`'s business query filter and writes each decision back onto exactly the loaded row.
+  **A staged cost also records the rebuild it makes necessary** (issue #1261): the adapter collects
+  each staged sale's product and earliest changed instant and writes one
+  `PendingInventoryCostRebuilds` row per product through the shared
+  `PendingInventoryCostRebuildRecorder`, inside one `BEGIN IMMEDIATE` transaction and the same
+  `SaveChanges` as the costs - so the costs and their recorded rebuild commit together or not at all,
+  and the drain replays each touched product afterwards (see
+  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). Before this, a backfill
+  rewrote sale costs and enqueued nothing: the product's `CostingQuantity`/`InventoryValue` stayed as
+  the costs it replaced had left them until its next sale. A dry run stages no cost and so records no
+  work, and an unresolved sale belongs to no product and records none either. **The precedence
+  decision is re-asked inside that transaction** before anything is written: the adapter reads the
+  staged sales' costing columns again - projected, so the answer is the database's and not the tracked
+  instances the costs were staged onto - asks `SaleCostPrecedence.StillReplaces`, and takes a refused
+  cost back off its row (each costing property returns to the value the row was loaded with, so the
+  save writes nothing for that sale), records no rebuild for it and reports it in the
+  `SaleCostSaveOutcome` its caller reclassifies. A staged sale whose row the lock cannot find at all is
+  left to EF Core's own concurrency check, which refuses the whole save.
   The `NayaxSaleCosting` mapping lets `EfNayaxSalesImportStore` (the uploaded transaction
   export, issue #301) and
   `EfLatestNayaxSalesStore` cost the `NayaxSales` entity they are importing through `ICostSale`
@@ -14569,9 +15049,10 @@ coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` ho
 period rests on — the two source families' ranges, whether the period holds sales rows and whether
 it holds settlement rows — **and the period instants themselves**, because the adapter that queried
 the rows is the only thing that knows which window it filtered them by, and a coverage range may
-only be compared with the window the figures were measured over. The daily report, bookkeeping, the
-reports dashboard and reconciliation select sales between business-day midnights (issue #1250);
-machine and product profitability still select between plain calendar-date bounds. Its
+only be compared with the window the figures were measured over. Every one of these reports selects
+its sales between business-day midnights and judges its coverage over exactly those instants
+(issue #1250 for the daily report, bookkeeping, the reports dashboard and reconciliation; issue
+#1252 for machine profitability, product profitability and Transaction Sales). Its
 `Availability()` and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
 reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
 `EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
@@ -14670,6 +15151,164 @@ read either contract shape, `providerIncomplete()` decides whether a page shows 
 count — a count of `0` with no coverage behind it reads as "nothing happened here" just as `$0.00`
 does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
 incomplete and the business's own records are not.
+
+### The commission report states commission due and records no payment (issue #1251)
+
+The Site Commission report used to carry a settled balance beside the commission it calculated:
+`paid`, `outstanding`, `status` (`Paid`/`Partially Paid`/`Overdue`/`Due`/`—`), a `dueDate` derived
+from the agreement's `PaymentDueDaysAfterPeriodEnd`, the period's `payments`, and a `POST
+api/site-commissions/{siteId}/payments` route behind a Record Payment control on the page. **All of
+that is gone**, by the repository owner's decision of 13 November 2026 (audit #1223, findings REP-06
+and REP-14): the business does not record commission payments in this application.
+
+**Why it was removed rather than fixed.** A `CommissionPayment` row was keyed by the exact
+`(periodStart, periodEnd)` it was recorded against, and `GetPaymentsAsync` matched those two dates
+exactly. So a payment recorded for July showed up only for a request whose range was *precisely*
+July: every other range — a quarter, a financial year, July 1–30 — reported the same, already-paid
+commission as fully outstanding, and accepted a second payment for the same sales. The guard against
+overpaying (`paid + amount > commissionDue + $0.01`) read the report and then inserted in a separate
+operation, so two concurrent requests could both pass it. A balance that is right for one spelling of
+a period and wrong for every other is worse than no balance at all, and the owner did not want the
+feature.
+
+**What the removal is, exactly.** `RecordSiteCommissionPayment` and its DI registration are gone, so
+the route is absent and answers `404` — not `403`, which is what a member refused the capability
+gets. `ISiteCommissionStore.GetPaymentsAsync`/`AddPaymentAsync` and their `EfSiteCommissionStore`
+implementations are gone with it, and `GetSiteCommissionReport` reads no payment at all; dropping the
+status also dropped its only use of `IBusinessCalendar` at the time, so the use case stopped taking
+one — issue #1252 gave it a calendar again for a different reason, to resolve the requested dates to
+business-day instants and each sale's agreement to that sale's business date.
+`SiteCommissionReportRow`/`SiteCommissionRowDto` no longer carry the five payment-derived members,
+and the domain `CommissionPayment` record — which existed only to carry a payment across the removed
+port — is gone. The Angular page drops the Paid, Outstanding and Status columns, the Outstanding
+figure in the details, the Payment history section and the Record Payment form, and the printable
+details page drops Outstanding and Payment history.
+
+**What issue #1251 deliberately left untouched.** Gross, card, cash and eligible sales, the rate,
+commission due, the machine breakdown and the products rows were the same figures for the same
+inputs — the availability model above, the agreement resolution, the data-quality states and the
+business-date window of issue #1250 all behaved exactly as they did. (Issue #1252 then changed which
+sales a requested range holds and which agreement covers each of them, on its own decision: see
+[Nayax sale timestamps](#nayax-sale-timestamps-issue-380).) The **stored rows stay**: `CommissionPayments`
+is still a tenant-owned EF entity with its mapping, its index and its migration history, still
+counted by `BusinessBootstrapper` and still on the Super Admin diagnostics surface. There is no
+migration and no data change; the rows are simply never read. The agreement's
+`PaymentDueDaysAfterPeriodEnd` column and its form field stay as they are, so an agreement already
+recording a due-days value keeps it.
+
+**What proves it.** `SiteCommissionsControllerRetiredPaymentRouteTests` hosts the real API and
+asserts an Owner's `POST` to the retired route answers `404`, that the controller publishes no
+endpoint whose path contains `payments`, and that the report route still answers that same Owner
+`200`. `SiteCommissionServiceTests` keeps every commission-due, gap, overlap, multiple-rate and
+machine-breakdown assertion unchanged and adds one over a seeded payment row: the stated commission
+is the period's own, and the row is still in the database afterwards.
+`site-commissions-report.component.spec.ts` covers the three absent columns, the absent Outstanding
+figure, Payment history and Record Payment control, the machine and product sections still being
+there, and the printable page dropping the same two sections.
+
+### Ending a site commission agreement (issue #1254)
+
+A commission agreement is effective-dated financial configuration, and until now it could only be
+added. `SaveSiteCommissionAgreement` refuses any overlap, so an open-ended 10% agreement from 1
+January 2026 blocked a 12% agreement from 1 July 2026 for ever and a rate change meant editing the
+database. `POST api/site-commissions/agreements/{agreementId}/end` sets an agreement's end date,
+under the repository owner's decision of 14 November 2026 that **only ending is added**: correcting
+a mistyped rate or start date, and deleting an agreement, stay out, because each would rewrite
+commission already reported for periods that have been settled.
+
+**Ending only ever narrows, and that is why a Manager may do it.**
+`Inventory.Domain.FinancialConfiguration.SiteCommissionAgreementEndPolicy` is the one rule: the end
+date must be on or after the agreement's own start date, and an agreement that already carries an
+end date may be brought forward but never pushed out. Both comparisons are by calendar date, because
+`EffectiveFinancialConfiguration.ResolveAgreement` resolves by date. The consequence is what makes
+the action safe on the capability that already adds an agreement: every date the agreement used to
+cover either still belongs to it or belongs to no agreement at all, so no sale silently moves onto a
+different rate, and the narrowing itself cannot create the overlap the add refuses. Each breach is a
+`400` carrying the rule's own caller-safe sentence through `DomainExceptionHandler`
+(`DomainValidationException`), and an agreement the caller's business does not hold - another
+business's key included - is `404` rather than a refusal. The request body's `endDate` is marked
+`JsonRequiredAttribute`, the way this repository's other value-typed write fields are, so a body
+that omits it is refused outright instead of binding to `default(DateTime)` and reaching the rule as
+1 January 0001 - an answer about the agreement's start date, which is not what went wrong.
+
+**The authoritative read, the comparison and the write are one operation.**
+`ISiteCommissionStore.BeginWriteTransactionAsync` opens `SqliteWriteLockTransaction`
+(`BEGIN IMMEDIATE`) over the request's own `AppDbContext`, and `EndSiteCommissionAgreement` re-reads
+the agreement *inside* it before measuring the end date against it; the instant the row's
+`UpdatedAt` is stamped with, and the audit event records, is sampled inside that lock too (the
+pattern issue #681 established), because the only interesting thing that can happen before it is a
+wait. `SaveSiteCommissionAgreement` now takes the same lock around its overlap check and its insert,
+which it did not before: two callers adding overlapping agreements are serialised into a refusal
+rather than both passing a check and both inserting, and an end cannot commit between another
+request's overlap check and its insert. "End the 10% agreement on 30 June, then add 12% from 1 July"
+is therefore two writes that cannot interleave. Both store methods save inside the caller's
+transaction and deliberately do not commit: the use case opened it before the read the write was
+decided from, and owns the commit, so a refusal after that point discards everything staged.
+
+**Nothing stored is recalculated.** Commission is calculated on read (see [The commission report
+states commission due and records no payment](#the-commission-report-states-commission-due-and-records-no-payment-issue-1251)),
+so commission due for dates up to the end date is unchanged and only later dates move onto whatever
+agreement covers them next - which is also why an end date in the past is a real decision rather
+than a correction, and why the page warns about one before it is confirmed.
+
+**It is audited, and the audit is a log event rather than a row.**
+`ISiteCommissionAgreementAudit` records the actor's Entra `(tid, oid)` pair, the business, the
+agreement, the site, the previous end date (or none) and the new one, at the instant sampled inside
+the lock, and only **after** the commit - a refused change was rolled back and did not happen.
+`InventoryApi.Adapters.Commissions.LoggingSiteCommissionAgreementAudit` satisfies it with one
+structured `ILogger` event plus the request's correlation id, on exactly the terms
+`LoggingBusinessSettingsAudit` and `LoggingMemberManagementAudit` are satisfied on, and the entry
+type has no field for a site name, a commission rate or any money figure, which keeps the business's
+financial configuration out of the trail structurally rather than by a sink's discretion.
+
+**Tenancy, authorization and plan are the controller's existing ones.** The route is class 1 - the
+`[RequireCapability(Capability.SiteCommissionsManage)]` and `[RequirePlan(PlanFeature.SiteCommissions)]`
+already declared on `SiteCommissionsController` - so an Operator is `403`, a business without the
+plan is `403 plan_required`, and a read-only support session is refused by the central method rule
+with `read_only_support_session` because it is a `POST`. The business comes from the caller's
+membership and never from the request: `FindAgreementAsync` and `SetAgreementEndDateAsync` are
+ordinary filtered tenant-owned statements, so the route value selects an agreement rather than a
+tenant. There is **no migration and no schema change** - `SiteCommissionAgreement.EffectiveTo`
+already exists and was already nullable - and no stored commission figure is written anywhere.
+
+**What proves it.** `SiteCommissionAgreementEndPolicyTests` covers the rule's boundaries (the start
+date itself, a date before it, an equal and an earlier existing end date, an extension, and the
+time-of-day-insensitive comparison) and, through `EffectiveFinancialConfiguration.ResolveAgreement`,
+that every date up to the end date still resolves to the ended agreement and the day after resolves
+to its replacement. `EndSiteCommissionAgreementTests` pins the use case: the write transaction is
+opened before the authoritative read and committed after the write, a refusal commits and audits
+nothing, an agreement the business does not hold is not found, the audit entry carries the old and
+new end date and the in-lock instant, and a request with no identified actor reads nothing at all.
+`SiteCommissionAgreementEndApiTests` drives the real API: the 12% agreement is refused while the 10%
+one is open-ended and accepted once it has been ended on 30 June, an agreement that still overlaps is
+refused anyway, both refusals answer `400` with the rule's sentence and change nothing, a Manager may
+end an agreement and an Operator is `403`, another business's agreement is `404` and untouched, a
+body that omits the end date is refused with `400` and leaves the agreement open-ended, and
+the committed change - and only the committed change - appears in the audit log.
+`FinancialAdapterTenancyTests` adds the two-business proof that neither new store method can reach
+another business's agreement.
+
+`SiteCommissionAgreementConcurrencyTests` is what proves the write lock itself, because a call-order
+test over a hand-written store cannot: it races two genuine writers - one `AppDbContext`, and
+therefore one connection, each - against a real SQLite **file**, the way
+`InventoryCountApplyConcurrencyTests` and `SupplierPresetConcurrencyTests` do. A create that arrives
+while "end the 10% agreement on 30 June" is written but uncommitted waits, re-checks overlap against
+the state that end committed, and is **allowed** - where an unlocked check would have read the
+still-open-ended agreement and refused a perfectly good rate change. An end that waits behind another
+end is decided on the end date that one committed, so bringing an agreement forward to 31 March and
+then "ending" it on 30 June is refused with the policy's own sentence instead of silently *extending*
+it. A competing create driven from a `DbCommandInterceptor` at the instant the first create's overlap
+check has executed - on its own deliberately impatient connection, so the answer comes in a second
+rather than after SQLite's default thirty - cannot even begin, and a create that waits for the lock
+is refused with the overlap conflict rather than inserting a second agreement over the same dates;
+both are the race the unlocked create lost, and an agreement is a date range with no unique index to
+catch it. The last test is the production shape: both creates released together by a `Barrier`, one
+created and one refused. Each of the four staged tests was confirmed to fail against the unlocked
+code it guards.
+
+`CapabilityAuthorizationApiTests`,
+`EndpointAuthorizationClassificationTests`, `EndpointPlanRequirementTests` and
+`SupportSessionRequestApiTests` carry the new route in their matrices.
 
 ### Provider identity on the local row (issues #732, #759, #760 and #735)
 
@@ -16581,7 +17220,7 @@ POST api/cheapest-suppliers/summary   ← { productIds: [ … ] }        Dashboa
 
 **One shared standalone component, in two halves.** `CheapestSuppliersComponent` owns the read for a page's rows — when it starts, the batching into requests of at most 200 ids, its loading/loaded/failed state, its own failure message and the Retry that re-enters it, and the support-session case where it asks for nothing at all — and publishes the answers keyed by product id. `CheapestSupplierCellComponent` is the cell and its popup: the cell shows the cheapest supplier and unit price on the business's basis, or `Loading`, `Unavailable`, `Not tracked`, `Awaiting match`, `No match found` or `No eligible price`, and only a successful read may say anything about a product. Clicking opens a modal dialog — labelled by the product's name, focused on open, closed by Escape, the backdrop or Close, returning focus to the cell — listing every supplier in the server's own order (comparable offers cheapest first, then the ones it could not compare, then the unchecked listings, then the suppliers with no match) with pack size, pack price, unit price on **both** bases, special, stock, last check and a link to the supplier's page, a note that these are observed prices and not recorded costs, and "Matched automatically" when the match was the collector's and nobody has checked it ([#941](https://github.com/cristhyanc/InventoryApp/issues/941)). Both live in `components/shared/cheapest-supplier/`, so #939 and #940 add a column rather than a second answer, and the page keeps its own dialog markup out of a routed template ([Page composition boundary](#page-composition-boundary-issue-191)).
 
-**The popup is a native modal `<dialog>`, because that is the only way "modal" is true** (the source-review finding of 28 October 2026). It is opened with `showModal()`, so the browser puts the panel in its top layer, makes the rest of the page inert and paints the overlay as the panel's own `::backdrop`: the page behind it cannot be clicked, tabbed into or reached by assistive technology while it is open. The first shape of this popup was the repository's older pattern — a fixed backdrop `div` around a `div` carrying `role="dialog"` and `aria-modal="true"` — which focused itself and returned focus on closing but trapped nothing, so a keyboard user could Tab straight out of a panel that told a screen reader it was modal. The element therefore carries **no** `role` or `aria-modal` of its own (the platform maps a modal `<dialog>` to both), and its dismissal, Tab cycle and focus return are bound in the component rather than in the markup: `::backdrop` is the panel's own pseudo-element, so an outside click arrives on the panel and is told apart from a click on its content by the event's target, and the panel's `keydown` answers Escape and every Tab itself so the cycle — panel → first control → … → last control → first — is one definition in one place instead of an assumption about the browser's. Closing closes the dialog *before* moving focus, because the cell underneath cannot take focus while the page is still inert. This popup is deliberately the only one changed: the older pattern beside it (`ConfirmationDialogComponent`, `product-price-history`, `MachineRestockSyncComponent`) has the same gap and its own follow-up, and reproducing a gap for consistency is not a reason.
+**The popup is a native modal `<dialog>`, because that is the only way "modal" is true** (the source-review finding of 28 October 2026). It is opened with `showModal()`, so the browser puts the panel in its top layer, makes the rest of the page inert and paints the overlay as the panel's own `::backdrop`: the page behind it cannot be clicked, tabbed into or reached by assistive technology while it is open. The first shape of this popup was the repository's older pattern — a fixed backdrop `div` around a `div` carrying `role="dialog"` and `aria-modal="true"` — which focused itself and returned focus on closing but trapped nothing, so a keyboard user could Tab straight out of a panel that told a screen reader it was modal. The element therefore carries **no** `role` or `aria-modal` of its own (the platform maps a modal `<dialog>` to both), and its dismissal, Tab cycle and focus return are bound in the component rather than in the markup: `::backdrop` is the panel's own pseudo-element, so an outside click arrives on the panel and is told apart from a click on its content by the event's target, and the panel's `keydown` answers Escape and every Tab itself so the cycle — panel → first control → … → last control → first — is one definition in one place instead of an assumption about the browser's. Closing closes the dialog *before* moving focus, because the cell underneath cannot take focus while the page is still inert. This popup is deliberately the only one changed here: the older pattern beside it (`product-price-history`, `MachineRestockSyncComponent`) still has the same gap and its own follow-up, and reproducing a gap for consistency is not a reason. `ConfirmationDialogComponent` closed its own copy of this gap separately (issue #1277; see [Interaction and presentation](#interaction-and-presentation)).
 
 **Last checked is a true instant, so it is the business's own clock.** Each supplier row renders `lastCheckedAtUtc` through `BusinessDateTimePipe` in the current business's configured IANA zone, never through Angular's `date` pipe in the operator's accidental browser zone — a check made at 04:00 UTC is mid-afternoon in Sydney and the small hours of the same date in New York, and the shown day has to be the business's. `SupplierListing.LastCheckedAtUtc` carries the `AppDbContext` UTC conversion that keeps the `Z` on it (serialised instant identity at the persistence boundary, [Time](#time)), so the instant the pipe parses is unambiguous. A zone that is not known yet renders nothing rather than a confidently wrong time, and blank is not `Never`: that answer belongs to a listing nobody has checked.
 
@@ -17384,7 +18023,8 @@ reads it now.
   `Imports.Run`, like the Admin `Imports` entry (see
   [Provider-locked navigation](#provider-locked-navigation-issue-729) for what that answer is).
   All Products' own **Import products** button keeps issue #875's visibility rules and links
-  here with no query parameter, and Admin → Imports' card is a link here too. The breadcrumb reads
+  here with no query parameter; Admin → Imports' card that linked here was removed on 17 November
+  2026 at the owner's request. The breadcrumb reads
   **Products > Import products** (`layout/breadcrumbs/breadcrumb-routes.ts`, parent `PRODUCTS`).
 
 Nothing about the review itself changed with the move: same API calls, same two steps, same
@@ -17581,6 +18221,27 @@ that meaning.
    (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
    documented meanings and are not substituted for one another. Only Event 501 rows are relevant
    to this feature.
+
+   **The timestamp contract: which instant each side uses** (issue #1243). `EventDateTimeGMT` is the
+   instant the machine was physically refilled, and `EventDateTimeVMC` - the machine's own clock - is
+   source data that drives nothing. An apply therefore records **two** instants, deliberately, and
+   each one has exactly one set of readers:
+
+   | Instant | Stored as | Read by |
+   | --- | --- | --- |
+   | The apply instant | `StockAdjustment.EffectiveAt` | the inventory-cost replay, Stock History, and every storage-stock query |
+   | The event's `EventDateTimeGMT` | `StockAdjustment.MachineLedgerEffectiveAt` (nullable, no backfill) | `EfMachineStockLedgerStore` alone, for the machine-stock ledger |
+
+   Storage and costing keep the apply instant because the units left the storeroom when the operator
+   applied the event, and dating that movement earlier could make physical stock negative at an
+   instant where the storeroom had not yet received the purchase. The machine ledger needs the other
+   answer, because a machine count sets the expected level from its own instant onward and a refill
+   the count already absorbed must not be added on top of it (see
+   [Machine stock ledger and shrinkage reconciliation](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56)).
+   A manual refill records no second instant and is unchanged. The event row itself keeps both
+   provider instants verbatim, and `NayaxMachineStockEvent.EventDateTimeGmt` is normalised to a UTC
+   instant on import and marked UTC on every read, so the instant the ledger replays at is the
+   instant the alert reported.
 2. **Parse.** `Inventory.Domain.Nayax.NayaxStockAdjustmentEventParser` is a deterministic, EF/HTTP-
    free parser for the alert's `EventData` text. It anchors on the literal `Product MDB:` marker
    rather than the free-text employee/user-name prefix that precedes it, so it does not depend on
@@ -17611,6 +18272,34 @@ that meaning.
    causes a movement. The same product may legitimately occupy more than one MDB on one machine;
    each event stays individually auditable, and the preview groups them by product to show the
    combined requested storage impact.
+
+   **A match is no longer decided only once** (issue #1248, audit #1222 finding INV-13).
+   `MatchStatus`/`MatchedProductId` used to be written at import and never again, so an alert
+   imported while its MDB position did not exist in Nayax, or while no local product carried that
+   position's `NayaxProductID`, became Needs Review and stayed there for ever - the operator mapped
+   the product, came back, and still had to enter the refill by hand.
+   `Inventory.Application.MachineStockSync.RematchMachineStockEvents` now re-evaluates the events
+   that are **still waiting for a match** against the machine's current mapping, in two places:
+   - **Whenever the Sync Restock list loads.** `SyncMachineStockFromNayax` reads the machine's MDB
+     positions once - fresh, never from the 60-second machine-products cache (issue #842), the same
+     read the import uses, so an import and a re-match in the same run cannot disagree about the
+     mapping - and the preview the operator is handed already shows the refreshed match. A load with
+     nothing waiting and no new alert makes no machine-products read at all.
+   - **Again inside the apply's write lock** (step 7 below), because the match decides which
+     product's storage moves.
+
+   What "still waiting for a match" means is one rule,
+   `RematchMachineStockEvents.IsWaitingForAMatch` with `EfMachineStockEventStore`'s relational form
+   of it beside it: `Unprocessed`, `DuplicateResolution.None`, not `Matched`, and carrying the
+   parsed MDB and product name a mapping can resolve it by. So an **applied** event is never
+   re-matched (its match is the record of which product's storage moved), nor is one **dismissed** as
+   already recorded manually or **applied as a separate restock**, nor is an alert whose `EventData`
+   never parsed - re-parsing the same stored text deterministically fails the same way. The write,
+   `IMachineStockEventStore.UpdateMatchesAsync`, re-checks that same condition at the row and sets
+   the three match columns and nothing else: re-matching can never change an event's processing
+   status, its duplicate resolution, its movement, its parsed values or the imported alert itself.
+   The resolution is `NayaxMachineStockMatchPolicy`'s, unchanged - this issue changed no matching
+   rule, only how often the rule is asked.
 5. **Preview before anything changes.** The machine-detail page's **Sync Restock** action
    (`MachineRestockSyncComponent`) opens a reconciliation dialog and calls
    `POST /api/machines/{id}/sync-restock`, which fetches, imports, and returns a reconciliation
@@ -17622,16 +18311,40 @@ that meaning.
    discrepancy** (`NayaxMachineStockImpactPolicy`), and - for a positive refill that exceeds
    available storage - the unaccounted difference. A positive event is also flagged **possible
    duplicate** (`NayaxMachineStockDuplicatePolicy`) when a manual (`StockAdjustmentSource.Manual`)
-   `MachineRefill` for the same machine/product/quantity was recorded within a 24-hour window; this
+   `MachineRefill` for the same machine and product was recorded within a 24-hour window; this
    is a signal for human resolution, not an automatic merge or block - the ordinary Apply action
    refuses it until the operator explicitly resolves it (issue #196, next step).
+
+   **Quantity is deliberately not part of that rule** (issue #1244, audit #1222 finding INV-07).
+   Requiring the manual refill's quantity to equal the event's let the commonest double deduction
+   through unflagged: an operator packs 20 for the machine, 15 actually go in, and the machine's own
+   event of 15 matched nothing, applied silently, and took storage from 100 to 80 to 65 while the
+   shelf held 80. Any manual refill of the same product on the same machine inside the window now
+   qualifies, whatever its quantity. The window itself is unchanged and stays **inclusive** of its
+   boundary: a refill exactly 24 hours from the event qualifies, one 24 hours and a second away does
+   not.
+
+   **The candidate is chosen deterministically, and the others are counted rather than hidden.**
+   `FindPossibleDuplicate` returns a `NayaxPossibleDuplicate`: the qualifying refill **nearest in
+   time** to the event, ties broken by the **lowest movement id** (`StockAdjustment.Id`), plus
+   `OtherQualifyingCount` - how many other refills also qualified. Nearest-then-lowest-id rather than
+   first-in-list-order is what makes the preview, the ordinary apply and both resolutions act on the
+   same movement whatever order the evidence arrives in, which matters because the chosen one is the
+   `MatchedManualStockAdjustmentId` a resolution records. The preview publishes the comparison the
+   operator decides on - the event's own `ParsedQuantity`, the chosen refill's
+   `PossibleDuplicateQuantity` (its units *into the machine*, the opposite sign of its own storage
+   change) and `PossibleDuplicateEffectiveAt`, with `OtherPossibleDuplicateCount` - and the Sync
+   Restock dialog shows all four beside the **Possible duplicate** badge. Deciding the difference is
+   explicitly not this rule's job: there is no partial "apply the difference" resolution, and the
+   packed-versus-loaded feature (#922) is separate.
 6. **A flagged possible duplicate requires explicit resolution before it can move storage
    (issue #196).** `NayaxStockEventPreviewDto.DuplicateResolution` (`Inventory.Domain.Nayax.
    NayaxDuplicateResolution`: `None`/`ReconciledManually`/`AppliedAsSeparateRestock`) is the
    persisted, auditable outcome of that choice, distinct from `ProcessingStatus` (which only
    tracks whether a storage movement was created). While unresolved, the dialog shows the event
-   visually distinct (its possible-duplicate badge and comparison context, including the matching
-   manual refill) with two explicit per-row actions, alongside the ordinary selectable checkbox -
+   visually distinct (its possible-duplicate badge and comparison context: both quantities, the
+   chosen manual refill's time and how many others qualified) with two explicit per-row actions,
+   alongside the ordinary selectable checkbox -
    the possible-duplicate flag is a suggestion for human resolution, not a precondition (issue
    #242, next step), so the checkbox stays enabled even while unresolved, but the event is never
    pre-selected or presented as an ordinary Apply item until it is resolved:
@@ -17639,7 +18352,8 @@ that meaning.
      with `AlreadyRecordedManually`. `Inventory.Application.MachineStockSync.
      ResolveMachineStockDuplicate` reconciles the event (`DuplicateResolution =
      ReconciledManually`, `DuplicateResolvedAt` stamped, `MatchedManualStockAdjustmentId` set to
-     the matching manual `StockAdjustment.Id`) without ever creating a `MachineRefill`/
+     the chosen manual `StockAdjustment.Id`, whether or not its quantity equals the event's)
+     without ever creating a `MachineRefill`/
      `StockAdjustment`, changing `QuantityInStock`, or touching costing. The event stays
      `Unprocessed` (no movement occurred) but is excluded from the preview's product-impact
      totals, since it will never draw down storage.
@@ -17659,6 +18373,27 @@ that meaning.
    original imported Nayax event row is never deleted or rewritten by either resolution; only the
    duplicate-resolution columns and, for an override, the ordinary `Applied` columns are added to
    it.
+
+   **Both resolutions take the write lock, and an event ends in exactly one state** (issue #1248,
+   audit #1222 finding INV-12). "Apply as separate restock" already re-read the event inside the
+   `BEGIN IMMEDIATE` transaction it writes in. "Already recorded manually" did not: it read the
+   event and checked its status outside every transaction and then stamped `ReconciledManually`
+   without re-checking `ProcessingStatus`, so two operators resolving one event in opposite ways at
+   the same moment both passed their own check and the event ended up **applied and marked as never
+   applied at once** - a real Nayax movement sitting under a reconciliation that says no movement
+   was made. It now opens the same write-locked transaction, re-reads the event inside it, and
+   commits the stamp from that read, so the two resolutions serialise against each other and against
+   an ordinary apply.
+   - Repeating the **same** resolution is unchanged: it is the established idempotent replay and
+     still answers `200` with `Reconciled` or `Applied` and the committed movement's id.
+   - A resolution that finds the event settled the **other** way is refused. It answers the new
+     `NayaxStockEventApplyOutcome.ResolutionConflict`, which `MachinesController` maps to **`409`**
+     carrying the same `NayaxStockEventApplyResultDto` shape - the event id, the outcome and the one
+     sentence saying which way the event actually went - having written nothing. The Sync Restock
+     dialog shows that sentence as a warning and reloads the list, so the row stops offering a
+     decision that has already been taken. The two refusal sentences are in one place,
+     `MachineStockResolutionMessages`, shared with the bulk resolution of step 6a so the single and
+     bulk actions cannot say different things about the same state.
 6a. **Bulk "Already recorded manually" for any eligible unresolved event, suggested or not (issue
     #242).** The possible-duplicate flag above is only a suggestion for human resolution; it is
     never a precondition for this resolution. The operator may explicitly check any unresolved,
@@ -17680,7 +18415,13 @@ that meaning.
     following the same per-event batch shape `ApplyMachineStockSync` established (step 7, below).
     Checking a box never itself reconciles anything - only this explicit action does - and
     **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
-    `isReadyToApply` computes, for **Apply selected**.
+    `isReadyToApply` computes, for **Apply selected**. Since issue #1248 each selected id is
+    resolved inside its **own** write-locked transaction, re-reading the event there before
+    stamping it, so an apply that commits in between is seen and that id is reported `NotApplicable`
+    rather than marked as never applied on top of its movement. The batch's per-event contract is
+    unchanged: every id still answers for itself, and the bulk action answers `200` with those
+    per-event outcomes rather than the single resolution's `409` - a batch has no one status to
+    refuse with.
 7. **Apply only what is accepted, one transaction and one cost rebuild per product** (issue #1127).
    `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
@@ -17689,12 +18430,13 @@ that meaning.
    `IRebuildProductCost.RebuildAsync` for that product - replaying a product's whole movement and
    sale history is what an apply actually costs, so ten ticked events for one product mean one
    replay of it, not ten. Every event is still its own `StockAdjustmentReason.MachineRefill`
-   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note and
-   its own `StockAdjustmentId` on the event row, so each one stays individually auditable, and the
-   response still reports one result per distinct requested event id in request order. Entities the
-   batch left tracked - including the history its rebuild loaded - are dropped once its transaction
-   has ended, so what each later product's `SaveChanges` has to examine does not grow with the
-   products already applied.
+   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note, its
+   own `EventDateTimeGMT` recorded as the machine ledger's instant for it (the timestamp contract in
+   step 1) and its own `StockAdjustmentId` on the event row, so each one stays individually
+   auditable, and the response still reports one result per distinct requested event id in request
+   order. Entities the batch left tracked - including the history its rebuild loaded - are dropped
+   once its transaction has ended, so what each later product's `SaveChanges` has to examine does not
+   grow with the products already applied.
 
    `NayaxMachineStockApplyPolicy` is the deterministic Domain rule that decides each event, and it
    is applied **inside** that product's write lock: the transaction is `BEGIN IMMEDIATE` on SQLite
@@ -17705,7 +18447,18 @@ that meaning.
    and reports `Already applied.` with that one movement's id, never a second deduction. Within one
    batch each event's stock check is made against the quantity read at the start of that
    transaction less the refills the batch has already accepted, so a batch can never take more units
-   out of storage than it holds. A validated positive event is applied through the same
+   out of storage than it holds. **The match is re-evaluated inside that same lock** (issue #1248):
+   which product an event names decides which product's storage the batch deducts, so the machine's
+   current mapping is read once per request - outside every lock, because it is a Nayax read and
+   nothing is decided on it, exactly like the planning read that groups the request by product - and
+   each batch re-resolves the events still waiting for a match from the rows it read under its own
+   lock, writing the refreshed match through `UpdateMatchesAsync` in the same transaction as the
+   movement it decided. So a newly matched event can simply be applied, and a batch that rolls back
+   discards its refreshed matches with its movements. A request whose events are all already matched
+   makes **no** Nayax call at all, and a mapping that cannot be read - Nayax unreachable - leaves
+   every event decided from what is stored, exactly as before this issue: an event still waiting for
+   a match keeps waiting rather than being applied on a guess, and the already-matched events of the
+   same request are applied unaffected. A validated positive event is applied through the same
    `IRecordInventoryMovement` movement logic as every other stock adjustment - it reduces
    `QuantityInStock` but never touches costing quantity/value, the same invariant an internal
    transfer already preserves. If the requested quantity exceeds the storage left to it, the event is
@@ -17721,12 +18474,31 @@ that meaning.
    the policy already refused keeps its own outcome - including an `InsufficientStock` decided
    against the storage left at the time of its check, which stays in the response even though the
    rollback has since restored that stock; the event is still `Unprocessed` and is simply retried.
+
+   **Every failed apply is logged, and exactly one failure explains itself** (issue #1240). Each
+   event of a rolled-back batch emits one `Warning` through the Application port
+   `IMachineStockSyncLog` (`Inventory.Infrastructure.MachineStockSync.LoggingMachineStockSyncLog` is
+   the one place those events become log lines, the arrangement `LoggingNayaxSqsReaderLog` has)
+   carrying the event id, a short failure code - the exception's type name, or `EventNotFound` - and
+   the caller-safe reason when there is one. Before this, a restock that never landed left no record
+   at all. What the **operator** sees is still the established
+   `Failed to apply this event; no inventory movement was recorded.`, with one exception: a fatal
+   **cost data-quality refusal** appends the cost replay's own product-named sentence to it, because
+   that is a repair the operator can make and a retry cannot. Every other failure - a commit the
+   database refuses, a movement that cannot be recorded, an event row this machine does not have -
+   keeps the generic sentence alone, deliberately: a provider or EF Core exception's own message can
+   quote the statement or the data it failed on, so it reaches the log as a type name and reaches
+   the response not at all. `MachineRefillFailure` is the shape that carries this back from
+   `IMachineStockEventStore.ApplyProductRefillsAsync`, and its `CostDataQualityMessage` is non-null
+   for that one failure only. The "Apply as separate restock" duplicate resolution writes the same
+   refill and is logged and explained in exactly the same way.
    The "Apply as separate restock" duplicate resolution of step 6 writes through the same
    write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
    record a second movement when it races another apply of the same event either; a failed write
    or commit there returns the same `Error` and leaves the event unresolved, so it can be chosen
-   again. A cancelled request is the one failure that is not reported per event: it stops the
-   apply.
+   again. Since issue #1248 its "Already recorded manually" sibling takes that same lock, so the two
+   resolutions serialise against each other as well. A cancelled request is the one failure that is
+   not reported per event: it stops the apply.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
@@ -17816,8 +18588,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   dependency.
 - **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
-  issue #196 - and `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
-  #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
+  issue #196 - `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
+  #242 - and `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
+  #1248), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
   with `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
@@ -17825,9 +18598,12 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   transaction (`BeginRefillWriteTransactionAsync`/`IMachineStockRefillWriteTransaction`), the
   whole-request event read `FindEventsAsync` and the batch `ApplyProductRefillsAsync`, which records
   one product's accepted refills and the duplicate-resolution columns of each and rebuilds that
-  product's cost once; the use cases decide every event and own the commit, so no policy moved
-  behind the port). The Nayax read stays on the existing
-  `Inventory.Application.Nayax.INayaxLynxClient` port.
+  product's cost once; and, since issue #1248, with the re-match pair `FindRematchCandidatesAsync`
+  and `UpdateMatchesAsync`, whose `MachineStockEventMatchUpdate` carries the three match columns and
+  nothing else - the use cases decide every event and own the commit, so no policy moved behind the
+  port). `MachineStockEventState` carries the event's parsed MDB and product name for the same
+  issue, because they are what a refreshed mapping resolves a stored event by. The Nayax read stays
+  on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `Inventory.Infrastructure.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-product write-locked transaction
@@ -18921,24 +19697,29 @@ forgotten — the next import found the transaction already stored, reported no 
 that product's costing position stayed stale until its next sale. A queue reader deleting a message on
 "already stored" would have lost it for good.
 
-- The row is written in the **same transaction as the sale**, and removed in the **same transaction as
+- The row is written in the **same transaction as the sale** — or, for a backfill, as the sale cost it
+  rewrote (issue #1261) — and removed in the **same transaction as
   the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
-  disagree.
-- **A drain acknowledges only the work it actually replayed.** The replay runs *outside* the write
-  lock on purpose (step 8 above), so another writer — the other sales path, or a second drain, since
-  both drain every pending row of the business — can record another sale for the same product and
-  commit while it is running, *after* the replay has already read the costing inputs it is computing
-  from. The drain therefore reads the row again *inside* the write-locked transaction that removes it,
-  where no other writer can commit between the read and the removal, and removes it only while it
-  still holds the `Revision` that was replayed. When it does not, the transaction commits nothing at
-  all: the costs that replay staged were computed before the newer sale existed, so they are discarded
-  rather than written over what the next drain will write, the product is reported as still pending —
-  which it is — and the row stays as the standing record of what has to be replayed. Removing it by
-  key instead would have thrown the newly arrived work away for good, which is the one failure this
-  table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings against a real database
-  **file** with two connections: an earlier sale, a sale at or after the replayed instant, and two
-  drains of one row.
-- **`Revision` is the comparison, and the instant cannot be.** Recording a pending rebuild only ever
+  disagree. A backfill writes a row only for a cost its write lock actually wrote: a staged cost the
+  precedence rule refuses inside that transaction changed nothing, and a product nobody's history
+  moved must not be queued for a replay.
+- **A drain acknowledges only the work it actually replayed, over the history it replayed.** The
+  replay runs *outside* the write lock on purpose (step 8 above), so another writer — the other sales
+  path, a second drain (both drain every pending row of the business), or any writer that changes the
+  product's stock or purchases — can commit while it is running, *after* the replay has already read
+  the costing inputs it is computing from. The drain therefore reads both facts again *inside* the
+  write-locked transaction that removes the row, where no other writer can commit between the read and
+  the removal, and removes it only while the row still holds the `Revision` that was replayed **and**
+  the product still holds the `CostingVersion` that was replayed over. When either has moved, the
+  transaction commits nothing at all: the costs that replay staged were computed before the newer work
+  existed, so they are discarded rather than written over what the next drain will write, the product
+  is reported as still pending — which it is — and the row stays as the standing record of what has to
+  be replayed. Removing it by key instead would have thrown the newly arrived work away for good, which
+  is the one failure this table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings
+  against a real database **file** with two connections: an earlier sale, a sale at or after the
+  replayed instant, two drains of one row, a purchase, a purchase *edit*, and two drains of one
+  scope with a purchase edit committed between them.
+- **`Revision` is the comparison for another sale, and the instant cannot be.** Recording a pending rebuild only ever
   moves `FromInstantUtc` earlier, so a sale at or after the instant the row already holds adds work
   without changing any other column — an acknowledgement that compared the instant would succeed,
   write costs computed without that sale in them and delete the work recorded for it, leaving the newer
@@ -18949,6 +19730,48 @@ that product's costing position stayed stale until its next sale. A queue reader
   a *failed attempt* deliberately moves neither the instant nor the revision: an attempt is evidence
   about a replay, not new work, and invalidating another drain's claim for it would discard a replay
   that is still correct.
+- **`Revision` answers only for another sale, and `Product.CostingVersion` answers for everything
+  else** (issue #1245, finding INV-08 of audit #1222). Only a sale enqueues a pending rebuild, so a
+  stock write, a purchase edit, a purchase delete, a Take Inventory count or a refill changes the very
+  history a running replay computed from while leaving that row at the revision the claim holds. The
+  drain would then write a costing position with the newer write left out of it — 21 units worth $54
+  overwritten by the 9 units worth $18 the replay had computed before the purchase existed — and
+  nothing would be left to say so until the product's next rebuild. `Products.CostingVersion` is
+  therefore a counter the product carries, starting at `0` and moved on by one in the **same
+  transaction** as every rebuilt costing position: `EfInventoryCostLedgerStore.StageProductPosition`
+  is the one place that writes either, every cost rebuild ends in a call to it, and a dry run stages
+  neither. The drain records the version when it claims the product and the acknowledgement compares
+  it in the database's own `WHERE` clause, untracked — the drain's context holds its own staged
+  position, whose version is one ahead of the stored one by construction. A product that no longer
+  exists is not a changed version, so a row naming one is still cleared. A latest-movement id could
+  not do this job: a purchase edit rewrites a movement's quantity, cost or instant *in place* and adds
+  no new one. The column records no quantity, cost or value, needs no backfill (`0` is right for every
+  existing product, because what is compared is whether the value changed and never what it is), and
+  is deliberately off the published `Product` payload. The forced backfill tools and the repair
+  fingerprint were issue #1261, which made the sale-cost backfills enqueue a pending rebuild for every
+  product they changed — see [Sale import and costing](#sale-import-and-costing) — so "only a sale
+  enqueues one" above now reads "only a write to a sale's own cost does": the two backfills are the
+  other such writer, they write through the same recorder under the same rules, and nothing else about
+  this table changed.
+- **Each claim's replay starts from the stored costing inputs, which is what makes that comparison
+  mean anything on the second drain of one scope** (issue #1245). A drain runs more than once in one
+  scope — the hourly reconciliation drains before the synchronization and again after the comparison,
+  and the synchronization drains as well — and a successful acknowledgement saves the replay and
+  leaves its product, its stock movements and its sales *tracked*. EF Core answers a later tracking
+  query for a row it already tracks with the instance it holds and does not refresh that instance's
+  values, so the drain detaches those three before every claim (`ForgetTrackedCostingInputs`, the
+  costing counterpart of the pending row's own `ForgetTracked`). Without it, the second drain replayed
+  a purchase edit's product over the unit cost from *before* the correction and staged the version the
+  first drain had written — which is the value its own fresh claim already held, so the comparison
+  passed, the row was removed with a position computed from superseded inputs, EF's partial-column
+  update left the stored value and average disagreeing with each other, and the persisted version
+  repeated instead of advancing, hiding the whole thing from the next claim too. Reading the inputs
+  fresh makes the staged version the stored one plus one, so **a committed rebuild always leaves the
+  version ahead of the claim it committed against** and anything that moved it in between fails the
+  comparison and is discarded. The detaching belongs to the drain and not to
+  `EfInventoryCostLedgerStore`: a purchase create rebuilds the cost over movements it has staged and
+  not yet saved, and that replay must see them. `NayaxSqsConcurrencyTests` covers two drains on one
+  context with a purchase edit and the next sale committed through another context between them.
 - A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
   the earlier instant covers the later one, and the other way round would silently skip a sale's effect
   on cost.
@@ -18985,15 +19808,32 @@ failed rebuild used to cause on every visit; that warning now appears only when 
 
 | Kind | Examples | Action |
 |---|---|---|
-| Transient | `SQLITE_BUSY` after the busy timeout; a network or AWS failure; a Nayax timeout or failure; an unusable connection or a plan without the sales provider; a pending rebuild still failing | **Not deleted.** Visibility set to 30 s × receive count, capped at the visibility timeout |
+| Transient — something is unavailable | `SQLITE_BUSY` after the busy timeout; a network or AWS failure; a Nayax timeout or failure; an unusable connection or a plan without the sales provider (`StoreUnavailable`, `ProviderUnavailable`, `ConnectionUnavailable`) | **Not deleted.** Visibility set to the outage schedule's step for this receive count (issue #1305): **45 s, 30 min, 3 h, 9 h, then 11 h** |
+| Transient — a rebuild is pending | a pending rebuild still failing (`RebuildPending`) | **Not deleted.** Visibility set to 30 s × receive count, capped at the visibility timeout |
 | Permanent | #1102 Invalid, Unsupported or FreeVend; a missing, unknown or disabled sender; a business that is not `Active`; a machine that is not the business's | **Not deleted.** Visibility set to 0, so the message reaches the dead-letter queue after the queue's own `maxReceiveCount` |
 | Done | a CompletedSale or CancelledOrDeclined saved with no pending rebuild; a duplicate whose rebuilds are clear; Revalue; Multivend | **Deleted** |
 
-Two of those rows need their reasoning stated. An **unusable connection or a downgraded plan is
+**The outage schedule is one list in `NayaxSqsQueuePolicy.TransientOutageSchedule`, read by receive
+count** (issue #1305, the owner's decision of 14 Nov 2026 on audit finding INT-02). A receive count past
+its five steps stays on the last one, and a receive count the queue did not report is treated as the
+first receive. It exists because the two failures it has to cover are hours apart: the first step is
+under a minute so a dropped connection or one slow Nayax call clears on the next receive, and the later
+steps are hours so an outage nobody is awake for — a Nayax token that expired overnight — is ridden out
+instead of spending the queue's receives in seven minutes. With the dead-letter queue's documented
+`maxReceiveCount` of **5**, the four waits between the first receive and the fifth and last attempt
+total **12 h 30 m 45 s**, and the fifth wait keeps the message on the main queue for another 11 hours
+before AWS moves it — so a sale reaches the dead-letter queue roughly **23½ hours** after its first
+receive rather than after about seven minutes. No step reaches SQS's own 12-hour ceiling
+(`MaxVisibilityTimeoutSeconds`), because `ChangeMessageVisibility` refuses a larger value outright and a
+refused call would drop the message back to the queue's plain 120-second timeout. A **pending rebuild
+is deliberately not on this schedule**: what it waits for is this application's own cost replay, not a
+remote system coming back, so it keeps the short per-receive backoff.
+
+Two of the table's rows need their reasoning stated. An **unusable connection or a downgraded plan is
 transient**, not permanent: an unknown sender and a foreign machine are statements about the *message*,
 while a disconnected business is a statement about *today* — reconnecting makes the very same message
-saveable, so the sale is parked for the next receive rather than pushed at the dead-letter queue. And a
-**failure nobody recognised is transient too**: deleting a message because this application threw
+saveable, so the sale waits out the outage schedule rather than being pushed at the dead-letter queue.
+And a **failure nobody recognised is transient too**: deleting a message because this application threw
 something unexpected would lose a real sale, and the queue's own `maxReceiveCount` is what stops a
 message retrying forever. Nothing is ever deleted to get rid of it.
 
@@ -19494,7 +20334,11 @@ server in two separate views, `view=10` (needs review: exactly the `Conflict` an
 `pageIndex` from 0 and `pageSize` from 1 to 100 (default 25), and answers the view's total beside the
 page; decided sales therefore never push a flagged sale out of reach. An absence is
 shown as what `lastSales` returned for the machine (count, earliest and latest, in business time),
-never as "missing from Nayax".
+never as "missing from Nayax". Since issue #1306 the list's three amounts — the sale's
+`settlementValue`, the evidence's `providerSettlementValue` and a history entry's
+`reconciledPeriodDifference` — are `null` for a caller without `Dashboard.ViewFinancials`, and the
+page leaves those lines out; nothing else about either response or about who may decide changes. See
+[Operator-readable financial disclosure](#operator-readable-financial-disclosure-issue-700).
 
 ### Backend migration track
 
@@ -19559,7 +20403,9 @@ files" as the historical record of that slice, not as a test to look for today.
      port before this slice, and keeps doing so unchanged - this slice did not introduce a second
      storage boundary.
    - `Inventory.Domain.Expenses.OperatingExpenseDetails` validates an expense's descriptive/financial
-     fields (required description, non-negative amounts, service-period ordering) and
+     fields (required description, non-negative amounts, ex GST plus GST equal to the total within
+     `$0.01` since issue #1257 — see [Expense and fee GST amounts add
+     up](#expense-and-fee-gst-amounts-add-up-issue-1257) — and service-period ordering) and
      `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` validates a candidate attachment's size and
      extension and resolves its content type - the two deterministic rules the controller used to
      enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
@@ -19741,6 +20587,8 @@ files" as the historical record of that slice, not as a test to look for today.
        unchanged. `ManualStockAdjustmentPolicy` validates a manual adjustment request - a Correction
        must remove stock, and a positive Restock must carry a non-negative unit cost - reusing the
        exact messages the former `InventoryApi.Services.StockService.Adjust` inline checks threw.
+       (Issue #1242 later gave **every** reason a fixed direction in that same policy; see
+       [Product purchase and restock](#product-purchase-and-restock).)
        `RestockCostSuggestionPolicy` is the one authoritative restock-cost-suggestion priority (the
        latest purchase unit cost, else the product's average unit cost when valid, else none), given
        already-queried facts; its three `Source` string constants (`"LastPurchase"`/`"AverageUnitCost"`/`"None"`)
@@ -20325,8 +21173,11 @@ Consequently, automated engineering agents stop at a pull request. Merge and pro
 
 Deploying the API restarts the process, and that restart is how its database schema changes (issue #54, revised by issue #201). `InventoryApi/Bootstrap/DatabaseSchemaStartup.EnsureSchema` runs at startup and decides per environment:
 
+- **A schema newer than the code is refused first, before anything is applied** (issue #1299, audit #1228 finding OPS-03, confirmed by #1231). `InventoryApi/Bootstrap/UnknownAppliedMigrations` compares the applied ids in `__EFMigrationsHistory` with the ids the running build contains; an applied id the build does not contain can only have been written by a newer build, which pending migrations alone never reveal. **Production, and every other environment except Development and `Testing`, logs a critical error naming those ids and throws `DatabaseSchemaNewerThanCodeException` having migrated and written nothing** — a Staging-like database is somebody's hosted data, so it fails closed with Production rather than with a developer's laptop. Because the comparison is the first thing `EnsureSchema` does, a database holding both an unknown applied id and a pending one is refused with the pending migration **not** applied. **Development and `Testing`** log the same finding as an error and continue, applying what is pending as before, because this policy already treats their database as the disposable one. The repository owner decided on 14 November 2026 that this fails closed in Production: redeploying an older build after a release that added migrations is no longer possible without a restore, and recovery is either restoring the verified backup taken just before that release and then deploying the older build, or rolling forward to a build that contains the migrations — nothing rolls a migration back. `DatabaseSchemaNewerThanCodeTests` covers the refusal, the unknown-plus-pending ordering, the Development/`Testing` rule and the dry-run report against a real SQLite history table.
 - **Production, Development, and `Testing`** all apply pending migrations automatically. A failed apply throws `DatabaseMigrationFailedException`, naming the environment and the pending migrations, and startup does not complete — the API never serves requests against a schema its code does not match. Development and `Testing` do this because their database is disposable; Production does it because issue #201 restored the pre-issue-#64 automatic-migration policy for normal deployments, now that the tenancy rollout issue #64 protected is complete.
 - **Any other non-Production environment** (an ephemeral integration or Staging environment, for example) applies nothing by default and throws `PendingMigrationsException`, naming the pending migrations and the command to apply them, unless the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` configuration override is `true` for that disposable database.
+
+`migrate-database --dry-run` reports the same unknown applied ids and exits non-zero instead of saying "already up to date" (issue #1299), so the restore rehearsal's schema check and an operator inspecting a database both see that the schema is ahead of the build they are holding. How migrations are applied is unchanged: `--apply` still applies exactly what is pending, with the finding printed before the apply starts.
 
 The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/DatabaseMigrationCommand`), run with `--dry-run` to inspect and `--apply` to migrate, remains available for diagnostics and manual use — inspecting what a pending deployment will apply, or applying a high-risk migration ahead of a deployment window under review — but is no longer mandatory before a normal Production deployment. Recovery from a bad apply, automatic or manual, is restoring a verified backup taken beforehand; neither startup nor the command rolls a migration back. Concurrent same-machine startups (an overlapping restart during a deployment, for example) are not separately locked: EF Core's `Database.Migrate()` re-reads the applied-migrations history when it runs rather than trusting an earlier snapshot, and SQLite's single-writer lock (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above) already serializes the two attempts, which `DatabaseSchemaStartupTests.Concurrent_production_startups_do_not_race_to_apply_the_same_migration_twice` exercises against a real on-disk database. See `docs/tenant-rollout.md` for the worked historical example and `AGENTS.md` § Database and migrations for the current invariant.
 
@@ -20428,9 +21279,12 @@ answered here criterion by criterion rather than left to the general paragraphs 
    processes one message at a time — which the single-writer SQLite file requires anyway. Staleness is
    the whole point of the feature: sales reach the application within seconds instead of on the next
    Dashboard load.
-2. **Retries.** Nothing is retried in a loop here; the *queue* is the retry. A transient outcome sets
-   the message's visibility to 30 s × its receive count, capped at the visibility timeout, so the
-   backoff is counted by SQS's own `ApproximateReceiveCount` and therefore survives a restart. A
+2. **Retries.** Nothing is retried in a loop here; the *queue* is the retry. A transient outcome whose
+   reason is that something outside the application is unavailable sets the message's visibility to the
+   outage schedule's step for its receive count — 45 s, 30 min, 3 h, 9 h, then 11 h (issue #1305) — and
+   any other transient outcome, today a pending cost rebuild, to 30 s × its receive count capped at the
+   visibility timeout; either way the backoff is counted by SQS's own `ApproximateReceiveCount` and
+   therefore survives a restart. A
    `ReceiveMessage` that fails backs off with jitter up to 60 s. Nayax calls still pass through
    `NayaxResilienceHandler` as every other caller's do. A message that can never succeed is retried not
    at all: its visibility is set to zero so the queue's `maxReceiveCount` carries it to the dead-letter

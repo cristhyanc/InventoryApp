@@ -7,6 +7,7 @@ import { LocalMachine } from '../../../models/models';
 import { LocalMachineService } from '../../../services/local-machine.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { handOffFocusFromRemovedOpener } from '../../shared/confirmation-focus';
 import { IconComponent } from '../../shared/icon.component';
 import { ListLoadState } from '../../shared/list-load-state';
 
@@ -214,8 +215,13 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   /**
    * Sends the one delete. The machine being confirmed is cleared first, so a second click on the
    * dialog's button has nothing left to send even before `saving` closes the window.
+   *
+   * `opener` is the control the confirmation returned focus to as it closed - this row's own Delete
+   * button. It keeps focus while the delete is in flight, so the refusal below leaves focus on the
+   * row it is about; a success reloads the list without that row, so focus is handed on to the page
+   * heading rather than dropped on the document body (issue #1277).
    */
-  deleteConfirmed(): void {
+  deleteConfirmed(opener: HTMLElement | null = null): void {
     const machine = this.confirmingMachine;
     this.confirmingMachine = null;
     if (machine === null || this.sessionActive || this.saving) return;
@@ -224,7 +230,7 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
     // so, but that answer was read before this click, and the machine can have gained an expense, a
     // count, a movement, a refill or a provider link in between. `write` reloads only on success,
     // so the row a refusal is about is still there.
-    this.write(this.machines$.delete(machine.id));
+    this.write(this.machines$.delete(machine.id), () => handOffFocusFromRemovedOpener(opener));
   }
 
   /**

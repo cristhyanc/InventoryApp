@@ -376,8 +376,9 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
                     DecidedAt)
                 : null,
             attachmentReservation: null,
+            idempotency: null,
             CancellationToken.None);
-        return purchase.Id;
+        return purchase.Purchase.Id;
     }
 
     private DbContextOptions<AppDbContext> Options() =>

@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Transactions;
+using EffectiveFeeRate = Inventory.Domain.FinancialConfiguration.EffectiveNayaxFeeRate;
 using TransactionPaymentType = Inventory.Domain.FinancialConfiguration.NayaxPaymentType;
 using TransactionSaleStatus = Inventory.Domain.FinancialConfiguration.NayaxTransactionStatus;
 using Xunit;
@@ -11,8 +12,9 @@ public class GetTransactionSalesReportTests
         TransactionPaymentType paymentType = TransactionPaymentType.Card, decimal sale = 10m,
         bool hasPersistedCost = true, decimal? costOfGoodsSold = 4m, long? siteId = null, string? siteName = null,
         long? productId = 1, long? nayaxProductId = 1, string rawProductName = "Water", string machineName = "Machine A",
-        long machineId = 10, DateTime? date = null) =>
-        new(id, date ?? new DateTime(2025, 8, 1), machineId, machineName, siteId, siteName, productId, nayaxProductId,
+        long machineId = 10, DateTime? date = null, DateTime? businessDate = null) =>
+        new(id, date ?? new DateTime(2025, 8, 1), businessDate ?? (date ?? new DateTime(2025, 8, 1)).Date,
+            machineId, machineName, siteId, siteName, productId, nayaxProductId,
             rawProductName, paymentType, paymentType.ToString(), sale, null, costOfGoodsSold, costOfGoodsSold,
             hasPersistedCost ? "Costed" : "Pending", hasPersistedCost ? "Inventory Ledger" : "Unknown", hasPersistedCost,
             status, status == TransactionSaleStatus.Completed ? 12 : 55, status.ToString());
@@ -57,6 +59,35 @@ public class GetTransactionSalesReportTests
             machineId: 10,
             date: new DateTime(2025, 1, 1).AddHours(i * 17 % 5000)))
         .ToArray();
+
+    /// <summary>
+    /// The use case feeds the Domain row policy the sale's <em>business</em> date, not its stored
+    /// instant (issue #1252). Both rows here sit on the same UTC date and on different business
+    /// dates, and a rate takes effect on the later one, so passing the instant would charge both
+    /// rows the old rate.
+    /// </summary>
+    [Fact]
+    public async Task The_row_policy_resolves_the_fee_rate_from_the_sales_business_date()
+    {
+        var utcDate = new DateTime(2026, 10, 4, 12, 59, 0, DateTimeKind.Utc);
+        var facts = FakeTransactionSalesReportFactsProvider.Facts(
+            [
+                Row(1, date: utcDate, businessDate: new DateTime(2026, 10, 4)),
+                Row(2, date: utcDate.AddMinutes(2), businessDate: new DateTime(2026, 10, 5)),
+            ],
+            feeRates:
+            [
+                new EffectiveFeeRate(new DateTime(2026, 1, 1), 0.10m),
+                new EffectiveFeeRate(new DateTime(2026, 10, 5), 0.50m),
+            ]);
+
+        var report = await UseCase(facts).Handle(
+            new TransactionSalesFilterDto(SortBy: "date", SortDescending: false), CancellationToken.None);
+
+        Assert.Equal([1L, 2L], report.Rows.Select(x => x.TransactionId).ToList());
+        Assert.Equal(0.10m, report.Rows[0].FeeExGst);
+        Assert.Equal(0.50m, report.Rows[1].FeeExGst);
+    }
 
     [Fact]
     public async Task Default_status_filter_only_returns_completed_transactions()

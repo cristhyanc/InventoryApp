@@ -8,6 +8,7 @@ import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Product, Category } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
+import { handOffFocusFromRemovedOpener } from '../shared/confirmation-focus';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import {
@@ -455,7 +456,13 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.confirmingProduct = null;
   }
 
-  deleteConfirmed(): void {
+  /**
+   * `opener` is the control the confirmation returned focus to as it closed - this row's own Delete
+   * button. It keeps focus while the delete is in flight, so the refusal below leaves focus on the
+   * row it is about; a success re-reads the list without that row, so focus is handed on to the page
+   * heading rather than dropped on the document body (issue #1277).
+   */
+  deleteConfirmed(opener: HTMLElement | null = null): void {
     if (!this.confirmingProduct) {
       return;
     }
@@ -463,7 +470,10 @@ export class ProductListComponent implements OnInit, OnDestroy {
     const product = this.confirmingProduct;
     this.confirmingProduct = null;
     this.productService.delete(product.id).subscribe({
-      next: () => this.applyFilters(),
+      next: () => {
+        this.applyFilters();
+        handOffFocusFromRemovedOpener(opener);
+      },
       // Delete is offered only where `canDelete` said the API allows it, but that answer was read
       // before this click: a product can gain a stock movement, a sale or a provider link in
       // between, and the server decides again inside the delete's own transaction. Its refusal is

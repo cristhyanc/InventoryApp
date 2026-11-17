@@ -42,10 +42,10 @@ public class ReportsControllerBookkeepingTests
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(useCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
         var controller = new ReportsController(getReportExportRows, new ReportExportFileWriter(),
             useCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, FakeGstRegistrationStore.BasSummary(gstUseCase), dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Bookkeeping(
             new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Inventory.Application.Costing;
 using Inventory.Domain.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -9,18 +10,23 @@ namespace InventoryApi.Http;
 /// Maps domain/application validation and conflict failures to stable, safe ProblemDetails
 /// responses, so controllers no longer need their own repetitive try/catch.
 ///
-/// It only claims exception types whose contract guarantees a caller-safe message, all defined in
-/// the <c>Inventory.Domain.Exceptions</c> hierarchy that this handler translates to HTTP:
+/// It only claims exception types whose contract guarantees a caller-safe message. Three are the
+/// <c>Inventory.Domain.Exceptions</c> hierarchy this handler translates to HTTP:
 /// <see cref="DomainValidationException"/> and <see cref="DomainConflictException"/> (both
 /// documented as carrying a message written for the caller), and its subclass
 /// <see cref="InsufficientStockException"/>, whose message is a fixed sentence plus an available
-/// stock count the caller is already entitled to see.
+/// stock count the caller is already entitled to see. The fourth is
+/// <see cref="InventoryCostDataQualityException"/> (issue #1240): the cost replay composes its
+/// message out of the caller's own product names and movement ids, and the refusal depends on that
+/// product's current history, so it is published verbatim as the same <c>409</c>
+/// <see cref="DomainConflictException"/> carries. It is claimed <em>by its own type</em> and never
+/// through the <see cref="InvalidOperationException"/> it happens to derive from.
 ///
 /// It deliberately does not claim framework-wide types such as
 /// <see cref="ArgumentException"/> or <see cref="InvalidOperationException"/>. Those are thrown
 /// all over the BCL, EF Core, and this application's own infrastructure (tenant scope resolution,
-/// costing data-quality checks, report export), and their messages are written for a developer,
-/// not for an API client. Claiming them here would turn unrelated internal failures into public
+/// report export), and their messages are written for a developer, not for an API client. Claiming
+/// them here would turn unrelated internal failures into public
 /// 400 responses that echo an internal message and are never logged. Every one of them - like any
 /// other unrecognized exception - returns <see langword="false"/> and falls through to
 /// <see cref="GlobalExceptionHandler"/>, which logs it once at <see cref="LogLevel.Error"/> and
@@ -60,11 +66,14 @@ public sealed class DomainExceptionHandler : IExceptionHandler
         var traceId = Activity.Current?.Id ?? httpContext.TraceIdentifier;
 
         // A conflict is worth an operator's attention (it may indicate a real race between two
-        // callers), but it is still an expected outcome, not a server error - warning only.
+        // callers), but it is still an expected outcome, not a server error - warning only. A cost
+        // data-quality refusal is logged for the same reason and so that moving it off
+        // GlobalExceptionHandler's 500 does not make a blocked product's history silent.
         // InsufficientStockException is excluded even though it now derives from
         // DomainConflictException: its established mapping (400, not logged) predates that
         // inheritance and must not change because of it.
-        if (exception is DomainConflictException && exception is not InsufficientStockException)
+        if (exception is InventoryCostDataQualityException
+            || (exception is DomainConflictException && exception is not InsufficientStockException))
         {
             _logger.LogWarning(
                 "Domain conflict. TraceId={TraceId} Detail={DomainConflictDetail}",
@@ -107,6 +116,11 @@ public sealed class DomainExceptionHandler : IExceptionHandler
         InsufficientStockException => (StatusCodes.Status400BadRequest, ValidationTitle),
         DomainValidationException => (StatusCodes.Status400BadRequest, ValidationTitle),
         DomainConflictException => (StatusCodes.Status409Conflict, ConflictTitle),
+
+        // Issue #1240. The type is sealed and its message is the replay's own product-named
+        // sentence, so this arm claims that one type and nothing else under
+        // InvalidOperationException.
+        InventoryCostDataQualityException => (StatusCodes.Status409Conflict, ConflictTitle),
         _ => null,
     };
 }

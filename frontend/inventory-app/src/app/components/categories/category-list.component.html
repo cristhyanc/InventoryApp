@@ -28,7 +28,7 @@
           <textarea id="categoryDescription" [(ngModel)]="form.description" name="description" rows="2" placeholder="Optional"></textarea>
         </div>
         <div class="page-actions">
-          <button type="submit" class="btn btn-primary" [disabled]="sessionActive">{{ editing ? 'Update' : 'Create' }}</button>
+          <button type="submit" class="btn btn-primary" [disabled]="sessionActive || saving">{{ submitLabel }}</button>
           @if (editing) {
             <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
           }
@@ -87,5 +87,5 @@
   *ngIf="confirmingCategory"
   title="Confirm delete"
   [message]="`Delete category '${confirmingCategory.name}'?`"
-  (confirmed)="deleteConfirmed()"
+  (confirmed)="deleteConfirmed($event)"
   (canceled)="cancelDelete()"></app-confirmation-dialog>

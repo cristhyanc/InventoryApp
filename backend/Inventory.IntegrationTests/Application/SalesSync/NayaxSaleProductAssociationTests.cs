@@ -310,7 +310,7 @@ public class NayaxSaleProductAssociationTests : IDisposable
     {
         await using var db = Context();
         var report = await new GetProductProfitabilityReport(
-                new EfProductProfitabilityReportFactsProvider(db),
+                new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
                 new EfProductPurchaseCostFactsProvider(db))
             .Handle(
                 new ReportingFilterDto(SaleInstant.Date.AddDays(-7), SaleInstant.Date.AddDays(7)),
@@ -386,5 +386,9 @@ public class NayaxSaleProductAssociationTests : IDisposable
         public Task<decimal?> GetAverageUnitCostAtAsync(
             long productId, DateTime at, long? excludingTransactionId = null, CancellationToken cancellationToken = default) =>
             inner.GetAverageUnitCostAtAsync(productId, at, excludingTransactionId, cancellationToken);
+
+        public Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+            long productId, DateTime at, long? excludingTransactionId = null, CancellationToken cancellationToken = default) =>
+            inner.GetLatestPurchaseUnitCostBeforeAsync(productId, at, excludingTransactionId, cancellationToken);
     }
 }

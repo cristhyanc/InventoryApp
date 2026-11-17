@@ -124,22 +124,36 @@ public static class NayaxProcessingFeePolicy
         (fee.FeesTypeId ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase) ||
         (fee.FeeTypeDescription ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// One imported fee row's amount excluding GST. An ex-GST amount the import recorded is
+    /// authoritative; otherwise it is the inclusive amount less <see cref="FeeGst"/>, so the two
+    /// halves always add back up to the total the import recorded (issue #1257).
+    /// </summary>
     private static decimal FeeExGst(ImportedProcessingFee fee)
     {
         if (fee.TotalSum.HasValue) return fee.TotalSum.Value;
         if (!fee.TotalSumWithVat.HasValue) return 0m;
-        var gst = fee.VatPercentage.HasValue
-            ? fee.TotalSumWithVat.Value * fee.VatPercentage.Value / (100m + fee.VatPercentage.Value)
-            : ReportingCalculations.GstFromInclusive(fee.TotalSumWithVat.Value);
-        return fee.TotalSumWithVat.Value - gst;
+        return fee.TotalSumWithVat.Value - FeeGst(fee);
     }
 
+    /// <summary>
+    /// One imported fee row's GST, from the strongest evidence the row carries: both amounts, then
+    /// its own VAT percentage, and otherwise the inclusive amount under the current Australian GST
+    /// assumption (AGENTS.md § Nayax processing fees and GST).
+    ///
+    /// <para><strong>Issue #1257 fixed the last of those.</strong> A row with only an inclusive
+    /// amount used to report GST <c>0</c> while <see cref="FeeExGst"/> had already removed one
+    /// eleventh for it, so an 11.00 fee was reported as 10.00 ex GST, 0.00 GST and 10.00 including
+    /// GST - a dollar of the business's own fee GST credit lost, and a fee total that was not the
+    /// one imported. A row that records neither amount is still nothing, not a zero-GST fee.</para>
+    /// </summary>
     private static decimal FeeGst(ImportedProcessingFee fee)
     {
         if (fee.TotalSumWithVat.HasValue && fee.TotalSum.HasValue)
             return fee.TotalSumWithVat.Value - fee.TotalSum.Value;
-        if (fee.TotalSumWithVat.HasValue && fee.VatPercentage.HasValue)
-            return fee.TotalSumWithVat.Value * fee.VatPercentage.Value / (100m + fee.VatPercentage.Value);
-        return 0m;
+        if (!fee.TotalSumWithVat.HasValue) return 0m;
+        return fee.VatPercentage.HasValue
+            ? fee.TotalSumWithVat.Value * fee.VatPercentage.Value / (100m + fee.VatPercentage.Value)
+            : ReportingCalculations.GstFromInclusive(fee.TotalSumWithVat.Value);
     }
 }

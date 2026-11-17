@@ -105,6 +105,28 @@ public static class PickListRefillPolicy
     public static string NotEnoughStockMessage(int availableStock) =>
         new InsufficientStockException(availableStock).Message;
 
+    /// <summary>The opening sentence of <see cref="CostHistoryRefusalMessage"/>.</summary>
+    public const string NothingRecordedPrefix = "Nothing in this pick was recorded.";
+
+    /// <summary>
+    /// The sentence a refill is refused with when one of its rows cannot be costed because that
+    /// product's history has a fatal data-quality issue (issue #1240). It is not a request rule -
+    /// nothing about the submission is wrong - so it is not one of the per-row refusals above: the
+    /// refusal is raised while the movements are being written and reaches the operator as a
+    /// <c>409</c>'s whole detail sentence.
+    ///
+    /// <para>That is why the wording states the outcome first. A batch is all-or-nothing, so what
+    /// the operator most needs to know is that none of it was recorded, and then which row to
+    /// repair: <paramref name="costIssueMessage"/> is the replay's own message, which names the
+    /// product, and <paramref name="machineLabel"/> names the machine the row was picked for -
+    /// <see langword="null"/> for a refill that names no machine at all, which is a refill the
+    /// single-machine contract allows.</para>
+    /// </summary>
+    public static string CostHistoryRefusalMessage(string costIssueMessage, string? machineLabel) =>
+        machineLabel is null
+            ? $"{NothingRecordedPrefix} {costIssueMessage}"
+            : $"{NothingRecordedPrefix} {costIssueMessage} That row was being picked for {machineLabel}.";
+
     /// <summary>
     /// Everything that can be decided from the request alone, before any read: the key, the note,
     /// the number of rows, each row's presence and quantity, and a product named more than once.

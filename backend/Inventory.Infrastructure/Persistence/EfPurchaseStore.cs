@@ -3,6 +3,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
 using Inventory.Application.Time;
 using Inventory.Application.SupplierOrders;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
@@ -111,12 +112,46 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return (conflict.ProductId, productName, conflict.CutoffAt);
     }
 
-    public async Task<PurchaseRecord> CreateAsync(
+    /// <inheritdoc />
+    public async Task<PurchaseIdempotentCreate?> FindByIdempotencyKeyAsync(
+        string idempotencyKey, CancellationToken cancellationToken)
+    {
+        // The AppDbContext tenant query filter scopes this read; there is no per-call BusinessId
+        // clause to go stale, and one business's key therefore never finds another's purchase.
+        var purchase = await _db.Receipts
+            .Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.IdempotencyKey == idempotencyKey, cancellationToken);
+        return purchase is null ? null : new PurchaseIdempotentCreate(purchase.IdempotencyFingerprint, ToRecord(purchase));
+    }
+
+    /// <inheritdoc />
+    public async Task<PurchaseDuplicateMatch?> FindPossibleDuplicateAsync(
+        int supplierId,
+        string invoiceNumber,
+        DateTime fromUtcInclusive,
+        DateTime toUtcExclusive,
+        CancellationToken cancellationToken)
+    {
+        // The caller's own purchases only, through the ordinary tenant query filters. The most
+        // recent one, because that is the purchase an operator who just saved this receipt would
+        // recognise; nothing else about the day is reported and no count is taken.
+        return await _db.Receipts.AsNoTracking()
+            .Where(receipt => receipt.SupplierId == supplierId
+                && receipt.InvoiceNumber == invoiceNumber
+                && receipt.PurchaseDate >= fromUtcInclusive
+                && receipt.PurchaseDate < toUtcExclusive)
+            .OrderByDescending(receipt => receipt.PurchaseDate).ThenByDescending(receipt => receipt.Id)
+            .Select(receipt => new PurchaseDuplicateMatch(receipt.Id, receipt.Title, receipt.PurchaseDate))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<PurchaseCreateOutcome> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         AttachmentUploadReservation? attachmentReservation,
+        PurchaseIdempotencyClaim? idempotency,
         CancellationToken cancellationToken)
     {
         var purchase = new Purchase
@@ -135,18 +170,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
             StoredFileName = file?.StoredFileName,
             ContentType = file?.ContentType,
             FileSizeBytes = file?.FileSizeBytes,
+            // Both together, or both null for a create that carries no key (issue #1247).
+            IdempotencyKey = idempotency?.Key,
+            IdempotencyFingerprint = idempotency?.Fingerprint,
         };
-        ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
-        purchase.Items = items.Select(x =>
+        purchase.Items = items.Select(x => new PurchaseItem
         {
-            var item = new PurchaseItem
-            {
-                ProductId = x.ProductId,
-                Quantity = x.Quantity,
-                UnitCost = x.UnitCost,
-            };
-            ApplyItemClassification(item, x.GstClassification);
-            return item;
+            ProductId = x.ProductId,
+            Quantity = x.Quantity,
+            UnitCost = x.UnitCost,
         }).ToList();
 
         // BEGIN IMMEDIATE when a completion decision rides along (issue #974), the deferred
@@ -158,11 +190,33 @@ public sealed class EfPurchaseStore : IPurchaseStore
         // A document's storage reservation needs the same lock for the same reason (issue #968):
         // an expired reservation is re-validated against the business's current usage inside this
         // transaction, and that read has to be the one the write is decided on.
-        var needsWriteLock = supplierOrderCompletion is not null || attachmentReservation is not null;
+        //
+        // An idempotency key needs it for the same reason again (issue #1247): "has this key
+        // already saved a purchase?" is a check-then-write rule, and a deferred transaction takes
+        // SQLite's write lock at the first write - after that read - so two copies of one
+        // submission would both read "nothing under this key" and both save a purchase, doubling
+        // the stock and the inventory value of every product on the receipt. With BEGIN IMMEDIATE
+        // the second caller waits, then reads the first one's committed purchase and replays it.
+        var needsWriteLock = supplierOrderCompletion is not null
+            || attachmentReservation is not null
+            || idempotency is not null;
         await using var writeLock = needsWriteLock
             ? await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken)
             : null;
         await using var transaction = needsWriteLock ? null : await BeginTransactionAsync();
+
+        // First inside the lock: has this key already saved a purchase? A retry is answered with
+        // the purchase that was saved, and a different request under a spent key is refused -
+        // neither of them writes a row, a movement or a cost. Returning without committing is what
+        // discards the transaction.
+        if (idempotency is not null
+            && await FindByIdempotencyKeyAsync(idempotency.Key, cancellationToken) is { } recorded)
+        {
+            if (!PurchaseIdempotencySubmission.IsSameRequest(idempotency, recorded))
+                throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+
+            return new PurchaseCreateOutcome(recorded.Purchase, Replayed: true);
+        }
 
         // Read, and refused, before anything at all is written: a stale decision must leave the
         // purchase unsaved rather than roll a committed-looking one back.
@@ -179,8 +233,24 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 _db, _clock, attachmentReservation, null, null, cancellationToken);
         }
 
+        // Classified inside the transaction, from the rules as this write reads them (issue #1348):
+        // a component the person submitted is their choice, and one they left out takes the
+        // product rule or supplier default, recorded with that provenance.
+        await ClassifyNewPurchaseAsync(purchase, fields, items, cancellationToken);
+
         _db.Receipts.Add(purchase);
-        await _db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (PurchaseIdempotencyKeyIndex.IsViolatedBy(exception))
+        {
+            // The index refusing the insert, mapped to the same refusal the claim above produces.
+            // It is reachable even with that claim in place - a database this process did not
+            // serialise with - and when it is reached it must not surface as an unexplained 500.
+            throw new DomainConflictException(PurchaseIdempotencyPolicy.KeyReusedMessage);
+        }
+
         await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
         var physicalChanges = new Dictionary<long, int>();
         foreach (var item in purchase.Items)
@@ -199,10 +269,43 @@ public sealed class EfPurchaseStore : IPurchaseStore
         if (completionTarget is not null)
             await CompleteSupplierOrderAsync(completionTarget, supplierOrderCompletion!, cancellationToken);
 
+        // A keyed create is answered with the purchase as a read of it answers, because a retry
+        // under that key is answered by exactly such a read (issue #1247). A create with no key is
+        // projected from the entity this transaction built, exactly as it always was. The read is
+        // made here, while the transaction is still open and this connection can still see its own
+        // rows - after the commit the statement would have no transaction to run in.
+        var record = idempotency is null
+            ? ToRecord(purchase)
+            : await StoredRecordAsync(purchase, cancellationToken);
+
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
 
-        return ToRecord(purchase);
+        return new PurchaseCreateOutcome(record, Replayed: false);
+    }
+
+    /// <summary>
+    /// The purchase this transaction has just written, read back through the same includes every
+    /// read of it uses and projected from the stored row rather than from the entity that was built
+    /// to write it.
+    ///
+    /// <para>It is what makes a keyed create and its replay one answer (issue #1247). The two were
+    /// projected differently: the created entity carries the purchase date as the request handed it
+    /// over - a UTC instant, which serializes with a <c>Z</c> the value SQLite stores and returns
+    /// does not - and carries whichever navigations the write happened to load, while a replay is an
+    /// ordinary read of the stored row. An unchanged request therefore has to be answered the same
+    /// way twice, and this is that one projection.</para>
+    /// </summary>
+    private async Task<PurchaseRecord> StoredRecordAsync(Purchase purchase, CancellationToken cancellationToken)
+    {
+        var stored = await _db.Receipts.AsNoTracking()
+            .Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.Id == purchase.Id, cancellationToken);
+
+        // The row was written by this transaction in this business's own scope, so it is there; the
+        // written entity is kept as the answer only so an impossible miss could not lose a purchase
+        // that was saved.
+        return stored is null ? ToRecord(purchase) : ToRecord(stored);
     }
 
     /// <summary>
@@ -747,6 +850,66 @@ public sealed class EfPurchaseStore : IPurchaseStore
                     new GstClassificationState(item.GstClassification, item.GstClassificationSource)))
                 .ToList(),
             submitted.Select(item => new SubmittedPurchaseLine(item.Id, item.ProductId)).ToList());
+
+    /// <summary>
+    /// Classifies a purchase being created (issue #1348): every line and present charge through
+    /// <see cref="NewPurchaseGstClassificationPolicy"/>, with the product rules and the supplier's
+    /// defaults read from this business's own rows. Only a create calls this; an edit never reads a
+    /// rule.
+    /// </summary>
+    private async Task ClassifyNewPurchaseAsync(
+        Purchase purchase,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        CancellationToken cancellationToken)
+    {
+        var supplierDefaults = SupplierGstDefaults.None;
+        if (purchase.SupplierId is { } supplierId)
+        {
+            var supplier = await _db.Suppliers.AsNoTracking()
+                .Where(candidate => candidate.Id == supplierId)
+                .Select(candidate => new { candidate.ProductLineGstDefault, candidate.DeliveryGstDefault, candidate.PackageGstDefault })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (supplier is not null)
+            {
+                supplierDefaults = new SupplierGstDefaults(
+                    supplier.ProductLineGstDefault, supplier.DeliveryGstDefault, supplier.PackageGstDefault);
+            }
+        }
+
+        var unclassifiedProductIds = items
+            .Where(item => item.GstClassification is null)
+            .Select(item => item.ProductId)
+            .Distinct()
+            .ToList();
+        var productRules = unclassifiedProductIds.Count == 0
+            ? new Dictionary<long, GstClassification>()
+            : await _db.Products.AsNoTracking()
+                .Where(product => unclassifiedProductIds.Contains(product.Id))
+                .ToDictionaryAsync(product => product.Id, product => product.GstRule, cancellationToken);
+
+        var lines = purchase.Items.ToList();
+        for (var index = 0; index < items.Count; index++)
+        {
+            var input = items[index];
+            var state = NewPurchaseGstClassificationPolicy.ClassifyLine(
+                input.GstClassification,
+                productRules.GetValueOrDefault(input.ProductId, GstRules.None),
+                supplierDefaults);
+            lines[index].GstClassification = state.Classification;
+            lines[index].GstClassificationSource = state.Source;
+        }
+
+        var delivery = NewPurchaseGstClassificationPolicy.ClassifyCharge(
+            GstComponentKind.DeliveryCharge, purchase.DeliveryCost, fields.DeliveryGstClassification, supplierDefaults);
+        purchase.DeliveryGstClassification = delivery.Classification;
+        purchase.DeliveryGstClassificationSource = delivery.Source;
+
+        var package = NewPurchaseGstClassificationPolicy.ClassifyCharge(
+            GstComponentKind.PackageCharge, purchase.PackageCost, fields.PackageGstClassification, supplierDefaults);
+        purchase.PackageGstClassification = package.Classification;
+        purchase.PackageGstClassificationSource = package.Source;
+    }
 
     /// <summary>
     /// Applies a submitted line GST classification (issue #429). A <c>null</c> submission keeps the

@@ -1,5 +1,7 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Gst;
+using Inventory.Domain.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.Bookkeeping;
@@ -24,8 +26,12 @@ public sealed class FakeBookkeepingReportFactsProvider : IBookkeepingReportFacts
 
     public static BookkeepingReportFacts Complete(decimal sales = 100m, decimal cost = 40m, decimal cardSales = 80m,
         int cardTransactions = 8, decimal cashSales = 20m, int cashTransactions = 2,
-        int? transactionCount = null) => new(
+        int? transactionCount = null, IReadOnlyList<SalesByGstRule>? salesByProductGstRule = null) => new(
         GrossSales: sales,
+        // Every sale is a taxable product's unless a test about issue #1255's GST-on-sales rule
+        // says otherwise, which is what the whole period used to be assumed to be. The groups
+        // always add up to GrossSales, as the real adapter's do.
+        SalesByProductGstRule: salesByProductGstRule ?? [new SalesByGstRule(GstClassification.Taxable, sales)],
         CardSales: cardSales,
         CardTransactions: cardTransactions,
         CashSales: cashSales,

@@ -11,6 +11,7 @@ import {
   ViewChild
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { BehaviorSubject, Subscription } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
@@ -28,6 +29,7 @@ import {
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockSyncPreview,
   NayaxStockEventApplyOutcome,
+  NayaxStockEventApplyResult,
   NayaxStockEventMatchStatus,
   NayaxStockEventPreview
 } from '../../../models/models';
@@ -606,10 +608,25 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
           this.restockApplied.emit();
         }
       },
-      error: () => {
+      error: (failure: unknown) => {
         this.resolvingEventId$.next(null);
-        this.applyError$.next('Failed to resolve the possible duplicate.');
-        this.toastService.error('Failed to resolve the possible duplicate.');
+        this.selectedEventIds.delete(event.id);
+
+        // 409: somebody else settled this event the other way while this resolution was being
+        // made, and nothing was written (issue #1248). The server's own sentence says which way it
+        // went, and the list is reloaded so the row stops offering a decision already taken.
+        const conflict = failure instanceof HttpErrorResponse && failure.status === 409
+          ? (failure.error as NayaxStockEventApplyResult | null)?.message
+          : null;
+
+        const message = conflict ?? 'Failed to resolve the possible duplicate.';
+        this.applyError$.next(message);
+        if (conflict) {
+          this.toastService.warning(message);
+          this.refreshPreview();
+        } else {
+          this.toastService.error(message);
+        }
       }
     });
   }

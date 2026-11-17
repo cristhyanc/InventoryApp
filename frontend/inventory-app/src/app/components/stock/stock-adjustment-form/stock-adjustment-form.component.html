@@ -26,27 +26,45 @@
         name="quantityChange"
         type="number"
         inputmode="numeric"
-        [min]="isCorrection ? 1 : null"
+        [min]="quantityMinimum"
         step="1"
         required
         aria-describedby="adjustment-quantity-hint"
-        [placeholder]="isCorrection ? 'e.g. 4' : 'e.g. 12 or -3'" />
+        [placeholder]="quantityPlaceholder" />
       <p id="adjustment-quantity-hint" class="field-hint" data-testid="adjustment-quantity-hint">
-        @if (isCorrection) {
-          Enter the quantity to remove. It will be recorded as a negative stock correction.
+        @if (removesStock) {
+          Enter the quantity to remove. It is recorded as a negative movement, so it leaves storage stock and inventory value.
+        } @else if (addsStock) {
+          Enter the quantity received. A Restock only adds stock - use Correction, Damaged or Expired to remove it.
+        } @else if (reasonChosen) {
+          A negative number moves units from storage into the machine (e.g. -3 records −3); a positive number returns them to storage.
         } @else {
-          A positive number adds units to storage stock (e.g. 12 records +12); a negative number removes them (e.g. -3 records −3).
+          Enter the number of units, then choose the reason that says which way they move.
         }
       </p>
     </div>
 
     <div class="field">
-      <label for="adjustment-reason" class="field-label">Reason</label>
-      <select id="adjustment-reason" class="min-h-11" [(ngModel)]="form.reason" (ngModelChange)="onAdjustmentInputsChanged()" name="reason">
+      <label for="adjustment-reason" class="field-label">Reason *</label>
+      <select
+        id="adjustment-reason"
+        class="min-h-11"
+        [(ngModel)]="form.reason"
+        (ngModelChange)="onAdjustmentInputsChanged()"
+        name="reason"
+        required
+        aria-describedby="adjustment-reason-hint">
+        <!-- No default reason (issue #1242): the direction stock moves in is the operator's choice. -->
+        <option [ngValue]="null">Select a reason…</option>
         @for (r of reasonOptions; track r.value) {
           <option [ngValue]="r.value">{{ r.label }}</option>
         }
       </select>
+      @if (!reasonChosen) {
+        <p id="adjustment-reason-hint" class="field-hint" data-testid="adjustment-reason-hint">
+          Choose a reason before applying the adjustment.
+        </p>
+      }
     </div>
 
     @if (requiresRestockCost) {
@@ -101,7 +119,11 @@
 
   <div class="flex flex-wrap justify-end gap-3 border-t border-rr-line px-4 py-3 sm:px-6">
     <button type="button" data-testid="cancel-adjustment" class="rr-button-secondary" [disabled]="saving" (click)="cancel()">Cancel</button>
-    <button type="submit" data-testid="apply-adjustment" [disabled]="saving || sessionActive" class="rr-button-primary">
+    <button
+      type="submit"
+      data-testid="apply-adjustment"
+      [disabled]="saving || sessionActive || !reasonChosen"
+      class="rr-button-primary">
       {{ saving ? 'Applying…' : 'Apply adjustment' }}
     </button>
   </div>

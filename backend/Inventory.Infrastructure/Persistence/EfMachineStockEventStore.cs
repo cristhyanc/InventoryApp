@@ -39,7 +39,24 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             e.MatchedProductId,
             e.ParsedQuantity,
             e.StockAdjustmentId,
-            e.DuplicateResolution);
+            e.DuplicateResolution,
+            e.ParsedMdb,
+            e.ParsedProductName);
+
+    /// <summary>
+    /// The one predicate for "this event is still waiting for a product match" (issue #1248),
+    /// shared by the candidate read and the write, so the two cannot drift apart: a processed,
+    /// reconciled or separately-applied event is never re-matched, because its match is the record
+    /// of which product's storage actually moved, and an event whose EventData never parsed has no
+    /// MDB and no product name for any mapping to resolve it by. It is the relational form of
+    /// <see cref="RematchMachineStockEvents.IsWaitingForAMatch"/>.
+    /// </summary>
+    private static readonly Expression<Func<NayaxMachineStockEvent, bool>> WaitingForAMatch =
+        e => e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+            && e.DuplicateResolution == NayaxDuplicateResolution.None
+            && e.MatchStatus != NayaxStockEventMatchStatus.Matched
+            && e.ParsedMdb != null
+            && e.ParsedProductName != null;
 
     private readonly AppDbContext _db;
     private readonly IRecordInventoryMovement _recordMovement;
@@ -200,6 +217,60 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .AsNoTracking()
             .Where(e => e.MachineId == nayaxMachineId);
 
+    public async Task<IReadOnlyList<MachineStockEventState>> FindRematchCandidatesAsync(
+        long nayaxMachineId, CancellationToken cancellationToken) =>
+        await EventsOf(nayaxMachineId)
+            .Where(WaitingForAMatch)
+            .Select(EventState)
+            .ToListAsync(cancellationToken);
+
+    public async Task<int> UpdateMatchesAsync(
+        long nayaxMachineId,
+        IReadOnlyList<MachineStockEventMatchUpdate> updates,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+
+        if (updates.Count == 0)
+            return 0;
+
+        var refreshed = updates.ToDictionary(update => update.EventId);
+        var ids = refreshed.Keys.ToList();
+
+        // Tracked, machine-scoped, and filtered by the same "still waiting" condition the candidate
+        // read uses: an event applied or resolved since that read is simply not among these rows,
+        // so nothing can rewrite the match a committed movement was decided from.
+        var rows = await _db.NayaxMachineStockEvents
+            .Where(e => e.MachineId == nayaxMachineId && ids.Contains(e.Id))
+            .Where(WaitingForAMatch)
+            .ToListAsync(cancellationToken);
+
+        var changed = 0;
+        foreach (var row in rows)
+        {
+            var update = refreshed[row.Id];
+            if (row.MatchStatus == update.MatchStatus
+                && row.MatchedProductId == update.MatchedProductId
+                && row.NeedsReviewReason == update.NeedsReviewReason)
+            {
+                continue;
+            }
+
+            row.MatchStatus = update.MatchStatus;
+            row.MatchedProductId = update.MatchedProductId;
+            row.NeedsReviewReason = update.NeedsReviewReason;
+            changed++;
+        }
+
+        if (changed > 0)
+        {
+            // Inside the caller's transaction where there is one; the caller owns the commit.
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        return changed;
+    }
+
     public async Task<NayaxStockSyncProduct?> FindStorageProductAsync(
         long productId, CancellationToken cancellationToken)
     {
@@ -242,7 +313,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 var entity = await _db.NayaxMachineStockEvents.FirstOrDefaultAsync(
                     e => e.Id == refill.EventId && e.MachineId == nayaxMachineId, cancellationToken);
                 if (entity is null)
-                    return new MachineRefillApplication(false, []);
+                    return new MachineRefillApplication(
+                        false, [], new MachineRefillFailure(MachineRefillFailure.EventNotFound, null));
 
                 events.Add((refill, entity));
             }
@@ -253,12 +325,19 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 // Each event keeps its own movement, with its own EventLogID note: the batch is one
                 // transaction and one rebuild, never one merged movement. Each one is staged against
                 // the quantity the previous one left, exactly as separate saves left it.
+                //
+                // The movement's own EffectiveAt stays the apply instant, which is what the cost
+                // replay and Stock History read, so applying a late event cannot take units out of
+                // storage at an earlier instant. The machine ledger needs the other instant - when
+                // the machine was physically refilled - so the event's own EventDateTimeGMT travels
+                // with the movement for it alone (issue #1243).
                 var movement = await _recordMovement.RecordAsync(
                     new InventoryMovement(
                         productId, -refill.Quantity, DomainStock.StockAdjustmentReason.MachineRefill,
                         $"Nayax Sync Restock (EventLogID {refill.NayaxEventLogId})",
                         MachineId: machine.LocalMachineId,
-                        Source: DomainStock.StockAdjustmentSource.Nayax),
+                        Source: DomainStock.StockAdjustmentSource.Nayax,
+                        MachineLedgerEffectiveAt: entity.EventDateTimeGmt),
                     cancellationToken);
 
                 applied.Add((refill, entity, movement));
@@ -291,12 +370,22 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 true,
                 [.. applied.Select(x => new AppliedMachineRefill(x.Refill.EventId, x.Movement.Id))]);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             // The caller owns the transaction, so its disposal is what discards these writes; what
             // is left here is the unit of work, which must not carry the failed batch any further.
             _db.ChangeTracker.Clear();
-            return new MachineRefillApplication(false, []);
+
+            // Why it failed, for the caller's log line and - for the one failure whose message is
+            // written for an operator - for the result they see (issue #1240). Every other
+            // exception contributes its type name alone: a provider's own message can quote the
+            // statement or the data it failed on, which belongs in neither a log nor a response.
+            return new MachineRefillApplication(
+                false,
+                [],
+                new MachineRefillFailure(
+                    exception.GetType().Name,
+                    exception is InventoryCostDataQualityException refusal ? refusal.Message : null));
         }
     }
 

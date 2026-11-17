@@ -1006,6 +1006,15 @@ export interface NayaxStockEventPreview {
   isPossibleDuplicate: boolean;
   possibleDuplicateNotes: string | null;
   duplicateResolution: NayaxDuplicateResolution;
+  /**
+   * How many units the matching manual refill put into the machine, so it can be compared with
+   * `parsedQuantity` (issue #1244). Null when the event is not flagged as a possible duplicate.
+   */
+  possibleDuplicateQuantity: number | null;
+  /** When that manual refill was effective; null when the event is not flagged. */
+  possibleDuplicateEffectiveAt: string | null;
+  /** How many other manual refills also qualified inside the 24-hour window. */
+  otherPossibleDuplicateCount: number;
 }
 
 export interface NayaxProductImpactPreview {
@@ -1116,7 +1125,14 @@ export enum NayaxStockEventApplyOutcome {
   /** Reconciled as already recorded manually (issue #196): no movement was applied. */
   Reconciled = 5,
   /** Flagged as a possible duplicate and not yet explicitly resolved; the ordinary Apply action refused it. */
-  DuplicateRequiresResolution = 6
+  DuplicateRequiresResolution = 6,
+  /**
+   * The event was already settled the *other* way, so this resolution changed nothing (issue
+   * #1248). `POST /api/machines/{id}/sync-restock/resolve-duplicate` answers it with 409 and this
+   * same result shape; repeating the *same* resolution is still the idempotent `Reconciled`/
+   * `Applied` 200.
+   */
+  ResolutionConflict = 7
 }
 
 export interface NayaxStockEventApplyResult {

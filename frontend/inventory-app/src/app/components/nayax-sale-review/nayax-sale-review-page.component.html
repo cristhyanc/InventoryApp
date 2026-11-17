@@ -67,7 +67,9 @@
               <h3 class="m-0 text-sm font-semibold text-rr-navy">Stored sale</h3>
               <dl class="m-0 mt-1 text-sm text-rr-muted">
                 <div>Machine: {{ item.machineName || item.machineId }} ({{ item.machineId }})</div>
-                <div>Amount: {{ item.settlementValue | currency }}</div>
+                @if (canViewFinancials && item.settlementValue !== null) {
+                  <div data-testid="nayax-sale-review-stored-amount">Amount: {{ item.settlementValue | currency }}</div>
+                }
                 <div>Authorized: {{ item.authorizationInstantUtc | businessDateTime }}</div>
                 <div>Received: {{ item.receivedViaSqsAtUtc ? (item.receivedViaSqsAtUtc | businessDateTime) : 'Not recorded' }}</div>
                 <div>Product: {{ item.productName || 'Unknown' }}</div>
@@ -80,7 +82,15 @@
                 <h3 class="m-0 text-sm font-semibold text-rr-navy">Nayax's record</h3>
                 <dl class="m-0 mt-1 text-sm text-rr-muted" data-testid="nayax-sale-review-comparison">
                   <div>Machine: {{ comparison.providerMachineId ?? 'Not given' }} ({{ comparisonLabel(comparison.machineComparison) }})</div>
-                  <div>Amount: {{ comparison.providerSettlementValue !== null ? (comparison.providerSettlementValue | currency) : 'Not given' }} ({{ comparisonLabel(comparison.amountComparison) }})</div>
+                  <!--
+                    Without Dashboard.ViewFinancials the figure is withheld by the API, so only how
+                    the two amounts compared is shown - which is what says why the sale is listed.
+                  -->
+                  @if (canViewFinancials) {
+                    <div data-testid="nayax-sale-review-provider-amount">Amount: {{ comparison.providerSettlementValue !== null ? (comparison.providerSettlementValue | currency) : 'Not given' }} ({{ comparisonLabel(comparison.amountComparison) }})</div>
+                  } @else {
+                    <div data-testid="nayax-sale-review-amount-comparison">Amount: {{ comparisonLabel(comparison.amountComparison) }}</div>
+                  }
                   <div>Authorized: {{ comparison.providerAuthorizationInstantUtc ? (comparison.providerAuthorizationInstantUtc | businessDateTime) : 'Not given' }} ({{ comparisonLabel(comparison.instantComparison) }})</div>
                   <div>Product: {{ comparison.providerProductName || comparison.providerNayaxProductId || 'Not given' }} ({{ comparisonLabel(comparison.productComparison) }})</div>
                   <div>Checked: {{ comparison.observedAtUtc | businessDateTime }}</div>
@@ -110,7 +120,7 @@
                     {{ decisionLabel(entry.decision) }} by the owner@if (entry.reason) {: "{{ entry.reason }}"}.
                   }
                   {{ verificationLabel(entry.previousState) }} &rarr; {{ verificationLabel(entry.resultingState) }}.
-                  @if (entry.reconciledPeriodDifference !== null) {
+                  @if (canViewFinancials && entry.reconciledPeriodDifference !== null) {
                     Changed the reimbursement period {{ entry.reconciledPeriodFrom | date: 'dd/MM/yyyy' }} to
                     {{ entry.reconciledPeriodTo | date: 'dd/MM/yyyy' }} by {{ entry.reconciledPeriodDifference | currency }}.
                   }

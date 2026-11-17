@@ -39,6 +39,8 @@ import { IconComponent } from '../shared/icon.component';
       </div>
     }
     <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">@for (card of cards(report); track card.label) {<div class="card card-body"><p class="text-md-card-title font-semibold text-md-gray-800">{{ moneyOrState(card.value, card.availability) }}</p><p class="stat-card-label text-left">{{ card.label }}</p>@if (availabilityBadge(card.availability); as badge) {<p class="value-muted text-left" [attr.data-testid]="'availability-' + card.key">{{ badge }}</p>}</div>}</section>
+    <p class="value-muted" data-testid="gst-on-sales-rule">GST on sales is one eleventh of taxable sales (GST-inclusive), taken once from the period total. Sales of products whose GST rule is GST-free are left out of taxable sales; a product with no GST rule is taxable, and those sales are shown separately above. Each product's GST rule as it stands today is used - no GST classification is recorded per sale, and no history of a product's rule is kept.</p>
+    <p class="value-muted" data-testid="gst-bas-summary-pointer">For a business registered for GST, Monthly Bookkeeping shows these same figures under the BAS labels G1 (total sales), 1A (GST on sales) and 1B (GST credits), with the estimated net GST. Both pages use one server calculation, so they report the same period identically.</p>
     <section class="card"><div class="card-header"><h2 class="card-title">Purchase input GST</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Product lines</span><strong>{{ money(report.purchaseLineGst) }}</strong></div><div class="flex justify-between"><span>Delivery and package charges</span><strong>{{ money(report.purchaseChargeGst) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total purchase input GST</span><strong>{{ money(report.inventoryPurchaseGst) }}</strong></div><div class="flex justify-between"><span class="value-muted">Unclassified components</span><strong data-testid="purchase-unresolved">{{ report.purchaseUnresolvedComponentCount ?? 0 }} ({{ money(report.purchaseUnresolvedAmount) }})</strong></div></div><div class="card-footer">Unclassified components contribute no input GST; they are never estimated from an amount.</div></section>
   }
   @if (quality().length) { <div class="alert alert-warning"><p class="alert-title">Data quality notes</p><ul class="list-disc pl-5">@for (note of quality(); track note) {<li>{{ note }}</li>}</ul></div> }
@@ -56,11 +58,23 @@ export class GstReportComponent extends ReportPageBase<GstReport> {
    * input GST deliberately carry none: they come from this business's own records, so they stay
    * visible and exact even when no provider data exists at all. Net GST carries the combined
    * state, because it subtracts both provider figures.
+   *
+   * Taxable sales is the GST-exclusive value of the sales GST on sales was taken from; GST-free
+   * sales is the revenue of products whose GST rule says GST-free, which bears no GST; and the
+   * no-rule figure is the part of taxable sales that is taxable only because those products have no
+   * rule yet (issue #1255). The server decides all three.
    */
   cards(report: GstReport): GstCard[] {
     const provider = report.providerAvailability;
     return [
       { key: 'taxable-sales', label: 'Taxable sales', value: report.taxableSales, availability: provider?.sales },
+      { key: 'gst-free-sales', label: 'GST-free sales', value: report.gstFreeSales, availability: provider?.sales },
+      {
+        key: 'no-gst-rule-sales',
+        label: 'Sales of products with no GST rule',
+        value: report.noGstRuleSales,
+        availability: provider?.sales
+      },
       { key: 'gst-on-sales', label: 'GST on sales', value: report.gstOnSales, availability: provider?.sales },
       { key: 'taxable-fees', label: 'Taxable fees', value: report.taxableFees, availability: provider?.fees },
       { key: 'gst-on-fees', label: 'GST on fees', value: report.gstOnFees, availability: provider?.fees },

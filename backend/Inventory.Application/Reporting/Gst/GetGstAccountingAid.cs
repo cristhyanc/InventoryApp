@@ -9,7 +9,9 @@ namespace Inventory.Application.Reporting.Gst;
 
 /// <summary>
 /// The GST accounting-aid report use case: reuses the already-migrated bookkeeping report's
-/// GST-on-sales/GST-on-fees figures through <see cref="IGetBookkeepingReport"/>, retrieves the
+/// taxable/GST-free/no-rule sales split and its GST-on-sales/GST-on-fees figures through
+/// <see cref="IGetBookkeepingReport"/> (issue #1255 - one GST-on-sales rule, never a second one
+/// here), retrieves the
 /// imported-summary data-quality facts and the period's purchase GST components through the narrow
 /// <see cref="IGstReportFactsProvider"/> port, applies the Domain GST-derivation policies, and
 /// builds the authoritative <see cref="GstAccountingAidDto"/> consumed by both the API response and
@@ -20,8 +22,13 @@ namespace Inventory.Application.Reporting.Gst;
 /// <c>PurchaseGstPolicy</c>. Only resolved components reduce net GST; unclassified ones are shown
 /// as an unresolved count and amount beside a clear incomplete status, so an incomplete period is
 /// never presented as a finished BAS figure.
+///
+/// <para>Since issue #1318 the run is published twice: <see cref="Handle"/> returns the aid report,
+/// and <see cref="Compose"/> returns that same report together with the figures and conditional
+/// notes the Bookkeeping BAS summary needs beside it. The summary is a projection of this one
+/// calculation, never a second one.</para>
 /// </summary>
-public sealed class GetGstAccountingAid
+public sealed class GetGstAccountingAid : IGetGstAccountingAid
 {
     private readonly IGetBookkeepingReport _getBookkeepingReport;
     private readonly IGstReportFactsProvider _facts;
@@ -32,7 +39,10 @@ public sealed class GetGstAccountingAid
         _facts = facts;
     }
 
-    public async Task<GstAccountingAidDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken)
+    public async Task<GstAccountingAidDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken) =>
+        (await Compose(filter, cancellationToken)).Report;
+
+    public async Task<GstAccountingAidComposition> Compose(ReportingFilterDto filter, CancellationToken cancellationToken)
     {
         var bookkeeping = await _getBookkeepingReport.Handle(filter, cancellationToken);
         var machineId = filter.MachineId ?? filter.MachineID;
@@ -41,8 +51,11 @@ public sealed class GetGstAccountingAid
 
         var purchases = PurchaseInputGstPolicy.Calculate(facts.Purchases);
 
+        // The sales side comes from bookkeeping's own split by product GST rule (issue #1255), not
+        // from its gross sales: a GST-free product's revenue is neither taxable sales nor part of
+        // the figure GST on sales was taken from.
         var derived = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
-            Sales: bookkeeping.Sales,
+            TaxableSalesIncludingGst: bookkeeping.TaxableSales,
             GstOnSales: bookkeeping.GstOnSales,
             NayaxFeesExGst: bookkeeping.NayaxFeesExGst,
             GstOnFees: bookkeeping.GstOnFees,
@@ -60,7 +73,7 @@ public sealed class GetGstAccountingAid
                 $"{purchases.UnresolvedComponentCount} purchase component(s) totalling {purchases.UnresolvedAmount:0.00} have no GST classification; purchase input GST and net GST are incomplete."));
         if (isMachineFiltered)
             notes.Add("Purchase input GST is a whole-business figure and is not allocated to individual machines, so it is excluded from a machine-filtered report; net GST is incomplete.");
-        AddAvailabilityNote(notes, availability.Sales, "Taxable sales and GST on sales");
+        AddAvailabilityNote(notes, availability.Sales, "Taxable sales, GST-free sales and GST on sales");
         AddAvailabilityNote(notes, availability.Fees, "Taxable Nayax fees and the GST on them");
 
         var quality = Quality(
@@ -75,10 +88,15 @@ public sealed class GetGstAccountingAid
             containsUnmappedProducts: false,
             notes: notes);
 
-        return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
+        var report = new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
             bookkeeping.GstOnSales, derived.TaxableFees, bookkeeping.GstOnFees, derived.NetGst, quality,
+            GstFreeSales: bookkeeping.GstFreeSales,
             InventoryPurchaseGst: purchases.TotalGst)
         {
+            // The part of the taxable sales above that is taxable only because those products have
+            // no GST rule yet (issue #1255), reported on its own so the aid never presents that
+            // default as a settled classification.
+            NoGstRuleSales = bookkeeping.NoGstRuleSales,
             OperatingExpenseGst = bookkeeping.OperatingExpenseGst,
             PurchaseLineGst = purchases.LineGst,
             PurchaseChargeGst = purchases.ChargeGst,
@@ -91,6 +109,14 @@ public sealed class GetGstAccountingAid
             // combination written here.
             NetGstAvailability = availability.Combined
         };
+
+        // The BAS summary's extra inputs travel beside the report rather than inside it: they are
+        // this calculation's own facts, and the aid's published contract has no use for them.
+        return new GstAccountingAidComposition(report, notes,
+            TotalSalesIncludingGst: bookkeeping.Sales,
+            GstCredits: derived.GstCredits,
+            EstimatedFeeGst: bookkeeping.NayaxProcessingFees.EstimatedFeeGst,
+            FeeGstIncludesEstimates: bookkeeping.NayaxProcessingFees.HasEstimatedFees);
     }
 
     /// <summary>

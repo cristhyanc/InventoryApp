@@ -387,7 +387,7 @@
   *ngIf="confirmingProduct"
   title="Confirm delete"
   [message]="`Delete product '${confirmingProduct.name}'?`"
-  (confirmed)="deleteConfirmed()"
+  (confirmed)="deleteConfirmed($event)"
   (canceled)="cancelDelete()"></app-confirmation-dialog>
 
 <!--

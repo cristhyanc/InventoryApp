@@ -58,8 +58,9 @@ public class MachineStockSyncCommitFailureTests
 
         var ids = await EventIdsAsync(db);
         var store = FailsCommitFor.Product(Coke, Store(db));
+        var log = new RecordingMachineStockSyncLog();
 
-        var result = await new ApplyMachineStockSync(store).Handle(Machine, ids, CancellationToken.None);
+        var result = await Apply(db, store, log).Handle(Machine, ids, CancellationToken.None);
 
         Assert.True(store.FailedACommit, "The Coke commit was never attempted, so nothing was proved.");
         Assert.Equal(ids, result.Results.Select(r => r.EventId));
@@ -68,8 +69,21 @@ public class MachineStockSyncCommitFailureTests
         Assert.All(cokeStaged, failed =>
         {
             Assert.Equal(NayaxStockEventApplyOutcome.Error, failed.Outcome);
+
+            // A commit the database refused is not a refusal written for an operator: the message
+            // stays exactly the established generic one (issue #1240), and the reason lives in the
+            // log line below rather than in the response.
             Assert.Equal(FailedMessage, failed.Message);
             Assert.Null(failed.StockAdjustmentId);
+        });
+
+        // Logged per staged event, with the event id and the failure's type - the one record that
+        // a restock which never landed leaves behind.
+        Assert.Equal([ids[0], ids[2]], log.Failures.Select(failure => failure.EventId));
+        Assert.All(log.Failures, failure =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(failure.FailureType));
+            Assert.Null(failure.Reason);
         });
 
         // A non-writing outcome keeps what it was decided as.
@@ -102,7 +116,7 @@ public class MachineStockSyncCommitFailureTests
         }
 
         // Nothing about the Coke events is settled, so a retry applies them.
-        var retried = await new ApplyMachineStockSync(Store(db))
+        var retried = await Apply(db, Store(db), new RecordingMachineStockSyncLog())
             .Handle(Machine, [ids[0], ids[2]], CancellationToken.None);
         Assert.All(retried.Results, r => Assert.Equal(NayaxStockEventApplyOutcome.Applied, r.Outcome));
 
@@ -128,7 +142,8 @@ public class MachineStockSyncCommitFailureTests
         var store = FailsCommitFor.Product(Coke, Store(db), cancelling: cancellation);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new ApplyMachineStockSync(store).Handle(Machine, ids, cancellation.Token));
+            () => Apply(db, store, new RecordingMachineStockSyncLog())
+                .Handle(Machine, ids, cancellation.Token));
 
         await using var verify = TestAppDbContext.For(options, SellerBusinessId);
         Assert.Empty(await verify.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
@@ -150,13 +165,20 @@ public class MachineStockSyncCommitFailureTests
         var eventId = (await EventIdsAsync(db)).Single();
         var store = FailsCommitFor.Product(Coke, Store(db));
 
-        var result = await new ResolveMachineStockDuplicate(store).Handle(
+        var log = new RecordingMachineStockSyncLog();
+        var result = await new ResolveMachineStockDuplicate(store, log).Handle(
             Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
         Assert.True(store.FailedACommit, "The override's commit was never attempted, so nothing was proved.");
         Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Outcome);
         Assert.Equal(FailedMessage, result.Message);
         Assert.Null(result.StockAdjustmentId);
+
+        // The override writes the same refill as an ordinary apply, so its failure leaves the same
+        // one line (issue #1240).
+        var logged = Assert.Single(log.Failures);
+        Assert.Equal(eventId, logged.EventId);
+        Assert.Null(logged.Reason);
 
         await using (var verify = TestAppDbContext.For(options, SellerBusinessId))
         {
@@ -172,7 +194,7 @@ public class MachineStockSyncCommitFailureTests
         }
 
         // Still flagged and unresolved, so the operator can simply choose the override again.
-        var retried = await new ResolveMachineStockDuplicate(Store(db)).Handle(
+        var retried = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
             Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, retried.Outcome);
         Assert.NotNull(retried.StockAdjustmentId);
@@ -180,6 +202,15 @@ public class MachineStockSyncCommitFailureTests
 
     private static EfMachineStockEventStore Store(AppDbContext db) =>
         new(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
+
+    /// <summary>
+    /// The apply use case over <paramref name="store"/>, with the re-match of issue #1248 wired as
+    /// production wires it. Every event these fixtures seed is already matched, so no
+    /// machine-products read happens at all.
+    /// </summary>
+    private static ApplyMachineStockSync Apply(
+        AppDbContext db, IMachineStockEventStore store, IMachineStockSyncLog log) =>
+        TestMachineStockSyncUseCases.Apply(store, new EfNayaxProductLinkStore(db), log);
 
     private static async Task<List<int>> EventIdsAsync(AppDbContext db) =>
         await db.NayaxMachineStockEvents.AsNoTracking()
@@ -344,6 +375,16 @@ public class MachineStockSyncCommitFailureTests
         public Task<IReadOnlyList<MachineStockEventState>> FindEventsAsync(
             long nayaxMachineId, IReadOnlyCollection<int> eventIds, CancellationToken cancellationToken) =>
             _inner.FindEventsAsync(nayaxMachineId, eventIds, cancellationToken);
+
+        public Task<IReadOnlyList<MachineStockEventState>> FindRematchCandidatesAsync(
+            long nayaxMachineId, CancellationToken cancellationToken) =>
+            _inner.FindRematchCandidatesAsync(nayaxMachineId, cancellationToken);
+
+        public Task<int> UpdateMatchesAsync(
+            long nayaxMachineId,
+            IReadOnlyList<MachineStockEventMatchUpdate> updates,
+            CancellationToken cancellationToken) =>
+            _inner.UpdateMatchesAsync(nayaxMachineId, updates, cancellationToken);
 
         public Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken) =>
             _inner.FindStorageProductAsync(productId, cancellationToken);

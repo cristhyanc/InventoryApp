@@ -377,7 +377,11 @@ describe('ExpenseFormPageComponent refused saves (issue #1167)', () => {
     const { fixture, host, router } = await render({ id: '7', update });
     const navigate = jest.spyOn(router, 'navigate').mockResolvedValue(true);
 
+    // A negative amount is a refusal only the server makes; the three amounts are kept consistent
+    // so the form's own rule of issue #1257 does not refuse the save before it is sent.
     form(fixture).form.amountExGst = -5;
+    form(fixture).form.gstAmount = 0;
+    form(fixture).form.totalAmount = -5;
     saveWith(fixture, 'Annual policy (renewed)');
 
     expect(testId(host, 'expense-form-error')?.textContent).toContain('Amounts cannot be negative.');

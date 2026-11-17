@@ -275,15 +275,19 @@ public class NayaxHistoricalCostTests
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(
             db, TestFinancialUseCases.TrivialCalendar));
-        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(
+            db, nayaxFees, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
-            new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
+            new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
+            new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions, TestFinancialUseCases.TrivialCalendar));
-        var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db));
+        var getTransactionSalesReport = new GetTransactionSalesReport(
+            new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar));
         var getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid,
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(getGstAccountingAid), getDashboardReport,
             getTransactionSalesReport);
         var csv = Encoding.UTF8.GetString(new ReportExportFileWriter().WriteCsv(await getReportExportRows.Handle(
             "transactions",

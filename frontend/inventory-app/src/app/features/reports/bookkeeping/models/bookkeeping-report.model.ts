@@ -5,6 +5,16 @@ export interface BookkeepingReport {
   partialCostOfGoods?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number; uncostedSalesAmount?: number;
   grossProfit?: number | null; fees: number; netSettlement: number; gstOnSales: number; gstOnFees: number;
   dataQuality: ReportQuality;
+  /**
+   * The sales `gstOnSales` was taken from, by each sold product's own GST rule (issue #1255), all
+   * GST-inclusive like `sales` itself. `taxableSales` plus `gstFreeSales` is `sales`; only a product
+   * whose rule is explicitly GST-free is in `gstFreeSales`. `noGstRuleSales` is the part of
+   * `taxableSales` that is taxable only because those products have no rule yet - the default every
+   * product starts at - plus any sale whose product could not be resolved. All three are
+   * provider-sourced and governed by `providerAvailability.sales`. Optional because an older API
+   * response does not carry them.
+   */
+  taxableSales?: number; gstFreeSales?: number; noGstRuleSales?: number;
   siteCommission?: number; netProfit?: number | null; netMarginPercent?: number | null;
   directProfit?: number | null; directMarginPercent?: number | null;
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;

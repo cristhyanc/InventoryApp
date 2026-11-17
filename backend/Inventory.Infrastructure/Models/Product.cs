@@ -58,6 +58,34 @@ public class Product : IBusinessOwned
     public decimal AverageUnitCost { get; set; }
     public int? CostingQuantity { get; set; }
     public decimal? InventoryValue { get; set; }
+
+    /// <summary>
+    /// The version of the three costing values above (issue #1245). It starts at <c>0</c> and moves
+    /// on by one in the <em>same transaction</em> as every rebuilt costing position, because the one
+    /// place that stages such a position - <c>EfInventoryCostLedgerStore.StageProductPosition</c> -
+    /// moves it. Every stock write, purchase create, purchase edit, purchase delete, Take Inventory
+    /// count, refill and costing repair ends in a rebuild, so each of them moves it; a dry run
+    /// stages no position and moves nothing.
+    ///
+    /// <para><strong>Why the product needs one.</strong> The sales cost-rebuild drain replays a
+    /// product's pending rebuild <em>outside</em> the write lock and then acknowledges the claim, and
+    /// the pending row's own <c>Revision</c> only answers for work <em>another sale</em> added. A
+    /// purchase, a correction or a count committed during that replay changes the history the staged
+    /// figures were computed from while leaving that row untouched, so without this the drain would
+    /// write a costing position that leaves the newer write out until the next rebuild. The drain
+    /// records this version when it claims the product and saves nothing when it has moved since (see
+    /// <c>EfLatestNayaxSalesStore.AcknowledgeAsync</c>).</para>
+    ///
+    /// <para>A latest-movement id could not do that job: a purchase edit changes a movement's
+    /// quantity, cost or instant <em>in place</em> and adds no new one.</para>
+    ///
+    /// <para>It records nothing financial - it is a counter of rebuilds, carrying no quantity, cost
+    /// or value - and it is deliberately off the wire, like <see cref="GstRule"/>: this entity's
+    /// serialisable surface is a pinned legacy API contract, and a concurrency version is internal
+    /// bookkeeping rather than part of the catalogue payload.</para>
+    /// </summary>
+    [JsonIgnore]
+    public long CostingVersion { get; set; }
     [NotMapped]
     public decimal MachinePrice { get; set; }
     [NotMapped]

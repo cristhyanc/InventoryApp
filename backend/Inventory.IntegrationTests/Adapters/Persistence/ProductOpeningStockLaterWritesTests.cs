@@ -159,9 +159,10 @@ public sealed class ProductOpeningStockLaterWritesTests : IDisposable
                     new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                     supplierOrderCompletion: null,
                     attachmentReservation: null,
+                    idempotency: null,
                     CancellationToken.None);
 
-            Assert.Single(purchase.Items);
+            Assert.Single(purchase.Purchase.Items);
         }
 
         // Every write committed, and the product's costing position is still a known one: 20 opening

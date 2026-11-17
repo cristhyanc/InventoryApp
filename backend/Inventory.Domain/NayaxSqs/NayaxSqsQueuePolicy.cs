@@ -49,6 +49,34 @@ public static class NayaxSqsQueuePolicy
     /// </summary>
     public static TimeSpan TransientBackoffStep { get; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The wait after a failure caused by something outside this application being unavailable
+    /// (issue #1305), one step per time the message has been received.
+    ///
+    /// <para><strong>It is a schedule rather than a multiple because the two failures it has to cover
+    /// are hours apart.</strong> A blip of a few seconds - one dropped connection, one slow Nayax
+    /// call - must clear on the first retry, so the first step is under a minute. An outage that
+    /// nobody is awake for - the owner's example is a Nayax token that expired overnight - has to be
+    /// ridden out until somebody fixes it, so the later steps are hours: with the dead-letter queue's
+    /// documented <c>maxReceiveCount</c> of five, these four waits put the fifth and last attempt
+    /// 12 h 30 m 45 s after the first receive, and the fifth wait keeps the message on the main queue
+    /// for another 11 hours before AWS moves it.</para>
+    ///
+    /// <para>No step may reach <see cref="MaxVisibilityTimeoutSeconds"/>: SQS refuses a
+    /// <c>ChangeMessageVisibility</c> past its 12-hour ceiling outright, and a refused call would
+    /// leave the message on the queue's own 120-second timeout - the one outcome worse than waiting
+    /// too long. The last step is 11 hours, which leaves a message that was in flight for a while
+    /// before it failed an hour of room under that ceiling.</para>
+    /// </summary>
+    public static IReadOnlyList<TimeSpan> TransientOutageSchedule { get; } =
+    [
+        TimeSpan.FromSeconds(45),
+        TimeSpan.FromMinutes(30),
+        TimeSpan.FromHours(3),
+        TimeSpan.FromHours(9),
+        TimeSpan.FromHours(11),
+    ];
+
     /// <summary>How often the dead-letter queue's depth is read.</summary>
     public static TimeSpan DeadLetterDepthInterval { get; } = TimeSpan.FromMinutes(5);
 
@@ -89,6 +117,28 @@ public static class NayaxSqsQueuePolicy
         var backoff = TransientBackoffStep * receives;
 
         return backoff < visibilityTimeout ? backoff : visibilityTimeout;
+    }
+
+    /// <summary>
+    /// The visibility a message whose processing failed because something it needs is unavailable is
+    /// set to (issue #1305): the step <see cref="TransientOutageSchedule"/> holds for this receive
+    /// count, with a receive count past the schedule staying on its last step and one the queue did
+    /// not report treated as the first receive - the shortest wait, so a message nothing knows about
+    /// is retried promptly rather than parked for half a day.
+    ///
+    /// <para>Unlike <see cref="TransientVisibility"/> this is not bounded by the queue's visibility
+    /// timeout: a wait of two minutes is exactly what made an overnight outage end in the dead-letter
+    /// queue. It is bounded by <see cref="MaxVisibilityTimeoutSeconds"/>, which SQS itself enforces,
+    /// and the clamp is applied here as well so a future edit to the schedule cannot produce a call
+    /// AWS would refuse.</para>
+    /// </summary>
+    public static TimeSpan TransientOutageVisibility(int approximateReceiveCount)
+    {
+        var receives = Math.Max(1, approximateReceiveCount);
+        var step = TransientOutageSchedule[Math.Min(receives, TransientOutageSchedule.Count) - 1];
+        var ceiling = TimeSpan.FromSeconds(MaxVisibilityTimeoutSeconds);
+
+        return step < ceiling ? step : ceiling;
     }
 
     /// <summary>

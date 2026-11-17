@@ -97,6 +97,7 @@ public class CostLedgerFingerprintTests
         ]));
         Assert.NotEqual(baseline, Compute(sales: [new CostReplaySale(101, T0.AddMinutes(1))]));
         Assert.NotEqual(baseline, Compute(sales: [new CostReplaySale(100, T0.AddMinutes(9))]));
+        Assert.NotEqual(baseline, Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1), 1.25m)]));
         Assert.NotEqual(baseline, Compute(sales: []));
         Assert.NotEqual(baseline, Compute(repairs: [new CostReplayRepair(2, T0.AddMinutes(2), 3, 1.5m)]));
         Assert.NotEqual(baseline, Compute(repairs: [new CostReplayRepair(1, T0.AddMinutes(3), 3, 1.5m)]));
@@ -108,6 +109,25 @@ public class CostLedgerFingerprintTests
         Assert.NotEqual(baseline, Compute(baseline: new CostReplayBaseline(T0, 2, 2, 3m)));
         Assert.NotEqual(baseline, Compute(baseline: new CostReplayBaseline(T0, 1, 3, 3m)));
         Assert.NotEqual(baseline, Compute(baseline: new CostReplayBaseline(T0, 1, 2, 4m)));
+    }
+
+    /// <summary>
+    /// Issue #1261: the sale's transaction-level Nayax <c>Product Cost Price</c> is a replay input -
+    /// since issue #1176 the replay costs a sale from it when the ledger has no known cost before it -
+    /// so a correction to that cost between the preview and the apply has to invalidate the preview
+    /// exactly as a new sale does. Two different Nayax costs are two different ledgers; the same cost
+    /// stored at a different scale, and the absence of one, are not.
+    /// </summary>
+    [Fact]
+    public void A_sales_Nayax_cost_is_a_replay_input_and_changes_the_fingerprint()
+    {
+        var withoutCost = Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1))]);
+        var withCost = Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1), 1.25m)]);
+
+        Assert.NotEqual(withoutCost, withCost);
+        Assert.NotEqual(withCost, Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1), 1.30m)]));
+        Assert.Equal(withCost, Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1), 1.250000m)]));
+        Assert.Equal(withoutCost, Compute(sales: [new CostReplaySale(100, T0.AddMinutes(1), null)]));
     }
 
     /// <summary>

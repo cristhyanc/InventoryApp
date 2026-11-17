@@ -51,4 +51,21 @@ public interface IRebuildProductCost
         DateTime saleTime,
         long? saleTransactionId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The unit cost of the latest costed purchase (a positive <c>Restock</c> with a valid unit cost)
+    /// replayed before the given sale - historical sale-cost precedence step 2 - or <c>null</c> when
+    /// no such purchase precedes it, the product does not exist, or its history up to then has a
+    /// fatal data-quality issue.
+    ///
+    /// <para>It is the same replay <see cref="GetAverageUnitCostAtAsync"/> runs, reporting the other
+    /// value that replay already computes, and it exists for the forced sale-cost backfill (issue
+    /// #1261): that tool applies the complete precedence because no rebuild runs inside its own
+    /// transaction to apply step 2 for it.</para>
+    /// </summary>
+    Task<decimal?> GetLatestPurchaseUnitCostBeforeAsync(
+        long productId,
+        DateTime saleTime,
+        long? saleTransactionId = null,
+        CancellationToken cancellationToken = default);
 }

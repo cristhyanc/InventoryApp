@@ -64,11 +64,46 @@ permission denial in a workflow file, or a distinguishing piece of code is caugh
 | --- | --- | --- |
 | `repoFileContains` | `file` (repo-relative path), `text` (substring) | `file` must contain `text`. |
 | `repoFileNotContains` | `file`, `text` | `file` must **not** contain `text`. |
+| `testExists` | `file` (repo-relative path), `test` (test/method name) | `file` must declare a test named `test`. See below. |
 | `requiresModelEvaluation` | none | The case genuinely requires reasoning about a specific scenario, not just checking that a policy sentence still exists. It must be the only assertion in the case. The deterministic runner marks it `SKIPPED` (excluded from the pass rate) rather than grading it. |
 
 `file` must exist in the repository; the runner rejects a case that points at a missing file
 before running anything, so a case can never silently stop checking what it claims to check
 because the referenced file was renamed.
+
+**`repoFileContains`/`repoFileNotContains` prove wording only; `testExists` proves a test is
+declared, not that it is correct.** A `repoFileContains` assertion passes as long as a guardrail
+sentence is still present in `AGENTS.md`, `docs/`, or a source file — the wording can be true while
+the code it describes is broken, which is exactly what audit #1230 found for the time and costing
+cases (TQ-06). `testExists` closes one gap in that: it fails when the named test's *file* was
+removed or the test itself was deleted or renamed, so a case naming a real behavioural test cannot
+drift silently out of coverage. It still proves only that the test is **declared** — not that its
+assertions are correct, not that it actually exercises the rule, and not that it still passes
+(`run-agent-evals.mjs` never executes `dotnet test`/Jest; that is `scripts/validate.sh`'s job). The
+case file's own `policyReferences`/`expectedBehavior` and the pull request that added the
+`testExists` assertion are what state *why* the named test enforces the rule; the assertion itself
+only answers "does this test still exist".
+
+A `testExists` assertion recognises two test shapes, chosen by `file`'s extension:
+
+- A `.cs` file: an xUnit test method named `test`, with a `[Fact]` or `[Theory]` attribute among
+  the attributes directly above it on their own lines (other attributes such as `[InlineData]`,
+  `[MemberData]`, or `[Trait]` may sit in between — only another `[Fact]`/`[Theory]`-free run of
+  attributes needs to end before the method line for the match to require a fresh one). Comments
+  are stripped before matching, so a method name that appears only in a `//`/`///` comment or a
+  `/* */` block does not count.
+- Any other file (for example `.ts`): a real Jest/node `it(` or `test(` call whose **complete**
+  first argument is a string literal (`'…'`, `"…"` or a plain `` `…` ``) whose text is exactly
+  `test`. The file is scanned as code, so comments and string literals are skipped: a
+  commented-out call, or a test-shaped string such as ``const sample = `test("x", () => {});` ``,
+  does not count. A computed title does not count either — `test('a' + 'b', …)` declares neither
+  `a` nor `a b`, because the literal `'a'` is not the whole argument and `'a b'` never appears.
+  Only the bare `it(`/`test(` form is recognised: a modified call (`it.only(`, `it.skip(`,
+  `it.each(`) or a title built at runtime has to be named by a different, literal test.
+
+A missing file, or a file that no longer declares that exact test (deleted or renamed), fails the
+case and names which. An unrecognised shape fails the same way, so the assertion errs towards
+failing loudly rather than vouching for a test it did not actually find.
 
 ## Running the deterministic runner
 

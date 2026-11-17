@@ -6,6 +6,18 @@ using SiteCommissionAgreementEntity = Inventory.Infrastructure.Models.SiteCommis
 
 namespace Inventory.Infrastructure.Persistence;
 
+/// <summary>
+/// The EF Core implementation of <see cref="ISiteCommissionStore"/>.
+///
+/// <para>Both agreement writes run inside <see cref="SqliteWriteLockTransaction"/>
+/// (<c>BEGIN IMMEDIATE</c>), opened by the use case before the read that decides the write
+/// (issue #1254). <see cref="AddAgreementAsync"/> and <see cref="SetAgreementEndDateAsync"/>
+/// therefore save inside that transaction and do not commit it.</para>
+///
+/// <para>Every statement here is an ordinary filtered tenant-owned read or write: the agreement a
+/// route value names is found only while the caller's own business holds it, through the central
+/// query filter rather than a <c>Where</c> clause of this adapter's own.</para>
+/// </summary>
 public sealed class EfSiteCommissionStore : ISiteCommissionStore
 {
     private readonly AppDbContext _db;
@@ -14,6 +26,10 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
     {
         _db = db;
     }
+
+    /// <inheritdoc />
+    public async Task<ISiteCommissionWriteTransaction> BeginWriteTransactionAsync(CancellationToken cancellationToken) =>
+        new WriteTransaction(await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken).ConfigureAwait(false));
 
     public async Task<IReadOnlyList<SiteCommissionSaleFact>> GetCompletedSalesAsync(
         IReadOnlyCollection<long> machineIds,
@@ -43,22 +59,6 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
         .Select(ToDomain)
         .ToList();
 
-    public async Task<IReadOnlyList<CommissionPayment>> GetPaymentsAsync(
-        long? siteId,
-        DateTime periodStart,
-        DateTime periodEnd,
-        CancellationToken cancellationToken) =>
-        (await _db.CommissionPayments.AsNoTracking()
-            .Where(payment =>
-                (!siteId.HasValue || payment.SiteId == siteId.Value) &&
-                payment.PeriodStart == periodStart &&
-                payment.PeriodEnd == periodEnd)
-            .OrderBy(payment => payment.PaymentDate)
-            .ThenBy(payment => payment.Id)
-            .ToListAsync(cancellationToken))
-        .Select(ToDomain)
-        .ToList();
-
     public Task<bool> HasOverlappingAgreementAsync(
         long siteId,
         DateTime effectiveFrom,
@@ -69,6 +69,32 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
             agreement.EffectiveFrom <= (effectiveTo ?? DateTime.MaxValue) &&
             (agreement.EffectiveTo ?? DateTime.MaxValue) >= effectiveFrom,
             cancellationToken);
+
+    public async Task<CommissionAgreement?> FindAgreementAsync(
+        int agreementId,
+        CancellationToken cancellationToken)
+    {
+        var entity = await _db.SiteCommissionAgreements.AsNoTracking()
+            .FirstOrDefaultAsync(agreement => agreement.Id == agreementId, cancellationToken);
+        return entity is null ? null : ToDomain(entity);
+    }
+
+    public async Task<CommissionAgreement> SetAgreementEndDateAsync(
+        int agreementId,
+        DateTime endDate,
+        DateTime occurredAtUtc,
+        CancellationToken cancellationToken)
+    {
+        // Tracked, because this is the write: the row is loaded through the same tenant filter the
+        // lookup above uses, so an agreement of another business is not here to be updated.
+        var entity = await _db.SiteCommissionAgreements
+            .FirstAsync(agreement => agreement.Id == agreementId, cancellationToken);
+
+        entity.EffectiveTo = endDate;
+        entity.UpdatedAt = occurredAtUtc;
+        await _db.SaveChangesAsync(cancellationToken);
+        return ToDomain(entity);
+    }
 
     public async Task<CommissionAgreement> AddAgreementAsync(
         CommissionAgreement agreement,
@@ -89,22 +115,20 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
         return ToDomain(entity);
     }
 
-    public async Task<CommissionPayment> AddPaymentAsync(
-        CommissionPayment payment,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// The Application-facing handle over <see cref="SqliteWriteLockTransaction"/>, so the use case
+    /// owns the commit without Application referencing Infrastructure.
+    /// </summary>
+    private sealed class WriteTransaction : ISiteCommissionWriteTransaction
     {
-        var entity = new Inventory.Infrastructure.Models.CommissionPayment
-        {
-            SiteId = payment.SiteId,
-            PeriodStart = payment.PeriodStart,
-            PeriodEnd = payment.PeriodEnd,
-            PaymentDate = payment.PaymentDate,
-            Amount = payment.Amount,
-            Notes = payment.Notes
-        };
-        _db.CommissionPayments.Add(entity);
-        await _db.SaveChangesAsync(cancellationToken);
-        return ToDomain(entity);
+        private readonly SqliteWriteLockTransaction _transaction;
+
+        public WriteTransaction(SqliteWriteLockTransaction transaction) => _transaction = transaction;
+
+        public Task CommitAsync(CancellationToken cancellationToken) =>
+            _transaction.CommitAsync(cancellationToken);
+
+        public ValueTask DisposeAsync() => _transaction.DisposeAsync();
     }
 
     private static CommissionAgreement ToDomain(SiteCommissionAgreementEntity entity) =>
@@ -117,18 +141,6 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
             entity.Frequency,
             entity.Basis,
             entity.PaymentDueDaysAfterPeriodEnd,
-            entity.CreatedAt,
-            entity.UpdatedAt);
-
-    private static CommissionPayment ToDomain(Inventory.Infrastructure.Models.CommissionPayment entity) =>
-        new(
-            entity.Id,
-            entity.SiteId,
-            entity.PeriodStart,
-            entity.PeriodEnd,
-            entity.PaymentDate,
-            entity.Amount,
-            entity.Notes,
             entity.CreatedAt,
             entity.UpdatedAt);
 }

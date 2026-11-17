@@ -59,7 +59,7 @@ public class DailyReportSydneyBusinessDayTests
         Assert.Equal(3.5m, day.GrossSales);
         Assert.Empty(sundayFacts.Days);
 
-        var transactions = await new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db))
+        var transactions = await new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, Sydney))
             .Handle(new TransactionSalesFilterDto(From: sunday, To: monday), CancellationToken.None);
         var transaction = Assert.Single(transactions.Rows);
         Assert.Equal(monday, Sydney.ToBusinessDate(transaction.TransactionDate));

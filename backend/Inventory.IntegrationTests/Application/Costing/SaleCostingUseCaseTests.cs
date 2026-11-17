@@ -99,6 +99,47 @@ public class SaleCostingUseCaseTests
             It.IsAny<long>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// The sale-time path still goes straight from step 1 to step 3 (<c>AGENTS.md</c> § Inventory and
+    /// historical costing invariants): the inventory-cost rebuild that follows a stored sale replays
+    /// step 2 straight afterwards, so asking for the latest costed purchase here would be a second
+    /// answer to a question the rebuild already answers. Only a forced backfill, which has no such
+    /// rebuild inside its transaction, asks for the complete precedence (issue #1261).
+    /// </summary>
+    [Fact]
+    public async Task The_sale_time_path_does_not_apply_the_latest_purchase_step()
+    {
+        var store = new FakeStore();
+        var rebuild = LedgerCost(10, null, latestPurchase: 1.60m);
+        var sale = Sale(1, productId: 10, nayaxCost: 1.10m);
+
+        var cost = await new CostSale(store, rebuild.Object).Handle(sale);
+
+        Assert.Equal(new SaleCostAssignment(1.10m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), cost);
+        rebuild.Verify(x => x.GetLatestPurchaseUnitCostBeforeAsync(
+            It.IsAny<long>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// And at or before the transition cutoff neither ledger step applies: the baseline is the
+    /// opening and the replay ignores everything there, so a forced backfill reads no purchase
+    /// before the sale either and falls to the sale's own Nayax cost.
+    /// </summary>
+    [Fact]
+    public async Task A_sale_at_or_before_the_transition_cutoff_reads_neither_ledger_step()
+    {
+        var store = new FakeStore { Cutoffs = { [10] = SaleAt } };
+        var rebuild = LedgerCost(10, 1.50m, latestPurchase: 1.60m);
+        var sale = Sale(1, productId: 10, nayaxCost: 1.10m);
+
+        var cost = await new CostSale(store, rebuild.Object).Handle(
+            sale, force: true, SaleCostPrecedenceScope.Complete);
+
+        Assert.Equal(new SaleCostAssignment(1.10m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), cost);
+        rebuild.Verify(x => x.GetLatestPurchaseUnitCostBeforeAsync(
+            It.IsAny<long>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task A_sale_at_or_before_the_transition_cutoff_is_not_costed_from_the_ledger()
     {
@@ -303,8 +344,14 @@ public class SaleCostingUseCaseTests
         Assert.Equal(new SaleCostAssignment(1.20m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), store.Staged[2]);
     }
 
+    /// <summary>
+    /// The stored cost here has no recorded provenance, which is precedence step 4 - the weakest
+    /// claim there is - so the Nayax export cost (step 3) is an improvement and is written. Since
+    /// issue #1261 that is the whole of what <c>force</c> may do to a costed sale: improve its
+    /// precedence, or correct a cost of the same provenance.
+    /// </summary>
     [Fact]
-    public async Task Forced_historical_backfill_replaces_a_final_cost_with_the_Nayax_export_cost()
+    public async Task Forced_historical_backfill_replaces_a_final_cost_of_unknown_provenance()
     {
         var store = new FakeStore
         {
@@ -315,6 +362,147 @@ public class SaleCostingUseCaseTests
 
         Assert.Equal(1, result.SalesWouldBeCosted);
         Assert.Equal(new SaleCostAssignment(1.30m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), store.Staged[5]);
+    }
+
+    /// <summary>
+    /// Issue #1261, the defect: <c>force</c> used to mean "overwrite", so this tool wrote the
+    /// transaction-level Nayax cost (precedence step 3) over a sale costed from the inventory ledger
+    /// (step 1) or from the latest costed purchase before it (step 2) - replacing a better cost with
+    /// a worse one, in the business's own historical COGS. It now fills only a sale no better step
+    /// has costed.
+    /// </summary>
+    [Theory]
+    [InlineData(SaleCostOrigin.InventoryLedger)]
+    [InlineData(SaleCostOrigin.Estimated)]
+    public async Task A_forced_historical_backfill_leaves_a_better_sourced_cost_alone(SaleCostOrigin source)
+    {
+        var store = new FakeStore
+        {
+            Sales =
+            {
+                Sale(1, productId: 10, nayaxCost: 1.30m, unitCost: 0.90m, status: SaleCostStatus.Costed, source: source),
+                Sale(2, productId: 10, nayaxCost: 1.40m),
+            },
+        };
+
+        var result = await new BackfillNayaxHistoricalSaleCosts(store).Handle(dryRun: false, force: true);
+
+        Assert.Equal(1, result.SalesWouldBeCosted);
+        Assert.Equal(1, result.SalesAlreadyCosted);
+        Assert.Equal([2L], store.Staged.Keys);
+        Assert.Equal(new SaleCostAssignment(1.40m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), store.Staged[2]);
+    }
+
+    /// <summary>
+    /// Equal precedence is the one case where the value decides: a corrected Nayax export cost is
+    /// written, and the same cost re-read is not - so a repeated forced run stages nothing and
+    /// enqueues no rebuild.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_historical_backfill_rewrites_an_equal_source_cost_only_when_it_differs()
+    {
+        var store = new FakeStore
+        {
+            Sales =
+            {
+                Sale(1, productId: 10, nayaxCost: 1.30m, unitCost: 1.30m, status: SaleCostStatus.Costed,
+                    source: SaleCostOrigin.NayaxTransactionExport),
+                Sale(2, productId: 10, nayaxCost: 1.45m, unitCost: 1.30m, status: SaleCostStatus.Costed,
+                    source: SaleCostOrigin.NayaxTransactionExport),
+            },
+        };
+
+        var result = await new BackfillNayaxHistoricalSaleCosts(store).Handle(dryRun: false, force: true);
+
+        Assert.Equal(1, result.SalesWouldBeCosted);
+        Assert.Equal([2L], store.Staged.Keys);
+        Assert.Equal(new SaleCostAssignment(1.45m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), store.Staged[2]);
+    }
+
+    /// <summary>
+    /// Issue #1261: a forced ledger backfill applies the complete four-step precedence. The sale's
+    /// product has no ledger cost before it, but a costed purchase was replayed earlier, so the sale
+    /// takes that purchase's unit cost as <see cref="SaleCostOrigin.Estimated"/> (step 2) instead of
+    /// falling through to its own Nayax cost (step 3) - which is what the sale-time path did, and
+    /// what made this tool downgrade a step-2 estimate it re-costed.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_backfill_costs_a_sale_from_the_latest_purchase_before_its_Nayax_cost()
+    {
+        var store = new FakeStore { Sales = { Sale(1, productId: 10, nayaxCost: 1.10m) } };
+        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, null, latestPurchase: 1.60m).Object));
+
+        var result = await backfill.Handle(dryRun: false, force: true);
+
+        Assert.Equal(new SaleCostingBackfillResult(1, 0, 0, 0, 0, false), result);
+        Assert.Equal(new SaleCostAssignment(1.60m, SaleCostStatus.Costed, SaleCostOrigin.Estimated), store.Staged[1]);
+    }
+
+    /// <summary>
+    /// And with step 2 applied, a sale already costed from the latest purchase is re-costed to the
+    /// same estimate, so nothing is staged: the backfill no longer rewrites it at the Nayax cost.
+    /// A ledger-costed sale is left alone the same way, and only the uncosted sale is filled.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_backfill_never_replaces_a_better_sourced_cost()
+    {
+        var store = new FakeStore
+        {
+            Sales =
+            {
+                Sale(1, productId: 10, nayaxCost: 1.10m, unitCost: 1.60m, status: SaleCostStatus.Costed,
+                    source: SaleCostOrigin.Estimated),
+                Sale(2, productId: 10, nayaxCost: 1.10m, unitCost: 2.50m, status: SaleCostStatus.Costed,
+                    source: SaleCostOrigin.InventoryLedger),
+                Sale(3, productId: 10, nayaxCost: 1.10m),
+            },
+        };
+        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, null, latestPurchase: 1.60m).Object));
+
+        var result = await backfill.Handle(dryRun: false, force: true);
+
+        Assert.Equal(new SaleCostingBackfillResult(1, 0, 0, 0, 2, false), result);
+        Assert.Equal([3L], store.Staged.Keys);
+        Assert.Equal(new SaleCostAssignment(1.60m, SaleCostStatus.Costed, SaleCostOrigin.Estimated), store.Staged[3]);
+    }
+
+    /// <summary>
+    /// A sale no step can cost is left exactly as it is - no staged write and no cost rebuild asked
+    /// for - and is still reported as pending rather than as finalized: the run changed nothing
+    /// about it, which is not the same as having costed it.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_backfill_stages_nothing_for_a_sale_it_leaves_unchanged()
+    {
+        var store = new FakeStore { Sales = { Sale(1, productId: 10, nayaxCost: null) } };
+        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, null).Object));
+
+        var result = await backfill.Handle(dryRun: false, force: true);
+
+        Assert.Equal(new SaleCostingBackfillResult(0, 0, 1, 0, 0, false), result);
+        Assert.Empty(store.Staged);
+    }
+
+    /// <summary>
+    /// A corrected ledger cost is equal precedence with a different value, so it is written: the
+    /// precedence gate protects a better source, not a stale number.
+    /// </summary>
+    [Fact]
+    public async Task A_forced_backfill_rewrites_a_ledger_cost_that_changed()
+    {
+        var store = new FakeStore
+        {
+            Sales =
+            {
+                Sale(1, productId: 10, nayaxCost: 1.10m, unitCost: 2.50m, status: SaleCostStatus.Costed,
+                    source: SaleCostOrigin.InventoryLedger),
+            },
+        };
+        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, 2.75m).Object));
+
+        await backfill.Handle(dryRun: false, force: true);
+
+        Assert.Equal(new SaleCostAssignment(2.75m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), store.Staged[1]);
     }
 
     [Fact]
@@ -366,12 +554,15 @@ public class SaleCostingUseCaseTests
         nayax.VerifyNoOtherCalls();
     }
 
-    private static Mock<IRebuildProductCost> LedgerCost(long productId, decimal? cost)
+    private static Mock<IRebuildProductCost> LedgerCost(long productId, decimal? cost, decimal? latestPurchase = null)
     {
         var rebuild = new Mock<IRebuildProductCost>();
         rebuild.Setup(x => x.GetAverageUnitCostAtAsync(
                 productId, It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cost);
+        rebuild.Setup(x => x.GetLatestPurchaseUnitCostBeforeAsync(
+                productId, It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(latestPurchase);
         return rebuild;
     }
 
@@ -383,7 +574,8 @@ public class SaleCostingUseCaseTests
         SaleCostStatus status = SaleCostStatus.Pending,
         string? productName = "Snack",
         int? transactionStatusId = NayaxTransactionStatusIds.Completed,
-        NayaxSqsVerification? sqsVerification = null) =>
+        NayaxSqsVerification? sqsVerification = null,
+        SaleCostOrigin source = SaleCostOrigin.Unknown) =>
         new()
         {
             TransactionId = transactionId,
@@ -399,6 +591,7 @@ public class SaleCostingUseCaseTests
             UnitCostAtSale = unitCost,
             CostOfGoodsSold = unitCost,
             CostingStatus = status,
+            CostSource = source,
         };
 
     private sealed class FakeStore : ISaleCostingStore
@@ -425,10 +618,10 @@ public class SaleCostingUseCaseTests
 
         public void StageCost(CostableSale sale, SaleCostAssignment cost) => Staged[sale.TransactionId] = cost;
 
-        public Task SaveChangesAsync(CancellationToken cancellationToken)
+        public Task<SaleCostSaveOutcome> SaveChangesAsync(CancellationToken cancellationToken)
         {
             SaveCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(SaleCostSaveOutcome.NothingRefused);
         }
     }
 }

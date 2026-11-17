@@ -13,8 +13,9 @@ import { ReimbursementReportUploadComponent } from './reimbursement-report-uploa
  * <p>Uploading the ZIP Nayax emails is #1149's own workflow - accepted in seconds, imported in the
  * background, followed through the job status endpoints - and it does not belong as a fourth card on
  * Admin &rarr; Imports beside the Nayax sales upload. #888 set the precedent with
- * `/products/import`, and this is the same move: the Imports page keeps a short card that links
- * here, and the Nayax sales upload and the sale timestamp repair are untouched.</p>
+ * `/products/import`, and this is the same move. The Imports page no longer links here (owner's
+ * request, 17 November 2026): the page is reached from its own sidebar entry, directly after
+ * Imports, and the Nayax sales upload is untouched.</p>
  *
  * <p>Per docs/architecture.md &sect; Page composition boundary this page is the composition
  * boundary: the upload (its own file, request and refusal) and the recent uploads list (its own

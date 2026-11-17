@@ -20,18 +20,28 @@ internal static class TestCostingUseCases
     public static RecordInventoryMovement RecordMovement(AppDbContext db) =>
         new(new EfInventoryMovementStore(db));
 
+    /// <summary>
+    /// The sale-costing store (issue #297), on the system clock unless one is given. The clock is
+    /// what stamps the pending inventory-cost rebuild a staged cost records (issue #1261).
+    /// </summary>
+    public static EfSaleCostingStore SaleCostingStore(AppDbContext db, IClock? clock = null) =>
+        new(db, clock ?? new SystemClock());
+
     /// <summary>The sale-costing use case (issue #297), with the ledger rebuild over <paramref name="db"/> unless one is given.</summary>
-    public static CostSale CostSale(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfSaleCostingStore(db), rebuild ?? Rebuild(db));
+    public static CostSale CostSale(AppDbContext db, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
+        new(SaleCostingStore(db, clock), rebuild ?? Rebuild(db));
 
-    public static CostPendingSales CostPendingSales(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfSaleCostingStore(db), CostSale(db, rebuild));
+    public static CostPendingSales CostPendingSales(
+        AppDbContext db, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
+        new(SaleCostingStore(db, clock), CostSale(db, rebuild, clock));
 
-    public static BackfillSaleCosts BackfillSaleCosts(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfSaleCostingStore(db), CostSale(db, rebuild));
+    public static BackfillSaleCosts BackfillSaleCosts(
+        AppDbContext db, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
+        new(SaleCostingStore(db, clock), CostSale(db, rebuild, clock));
 
-    public static BackfillNayaxHistoricalSaleCosts BackfillNayaxHistoricalSaleCosts(AppDbContext db) =>
-        new(new EfSaleCostingStore(db));
+    public static BackfillNayaxHistoricalSaleCosts BackfillNayaxHistoricalSaleCosts(
+        AppDbContext db, IClock? clock = null) =>
+        new(SaleCostingStore(db, clock));
 
     /// <summary>
     /// The inventory-cost transition use cases (issue #298), on the system clock unless one is

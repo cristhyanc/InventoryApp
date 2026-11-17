@@ -261,6 +261,53 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
     });
   });
 
+  describe('GST from rules (issue #1348)', () => {
+    it('reports a chosen line product for the page to pre-fill its GST', async () => {
+      const line = newLine();
+      await render({ items: [line] });
+      const changed: PurchaseFormLine[] = [];
+      component.lineProductChange.subscribe((item) => changed.push(item));
+
+      const box = byTestId('purchase-item-product') as HTMLInputElement;
+      box.value = 'coke';
+      box.dispatchEvent(new Event('input'));
+      refresh();
+      host.querySelector<HTMLElement>('[data-testid="purchase-product-option"]')!.click();
+      refresh();
+
+      expect(changed).toEqual([line]);
+    });
+
+    it('says where a pre-filled line GST came from until the person picks one', async () => {
+      const line = pricedLine({ gstClassification: GstClassification.Taxable, gstRuleSource: 'product' });
+      await render({ items: [line] });
+
+      expect(byTestId('purchase-item-gst-hint')?.textContent?.trim()).toBe('From product');
+
+      const select = byTestId('purchase-item-gst') as HTMLSelectElement;
+      select.value = select.options[2].value;
+      select.dispatchEvent(new Event('change'));
+      refresh();
+
+      expect(line.gstChosen).toBe(true);
+      expect(line.gstRuleSource).toBeUndefined();
+      expect(byTestId('purchase-item-gst-hint')).toBeNull();
+    });
+
+    it('records a picked delivery GST as the person\'s choice', async () => {
+      const form = emptyForm({ deliveryCost: 5 });
+      await render({ items: [pricedLine()], form });
+
+      const select = byTestId('delivery-gst') as HTMLSelectElement;
+      select.value = select.options[1].value;
+      select.dispatchEvent(new Event('change'));
+      refresh();
+
+      expect(form.deliveryGstChosen).toBe(true);
+      expect(form.deliveryGstClassification).toBe(GstClassification.Taxable);
+    });
+  });
+
   it('keeps the price and GST explanations in help buttons beside the column headings', async () => {
     await render({ items: [pricedLine()] });
 

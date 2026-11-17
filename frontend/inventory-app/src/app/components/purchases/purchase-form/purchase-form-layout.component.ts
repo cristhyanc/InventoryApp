@@ -42,15 +42,33 @@ export interface PurchaseFormFields {
   deliveryGstClassification: GstClassification;
   packageCost: number | null;
   packageGstClassification: GstClassification;
+  /**
+   * Whether a person picked the delivery or package GST (issue #1348). Add Purchase pre-fills an
+   * unpicked charge from the supplier's fee default and leaves it out of the request, so the server
+   * applies that default and records where it came from; a picked one is submitted as chosen.
+   */
+  deliveryGstChosen?: boolean;
+  packageGstChosen?: boolean;
   purchaseDate: string;
   supplierId: number | '';
 }
+
+/** Where Add Purchase took a line's pre-filled GST from (issue #1348). */
+export type PurchaseLineGstRuleSource = 'product' | 'supplier';
 
 /** One line as both forms hold it; `id` is set only on a line the saved purchase already has. */
 export interface PurchaseFormLine extends PurchaseLinePrice {
   id?: number;
   productId: number;
   gstClassification: GstClassification;
+
+  /**
+   * Whether a person picked this line's GST (issue #1348). Until they do, Add Purchase may pre-fill
+   * it from the product's GST rule or the supplier's default (`gstRuleSource` says which) and leaves
+   * it out of the request, so the server applies the same rule and records its provenance.
+   */
+  gstChosen?: boolean;
+  gstRuleSource?: PurchaseLineGstRuleSource;
 
   /**
    * What a scanned receipt said about this line (issue #1166), and `undefined` on every line a
@@ -149,6 +167,14 @@ export class PurchaseFormLayoutComponent implements OnChanges {
    */
   @Input() gstSummary: PurchaseGstSummary | null = null;
 
+  /**
+   * The "this looks like a purchase you already recorded" sentence (issue #1247), or `null` when
+   * there is nothing to warn about. It is shown and never acted on: Save stays exactly as it is,
+   * because a supplier may reuse an invoice number and a business may legitimately record the same
+   * document twice. Only Add Purchase passes one; duplicate checks on an edit are out of scope.
+   */
+  @Input() duplicateWarning: string | null = null;
+
   @Output() readonly submitted = new EventEmitter<void>();
   @Output() readonly cancelled = new EventEmitter<void>();
   @Output() readonly addLine = new EventEmitter<void>();
@@ -159,11 +185,24 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   /** The person chose to save the purchase without the receipt the storage allowance refused. */
   @Output() readonly saveWithoutReceipt = new EventEmitter<void>();
 
+  /**
+   * A line's product changed (issue #1348), so Add Purchase can pre-fill its GST from that
+   * product's rule. Edit ignores it: an edit never applies a rule.
+   */
+  @Output() readonly lineProductChange = new EventEmitter<PurchaseFormLine>();
+
   /** The supplier or the purchase date changed, which is what a suggested title is made from. */
   @Output() readonly detailsChange = new EventEmitter<void>();
 
   /** The person typed in the title, so a suggested one must never replace it again. */
   @Output() readonly titleEdited = new EventEmitter<void>();
+
+  /**
+   * The invoice number has been entered and the field left (issue #1247). It is a separate output
+   * from {@link detailsChange} because the invoice number is no part of a suggested title, and it
+   * fires on blur rather than per keystroke so a half-typed number asks the server nothing.
+   */
+  @Output() readonly invoiceNumberEntered = new EventEmitter<void>();
 
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
   readonly missingProductMessage = MISSING_PRODUCT_MESSAGE;
@@ -319,6 +358,35 @@ export class PurchaseFormLayoutComponent implements OnChanges {
     // that is the one change issue #1166 asks for, and it puts the line into the purchase.
     if (productId && item.scan?.skipped) {
       item.scan.skipped = false;
+    }
+    this.lineProductChange.emit(item);
+  }
+
+  /** The person picked this line's GST, which no rule may replace from now on (issue #1348). */
+  onLineGstChange(item: PurchaseFormLine, classification: GstClassification): void {
+    item.gstClassification = classification;
+    item.gstChosen = true;
+    item.gstRuleSource = undefined;
+  }
+
+  /** The person picked a charge's GST, which no supplier default may replace from now on. */
+  onChargeGstChange(charge: 'delivery' | 'package', classification: GstClassification): void {
+    if (charge === 'delivery') {
+      this.form.deliveryGstClassification = classification;
+      this.form.deliveryGstChosen = true;
+    } else {
+      this.form.packageGstClassification = classification;
+      this.form.packageGstChosen = true;
+    }
+  }
+
+  /** The short note under a pre-filled line's GST picker, or `null` when a person picked it. */
+  gstRuleHint(item: PurchaseFormLine): string | null {
+    if (item.gstChosen) return null;
+    switch (item.gstRuleSource) {
+      case 'product': return 'From product';
+      case 'supplier': return 'Supplier default';
+      default: return null;
     }
   }
 

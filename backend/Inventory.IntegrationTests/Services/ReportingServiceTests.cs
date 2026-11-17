@@ -4,6 +4,7 @@ using Inventory.Application;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Sites;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -30,7 +31,6 @@ using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;
-using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -89,13 +89,16 @@ public class ReportingRegressionTests
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(
             db, TestFinancialUseCases.TrivialCalendar));
-        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(
+            db, nayaxFees, siteCommissions, TestFinancialUseCases.TrivialCalendar));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
-            new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
+            new EfProductProfitabilityReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar),
+            new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions, TestFinancialUseCases.TrivialCalendar));
-        var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
+        var getTransactionSalesReport = new GetTransactionSalesReport(
+            new EfTransactionSalesReportFactsProvider(db, TestFinancialUseCases.TrivialCalendar, nayaxLynxClient));
         return new ReportingHarness(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
             getTransactionSalesReport);
@@ -132,7 +135,8 @@ public class ReportingRegressionTests
             _getDashboardReport = getDashboardReport;
             _getTransactionSalesReport = getTransactionSalesReport;
             _getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
-                getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+                getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid,
+                InventoryApi.Tests.Application.Reporting.Gst.FakeGstRegistrationStore.BasSummary(getGstAccountingAid), getDashboardReport,
                 getTransactionSalesReport);
         }
 
@@ -309,7 +313,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow)));
+        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax));
         var filter = new ReportingFilterDto(new DateTime(2025, 7, 15), new DateTime(2025, 7, 15));
 
         var bookkeeping = await service.GetBookkeepingAsync(filter);
@@ -346,7 +350,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow)));
+        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax));
         var report = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15)));
 
@@ -370,7 +374,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow))).GetBookkeepingAsync(
+        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax)).GetBookkeepingAsync(
             new ReportingFilterDto(new DateTime(2025, 6, 1), new DateTime(2025, 7, 31)));
 
         Assert.Equal(2.20m, report.SiteCommission);
@@ -407,6 +411,16 @@ public class ReportingRegressionTests
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+        // IAuthenticatedActorAccessor is implemented at the InventoryApi boundary (claims parsing
+        // stays there), so a host that composes this graph owes it - exactly as it owes the
+        // per-request business time zone above. The export graph needs it since issue #1318: the
+        // bookkeeping export carries the BAS summary, which resolves the caller's own business
+        // through ICurrentBusinessProvider to read that business's GST registration. Registering
+        // the in-memory fake is what keeps this assertion reading as "every port this use case
+        // graph needs is present" without standing up an HTTP pipeline.
+        services.AddScoped<IAuthenticatedActorAccessor>(
+            _ => InventoryApi.Tests.Application.Tenancy.FakeAuthenticatedActorAccessor.NotAuthenticated());
+        services.AddScoped(_ => TestAppDbContext.DeniedScope());
         services.AddApplicationServices();
         services.AddInfrastructureServices();
 
@@ -832,7 +846,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow))).GetBookkeepingAsync(
+        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax)).GetBookkeepingAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
         Assert.Equal(0m, report.OtherOperatingExpenses);
@@ -863,7 +877,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow)));
+        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax));
         var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31));
 
         var report = await service.GetBookkeepingAsync(filter);
@@ -1136,7 +1150,7 @@ public class ReportingRegressionTests
         var nayax = new TransactionTestNayaxClient(
             new NayaxMachine { MachineID = 10, MachineName = "Valid", CustomerID = 91 },
             new NayaxMachine { MachineID = 11, MachineName = "Invalid", CustomerID = 92 });
-        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow))).GetMachineProfitabilityAsync(
+        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax)).GetMachineProfitabilityAsync(
             new ReportingFilterDto(date, date));
 
         var valid = Assert.Single(report.Rows, x => x.MachineId == 10);
@@ -1160,7 +1174,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient(new NayaxMachine { MachineID = 10, MachineName = "Mapped", CustomerID = 91 });
-        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow))).GetMachineProfitabilityAsync(
+        var report = await Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax)).GetMachineProfitabilityAsync(
             new ReportingFilterDto(date, date));
 
         var mapped = Assert.Single(report.Rows, x => x.MachineId == 10);
@@ -1196,7 +1210,7 @@ public class ReportingRegressionTests
         var nayax = new TransactionTestNayaxClient(
             new NayaxMachine { MachineID = 10, MachineName = "Valid", CustomerID = 91 },
             new NayaxMachine { MachineID = 11, MachineName = "Invalid", CustomerID = 91 });
-        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow)));
+        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax));
         var from = new DateTime(2025, 6, 1);
 
         var validFilter = new ReportingFilterDto(from, invalidDate, MachineId: 10);
@@ -1269,7 +1283,7 @@ public class ReportingRegressionTests
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();
-        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax, new FakeBusinessCalendar(DateTime.UtcNow)));
+        var service = Reporting(db, nayax, TestFinancialUseCases.SiteCommissions(db, nayax));
         var filter = new ReportingFilterDto(date, date, MachineId: 10);
 
         var machine = Assert.Single((await service.GetMachineProfitabilityAsync(filter)).Rows);

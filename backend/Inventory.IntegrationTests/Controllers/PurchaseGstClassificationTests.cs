@@ -92,8 +92,10 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     }
 
     /// <summary>
-    /// Decision D4: nothing is inferred. A purchase submitted without classifications - the shape
-    /// every existing client sends - stays entirely unclassified.
+    /// Nothing is inferred from an amount. A purchase submitted without classifications, for a
+    /// product and supplier with no configured GST rule, stays entirely unclassified; a configured
+    /// rule is what classifies an omitted component on a create (issue #1348,
+    /// <c>NewPurchaseGstRuleApiTests</c>).
     /// </summary>
     [Fact]
     public async Task Create_without_classifications_leaves_every_component_unknown()
@@ -620,7 +622,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
         return await CreateController(db).Upload(
             CreateFile(), "Weekly restock", null, null, null, deliveryCost, deliveryGst, packageCost, packageGst,
             new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items),
-            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null, idempotencyKey: null);
     }
 
     private async Task<PurchaseResponse> Update(
@@ -686,6 +688,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
             TestPurchaseUseCases.Upload(store, documents, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.FindDuplicate(store),
             TestPurchaseUseCases.Attach(store, documents),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),

@@ -78,10 +78,11 @@ public class SyncRestockTimestampContractTests
 
         await using var db = Context(connection);
         var store = new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
+        var nayax = NoNewAlertsClient().Object;
         var useCase = new SyncMachineStockFromNayax(
-            NoNewAlertsClient().Object,
+            nayax,
             store,
-            new EfNayaxProductLinkStore(db),
+            TestMachineStockSyncUseCases.Rematch(store, new EfNayaxProductLinkStore(db), nayax),
             new FakeClock(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc)),
             new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
             new FakeMachineRestockSyncCoverageStore(),

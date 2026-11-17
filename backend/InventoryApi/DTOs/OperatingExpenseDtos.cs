@@ -29,6 +29,12 @@ public enum OperatingExpenseCategory
 /// <summary>
 /// What a create or an update submits.
 ///
+/// <para>The three amounts are submitted exactly as the supplier's document states them and nothing
+/// is calculated from them, but since issue #1257 they have to describe one expense:
+/// <c>AmountExGst + GstAmount</c> more than <c>$0.01</c> from <c>TotalAmount</c> is refused with
+/// <c>400</c> and <c>OperatingExpenseDetails.AmountsMustAddUpMessage</c>, and nothing is stored. The
+/// property names and JSON types are unchanged.</para>
+///
 /// <para><c>MachineId</c> is the business's <b>own</b> machine record's id (<c>Machines.Id</c>,
 /// issue #780) and no longer the provider's machine number. It is the value
 /// <c>GET api/machines</c> publishes as <c>localMachineId</c>; a machine that is not one of the

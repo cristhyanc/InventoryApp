@@ -30,7 +30,7 @@ public static class CostLedgerFingerprint
     /// the rendering below changes: a fingerprint from an older rendering must never be treated as
     /// matching a newer one.
     /// </summary>
-    private const string Version = "v1";
+    private const string Version = "v2";
 
     private const char FieldSeparator = '|';
     private const char RecordSeparator = '\n';
@@ -67,7 +67,14 @@ public static class CostLedgerFingerprint
 
         Append(canonical, "sales", Number(sales.Count));
         foreach (var sale in sales.OrderBy(x => x.TransactionId))
-            Append(canonical, "s", Number(sale.TransactionId), Number(sale.AuthorizationTime.Ticks));
+        {
+            // The sale's own Nayax cost is a replay input (issue #1261): since issue #1176 the replay
+            // costs a sale from it when the ledger has no known cost before the sale, so a cost
+            // corrected between the preview and the apply changes the projection the operator
+            // approved and must invalidate it, exactly as a new sale does.
+            Append(canonical, "s", Number(sale.TransactionId), Number(sale.AuthorizationTime.Ticks),
+                Money(sale.NayaxProductCostPrice));
+        }
 
         Append(canonical, "repairs", Number(repairs.Count));
         foreach (var repair in repairs.OrderBy(x => x.Id))

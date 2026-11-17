@@ -19,7 +19,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
-- Effective-dated Nayax processing fees and site commission agreements.
+- Effective-dated Nayax processing fees and site commission agreements. An Owner or a Manager adds an agreement and can **end** an existing one on a date, which is how a site's rate changes: the application refuses overlapping agreements, so the open-ended one has to stop before the new rate starts. Ending only ever shortens an agreement — the end date must be on or after its start date and can never be pushed out — commission due for dates up to that end date is unchanged, the screen warns before you confirm an end date that has already passed, and every ending is recorded in the audit log. Correcting an agreement's rate or start date, and deleting one, are deliberately not offered: either would rewrite commission already reported.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
 - Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports; **Bookkeeping is the one consolidated financial summary report** (issue #806 retired the separate Reporting Dashboard page once Bookkeeping covered its distinct figures; the old address now redirects to Bookkeeping, filters and all). Monthly Bookkeeping reports its own sales volume too — the number of completed transactions in the selected dates and machine scope, and the average sale over them; both figures follow the same date and machine filters as the rest of the report, appear in its CSV/XLSX export, and show their availability state rather than a zero when provider data does not cover the period. Monthly Bookkeeping also reconciles the reimbursement it expects — the period's card sales less the Nayax fees including GST — against the reimbursement an imported Nayax settlement actually recorded for that period, showing the signed difference and a Reconciled, Needs Review or Pending status (pending until a settlement import covers the period), with the same tolerance, filters, CSV/XLSX columns and availability labelling as the rest of the report; the calculated expectation stays separate from the imported actual and from the existing net reimbursement figure.
 - CSV/XLSX exports that use the same backend calculations as the UI.
@@ -722,7 +722,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
-  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports and Admin → Reimbursement Report, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
+  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports and Admin → Reimbursement Report, and the site commission report and agreements. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
   - **The reports and the Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven Admin tools — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — and each of the eight reports — Bookkeeping, Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. The **Imports** switch covers two entries, because Reimbursement Report is the other way into the same imports (issue #1152): switching it off hides both. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, a Manager still holds `Reports.View`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
@@ -732,6 +732,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue`, `monthToDateRevenue`, `previousComparableDayRevenue`, `previousComparableMonthRevenue` and (since issue #1215) `previousDayRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, which since issue #1019 each `machineStocks` entry carries for its own machine as well, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
+  - **The Nayax sales review hides its amounts too** (issue #1306). The "Nayax sales to review" list and its Dashboard summary stay open to every role that may see the Dashboard — knowing which sales need attention is day-to-day work — but for a caller without `Dashboard.ViewFinancials` the three amounts they carry are **`null`, never `0`**: each sale's `settlementValue`, the `providerSettlementValue` Nayax's own record carried, and the `reconciledPeriodDifference` an owner's decision moved a reimbursement period by. Everything else is unchanged for every caller: the same sales in the same order, the same filters, paging and totals, each sale's machine, time, product and state, whether it is counted, which of Nayax's fields disagreed ("Amount: differs"), the decision history and the decisions the owner is offered. The summary itself is two counts of sales and carries no amount. The page leaves the amount lines out rather than showing them empty or as `0.00`, and who may open it or decide about a sale does not change. It was found by an audit of the responses that arrived after issue #700's sweep, and the build guard now treats a `settlement` or `difference` property as a money figure as well.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
   - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
 
@@ -832,7 +833,7 @@ Once the rollout setting is on, the plan is checked on the server in two places 
 | Needs Ordering / low-stock alerts | A real count, labelled **storage stock only** |
 | Machines | The business's own machine records; the live fleet view is unavailable |
 | Pick List | Manual entry, as it does with no connection |
-| Sites, Site Commissions | Unavailable, with the stored agreements and payments untouched |
+| Sites, Site Commissions | Unavailable, with the stored agreements untouched |
 | Sync Restock, and its Dashboard reminder | Unavailable; the reminder is not shown |
 | Catalogue review, inventory-cost transition previews | Unavailable, as they are with no connection |
 | Purchases, Suppliers, Inventory, Expenses, manual pick-list entry, Take Inventory | **Completely unchanged** |
@@ -842,13 +843,13 @@ Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nay
 **What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
 
 - **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
-- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report, agreements and payments); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
+- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report and agreements); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
 
 A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
 
 **Supplier price comparisons, in plan terms.** On Free, the **Cheapest supplier** column reads as unavailable and the rest of those pages — the row, the purchase-cost columns beside it and every action — is untouched. The daily collection follows the same line: a product is looked up at the suppliers while **at least one** business on Starter or Pro is tracking it, so a product you and a Starter business both track is still priced and nothing you have tracked is ever deleted. And the **Track supplier prices** switch stays available on every plan: you can turn it on and off on Free, the setting is kept through a downgrade, and the prices appear as soon as the plan includes them. See [Track supplier prices on a product](#track-supplier-prices-on-a-product) and [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 
-**Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements, payments and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
+**Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
 
 **A plan is not a permission.** The role check happens first and is unchanged: a member whose role does not grant a feature is refused exactly as before, with no mention of plans, and a plan never gives a role access it does not have. See [Roles and capabilities](#roles-and-capabilities).
 
@@ -1128,6 +1129,18 @@ A message reaches the dead-letter queue after five receives that did not finish 
 report on its own — it is the queue doing what it was configured to do — but it always means at least
 one transaction was **not** imported, so it is worth looking at every time.
 
+**How long that takes depends on why the message failed.** A message refused for good — an unknown
+sender, a business that is not trading, a message that is not a transaction this application consumes —
+is released immediately and is in the dead-letter queue within minutes. A message that failed because
+something was *unavailable* (the database, the business's Nayax connection, or Nayax itself) now waits
+out a growing schedule instead: **45 s, then 30 min, then 3 h, then 9 h, then 11 h** between receives
+(issue #1305). Its fifth and last attempt is therefore about **12½ hours** after the first one, and it
+appears in the dead-letter queue roughly **23½ hours** after that first receive. So an outage that is
+fixed overnight — an expired Nayax token, say — is retried by the queue itself and needs no redrive, and
+a sale that *has* reached the dead-letter queue has already been retried across more than a day. The
+hourly `lastSales` reconciliation still covers those sales in the meantime, so a dead-letter message is
+not automatically a missing sale; check the sale before concluding it was lost.
+
 1. **Find out why.** The reader's own log lines name the queue message id and a fixed reason code for
    every message it refused. The codes worth acting on are: `SenderUnknown` or `SenderDisabled` (no
    business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin
@@ -1299,8 +1312,8 @@ capabilities](#roles-and-capabilities)).
 ### Where the page is, and what is on it
 
 **Admin → Reimbursement Report** (`/admin/imports/reimbursement-report`, issue #1152). It is in the
-sidebar's **Admin** group directly after **Imports**, and the Imports page itself carries a
-**Reimbursement Report** card that opens it; the breadcrumb reads Admin › Imports › Reimbursement
+sidebar's **Admin** group directly after **Imports** (the Imports page itself no longer links to it);
+the breadcrumb reads Admin › Imports › Reimbursement
 Report. The entry needs the same access as Imports (`Imports.Run`), is left out of the menu while the
 Nayax connection is not usable for the same reason Imports is, and is covered by the **same**
 Super Admin menu switch as Imports — switching `admin.imports` off hides both ways in (see
@@ -1912,9 +1925,25 @@ sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 ```
 
 Store the verified backup somewhere other than the App Service's own `/home` mount — which is what
-`--upload` does for you. Restoring (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`)
-overwrites live data and must be run deliberately, by a human, after stopping the API — never
-automatically. Retention/alerting and automated restore remain out of scope for
+`--upload` does for you.
+
+The database created by this application runs in **WAL mode** (EF Core's SQLite database creator
+sets it when it builds a new file; see
+[docs/architecture.md § SQLite operating assumptions](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53)
+for why, and what production's mode depends on). That keeps these two procedures separate and
+non-interchangeable:
+
+- **Backup, while the app runs** — only with `backup-database` or `sqlite3 ".backup"`, both shown
+  above. **Never copy `inventory.db` on its own while `inventory.db-wal` exists**: a plain
+  filesystem copy can capture the file mid-write, and in WAL mode it can also simply miss committed
+  data still sitting in `inventory.db-wal` rather than in `inventory.db` itself.
+- **Restore, with the app stopped** — replace the live database file with the verified backup
+  (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`), then remove any leftover
+  `inventory.db-wal` and `inventory.db-shm` left behind by the database being replaced (the
+  restored backup is its own complete snapshot and has no use for them), before starting the API
+  again. This must be run deliberately, by a human — never automatically.
+
+Retention/alerting and automated restore remain out of scope for
 `backup-database`. The full
 step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
@@ -1966,6 +1995,18 @@ actually serve Inventory App requests:
 
 Both endpoints allow anonymous access (`AllowAnonymous()` in `Program.cs`) and are unaffected by
 `BusinessScopeMiddleware`, which already leaves unauthenticated requests alone.
+
+Both endpoints also carry an **`X-Build-Sha`** response header (issue #1308, audit OPS-04,
+#1228/#1231): the full 40-character commit SHA the running build was made from, or `unknown` for a
+build with no git revision to stamp (for example a local build outside a git checkout). This lets
+an operator confirm after a deploy that the API now answering is the new release rather than the
+old process still finishing its restart, instead of trusting the first `200`/`503` reply. The value
+is read once at startup from the assembly's informational version (`BuildMetadata` in
+`InventoryApi/Http/HealthChecks`), which `InventoryApi.csproj` stamps with the git commit via the
+SDK's `SourceRevisionId` property — no SourceLink package and no change to the `dotnet publish`
+command. The deploy workflow does not wait for this header to match the release commit yet; that is
+a separate, human-reviewed change. See `docs/architecture.md` § Current repository structure (the
+`InventoryApi/Http/` entry) for where `BuildMetadata` and the middleware that sets the header live.
 
 **Azure App Service configuration.** Set the App Service **Health check** path (Portal: App
 Service → Monitoring → Health check; or the `healthCheckPath` site configuration property) to
@@ -2220,6 +2261,7 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - `npm run lint` runs `ng lint`, configured through `frontend/inventory-app/eslint.config.js` (ESLint 9 flat config with `angular-eslint` and `typescript-eslint`).
 - Rules are chosen to catch defects rather than style: unused variables and imports, `==` vs `===`, unreachable and constant-condition code, Angular template errors, and Angular lifecycle/interface mistakes are **errors**. Accessibility findings, `trackBy`, `any` and stray `console.log` are **warnings** so they are visible without blocking a build.
 - `npm run test` runs the Jest suite (`jest-preset-angular`, configured through `frontend/inventory-app/jest.config.js`/`tsconfig.spec.json`/`setup-jest.ts`) once and exits; it is not a watch-mode command. `*.spec.ts` files sit next to the code they test.
+- Jest always runs with `TZ=UTC`, set by `jest.config.js`'s `globalSetup` (`jest.global-setup.js`) before any worker starts and regardless of the invoking shell's own zone (issue #1292), so a spec that reads the device clock gets the same result everywhere and is always tested against a zone other than the business's own (Australia/Sydney).
 - `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
 
 ### GitHub Actions runners
@@ -2868,8 +2910,8 @@ does not manage.
   support session is active, and Nayax has not refused this application permission to read the
   catalogue — a refused catalogue read hides that button even though the connection itself is usable
   (`PendingPermissions` is a usable status), while a permission nothing has stated yet still offers
-  it. **Admin → Imports → Import products** is a link to the same page, so every entry point opens
-  the identical review; the review itself used to be a panel at the bottom of Admin → Imports, and
+  it. Admin → Imports no longer links to it (removed at the owner's request, 17 November 2026); the
+  review itself used to be a panel at the bottom of Admin → Imports, and
   closing it now returns you to Products. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
@@ -4257,9 +4299,8 @@ every business exactly as it is today.
   plan rather than claiming Nayax is not connected — which would be untrue of a business whose
   credentials are stored and working. **Importing a Nayax sales file** is the same kind of lock on
   **Admin → Imports**: that one card says it needs the Pro plan and withholds the file
-  controls, so nothing is uploaded that could only be refused, while the pending reimbursement XML
-  import, the product-catalogue import link and the CSV template download on the same page keep
-  working exactly as they do now. A refusal that arrives anyway — the plan changed between reads, or
+  controls, so nothing is uploaded that could only be refused, while the CSV template download on
+  the same page keeps working exactly as it does now. A refusal that arrives anyway — the plan changed between reads, or
   it could not be read at all — is shown in that card too, naming the plan the refusal itself named,
   rather than as a failed-import message with a retry that would be refused again.
 - **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does

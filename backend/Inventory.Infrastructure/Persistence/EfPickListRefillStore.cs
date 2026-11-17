@@ -119,7 +119,21 @@ public sealed class EfPickListRefillStore : IPickListRefillStore
                 .ConfigureAwait(false);
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            await _rebuild.RebuildAsync(row.ProductId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _rebuild.RebuildAsync(row.ProductId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (InventoryCostDataQualityException refusal)
+            {
+                // Re-raised naming this refill's machine beside the product the replay named, so the
+                // operator is told which row to repair (issue #1240). Nothing is committed: the
+                // caller owns the transaction and the refusal leaves it uncommitted, so the rows
+                // before this one are discarded with it.
+                throw await PickListRefillCostRefusal
+                    .NamingMachineAsync(_db, claim.MachineId, refusal, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
             refill.Lines.Add(new PickListRefillLine

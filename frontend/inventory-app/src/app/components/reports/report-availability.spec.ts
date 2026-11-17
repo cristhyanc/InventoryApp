@@ -80,7 +80,21 @@ async function renderBookkeeping(value: BookkeepingReport) {
     imports: [BookkeepingReportComponent],
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
-      { provide: ReportingService, useValue: { bookkeeping: jest.fn(() => of(value)) } },
+      {
+        provide: ReportingService,
+        useValue: {
+          bookkeeping: jest.fn(() => of(value)),
+          // The page composes the GST summary child (issue #1318), which asks for its own report.
+          // An unregistered business is what these availability tests are not about.
+          gstBasSummary: jest.fn(() => of({
+            from: value.from, to: value.to, status: 'NotGstRegistered', figures: null,
+            dataQuality: {
+              missingStatus: false, historicalCostUnavailable: false, gstClassificationMissing: false,
+              commissionNotPersisted: false, containsUnmappedProducts: false, notes: []
+            }
+          }))
+        }
+      },
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
       provideNayaxConnectionStatus()
     ]

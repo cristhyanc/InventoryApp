@@ -23,6 +23,11 @@
       "type": "repoFileContains",
       "file": "AGENTS.md",
       "text": "Never infer historical COGS from the product's current cost or selling price."
+    },
+    {
+      "type": "testExists",
+      "file": "backend/Inventory.UnitTests/Domain/Costing/WeightedAverageCostReplayTests.cs",
+      "test": "Restocks_and_sales_produce_weighted_average_cost_and_per_sale_cost"
     }
   ]
 }

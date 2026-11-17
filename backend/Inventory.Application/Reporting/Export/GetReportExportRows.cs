@@ -26,14 +26,17 @@ public sealed class GetReportExportRows
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
+    private readonly GetGstBasSummary _getGstBasSummary;
     private readonly GetDashboardReport _getDashboardReport;
     private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
     public GetReportExportRows(GetBookkeepingReport getBookkeepingReport, GetDailyReport getDailyReport,
         GetReconciliationReport getReconciliationReport, GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport, GetGstAccountingAid getGstAccountingAid,
+        GetGstBasSummary getGstBasSummary,
         GetDashboardReport getDashboardReport, GetTransactionSalesReport getTransactionSalesReport)
     {
+        _getGstBasSummary = getGstBasSummary;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
@@ -45,15 +48,20 @@ public sealed class GetReportExportRows
     }
 
     /// <summary>
-    /// What the bookkeeping report's GST-on-sales figure actually is (issue #476). GST
-    /// classification is not persisted per sale, so this figure stays the indicative inclusive
-    /// calculation and the export says so in its own column: moving the on-screen explanation into
-    /// the report's calculation help must never leave a downloaded file implying a verified figure.
+    /// What the bookkeeping report's GST-on-sales figure actually is (issue #476, restated for the
+    /// rule of issue #1255). GST is not classified per sale: the figure is one eleventh of the sales
+    /// of every product except those whose GST rule says GST-free, taken from the period's total and
+    /// read from each product's rule as it stands now. The export says so in its own column, because
+    /// a downloaded file must never imply a verified per-sale classification, and the no-rule column
+    /// beside it says how much of the taxable total rests on products nobody has given a rule.
     /// It is a label for one figure, not a blanket statement about GST on fees or expenses, which
     /// come from imported and recorded amounts.
     /// </summary>
     private const string BookkeepingGstOnSalesBasis =
-        "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).";
+        "GST on sales is one eleventh of taxable sales (GST-inclusive), taken once from the period total. " +
+        "Sales of products whose GST rule is GST-free are excluded; products with no GST rule, and sales " +
+        "whose product could not be resolved, are taxable and are reported as SalesWithNoGstRule. Each " +
+        "product's GST rule as it stands today is used; no per-sale GST classification is recorded.";
 
     // The availability column headers and date format repeat across every report's row shape
     // below, so they are named once here rather than retyped per report (issue #731).
@@ -199,10 +207,19 @@ public sealed class GetReportExportRows
             var sales = value.ProviderAvailability.Sales;
             var fees = value.ProviderAvailability.Fees;
             var combined = value.ProviderAvailability.Combined;
+            // The BAS-labelled GST summary this report's own screen shows for a GST-registered
+            // business (issue #1318), exported beside the figures it is drawn from so the file says
+            // exactly what the screen says for the same dates and scope. It is the same shared
+            // calculation, so the two cannot disagree.
+            var basSummary = await _getGstBasSummary.Handle(filter, cancellationToken);
+            var basCells = BookkeepingBasCells(basSummary);
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "Transactions", "AverageSale", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "ExpectedReimbursement", "ActualReimbursement", "ReimbursementDifference", "ReconciliationStatus", "IsReconciled", "ReconciliationTolerance", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees", "GstOnSalesBasis", "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader, "DataQualityNotes" },
-                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), value.FinancialYear, AvailabilityExportCells.Amount(value.Sales, sales), AvailabilityExportCells.Amount(value.CardSales, sales), AvailabilityExportCells.Amount(value.CashSales, sales), AvailabilityExportCells.Amount(value.TransactionCount, sales), AvailabilityExportCells.Amount(value.AverageSale, sales), AvailabilityExportCells.Amount(value.CardTransactionCount, sales), AvailabilityExportCells.Amount(value.CashTransactionCount, sales), AvailabilityExportCells.Amount(value.CostOfGoods, sales), AvailabilityExportCells.Amount(value.GrossProfit, sales), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeExGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.ActualFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedFeeIncGst, combined), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedCardTransactionCount, combined), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.NetSettlement, combined), AvailabilityExportCells.Amount(value.ExpectedReimbursement, combined), AvailabilityExportCells.Amount(value.ActualReimbursement, fees), AvailabilityExportCells.Amount(value.ReimbursementDifference, combined), value.ReconciliationStatus, value.IsReconciled.ToString(), value.ReconciliationTolerance.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.SiteCommission, sales), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectProfit : value.NetProfit, combined), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent, combined), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.GstOnFees, fees), BookkeepingGstOnSalesBasis, value.IsCogsComplete.ToString(), value.UncostedTransactionCount.ToString(CultureInfo.InvariantCulture), value.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture), value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture), value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture), value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture), value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture), value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(fees), AvailabilityExportCells.AsOfUtc(fees), AvailabilityExportCells.State(combined), string.Join(" ", value.DataQuality.Notes ?? []) }
+                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "Transactions", "AverageSale", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "ExpectedReimbursement", "ActualReimbursement", "ReimbursementDifference", "ReconciliationStatus", "IsReconciled", "ReconciliationTolerance", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "TaxableSales", "GstFreeSales", "SalesWithNoGstRule", "GstOnSales", "GstOnFees", "GstOnSalesBasis", "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "BasSummaryStatus", "BasG1TotalSales", "Bas1AGstOnSales", "Bas1BGstCredits", "BasGstCreditsFromPurchases", "BasGstCreditsFromOperatingExpenses", "BasGstCreditsFromNayaxFees", "BasEstimatedNetGst", "BasNetGstOutcome", "BasEstimateIncomplete", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader, "DataQualityNotes" },
+                new List<string> { value.From.ToString(DateFormat), value.To.ToString(DateFormat), value.FinancialYear, AvailabilityExportCells.Amount(value.Sales, sales), AvailabilityExportCells.Amount(value.CardSales, sales), AvailabilityExportCells.Amount(value.CashSales, sales), AvailabilityExportCells.Amount(value.TransactionCount, sales), AvailabilityExportCells.Amount(value.AverageSale, sales), AvailabilityExportCells.Amount(value.CardTransactionCount, sales), AvailabilityExportCells.Amount(value.CashTransactionCount, sales), AvailabilityExportCells.Amount(value.CostOfGoods, sales), AvailabilityExportCells.Amount(value.GrossProfit, sales), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeExGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.ActualFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedFeeIncGst, combined), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedCardTransactionCount, combined), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.NetSettlement, combined), AvailabilityExportCells.Amount(value.ExpectedReimbursement, combined), AvailabilityExportCells.Amount(value.ActualReimbursement, fees), AvailabilityExportCells.Amount(value.ReimbursementDifference, combined), value.ReconciliationStatus, value.IsReconciled.ToString(), value.ReconciliationTolerance.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.SiteCommission, sales), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectProfit : value.NetProfit, combined), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent, combined), AvailabilityExportCells.Amount(value.TaxableSales, sales), AvailabilityExportCells.Amount(value.GstFreeSales, sales), AvailabilityExportCells.Amount(value.NoGstRuleSales, sales), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.GstOnFees, fees), BookkeepingGstOnSalesBasis, value.IsCogsComplete.ToString(), value.UncostedTransactionCount.ToString(CultureInfo.InvariantCulture), value.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture), value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture), value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture), value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture), value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture), value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture) }
+                    .Concat(basCells)
+                    .Concat(new List<string> { AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(fees), AvailabilityExportCells.AsOfUtc(fees), AvailabilityExportCells.State(combined), string.Join(" ", (value.DataQuality.Notes ?? []).Concat(basSummary.DataQuality.Notes ?? [])) })
+                    .ToList()
             };
             return new ReportExportTable(rows, "Report");
         }
@@ -305,8 +322,8 @@ public sealed class GetReportExportRows
             var gstFees = value.ProviderAvailability.Fees;
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, "NetGstAvailability", "DataQualityNotes" },
-                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), AvailabilityExportCells.Amount(value.TaxableSales, sales), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.TaxableFees, gstFees), AvailabilityExportCells.Amount(value.GstOnFees, gstFees), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), AvailabilityExportCells.Amount(value.NetGst, value.NetGstAvailability), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(gstFees), AvailabilityExportCells.AsOfUtc(gstFees), AvailabilityExportCells.State(value.NetGstAvailability), string.Join(" ", value.DataQuality.Notes ?? []) }
+                new() { "From", "To", "TaxableSales", "GstFreeSales", "SalesWithNoGstRule", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, "NetGstAvailability", "DataQualityNotes" },
+                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), AvailabilityExportCells.Amount(value.TaxableSales, sales), AvailabilityExportCells.Amount(value.GstFreeSales, sales), AvailabilityExportCells.Amount(value.NoGstRuleSales, sales), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.TaxableFees, gstFees), AvailabilityExportCells.Amount(value.GstOnFees, gstFees), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), AvailabilityExportCells.Amount(value.NetGst, value.NetGstAvailability), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(gstFees), AvailabilityExportCells.AsOfUtc(gstFees), AvailabilityExportCells.State(value.NetGstAvailability), string.Join(" ", value.DataQuality.Notes ?? []) }
             };
             return new ReportExportTable(rows, "Report");
         }
@@ -342,4 +359,47 @@ public sealed class GetReportExportRows
     }
 
     private static long? MachineId(ReportingFilterDto filter) => filter.MachineId ?? filter.MachineID;
+
+    /// <summary>
+    /// The bookkeeping export's BAS summary cells (issue #1318), in the order its
+    /// <c>BasSummaryStatus</c>…<c>BasEstimateIncomplete</c> columns declare.
+    ///
+    /// <para>A period with no summary - a business that is not registered for GST, or a
+    /// machine-filtered request - carries its status and <em>empty</em> cells. A zero there would be
+    /// read as a nil BAS by exactly the reader this file is dangerous for, and nothing calculated
+    /// one (AGENTS.md § Nayax processing fees and GST: never render a missing figure as <c>0</c> in
+    /// an export).</para>
+    ///
+    /// <para>The provider-sourced labels are spelled through <see cref="AvailabilityExportCells"/>
+    /// like every other figure in the file; 1B carries the settlement state because the Nayax fee
+    /// GST is one of the three credits inside it, while the purchase and operating-expense credits
+    /// are this business's own records and stay exact.</para>
+    ///
+    /// <para><c>BasNetGstOutcome</c> is empty whenever the net amount is one nothing measured,
+    /// because the Domain policy withholds the payable/credit/nil answer with the amount. A cell
+    /// reading <c>Nil</c> beside an amount cell reading <c>Missing</c> is the nil BAS this rule
+    /// exists to prevent, and it is worst in a file somebody pastes into a working paper.</para>
+    /// </summary>
+    private static List<string> BookkeepingBasCells(GstBasSummaryDto summary)
+    {
+        if (summary.Figures is not { } figures)
+            return [summary.Status, string.Empty, string.Empty, string.Empty, string.Empty,
+                string.Empty, string.Empty, string.Empty, string.Empty, string.Empty];
+
+        var sales = figures.ProviderAvailability.Sales;
+        var fees = figures.ProviderAvailability.Fees;
+        return
+        [
+            summary.Status,
+            AvailabilityExportCells.Amount(figures.TotalSales, sales),
+            AvailabilityExportCells.Amount(figures.GstOnSales, sales),
+            AvailabilityExportCells.Amount(figures.GstCredits, fees),
+            figures.PurchaseGstCredits.ToString(CultureInfo.InvariantCulture),
+            figures.OperatingExpenseGstCredits.ToString(CultureInfo.InvariantCulture),
+            AvailabilityExportCells.Amount(figures.NayaxFeeGstCredits, fees),
+            AvailabilityExportCells.Amount(figures.NetGst, figures.NetGstAvailability),
+            figures.NetGstOutcome ?? string.Empty,
+            figures.IsIncomplete.ToString()
+        ];
+    }
 }

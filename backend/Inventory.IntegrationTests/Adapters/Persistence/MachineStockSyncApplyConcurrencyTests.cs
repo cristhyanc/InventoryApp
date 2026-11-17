@@ -7,6 +7,7 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.MachineStockSync;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -142,7 +143,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            var response = await new ApplyMachineStockSync(Store(db))
+            var response = await Apply(db)
                 .Handle(Machine, [eventId], CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, response.Results[0].Outcome);
@@ -171,7 +172,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            var result = await new ResolveMachineStockDuplicate(Store(db)).Handle(
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
                 Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
@@ -240,6 +241,97 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
             eventId, NayaxDuplicateResolution.AppliedAsSeparateRestock, OpeningStock - (2 * RefillQuantity));
         Assert.Equal(movementId, first.Result.StockAdjustmentId);
         Assert.Equal(movementId, second.Result.StockAdjustmentId);
+    }
+
+    /// <summary>
+    /// The other resolution landing inside the override's read-then-write gap (issue #1248).
+    /// "Already recorded manually" writes no movement, but it decides the same question - may this
+    /// event still be settled? - so it takes the same write lock before it re-reads the event. It
+    /// therefore cannot even begin inside the override's transaction, and the event is left with the
+    /// override's one final state. Before the lock it read the event outside every transaction and
+    /// stamped <c>ReconciledManually</c> on a row the override was already applying.
+    /// </summary>
+    [Fact]
+    public async Task A_reconcile_cannot_commit_inside_the_duplicate_overrides_read_and_write()
+    {
+        var eventId = await SeedUnprocessedEventAsync();
+        await SeedMatchingManualRefillAsync();
+        var competing = new CompetesWhileTheFirstOneReadsTheProduct(
+            () => ReconcileAsAlreadyRecordedAsync(ImpatientOptions(), eventId));
+
+        await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
+        {
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
+                Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+            Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
+        }
+
+        Assert.True(competing.Ran, "The competing resolution was never attempted, so nothing was proved.");
+        Assert.IsType<SqliteException>(competing.Failure);
+
+        await AssertAppliedExactlyOnceAsync(
+            eventId, NayaxDuplicateResolution.AppliedAsSeparateRestock, OpeningStock - (2 * RefillQuantity));
+    }
+
+    /// <summary>
+    /// The two resolutions of one flagged event as two genuine simultaneous requests (issue #1248):
+    /// one operator chooses "Apply as separate restock" and another chooses "Already recorded
+    /// manually" at the same instant. Exactly one of them settles the event; the other waits,
+    /// re-reads the winner's committed state inside the lock and is refused with
+    /// <see cref="NayaxStockEventApplyOutcome.ResolutionConflict"/> - the <c>409</c> the endpoint
+    /// answers - rather than stamping the opposite resolution over the winner's. The event ends in
+    /// one state and storage moves at most once, whichever of them won.
+    /// </summary>
+    [Fact]
+    public async Task One_resolution_wins_and_the_other_is_refused_with_a_conflict()
+    {
+        var eventId = await SeedUnprocessedEventAsync();
+        await SeedMatchingManualRefillAsync();
+
+        var (first, second) = await RaceAsync(
+            () => OverrideAsSeparateRestockAsync(Options(), eventId),
+            () => ReconcileAsAlreadyRecordedAsync(Options(), eventId));
+
+        Assert.Null(first.Failure);
+        Assert.Null(second.Failure);
+
+        // Neither request may answer with a provider lock error instead of a decision: the loser
+        // waits for the winner's commit and is then answered from it.
+        var outcomes = new[] { first.Result!.Outcome, second.Result!.Outcome };
+        Assert.Single(outcomes, NayaxStockEventApplyOutcome.ResolutionConflict);
+
+        await using var verify = TestAppDbContext.Unrestricted(Options());
+        var stored = await verify.NayaxMachineStockEvents.AsNoTracking().SingleAsync(e => e.Id == eventId);
+        var movements = await verify.StockAdjustments.AsNoTracking()
+            .Where(x => x.Reason == StockAdjustmentReason.MachineRefill && x.Source == StockAdjustmentSource.Nayax)
+            .ToListAsync();
+        var storage = (await verify.Products.AsNoTracking().SingleAsync(p => p.Id == ProductId)).QuantityInStock;
+
+        if (first.Result.Outcome == NayaxStockEventApplyOutcome.Applied)
+        {
+            // The override won: one movement, one deduction, and the event is Applied and nothing else.
+            Assert.Equal(NayaxStockEventApplyOutcome.ResolutionConflict, second.Result.Outcome);
+            Assert.Equal(NayaxStockEventProcessingStatus.Applied, stored.ProcessingStatus);
+            Assert.Equal(NayaxDuplicateResolution.AppliedAsSeparateRestock, stored.DuplicateResolution);
+            Assert.Equal(Assert.Single(movements).Id, stored.StockAdjustmentId);
+
+            // Both refills are in the product's replayed history: the seeded manual one the
+            // override declared separate, and the Nayax one it applied - once.
+            Assert.Equal(OpeningStock - (2 * RefillQuantity), storage);
+        }
+        else
+        {
+            // The reconciliation won: no Nayax movement at all, no cost replay, storage left exactly
+            // as the fixture seeded it, and the event is reconciled and nothing else.
+            Assert.Equal(NayaxStockEventApplyOutcome.ResolutionConflict, first.Result.Outcome);
+            Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, second.Result.Outcome);
+            Assert.Equal(NayaxStockEventProcessingStatus.Unprocessed, stored.ProcessingStatus);
+            Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+            Assert.Null(stored.StockAdjustmentId);
+            Assert.Empty(movements);
+            Assert.Equal(OpeningStock, storage);
+        }
     }
 
     /// <summary>
@@ -320,8 +412,7 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
         await using var db = TestAppDbContext.For(options, BusinessA);
         try
         {
-            var response = await new ApplyMachineStockSync(Store(db))
-                .Handle(Machine, [eventId], CancellationToken.None);
+            var response = await Apply(db).Handle(Machine, [eventId], CancellationToken.None);
             return new ApplyAnswer(response.Results[0], null);
         }
         catch (Exception failure)
@@ -336,8 +427,28 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
         await using var db = TestAppDbContext.For(options, BusinessA);
         try
         {
-            var result = await new ResolveMachineStockDuplicate(Store(db)).Handle(
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
                 Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+            return new ApplyAnswer(result, null);
+        }
+        catch (Exception failure)
+        {
+            return new ApplyAnswer(null, failure);
+        }
+    }
+
+    /// <summary>
+    /// The other resolution of the same flagged event (issue #1248): it writes no movement, but it
+    /// settles the event just as finally as the override does.
+    /// </summary>
+    private static async Task<ApplyAnswer> ReconcileAsAlreadyRecordedAsync(
+        DbContextOptions<AppDbContext> options, int eventId)
+    {
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        try
+        {
+            var result = await new ResolveMachineStockDuplicate(Store(db), new RecordingMachineStockSyncLog()).Handle(
+                Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
             return new ApplyAnswer(result, null);
         }
         catch (Exception failure)
@@ -348,6 +459,14 @@ public sealed class MachineStockSyncApplyConcurrencyTests : IDisposable
 
     private static EfMachineStockEventStore Store(AppDbContext db) =>
         new(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
+
+    /// <summary>
+    /// The apply use case over one context, with the re-match of issue #1248 wired as production
+    /// wires it. The seeded event is already matched, so no machine-products read happens here.
+    /// </summary>
+    private static ApplyMachineStockSync Apply(AppDbContext db) =>
+        TestMachineStockSyncUseCases.Apply(
+            Store(db), new EfNayaxProductLinkStore(db), new RecordingMachineStockSyncLog());
 
     /// <summary>Releases both requests at the same instant and returns what each of them answered.</summary>
     private static async Task<(ApplyAnswer First, ApplyAnswer Second)> RaceAsync(
