@@ -58,7 +58,10 @@ describe('MemberManagementComponent (issue #534)', () => {
     const operator = member({ membershipId: 3, displayName: 'Operator Row', role: 'Operator' });
     const { host } = await render({ list: () => of([owner, manager, operator]) });
 
-    const selects = Array.from(host.querySelectorAll('select')) as HTMLSelectElement[];
+    // Scoped to the table: below `md` the same three members also render as cards (issue #1274),
+    // each with their own role `<select>`, so the host has six selects in total.
+    const table = host.querySelector('[data-testid="members-table"]') as HTMLElement;
+    const selects = Array.from(table.querySelectorAll('select')) as HTMLSelectElement[];
     expect(selects).toHaveLength(3);
     expect(displayedRole(selects[0])).toEqual({ value: 'Owner', label: 'Owner' });
     expect(displayedRole(selects[1])).toEqual({ value: 'Manager', label: 'Manager' });
@@ -252,5 +255,77 @@ describe('MemberManagementComponent (issue #534)', () => {
 
     expect(reinstate).toHaveBeenCalledWith(1);
     expect(error).toHaveBeenCalledWith(message);
+  });
+
+  /**
+   * The narrow-layout card markup (issue #1274). jsdom applies no media query and computes no
+   * layout, so it cannot answer "does the page scroll sideways at 390px" - that is
+   * `admin-users-member-layout.e2e.ts`'s job, against the real compiled CSS. What these specs do
+   * check is the markup the narrow breakpoint depends on: a `md:hidden` card exists for every
+   * member with its own name, wrapping email, readable-role select, status and action - independent
+   * of the `hidden md:block` table, which keeps the exact markup it had before.
+   */
+  describe('the narrow-width card layout (issue #1274)', () => {
+    const longEmail = `a.very.long.email.address.belonging.to.one.member@example-${'x'.repeat(20)}.com`;
+
+    it('renders one card per member, each wired to the table\'s own role options', async () => {
+      const first = member({ membershipId: 1, displayName: 'Dana Lee', email: 'dana@example.com', role: 'Manager' });
+      const second = member({ membershipId: 2, displayName: 'Long Email Member', email: longEmail, role: 'Operator', isActive: false });
+      const { host } = await render({ list: () => of([first, second]) });
+
+      const cards = host.querySelectorAll('[data-testid="member-card"]');
+      expect(cards).toHaveLength(2);
+
+      const [firstCard, secondCard] = Array.from(cards) as HTMLElement[];
+      expect(firstCard.querySelector('[data-testid="member-card-name"]')?.textContent).toContain('Dana Lee');
+      expect(firstCard.querySelector('[data-testid="member-card-email"]')?.textContent).toContain('dana@example.com');
+      expect(displayedRole(firstCard.querySelector('select') as HTMLSelectElement)).toEqual({ value: 'Manager', label: 'Manager' });
+      expect(firstCard.textContent).toContain('Active');
+      expect(buttonWithText(firstCard, 'Revoke')).toBeTruthy();
+
+      expect(secondCard.querySelector('[data-testid="member-card-email"]')?.textContent).toContain(longEmail);
+      expect(displayedRole(secondCard.querySelector('select') as HTMLSelectElement)).toEqual({ value: 'Operator', label: 'Operator' });
+      expect(secondCard.textContent).toContain('Revoked');
+      expect(buttonWithText(secondCard, 'Reinstate')).toBeTruthy();
+    });
+
+    it('marks the long email to wrap instead of forcing the card wide', async () => {
+      expect(longEmail.length).toBeGreaterThanOrEqual(60);
+      const { host } = await render({ list: () => of([member({ email: longEmail })]) });
+
+      const emailNode = host.querySelector('[data-testid="member-card-email"]') as HTMLElement;
+      expect(emailNode.textContent).toContain(longEmail);
+      expect(emailNode.className).toContain('[overflow-wrap:anywhere]');
+    });
+
+    it('keeps the table markup exactly as before, hidden only below the md breakpoint', async () => {
+      const { host } = await render({ list: () => of([member()]) });
+
+      const table = host.querySelector('[data-testid="members-table"]') as HTMLElement;
+      const cards = host.querySelector('[data-testid="member-cards"]') as HTMLElement;
+      expect(table.className).toContain('hidden');
+      expect(table.className).toContain('md:block');
+      expect(table.querySelector('table.table')).toBeTruthy();
+      expect(cards.className).toContain('md:hidden');
+    });
+
+    it('changing the role from the card asks for confirmation the same way as the table', async () => {
+      const changeRole = jest.fn(() => of(member({ role: 'Owner' })));
+      const { fixture, host } = await render({ list: () => of([member()]), changeRole });
+
+      const card = host.querySelector('[data-testid="member-card"]') as HTMLElement;
+      const select = card.querySelector('select') as HTMLSelectElement;
+      select.value = 'Owner';
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+
+      expect(changeRole).not.toHaveBeenCalled();
+      expect(host.textContent).toContain("Change Dana Lee's role to Owner?");
+
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      expect(changeRole).toHaveBeenCalledWith(1, 'Owner');
+    });
   });
 });
