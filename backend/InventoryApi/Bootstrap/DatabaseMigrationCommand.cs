@@ -66,6 +66,10 @@ public static class DatabaseMigrationArguments
 /// <c>WebApplicationBuilder</c>.
 /// </summary>
 /// <param name="AppliedBefore">Migrations already applied before this run.</param>
+/// <param name="UnknownApplied">
+/// Applied migrations this build does not contain (issue #1299): the database's schema is newer
+/// than the code, which pending migrations alone never reveal.
+/// </param>
 /// <param name="PendingBefore">Migrations pending before this run.</param>
 /// <param name="Applied">True only when this run actually called <c>Migrate</c>.</param>
 /// <param name="PendingAfter">
@@ -78,6 +82,7 @@ public static class DatabaseMigrationArguments
 /// </param>
 public sealed record DatabaseMigrationOutcome(
     IReadOnlyList<string> AppliedBefore,
+    IReadOnlyList<string> UnknownApplied,
     IReadOnlyList<string> PendingBefore,
     bool Applied,
     IReadOnlyList<string> PendingAfter,
@@ -87,11 +92,17 @@ public sealed record DatabaseMigrationOutcome(
 
     public bool FullyApplied => PendingAfter.Count == 0;
 
+    /// <summary>True when the database's schema is newer than this build (issue #1299).</summary>
+    public bool SchemaIsNewerThanThisBuild => UnknownApplied.Count > 0;
+
     /// <summary>
-    /// The process exit code for this outcome: non-zero only when an apply ran and still left
-    /// migrations pending. A dry run and an already up-to-date database both succeed.
+    /// The process exit code for this outcome: non-zero when an apply ran and still left migrations
+    /// pending, and non-zero whenever the schema is newer than this build - a database this build
+    /// does not understand is never a success, which is why a dry run against one no longer reports
+    /// "already up to date" and exits 0 (issue #1299). An up-to-date database this build does
+    /// understand still succeeds in both modes.
     /// </summary>
-    public int ExitCode => Applied && !FullyApplied ? 1 : 0;
+    public int ExitCode => SchemaIsNewerThanThisBuild || (Applied && !FullyApplied) ? 1 : 0;
 }
 
 /// <summary>
@@ -103,6 +114,12 @@ public sealed record DatabaseMigrationOutcome(
 /// because the order matters and is part of the behaviour: the summary, the pending migration
 /// names and "Applying..." must reach the operator <i>before</i> the migration starts, so that an
 /// apply which fails part-way still leaves them looking at what was attempted.
+///
+/// Since issue #1299 it also reports the applied migrations this build does <i>not</i> contain -
+/// the database's schema being newer than the code, which no count of pending migrations reveals -
+/// and that report makes the run exit non-zero instead of saying "already up to date". How
+/// migrations are applied is unchanged: an <c>--apply</c> against such a database still applies
+/// exactly what is pending, with the finding on the operator's screen first.
 /// </summary>
 public static class DatabaseMigrator
 {
@@ -117,49 +134,97 @@ public static class DatabaseMigrator
         CancellationToken cancellationToken)
     {
         var appliedBefore = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToList();
+        var unknownApplied = UnknownAppliedMigrations.In(appliedBefore, db.Database.GetMigrations());
         var pendingBefore = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
 
-        output.WriteLine();
-        output.WriteLine($"Database migration - {(apply ? "APPLY" : "DRY RUN (nothing will be applied)")}");
-        output.WriteLine(new string('-', 78));
-        output.WriteLine($"Applied migrations : {appliedBefore.Count}");
-        output.WriteLine($"Pending migrations : {pendingBefore.Count}");
-        output.WriteLine();
+        await output.WriteLineAsync();
+        await output.WriteLineAsync(
+            $"Database migration - {(apply ? "APPLY" : "DRY RUN (nothing will be applied)")}");
+        await output.WriteLineAsync(new string('-', 78));
+        await output.WriteLineAsync($"Applied migrations : {appliedBefore.Count}");
+        await output.WriteLineAsync($"Pending migrations : {pendingBefore.Count}");
+
+        if (unknownApplied.Count > 0)
+        {
+            await output.WriteLineAsync($"Unknown applied    : {unknownApplied.Count}");
+        }
+
+        await output.WriteLineAsync();
+
+        // Issue #1299: an applied id this build does not contain is reported before anything else
+        // is said about pending work, because it changes what the operator should do next - and on
+        // an apply it has to be on their screen before `Migrate` is called.
+        if (unknownApplied.Count > 0)
+        {
+            foreach (var migration in unknownApplied)
+            {
+                await output.WriteLineAsync($"  unknown  {migration}");
+            }
+
+            await output.WriteLineAsync();
+            await output.WriteLineAsync(UnknownAppliedMigrations.Summarise(unknownApplied));
+            await output.WriteLineAsync(UnknownAppliedMigrations.RecoveryGuidance);
+            await output.WriteLineAsync();
+        }
 
         if (pendingBefore.Count == 0)
         {
-            output.WriteLine("The schema is already up to date. Nothing to do.");
-            output.WriteLine();
-            return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: false, pendingBefore, Readiness: null);
+            // "Already up to date" would be false here: this build is behind the database, which is
+            // the exact mistake the unknown-applied report above exists to stop (issue #1299).
+            if (unknownApplied.Count == 0)
+            {
+                await output.WriteLineAsync("The schema is already up to date. Nothing to do.");
+                await output.WriteLineAsync();
+            }
+
+            return new DatabaseMigrationOutcome(
+                appliedBefore,
+                unknownApplied,
+                pendingBefore,
+                Applied: false,
+                pendingBefore,
+                Readiness: null);
         }
 
         foreach (var migration in pendingBefore)
         {
-            output.WriteLine($"  pending  {migration}");
+            await output.WriteLineAsync($"  pending  {migration}");
         }
 
-        output.WriteLine();
+        await output.WriteLineAsync();
 
         if (!apply)
         {
-            output.WriteLine(
-                "Dry run: nothing was applied. Take a verified backup, then re-run with "
-                    + $"{DatabaseMigrationArguments.ApplyFlag}.");
-            output.WriteLine();
-            return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: false, pendingBefore, Readiness: null);
+            await output.WriteLineAsync(
+                unknownApplied.Count > 0
+                    ? "Dry run: nothing was applied. Resolve the unknown applied migration(s) above "
+                        + "first; this build is not the one to apply anything to this database."
+                    : "Dry run: nothing was applied. Take a verified backup, then re-run with "
+                        + $"{DatabaseMigrationArguments.ApplyFlag}.");
+            await output.WriteLineAsync();
+            return new DatabaseMigrationOutcome(
+                appliedBefore,
+                unknownApplied,
+                pendingBefore,
+                Applied: false,
+                pendingBefore,
+                Readiness: null);
         }
 
-        output.WriteLine("Applying...");
+        await output.WriteLineAsync("Applying...");
 
         // Flush before handing control to EF: if the migration throws, or the operator loses the
-        // session mid-apply, everything above must already be on their screen.
-        output.Flush();
+        // session mid-apply, everything above must already be on their screen. Unconditionally, so
+        // a cancellation cannot be the reason the operator is left without the report - hence
+        // CancellationToken.None rather than the caller's token, stated explicitly so the opt-out
+        // reads as the decision it is rather than as a forgotten argument (SonarCloud S8949).
+        await output.FlushAsync(CancellationToken.None);
 
         await db.Database.MigrateAsync(cancellationToken);
         var pendingAfter = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
 
-        output.WriteLine();
-        output.WriteLine(
+        await output.WriteLineAsync();
+        await output.WriteLineAsync(
             pendingAfter.Count == 0
                 ? "Schema applied. No migrations remain pending."
                 : $"WARNING: {pendingAfter.Count} migration(s) still pending after apply.");
@@ -170,8 +235,8 @@ public static class DatabaseMigrator
         // current, and a dry run or an already-up-to-date database has nothing new to report.
         var readiness = TenantOwnershipReadiness.Inspect(db);
 
-        output.WriteLine();
-        output.WriteLine(
+        await output.WriteLineAsync();
+        await output.WriteLineAsync(
             readiness.IsReady
                 ? "Tenant ownership is bootstrapped; no further action needed."
                 : $"Tenant ownership is NOT yet bootstrapped: {readiness.UnassignedRows} unassigned row(s), "
@@ -179,9 +244,15 @@ public static class DatabaseMigrator
                     + $"{readiness.UsableMembershipCount} active membership(s) on an active business. "
                     + $"Run `{BusinessBootstrapArguments.CommandName} "
                     + $"{BusinessBootstrapArguments.DryRunFlag}` next. See docs/tenant-rollout.md.");
-        output.WriteLine();
+        await output.WriteLineAsync();
 
-        return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: true, pendingAfter, readiness);
+        return new DatabaseMigrationOutcome(
+            appliedBefore,
+            unknownApplied,
+            pendingBefore,
+            Applied: true,
+            pendingAfter,
+            readiness);
     }
 }
 

@@ -42,6 +42,64 @@ let root;
 before(() => {
   root = mkdtempSync(join(tmpdir(), 'agent-evals-test-'));
   writeFileSync(join(root, 'policy.md'), 'Some preamble.\nThis file contains the guarded phrase and must keep it.\nTrailer.\n');
+  writeFileSync(
+    join(root, 'SampleTests.cs'),
+    [
+      'namespace Fixtures;',
+      '',
+      'public class SampleTests',
+      '{',
+      '    // Ghost_test is intentionally not implemented yet, see TODO.',
+      '    [Fact]',
+      '    public void Real_test()',
+      '    {',
+      '    }',
+      '',
+      '    [Theory]',
+      '    [InlineData(1)]',
+      '    [InlineData(2)]',
+      '    [InlineData(3)]',
+      '    public void Many_cases(int x)',
+      '    {',
+      '    }',
+      '',
+      '    /*',
+      '     * Block_ghost_test is only described here, inside a block comment.',
+      '     */',
+      '    [Fact]',
+      '    public void After_block_comment()',
+      '    {',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  writeFileSync(
+    join(root, 'sample.spec.ts'),
+    [
+      "describe('sample', () => {",
+      "  it('does the thing', () => {",
+      '    expect(true).toBe(true);',
+      '  });',
+      '',
+      '  test(',
+      "    'spans several lines',",
+      '    () => {',
+      '      expect(true).toBe(true);',
+      '    },',
+      '  );',
+      '',
+      "  // it('commented out test', () => {});",
+      '',
+      '  const example = `test("string only test", () => {});`;',
+      '',
+      '  test("retired test" + " suffix", () => {',
+      '    expect(example).toContain(\'retired\');',
+      '  });',
+      '});',
+      '',
+    ].join('\n'),
+  );
 });
 
 after(() => {
@@ -134,6 +192,36 @@ describe('validateCase', () => {
   it('rejects a repoFileContains assertion referencing a missing file', () => {
     const errors = validateCase(
       baseCase({ assertions: [{ type: 'repoFileContains', file: 'does-not-exist.md', text: 'x' }] }),
+      { root },
+    );
+    assert.ok(errors.some((e) => e.includes('does not exist')));
+  });
+
+  it('accepts a well-formed testExists assertion', () => {
+    const errors = validateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Real_test' }] }),
+      { root },
+    );
+    assert.deepEqual(errors, []);
+  });
+
+  it('rejects a testExists assertion missing "test"', () => {
+    const errors = validateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs' }] }),
+      { root },
+    );
+    assert.ok(errors.some((e) => e.includes('"test"')));
+    assert.ok(!errors.some((e) => e.includes('"text"')));
+  });
+
+  it('rejects a testExists assertion missing "file"', () => {
+    const errors = validateCase(baseCase({ assertions: [{ type: 'testExists', test: 'Real_test' }] }), { root });
+    assert.ok(errors.some((e) => e.includes('"file"')));
+  });
+
+  it('rejects a testExists assertion referencing a missing file', () => {
+    const errors = validateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'does-not-exist.cs', test: 'Real_test' }] }),
       { root },
     );
     assert.ok(errors.some((e) => e.includes('does not exist')));
@@ -288,6 +376,120 @@ describe('evaluateCase', () => {
       { root },
     );
     assert.equal(result.status, 'SKIPPED');
+  });
+});
+
+// --- testExists assertions ------------------------------------------------------------------
+
+describe('testExists assertions', () => {
+  it('passes for a [Fact] method declared with that name', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Real_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
+    assert.deepEqual(result.failures, []);
+  });
+
+  it('passes for a [Theory] followed by several [InlineData] lines before the method', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Many_cases' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
+  });
+
+  it('passes for a Jest it() whose title matches exactly', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'does the thing' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
+  });
+
+  it('passes for a Jest test() whose title literal is its complete first argument across several lines', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'spans several lines' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
+    assert.deepEqual(result.failures, []);
+  });
+
+  it('fails when a test-shaped string literal only looks like a Jest declaration', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'string only test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('string only test'));
+  });
+
+  it('fails when the title is only the literal prefix of a computed Jest title', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'retired test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('retired test'));
+  });
+
+  it('fails when a computed Jest title is named in full, because no literal declares it', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'retired test suffix' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('fails when a Jest title appears only in a commented-out it() call', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'commented out test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('fails when the referenced file does not exist', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'does-not-exist.cs', test: 'Real_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('could not be read'));
+  });
+
+  it('fails when the file exists but declares no test with that name', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Renamed_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('Renamed_test'));
+  });
+
+  it('fails when the name appears only in a comment, with no [Fact]/[Theory] method of that name', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Ghost_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('fails when the name appears only inside a /* */ block comment', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'Block_ghost_test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('passes for a [Fact] method declared after a block comment', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'SampleTests.cs', test: 'After_block_comment' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
   });
 });
 

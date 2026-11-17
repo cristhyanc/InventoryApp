@@ -779,7 +779,14 @@ must not be given a role that could).
    `migrate-database --dry-run` is an early CLI mode that never builds the web host and never
    applies anything, so it reports whether the snapshot's schema matches the deployed code —
    "already up to date", or the exact list of migrations a restore of this snapshot would need —
-   while leaving the copy unmodified. Follow it with business-level spot checks that compare the
+   while leaving the copy unmodified. Since issue #1299 it answers the **other** direction too: if
+   the snapshot's `__EFMigrationsHistory` holds a migration id the build running the dry run does
+   not contain, the schema is *newer* than that build, and the command lists those unknown applied
+   ids and **exits non-zero** instead of reporting "already up to date". Treat that as the signal it
+   is — the build in hand must not run against this snapshot, and starting the API against it in
+   Production would refuse to start, before any pending migration was applied (see [Build and
+   delivery](#build-and-delivery)) — rather than as a rehearsal failure: restore it with a build
+   that contains those migrations. Follow it with business-level spot checks that compare the
    copy against figures already known for a **closed** period: machine, product, sale and purchase
    row counts, the latest sale date, that every tenant-owned row still carries its owning business,
    and one or two report totals (a closed month's bookkeeping figures, for example) against what
@@ -788,7 +795,8 @@ must not be given a role that could).
    non-production Nayax, Entra and storage settings, never production ones.
 6. **Record the evidence.** A rehearsal that leaves no record cannot be relied on later. Note the
    date and operator, the object name and its `createdutc`/`kind`, the checksum comparison result,
-   the `integrity_check` and `foreign_key_check` results, the pending-migration result, which
+   the `integrity_check` and `foreign_key_check` results, the dry run's pending-migration and
+   unknown-applied result and its exit code, which
    business figures were compared, and the **elapsed wall-clock time from step 2 to the end of step
    5**. That duration is the measured input to the recovery-time trigger in [Measurable triggers to
    migrate to a server database](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above —
@@ -828,7 +836,10 @@ preference, and it binds every participant:
 - **Recovery from a bad schema migration is a restore, decided by a human** (see
   [Build and delivery](#build-and-delivery)): neither startup nor `migrate-database` rolls a
   migration back, and a failed deployment never gives an agent authority to restore, revert or
-  deploy (`AGENTS.md` § Security and deployment safeguards).
+  deploy (`AGENTS.md` § Security and deployment safeguards). Since issue #1299 redeploying the
+  older build instead is not a way around it either: that build refuses to start against the
+  migrated schema, so the way back is the restore first and then the older build, or rolling
+  forward (`docs/automation.md` § Deploy Production).
 
 ##### Human production setup, and how to verify it
 
@@ -4934,7 +4945,7 @@ Issue #59 replaced ad hoc, per-controller exception handling with a small typed 
 | `Inventory.Infrastructure` | Provider-specific failures (EF Core, Azure Blob, filesystem, HTTP, Nayax), translated to a plain answer or a narrow typed exception at that layer's own boundary so the provider SDK's exception type and message never cross it | `Nayax.NayaxUpstreamException`; `Documents.AzureBlobContainer` translates `Azure.RequestFailedException` by `ErrorCode` into a `bool`/`null` return and lets every other Azure failure propagate untranslated (never re-wrapped, never given a caller-safe message) | `502` via `NayaxUpstreamExceptionHandler` for Nayax; an untranslated provider failure (a missing container, a revoked role assignment) reaches `GlobalExceptionHandler` as a generic `500` with no SDK detail |
 | `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxConnectionExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
 
-The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException` was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it, and issue #1240 then mapped it at the HTTP boundary (below): it derives from `InvalidOperationException`, but its message is the cost replay's own product-named sentence rather than a developer's, so the handler claims that one sealed type by name and nothing else under that base.
+The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), `Bootstrap.DatabaseSchemaNewerThanCodeException` (issue #1299, the mirror of the pending-migrations guard: the schema is ahead of the code instead of behind it, thrown from the same method on the same startup decision), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException` was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it, and issue #1240 then mapped it at the HTTP boundary (below): it derives from `InvalidOperationException`, but its message is the cost replay's own product-named sentence rather than a developer's, so the handler claims that one sealed type by name and nothing else under that base.
 
 `Inventory.Domain.Exceptions` defines a small, documented hierarchy with no ASP.NET Core reference, matching the Clean Architecture rule that a Domain failure must not know about HTTP: the abstract `DomainException` root (a deliberate business-rule failure, never a programming error, an infrastructure fault, or an unexpected condition), `DomainValidationException` for a deliberate business-rule/input check, `DomainConflictException` for a request that cannot proceed because of the current state of the data (an overlapping agreement, a concurrent change), and `InsufficientStockException`, which specializes `DomainConflictException` because the conflicting state it reports is a stock level rather than an overlapping record. Their messages are written for the caller and must never carry an internal path, identifier, or another actor's data. `DomainValidationException` and `InsufficientStockException` are sealed; `DomainConflictException` stays unsealed so a future specialization can join it the same way `InsufficientStockException` did.
 
@@ -5730,10 +5741,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 - `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, and
   `onSalesSelected` returns before calling `ImportService`. Download template stays enabled: it
-  builds a CSV in the browser and calls no API. Its two cards that are links — Import products to
-  `/products/import` since issue #888, and Reimbursement Report to
-  `/admin/imports/reimbursement-report` since issue #1152 — are left in place, because a link starts
-  nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
+  builds a CSV in the browser and calls no API. The page no longer links to Import products
+  (`/products/import`, issue #888) or the Reimbursement Report (`/admin/imports/reimbursement-report`,
+  issue #1152) — both cards were removed at the owner's request on 17 November 2026 — and each of
+  those destinations applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
   `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
@@ -8032,30 +8043,29 @@ exactly where they were (see [Uploaded transaction export import (issue
 reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
 
-**Import products is a link to its own page** (issue #888). The product catalogue import is the
+**Import products has its own page** (issue #888). The product catalogue import is the
 catalogue review (issue #739, parent #329 decision C2) and no catalogue import of its own exists:
 `POST api/imports/products` does not exist any more. The review used to be a panel this page
 rendered below its cards when a local `reviewing` flag was set — by its own button or, since issue
-#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own, so this
-page keeps the Import products card with its title and description and the card's control is a
-`routerLink` to `/products/import`. The page reads no `review` query parameter any more and renders
-no review; see [The dedicated Import products page](#the-dedicated-import-products-page-issue-888)
-and [The catalogue review screen](#the-catalogue-review-screen-issue-739). The link is deliberately
-neither hidden nor disabled during a support session: it starts nothing, and the destination
-withholds the review and shows its own notice (see
-[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
-the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
-import went rather than implying it still runs here.
+#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own; this
+page reads no `review` query parameter any more and renders no review. See
+[The dedicated Import products page](#the-dedicated-import-products-page-issue-888) and
+[The catalogue review screen](#the-catalogue-review-screen-issue-739).
 
-**And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
-is now a short **Reimbursement Report** card whose control is a `routerLink` to
+**And so does the reimbursement report** (issue #1152). The `Import XML files` card moved to
 `/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
 page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
 pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
-so the upload is the only way in. The link is neither hidden nor disabled during a support
-session, for the reason the Import products link is not. See
-[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
-card description names that destination too.
+so the upload is the only way in. See
+[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152).
+
+**The Imports page no longer links to either of them** (owner's request, 17 November 2026). The
+short **Import products** and **Reimbursement Report** cards that used to link to those pages were
+removed, so the Imports page shows the Nayax sales card alone. Each destination is still reached
+from its own sidebar entry — Import products under **Inventory**, directly after Products, and
+Reimbursement Report in **Admin**, directly after Imports — and Import products also from All
+Products' **Import products** button; their routes, access rules and menu visibility switches are
+unchanged. The Admin hub's `Imports` card description still names where both imports went.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -18013,7 +18023,8 @@ reads it now.
   `Imports.Run`, like the Admin `Imports` entry (see
   [Provider-locked navigation](#provider-locked-navigation-issue-729) for what that answer is).
   All Products' own **Import products** button keeps issue #875's visibility rules and links
-  here with no query parameter, and Admin → Imports' card is a link here too. The breadcrumb reads
+  here with no query parameter; Admin → Imports' card that linked here was removed on 17 November
+  2026 at the owner's request. The breadcrumb reads
   **Products > Import products** (`layout/breadcrumbs/breadcrumb-routes.ts`, parent `PRODUCTS`).
 
 Nothing about the review itself changed with the move: same API calls, same two steps, same
@@ -21243,8 +21254,11 @@ Consequently, automated engineering agents stop at a pull request. Merge and pro
 
 Deploying the API restarts the process, and that restart is how its database schema changes (issue #54, revised by issue #201). `InventoryApi/Bootstrap/DatabaseSchemaStartup.EnsureSchema` runs at startup and decides per environment:
 
+- **A schema newer than the code is refused first, before anything is applied** (issue #1299, audit #1228 finding OPS-03, confirmed by #1231). `InventoryApi/Bootstrap/UnknownAppliedMigrations` compares the applied ids in `__EFMigrationsHistory` with the ids the running build contains; an applied id the build does not contain can only have been written by a newer build, which pending migrations alone never reveal. **Production, and every other environment except Development and `Testing`, logs a critical error naming those ids and throws `DatabaseSchemaNewerThanCodeException` having migrated and written nothing** — a Staging-like database is somebody's hosted data, so it fails closed with Production rather than with a developer's laptop. Because the comparison is the first thing `EnsureSchema` does, a database holding both an unknown applied id and a pending one is refused with the pending migration **not** applied. **Development and `Testing`** log the same finding as an error and continue, applying what is pending as before, because this policy already treats their database as the disposable one. The repository owner decided on 14 November 2026 that this fails closed in Production: redeploying an older build after a release that added migrations is no longer possible without a restore, and recovery is either restoring the verified backup taken just before that release and then deploying the older build, or rolling forward to a build that contains the migrations — nothing rolls a migration back. `DatabaseSchemaNewerThanCodeTests` covers the refusal, the unknown-plus-pending ordering, the Development/`Testing` rule and the dry-run report against a real SQLite history table.
 - **Production, Development, and `Testing`** all apply pending migrations automatically. A failed apply throws `DatabaseMigrationFailedException`, naming the environment and the pending migrations, and startup does not complete — the API never serves requests against a schema its code does not match. Development and `Testing` do this because their database is disposable; Production does it because issue #201 restored the pre-issue-#64 automatic-migration policy for normal deployments, now that the tenancy rollout issue #64 protected is complete.
 - **Any other non-Production environment** (an ephemeral integration or Staging environment, for example) applies nothing by default and throws `PendingMigrationsException`, naming the pending migrations and the command to apply them, unless the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` configuration override is `true` for that disposable database.
+
+`migrate-database --dry-run` reports the same unknown applied ids and exits non-zero instead of saying "already up to date" (issue #1299), so the restore rehearsal's schema check and an operator inspecting a database both see that the schema is ahead of the build they are holding. How migrations are applied is unchanged: `--apply` still applies exactly what is pending, with the finding printed before the apply starts.
 
 The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/DatabaseMigrationCommand`), run with `--dry-run` to inspect and `--apply` to migrate, remains available for diagnostics and manual use — inspecting what a pending deployment will apply, or applying a high-risk migration ahead of a deployment window under review — but is no longer mandatory before a normal Production deployment. Recovery from a bad apply, automatic or manual, is restoring a verified backup taken beforehand; neither startup nor the command rolls a migration back. Concurrent same-machine startups (an overlapping restart during a deployment, for example) are not separately locked: EF Core's `Database.Migrate()` re-reads the applied-migrations history when it runs rather than trusting an earlier snapshot, and SQLite's single-writer lock (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above) already serializes the two attempts, which `DatabaseSchemaStartupTests.Concurrent_production_startups_do_not_race_to_apply_the_same_migration_twice` exercises against a real on-disk database. See `docs/tenant-rollout.md` for the worked historical example and `AGENTS.md` § Database and migrations for the current invariant.
 
