@@ -5730,10 +5730,10 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 - `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, and
   `onSalesSelected` returns before calling `ImportService`. Download template stays enabled: it
-  builds a CSV in the browser and calls no API. Its two cards that are links — Import products to
-  `/products/import` since issue #888, and Reimbursement Report to
-  `/admin/imports/reimbursement-report` since issue #1152 — are left in place, because a link starts
-  nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
+  builds a CSV in the browser and calls no API. The page no longer links to Import products
+  (`/products/import`, issue #888) or the Reimbursement Report (`/admin/imports/reimbursement-report`,
+  issue #1152) — both cards were removed at the owner's request on 17 November 2026 — and each of
+  those destinations applies this same rule itself. `ProductImportPageComponent` renders a
   short "imports are unavailable during a support session" notice instead of the catalogue review —
   withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
   `ReimbursementReportPageComponent` renders the same notice and disables the ZIP upload, while
@@ -8032,30 +8032,29 @@ exactly where they were (see [Uploaded transaction export import (issue
 reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
 
-**Import products is a link to its own page** (issue #888). The product catalogue import is the
+**Import products has its own page** (issue #888). The product catalogue import is the
 catalogue review (issue #739, parent #329 decision C2) and no catalogue import of its own exists:
 `POST api/imports/products` does not exist any more. The review used to be a panel this page
 rendered below its cards when a local `reviewing` flag was set — by its own button or, since issue
-#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own, so this
-page keeps the Import products card with its title and description and the card's control is a
-`routerLink` to `/products/import`. The page reads no `review` query parameter any more and renders
-no review; see [The dedicated Import products page](#the-dedicated-import-products-page-issue-888)
-and [The catalogue review screen](#the-catalogue-review-screen-issue-739). The link is deliberately
-neither hidden nor disabled during a support session: it starts nothing, and the destination
-withholds the review and shows its own notice (see
-[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
-the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
-import went rather than implying it still runs here.
+#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own; this
+page reads no `review` query parameter any more and renders no review. See
+[The dedicated Import products page](#the-dedicated-import-products-page-issue-888) and
+[The catalogue review screen](#the-catalogue-review-screen-issue-739).
 
-**And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
-is now a short **Reimbursement Report** card whose control is a `routerLink` to
+**And so does the reimbursement report** (issue #1152). The `Import XML files` card moved to
 `/admin/imports/reimbursement-report`, where #1149's ZIP upload and its job status list live; this
 page runs no reimbursement import of its own and `AdminImportsComponent.importXml` is gone. The
 pending-XML action that moved there with it went with the server-folder import issue #1237 retired,
-so the upload is the only way in. The link is neither hidden nor disabled during a support
-session, for the reason the Import products link is not. See
-[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
-card description names that destination too.
+so the upload is the only way in. See
+[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152).
+
+**The Imports page no longer links to either of them** (owner's request, 17 November 2026). The
+short **Import products** and **Reimbursement Report** cards that used to link to those pages were
+removed, so the Imports page shows the Nayax sales card alone. Each destination is still reached
+from its own sidebar entry — Import products under **Inventory**, directly after Products, and
+Reimbursement Report in **Admin**, directly after Imports — and Import products also from All
+Products' **Import products** button; their routes, access rules and menu visibility switches are
+unchanged. The Admin hub's `Imports` card description still names where both imports went.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -18013,7 +18012,8 @@ reads it now.
   `Imports.Run`, like the Admin `Imports` entry (see
   [Provider-locked navigation](#provider-locked-navigation-issue-729) for what that answer is).
   All Products' own **Import products** button keeps issue #875's visibility rules and links
-  here with no query parameter, and Admin → Imports' card is a link here too. The breadcrumb reads
+  here with no query parameter; Admin → Imports' card that linked here was removed on 17 November
+  2026 at the owner's request. The breadcrumb reads
   **Products > Import products** (`layout/breadcrumbs/breadcrumb-routes.ts`, parent `PRODUCTS`).
 
 Nothing about the review itself changed with the move: same API calls, same two steps, same
