@@ -215,8 +215,10 @@ public static class DatabaseMigrator
 
         // Flush before handing control to EF: if the migration throws, or the operator loses the
         // session mid-apply, everything above must already be on their screen. Unconditionally, so
-        // a cancellation cannot be the reason the operator is left without the report.
-        await output.FlushAsync();
+        // a cancellation cannot be the reason the operator is left without the report - hence
+        // CancellationToken.None rather than the caller's token, stated explicitly so the opt-out
+        // reads as the decision it is rather than as a forgotten argument (SonarCloud S8949).
+        await output.FlushAsync(CancellationToken.None);
 
         await db.Database.MigrateAsync(cancellationToken);
         var pendingAfter = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
