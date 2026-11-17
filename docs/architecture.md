@@ -11609,7 +11609,8 @@ the instant with a fixed precedence:
    it may correct an older stored instant through the ordinary update and cost-rebuild path (the
    affected product is replayed from the earlier of its old and new instants).
 2. Otherwise a **stored** sale keeps the instant it already holds; the row's other facts (status,
-   product, settlement value, cost price under the existing rule) still update it. A later export
+   product, settlement value, cost price under the existing rule) still update it — each of them
+   only where the row actually carries a value, since issue #1298. A later export
    without a usable GMT value therefore cannot move a sale the latest-sales synchronization stored at
    its authoritative instant — and since that synchronization never rewrites a stored instant,
    nothing would ever move it back.
@@ -14475,7 +14476,9 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   `MachineAuthorizationTime` column. A transaction this business already holds
   is updated in place rather than counted again, and an update never erases a transaction cost price
   the business already has - a row that simply does not carry the column leaves the stored one in
-  place, while every other imported fact is overwritten, exactly as the legacy loop did. Statuses
+  place. Since issue #1298 that holds for every other imported fact too, which the loop used to
+  overwrite unconditionally; see [What a blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298) below. Statuses
   are classified by the Domain `NayaxTransactionStatusClassifier` and products matched by the Domain
   `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on the store's candidate projection;
   neither status identifiers nor matching rules are reimplemented. Since issue #745 a row's remote
@@ -14499,10 +14502,13 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   it. The adapter keeps the parsing decisions imported financial data depends on: headers matched on
   letters and digits only (so `Product Cost Price`, `ProductCostPrice` and `product_cost_price` are
   one column, with `ProductCost`/`CostPrice` additionally accepted for the transaction cost),
-  invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception
-  being an absent settlement value, which the legacy import read as `0`), and an instant taken from
-  a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
-  left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
+  invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception,
+  an absent settlement value the legacy import read as `0`, ended with issue #1298 - see [What a
+  blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298)), text cells
+  trimmed and a cell of nothing but whitespace left `null` rather than `""` (issue #1298, same
+  section), and an instant taken from a date cell, an Excel serial number, or the export's own
+  `d/M/yyyy h:mm:ss tt` text and otherwise left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
   deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
   `FileFormatException`, which the controller's `InvalidOperationException` handling does not claim,
   so it reaches `GlobalExceptionHandler` as a generic `500` exactly as before) rather than being
@@ -14533,7 +14539,8 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   import again; whole-import atomicity would be its own change. Both behaviours are pinned by
   regression tests.
 - `ImportsController.ImportNayaxSales` calls the use case directly; the route, the
-  `NayaxSalesImportResult` response shape, the status codes and both `400 Bad Request` validation
+  `NayaxSalesImportResult` response shape (extended by issue #1298, never narrowed), the status codes
+  and both `400 Bad Request` validation
   messages ("An Excel file is required." for a missing or empty upload, "Only .xlsx, .xls, or .csv
   files are supported." for an unsupported format) are unchanged. The `IFormFile` stays at the HTTP
   boundary: the use case receives only `NayaxSalesFileInput` (the uploaded name and a way to open the
@@ -14543,6 +14550,64 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   change the response body from a bare JSON string to `ProblemDetails`, which is the separate later
   change [Domain and application error mapping](#domain-and-application-error-mapping) already
   records for this action.
+
+##### What a blank cell or a missing column does to a stored sale (issue #1298)
+
+**The file is the source of truth for a transaction's status and amount, and says nothing at all
+through a blank cell.** Those are two different statements, and the import used to make only the
+first: `ClosedXmlNayaxSalesWorkbookReader` turned a blank or missing amount into `0` and a blank
+status into `null`, `EfNayaxSalesImportStore.Update` wrote status, amount, payment method, product
+name and machine name unconditionally, and so a row whose cells were empty - or a file exported
+without those columns - changed a stored completed $3.50 sale into a statusless $0 one and dropped
+it out of every report. The owner's decision of 14 November 2026 is what this now implements: a
+value the file carries wins, in either direction, on a queue-stored sale as much as any other; a
+value it does not carry changes nothing.
+
+- **The reader tells three cases apart** for the status and the settlement value, as
+  `NayaxSalesCellInput` beside each: `Absent` (no column, or a blank or whitespace cell), `Valid`
+  (a readable value, an explicit `0` amount included) and `Malformed` (a non-blank value it cannot
+  read). `NayaxSalesImportRow.SettlementValue` is nullable and is no longer defaulted to `0`. The
+  accepted number formats are unchanged - invariant culture, no currency symbol - so `$3.50` and
+  `abc` are still unreadable; what changed is that being unreadable is now *reported* instead of
+  looking exactly like an empty cell. Each row also carries its own `RowNumber`, counting the
+  header row as row 1.
+- **A text cell of nothing but whitespace states nothing either**, in the payment method, the
+  product name and the machine name. `ClosedXmlNayaxSalesWorkbookReader.TextValue` answers `null`
+  for it rather than the `""` it used to trim it to, so the row carries "the file said nothing"
+  for those three facts exactly as it does for the status and the amount; `null` in the row is the
+  port's contract for a value the file does not state.
+- **`ImportNayaxSales` decides what an update writes**, as it already did for the transaction cost
+  price, and `EfNayaxSalesImportStore.Update` still applies no rule of its own: the use case merges
+  the row with the stored sale (read through the import's own `StoredImportedSale`, which carries
+  the `CostableSale` view plus the settlement value, payment method and machine name that view does
+  not) and hands the store the values it decided. A blank or missing status, amount, payment method,
+  product name or machine name leaves the stored one exactly as it is; a product name that is kept
+  is also the name the product association is resolved against, so a kept name keeps the product it
+  names. Whether a text cell said anything is decided here too, by the use case's own `StatedText` -
+  no column, an empty value or whitespace only is nothing stated - so the rule holds however a
+  reader trimmed the cell, and the merge and the kept count share one notion of blank.
+- **A row whose status or amount is `Malformed` is applied nowhere.** The stored sale is untouched,
+  and the row is reported in `NayaxSalesImportResult.InvalidRows` with its row number and
+  transaction id so an operator can fix the file. It is never counted as updated, imported or
+  skipped.
+- **A new sale with a blank amount is skipped**, and counted as skipped: there is no stored amount
+  to keep, and `$0` is not a reading of an empty cell.
+- **The result reports two more facts** and keeps its three original counts unchanged:
+  `KeptStoredValues`, the number of *rows* (not fields) that kept a stored value because the file
+  said nothing about it, and `InvalidRows`, with `Invalid` as its count. The count covers every
+  field the merge keeps - status, amount, payment method, product name and machine name - and a row
+  that kept four of them counts once, so the number is "rows this file said nothing new about". A
+  kept status, payment method, product name or machine name counts only where the stored sale
+  holds one: an export written without those columns is ordinary and long-standing, a column absent
+  for a sale that has nothing stored under it preserves nothing, and the import can itself store a
+  new sale whose status cell was blank. The stored amount is never null, so a blank amount always
+  keeps one. Admin → Imports shows both counts in the
+  toast it already showed the three counts in (`salesImportSummary`); the page decides none of them.
+
+Out of scope, and unchanged: nothing stops a file from changing a stored status (refunded,
+completed or queue-verified) - the file wins; no new number format is accepted; nothing detects an
+older export uploaded after a newer one, because the file carries no export date; and sales an
+earlier upload already changed are not repaired here.
 
 Historical sale costing and its backfills are `Inventory.Application.Costing` use cases (issue #297,
 child 3 of #149), moved unchanged in behaviour from the removed
@@ -18219,8 +18284,10 @@ that meaning.
    without an offset is treated as UTC), `EventDateTimeVMC` (the machine clock, kept as source data
    only) and `EventData` (the raw text the parser reads, never modified). The descriptive fields
    (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
-   documented meanings and are not substituted for one another. Only Event 501 rows are relevant
-   to this feature.
+   documented meanings and are not substituted for one another. Only Event 501 rows and, since
+   issue #1325, Event 510 product replacements are relevant to this feature (see
+   [Product replacements](#product-replacements-event-510-issue-1325) below); every other code is
+   ignored.
 
    **The timestamp contract: which instant each side uses** (issue #1243). `EventDateTimeGMT` is the
    instant the machine was physically refilled, and `EventDateTimeVMC` - the machine's own clock - is
@@ -18662,6 +18729,88 @@ insufficient-storage shortfall, and auto-deciding the accounting/tax treatment o
 discrepancy are all explicitly out of scope for this feature. Issue #891 adds a Dashboard
 **reminder** that this sync is overdue, which is not a schedule: it only tells an operator that the
 explicit action above is waiting for them.
+
+#### Product replacements (Event 510, issue #1325)
+
+When an operator replaces the product in one MDB position in Nayax Core, Nayax records a
+"Machine Product Changed" alert. Before issue #1325 the import kept only Event 501 and dropped it,
+so a replacement left no trace in Sync Restock. It is now imported and shown, read-only: **nothing
+here writes stock**. Applying a replacement is #1326 and its editing UI is #1327.
+
+- **The contract and its evidence.** The Nayax developer portal documents `lastAlerts` but lists no
+  event codes and no `EventData` format, so the contract rests on one real `lastAlerts` item the
+  repository owner captured on 17 November 2026, anonymised and kept as the test fixture
+  `NayaxProductChangedAlertFixture` (`backend/Inventory.UnitTests/Domain/Nayax/`). It shows
+  `EventCode` `510`, `EventDescription` "Machine Product Changed", `EventGroupName` "Stock",
+  `EventCategoryName` "Inventory", and `EventData` of the form
+  `<operator> 'has replaced product <outgoing> with product <incoming> | Product MDB: <mdb>` - a
+  single quote opens before `has replaced product` and is never closed, and nothing follows the MDB
+  number. `NayaxMachineAlertEventCodes.MachineProductChanged` is the constant.
+- **Import.** `SyncMachineStockFromNayax` keeps 510 alerts beside 501 alerts and deduplicates them
+  by `NayaxEventLogId` exactly as 501 alerts are, so a repeated sync imports nothing twice. A
+  replacement needs no MDB mapping, so new replacements are saved **first and on their own**,
+  before the live machine-products read: a failure of that read can never lose one (`lastAlerts`
+  returns only recent alerts). New 501 alerts still need the read and fail with it as before.
+  `Inventory.Domain.Nayax.NayaxProductReplacementEventParser` reads the MDB, the outgoing name and
+  the incoming name, anchored on the text markers (`has replaced product`, `with product`,
+  `| Product MDB:`) and never on the operator prefix. Text that does not match, or that is ambiguous
+  because `with product` appears more than once (counted with the same whitespace rule the pattern
+  matches it by, so a second marker spaced with tabs, line breaks or several spaces still counts),
+  is stored as Needs Review with the raw text and
+  the parser's reason, exactly like an unparsable 501.
+- **Storage.** The row is a `NayaxMachineStockEvents` row with `EventCode` `510`.
+  `ParsedProductName` holds the **incoming** name and the additive, nullable
+  `ParsedOutgoingProductName` (migration `AddNayaxMachineStockEventOutgoingProductName`) the
+  outgoing one; it is null on every 501 row, whose meaning is unchanged. A replacement is stored
+  with `MatchStatus` Needs Review, no `MatchedProductId` and no `ParsedQuantity`: its product and
+  quantity suggestions are advice, recomputed on every read, never a stored match. A parsed
+  replacement carries no review reason; the list explains it.
+- **Suggestions** (`NayaxProductReplacementSuggestionPolicy`, advice only). Each is computed from
+  the same live machine-products read that the import and the re-match use
+  (`MachineStockMatchRefresh.SlotReading`), read fresh when the list holds a pending replacement.
+  The **incoming product** comes from the live slot first - MDB -> Nayax product id ->
+  `Product.ExternalProductId` - when the slot still reports a product whose normalised name equals
+  the incoming name; otherwise, for either name, it is a unique match on
+  `ProductMatcher.NormalizeName` among the business's active products. A tie, no match or a
+  mismatch leaves the suggestion empty with a reason. The **suggested incoming quantity** is the
+  units Nayax currently shows in that MDB, `PAR - MissingStockByMDB` (the Pick List's "current"
+  arithmetic), offered only when the slot still reports the incoming product, both values are
+  present, the result is not negative and no newer pending event exists for that machine and MDB;
+  otherwise it is null with a reason. The owner decided on 16 November 2026 that this is the
+  closest figure to what was loaded, because the operator's Adjust Stock in Nayax has already
+  filled the slot; it can read low by the sales since the replacement, the operator edits it, and
+  it is never called capacity. **If that live read fails** (Nayax unreachable), the preview is
+  still returned from what is stored: the incoming suggestion falls back to the unique name match
+  and the quantity is left out, each with the reason
+  (`NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason`), exactly as Apply decides
+  from what is stored when the same read fails. A cancelled request is not swallowed.
+- **Possible double count.** A pending 501 for the same machine and MDB within 24 hours of a
+  pending replacement (either side) is flagged on both rows. It is a safeguard only and blocks
+  nothing: the owner confirmed that the Adjust Stock done after a replacement creates no 501, so
+  the replacement is normally the only record of that refill. The pending events compared against
+  are the machine's whole unresolved list, never the page a From date or Show reconciled filter
+  produced.
+- **Every reader of the event table** treats the new kind deliberately:
+  - *Apply* (`ApplyMachineStockSync`) and *Apply as separate restock*
+    (`ResolveMachineStockDuplicate`) refuse it: `NayaxMachineStockApplyPolicy.Decide` takes the
+    event code and answers `ProductReplacementNotApplicable` (outcome `NotApplicable`) for anything
+    but a 501, after the settled "already applied" and "already reconciled" answers.
+  - *Already recorded manually* (`ResolveMachineStockEventsAsAlreadyRecorded`) accepts it and writes
+    no stock, exactly as for a 501.
+  - *Re-match* (`RematchMachineStockEvents.IsWaitingForAMatch` and
+    `EfMachineStockEventStore.WaitingForAMatch`) excludes it, so its stored match never changes.
+  - *Pending counts*: the Dashboard reminder and the #1018 "nothing left to sync" coverage fence
+    (`EfMachineRestockSyncCoverageStore.IsPendingSince`, whose `ParsedQuantity == null` branch it
+    falls into) and the machine ledger's unprocessed-event count
+    (`EfMachineStockLedgerStore`) count it like a 501 until it is resolved.
+  - *Stock History presence* (`EfProductInventoryHistoryQueries`) reads `MatchedProductId`, which a
+    replacement never has, so it adds no product history; the platform diagnostics surface still
+    excludes the whole table.
+- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time,
+  both Nayax names, the suggestions and their reasons, the suggested quantity and any double-count
+  flag. It has no quantity or reason inputs, is never pre-selected or counted as applicable, and
+  can only be marked **Already recorded manually**; **Apply selected** is disabled while a
+  replacement is selected.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 

@@ -392,7 +392,8 @@ public sealed class ApplyMachineStockSync
             state.ParsedQuantity,
             availableStorageQuantity,
             isPossibleDuplicate,
-            state.DuplicateResolution);
+            state.DuplicateResolution,
+            state.EventCode);
     }
 
     /// <summary>
@@ -416,6 +417,10 @@ public sealed class ApplyMachineStockSync
                 new(state.Id, NayaxStockEventApplyOutcome.NotMatched, ruling.Message, null),
 
             NayaxStockEventApplyDecision.NegativeDiscrepancy =>
+                new(state.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null),
+
+            // A product replacement (issue #1325): refused, never a refill, until #1326.
+            NayaxStockEventApplyDecision.ProductReplacementNotApplicable =>
                 new(state.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null),
 
             NayaxStockEventApplyDecision.InsufficientStorage =>

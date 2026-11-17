@@ -20,8 +20,10 @@ namespace Inventory.Infrastructure.Imports;
 ///   column; the transaction cost price is additionally accepted as <c>ProductCost</c> or
 ///   <c>CostPrice</c>, which are the spellings the Nayax export has been seen to use.</item>
 ///   <item>Numbers are read with <see cref="CultureInfo.InvariantCulture"/>, and an unparsable
-///   number stays <c>null</c> rather than becoming zero - except the settlement value, which the
-///   legacy import read as <c>0</c> when the column was absent.</item>
+///   number stays <c>null</c> rather than becoming zero. Since issue #1298 that holds for the
+///   settlement value too, which this reader used to default to <c>0</c> when the column was absent;
+///   the status and the settlement value additionally report which of the three cases the cell was -
+///   nothing stated, a readable value, or a non-blank value this reader cannot read.</item>
 ///   <item>A date cell is taken as a date, a numeric cell as an Excel serial date, and anything
 ///   else only as the export's own <c>d/M/yyyy h:mm:ss tt</c> text; an unrecognised instant stays
 ///   <c>null</c> so the row is skipped rather than imported at a guessed time.</item>
@@ -67,19 +69,24 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         foreach (var row in rows.Skip(1))
         {
             var (gmt, gmtInput) = GmtValue(Cell(row, headers, "AuthorizationDateTimeGMT"));
+            var (status, statusInput) = IntInput(Cell(row, headers, "TransactionStatusId"));
+            var (settlement, settlementInput) = DecimalInput(Cell(row, headers, "SettlementValue"));
             parsed.Add(new NayaxSalesImportRow(
                 LongValue(Cell(row, headers, "TransactionID")),
                 LongValue(Cell(row, headers, "MachineID")),
                 DateValue(Cell(row, headers, "MachineAuthorizationTime")),
-                IntValue(Cell(row, headers, "TransactionStatusId")),
+                status,
                 NullableLongValue(Cell(row, headers, "NayaxProductId")),
                 TextValue(Cell(row, headers, "MachineName")),
-                DecimalValue(Cell(row, headers, "SettlementValue")) ?? 0m,
+                settlement,
                 TextValue(Cell(row, headers, "PaymentMethod")),
                 TextValue(Cell(row, headers, "ProductName")),
                 DecimalValue(Cell(row, headers, "ProductCostPrice", "ProductCost", "CostPrice")),
                 gmt,
-                gmtInput));
+                gmtInput,
+                statusInput,
+                settlementInput,
+                row.RowNumber()));
         }
 
         return parsed;
@@ -159,16 +166,61 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         return null;
     }
 
-    private static string? TextValue(IXLCell? cell) => cell is null || cell.IsEmpty() ? null : cell.GetString().Trim();
+    /// <summary>
+    /// A cell's own text, trimmed, or <c>null</c> when the export carries no such column, the cell
+    /// is empty, or it holds nothing but whitespace (issue #1298). A cell of spaces states nothing
+    /// about a transaction, exactly as an empty one does - the same reading
+    /// <see cref="IntInput"/> and <see cref="DecimalInput"/> already apply to the status and the
+    /// amount - so it must not reach the import as an empty machine name, payment method or product
+    /// name, which the update would then write over a stored one.
+    /// </summary>
+    private static string? TextValue(IXLCell? cell)
+    {
+        if (cell is null || cell.IsEmpty())
+            return null;
+        var text = cell.GetString().Trim();
+        return text.Length == 0 ? null : text;
+    }
 
     private static long LongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : 0;
 
     private static long? NullableLongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : null;
 
-    private static int? IntValue(IXLCell? cell) => int.TryParse(TextValue(cell), out var value) ? value : null;
-
     private static decimal? DecimalValue(IXLCell? cell) =>
         decimal.TryParse(TextValue(cell), NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : null;
+
+    /// <summary>
+    /// The transaction-status cell, together with what the export carried there (issue #1298): no
+    /// column or a blank cell, a readable status, or a non-blank value that is not one. The third
+    /// case used to read as the first, so a status nobody could read looked exactly like a file
+    /// that said nothing about the transaction.
+    /// </summary>
+    private static (int? Value, NayaxSalesCellInput Input) IntInput(IXLCell? cell)
+    {
+        var text = TextValue(cell);
+        if (string.IsNullOrWhiteSpace(text))
+            return (null, NayaxSalesCellInput.Absent);
+        return int.TryParse(text, out var value)
+            ? (value, NayaxSalesCellInput.Valid)
+            : (null, NayaxSalesCellInput.Malformed);
+    }
+
+    /// <summary>
+    /// The settlement-value cell, read the same three ways (issue #1298). An explicit <c>0</c> is a
+    /// value the file states; a blank cell or a missing column is not, and is no longer defaulted
+    /// to <c>0</c> here. The accepted number formats are unchanged - invariant culture, no currency
+    /// symbol - so a value this reader could not read before is now reported as invalid rather than
+    /// silently becoming zero.
+    /// </summary>
+    private static (decimal? Value, NayaxSalesCellInput Input) DecimalInput(IXLCell? cell)
+    {
+        var text = TextValue(cell);
+        if (string.IsNullOrWhiteSpace(text))
+            return (null, NayaxSalesCellInput.Absent);
+        return decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+            ? (value, NayaxSalesCellInput.Valid)
+            : (null, NayaxSalesCellInput.Malformed);
+    }
 
     /// <summary>
     /// A cell under a column the export itself names as GMT, read as a true UTC instant (issue #380).

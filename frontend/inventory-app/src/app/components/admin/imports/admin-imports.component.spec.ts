@@ -7,7 +7,7 @@ import { capabilitySet } from '../../../access/capabilities';
 import { Entitlement } from '../../../access/entitlement';
 import { planLockSummary } from '../../../access/plan-lock';
 import { AdminImportsComponent, salesFileImportPlanLockedMessage } from './admin-imports.component';
-import { ImportService } from '../../../services/import.service';
+import { ImportService, NayaxSalesImportResult } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -40,6 +40,22 @@ function enforced(plan: string | null): Entitlement {
 
 /** The shipped state until issue #966's rollout is switched on: nothing is enforced by plan. */
 const ENFORCEMENT_OFF: Entitlement = { enforced: false, plan: null, source: 'EnforcementDisabled', endsAtUtc: null };
+
+/**
+ * One import result as the API answers it (issue #1298), with the counts a case does not care
+ * about left at nothing kept and nothing unreadable.
+ */
+function importResult(result: Partial<NayaxSalesImportResult>): NayaxSalesImportResult {
+  return {
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    keptStoredValues: 0,
+    invalid: 0,
+    invalidRows: [],
+    ...result
+  };
+}
 
 /**
  * This page runs one import - the Nayax sales upload - and hosts no catalogue review and no
@@ -107,7 +123,7 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
 
   it('accepts the supported sales file types and reports the imported, updated and skipped counts', async () => {
     for (const name of ['sales.xlsx', 'sales.XLS', 'sales.csv']) {
-      const importNayaxSales = jest.fn(() => of({ imported: 3, updated: 2, skipped: 1 }));
+      const importNayaxSales = jest.fn(() => of(importResult({ imported: 3, updated: 2, skipped: 1 })));
       const success = jest.fn();
       const { fixture } = await render({ importNayaxSales }, { success });
 
@@ -115,10 +131,41 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
 
       expect(importNayaxSales).toHaveBeenCalledTimes(1);
       expect((importNayaxSales.mock.calls[0] as unknown as File[])[0].name).toBe(name);
-      expect(success).toHaveBeenCalledWith('Imported 3 sales, updated 2, skipped 1.');
+      expect(success).toHaveBeenCalledWith(
+        'Imported 3 sales, updated 2, skipped 1. Kept stored values on 0 rows; 0 rows could not be read.'
+      );
       expect(fixture.componentInstance.loading).toBe(false);
       TestBed.resetTestingModule();
     }
+  });
+
+  /**
+   * Issue #1298: the two facts the three counts could not say. A row that kept a stored value
+   * because the file's cell was blank changed nothing an operator can see in a sale, and a row
+   * nobody could read was not applied at all - so both are reported rather than disappearing
+   * into "updated".
+   */
+  it('reports how many rows kept a stored value and how many could not be read', async () => {
+    const importNayaxSales = jest.fn(() =>
+      of(
+        importResult({
+          imported: 0,
+          updated: 4,
+          skipped: 1,
+          keptStoredValues: 2,
+          invalid: 1,
+          invalidRows: [{ rowNumber: 7, transactionId: 1001 }]
+        })
+      )
+    );
+    const success = jest.fn();
+    const { fixture } = await render({ importNayaxSales }, { success });
+
+    fixture.componentInstance.onSalesSelected(selectionEvent('sales.csv'));
+
+    expect(success).toHaveBeenCalledWith(
+      'Imported 0 sales, updated 4, skipped 1. Kept stored values on 2 rows; 1 row could not be read.'
+    );
   });
 
   it('does nothing when the file dialog is dismissed without a selection', async () => {
@@ -154,7 +201,7 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
   });
 
   it('keeps the sales file input restricted to the accepted extensions and disables the action while importing', async () => {
-    const { fixture, host } = await render({ importNayaxSales: jest.fn(() => of({ imported: 0, updated: 0, skipped: 0 })) });
+    const { fixture, host } = await render({ importNayaxSales: jest.fn(() => of(importResult({}))) });
 
     expect(host.querySelector('input[type="file"]')?.getAttribute('accept')).toBe('.xlsx,.xls,.csv');
 
@@ -376,7 +423,7 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
   });
 
   it('imports normally on Pro', async () => {
-    const importNayaxSales = jest.fn(() => of({ imported: 2, updated: 0, skipped: 0 }));
+    const importNayaxSales = jest.fn(() => of(importResult({ imported: 2 })));
     const success = jest.fn();
     const { fixture, host } = await render(
       { importNayaxSales },
@@ -391,7 +438,9 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
     fixture.componentInstance.onSalesSelected(selectionEvent('sales.csv'));
 
     expect(importNayaxSales).toHaveBeenCalledTimes(1);
-    expect(success).toHaveBeenCalledWith('Imported 2 sales, updated 0, skipped 0.');
+    expect(success).toHaveBeenCalledWith(
+      'Imported 2 sales, updated 0, skipped 0. Kept stored values on 0 rows; 0 rows could not be read.'
+    );
   });
 
   it('keeps the support-session restriction on Pro, where the plan allows the import', async () => {
@@ -414,7 +463,7 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
   });
 
   it('locks nothing while enforcement is switched off, whatever plan is reported', async () => {
-    const importNayaxSales = jest.fn(() => of({ imported: 1, updated: 0, skipped: 0 }));
+    const importNayaxSales = jest.fn(() => of(importResult({ imported: 1 })));
     const { fixture, host } = await render(
       { importNayaxSales },
       undefined,
@@ -436,7 +485,7 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
   ];
 
   it.each(notKnown)('locks nothing while %s, and lets the backend answer for the business', async (_case, access) => {
-    const importNayaxSales = jest.fn(() => of({ imported: 1, updated: 0, skipped: 0 }));
+    const importNayaxSales = jest.fn(() => of(importResult({ imported: 1 })));
     const { fixture, host } = await render({ importNayaxSales }, undefined, of(false), access);
 
     expect(planLock(host)).toBeNull();

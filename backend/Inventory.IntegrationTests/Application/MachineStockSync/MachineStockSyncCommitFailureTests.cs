@@ -355,6 +355,10 @@ public class MachineStockSyncCommitFailureTests
             IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
             _inner.GetStorageProductsAsync(productIds, cancellationToken);
 
+        public Task<IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate>> GetActiveProductCandidatesAsync(
+            CancellationToken cancellationToken) =>
+            _inner.GetActiveProductCandidatesAsync(cancellationToken);
+
         public Task ImportAsync(IReadOnlyList<MachineStockEventImport> events, CancellationToken cancellationToken) =>
             _inner.ImportAsync(events, cancellationToken);
 

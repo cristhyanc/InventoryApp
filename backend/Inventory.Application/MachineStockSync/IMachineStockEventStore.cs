@@ -9,6 +9,12 @@ namespace Inventory.Application.MachineStockSync;
 /// <see cref="EventDateTimeVmc"/> its machine-clock <c>EventDateTimeVMC</c>. The raw EventData is
 /// carried verbatim and <see cref="RawSourceMetadata"/> holds the complete source alert as JSON in
 /// Nayax's documented field names, so the import stays auditable.
+///
+/// <para>For a product replacement (Event 510, issue #1325) <see cref="ParsedProductName"/> is the
+/// <em>incoming</em> product's name and <see cref="ParsedOutgoingProductName"/> the outgoing one's;
+/// <see cref="ParsedQuantity"/> and <see cref="MatchedProductId"/> are always null, because a
+/// replacement reports no quantity and its product suggestions are advice computed afresh on every
+/// read, never a stored match. For a 501 event <see cref="ParsedOutgoingProductName"/> is null.</para>
 /// </summary>
 public sealed record MachineStockEventImport(
     long NayaxEventLogId,
@@ -23,9 +29,15 @@ public sealed record MachineStockEventImport(
     int? ParsedQuantity,
     long? MatchedProductId,
     NayaxStockEventMatchStatus MatchStatus,
-    string? NeedsReviewReason);
+    string? NeedsReviewReason,
+    string? ParsedOutgoingProductName = null);
 
-/// <summary>An imported event that has not been applied yet, with its matched product's current storage.</summary>
+/// <summary>
+/// An imported event that has not been applied yet, with its matched product's current storage.
+/// <see cref="EventCode"/> says which kind of alert it is (501 stock adjustment or 510 product
+/// replacement, issue #1325) and <see cref="ParsedOutgoingProductName"/> is the replacement's
+/// outgoing name.
+/// </summary>
 public sealed record PendingMachineStockEvent(
     int Id,
     long NayaxEventLogId,
@@ -42,7 +54,9 @@ public sealed record PendingMachineStockEvent(
     NayaxStockEventMatchStatus MatchStatus,
     string? NeedsReviewReason,
     NayaxStockEventProcessingStatus ProcessingStatus,
-    NayaxDuplicateResolution DuplicateResolution);
+    NayaxDuplicateResolution DuplicateResolution,
+    int EventCode = NayaxMachineAlertEventCodes.StockAdjustForMachine,
+    string? ParsedOutgoingProductName = null);
 
 /// <summary>
 /// One page of the Sync Restock working list (issue #206): the currently-unprocessed events that
@@ -59,6 +73,9 @@ public sealed record MachineStockEventsPage(
 /// EventData parsed to, carried since issue #1248 because they are what the machine's current MDB
 /// mapping is re-matched against. Both are absent for an alert whose EventData never parsed at all,
 /// which is an event no mapping can ever resolve.</para>
+///
+/// <para><see cref="EventCode"/> is carried since issue #1325, because only a 501 stock adjustment
+/// can ever be applied or re-matched: a 510 product replacement is refused by every apply path.</para>
 /// </summary>
 public sealed record MachineStockEventState(
     int Id,
@@ -72,7 +89,8 @@ public sealed record MachineStockEventState(
     int? StockAdjustmentId,
     NayaxDuplicateResolution DuplicateResolution,
     int? ParsedMdb = null,
-    string? ParsedProductName = null);
+    string? ParsedProductName = null,
+    int EventCode = NayaxMachineAlertEventCodes.StockAdjustForMachine);
 
 /// <summary>
 /// One event's refreshed product match (issue #1248): what the machine's current MDB mapping and
@@ -176,6 +194,13 @@ public interface IMachineStockEventStore
     /// </summary>
     Task<IReadOnlyDictionary<long, NayaxStockSyncProduct>> GetStorageProductsAsync(
         IReadOnlyCollection<long> productIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The business's active products, as id and name only (issue #1325): the catalogue a product
+    /// replacement's names are matched against when the live slot does not settle the suggestion.
+    /// </summary>
+    Task<IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate>> GetActiveProductCandidatesAsync(
+        CancellationToken cancellationToken);
 
     Task ImportAsync(IReadOnlyList<MachineStockEventImport> events, CancellationToken cancellationToken);
 

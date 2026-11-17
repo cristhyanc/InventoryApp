@@ -1,5 +1,6 @@
 using System.Text;
 using ClosedXML.Excel;
+using Inventory.Application.Imports;
 using Inventory.Infrastructure.Imports;
 using Xunit;
 
@@ -105,17 +106,95 @@ public class ClosedXmlNayaxSalesWorkbookReaderTests
     }
 
     /// <summary>
-    /// The one deliberate default the legacy import applied while parsing: an absent settlement
-    /// value read as <c>0</c>, which the persisted non-nullable column requires.
+    /// The one deliberate default the legacy import applied while parsing - an absent settlement
+    /// value read as <c>0</c> - is gone (issue #1298). A column the export does not carry says
+    /// nothing about a transaction's amount, and reading it as a real <c>0</c> is what let an
+    /// export without the column wipe a stored sale's amount; the import now keeps the stored one.
     /// </summary>
     [Fact]
-    public void An_absent_settlement_value_reads_as_zero()
+    public void An_absent_settlement_value_reads_as_no_value_rather_than_zero()
     {
         var row = Assert.Single(ReadCsv(
             "TransactionID,MachineID,MachineAuthorizationTime\n" +
             "1001,7,2/9/2026 2:30:00 PM"));
 
-        Assert.Equal(0m, row.SettlementValue);
+        Assert.Null(row.SettlementValue);
+        Assert.Equal(NayaxSalesCellInput.Absent, row.SettlementValueInput);
+    }
+
+    /// <summary>
+    /// The three cases the status and the amount are now read as (issue #1298): nothing stated, a
+    /// readable value - an explicit <c>0</c> amount included - and a non-blank value this reader
+    /// cannot read, which the import reports as an invalid row instead of silently treating as
+    /// blank. The accepted number formats are unchanged, so <c>$3.50</c> is still unreadable.
+    /// </summary>
+    [Fact]
+    public void A_blank_a_valid_and_an_unreadable_status_or_amount_are_told_apart()
+    {
+        var rows = ReadCsv(
+            "TransactionID,MachineID,TransactionStatusId,SettlementValue,MachineAuthorizationTime\n" +
+            "1001,7, , ,2/9/2026 2:30:00 PM\n" +
+            "1002,7,12,0,2/9/2026 2:30:00 PM\n" +
+            "1003,7,not-a-status,$3.50,2/9/2026 2:30:00 PM");
+
+        Assert.Equal(NayaxSalesCellInput.Absent, rows[0].TransactionStatusInput);
+        Assert.Equal(NayaxSalesCellInput.Absent, rows[0].SettlementValueInput);
+        Assert.Null(rows[0].TransactionStatusId);
+        Assert.Null(rows[0].SettlementValue);
+
+        Assert.Equal(NayaxSalesCellInput.Valid, rows[1].TransactionStatusInput);
+        Assert.Equal(NayaxSalesCellInput.Valid, rows[1].SettlementValueInput);
+        Assert.Equal(12, rows[1].TransactionStatusId);
+        Assert.Equal(0m, rows[1].SettlementValue);
+
+        Assert.Equal(NayaxSalesCellInput.Malformed, rows[2].TransactionStatusInput);
+        Assert.Equal(NayaxSalesCellInput.Malformed, rows[2].SettlementValueInput);
+        Assert.Null(rows[2].TransactionStatusId);
+        Assert.Null(rows[2].SettlementValue);
+    }
+
+    /// <summary>
+    /// A cell holding nothing but whitespace states nothing about a transaction, exactly as an empty
+    /// cell does (issue #1298). It used to be trimmed to <c>""</c>, which the import could not tell
+    /// from a reported name - so a row of spaces overwrote a stored payment method, product name or
+    /// machine name with a blank, the very thing a blank cell must never do. Asserted on a real
+    /// workbook, because that is the format the export is uploaded in and a whitespace cell is one
+    /// the workbook holds rather than an empty one.
+    /// </summary>
+    [Fact]
+    public void A_whitespace_only_text_cell_states_nothing_rather_than_an_empty_value()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.Worksheets.Add("Sales");
+        Header(sheet, "TransactionID", "MachineID", "PaymentMethod", "ProductName", "MachineName",
+            "MachineAuthorizationTime");
+        sheet.Cell(2, 1).Value = 1001;
+        sheet.Cell(2, 2).Value = 7;
+        sheet.Cell(2, 3).Value = "   ";
+        sheet.Cell(2, 4).Value = "\t";
+        sheet.Cell(2, 5).Value = " ";
+        sheet.Cell(2, 6).Value = Authorized;
+
+        var row = Assert.Single(Read(workbook, "sales.xlsx"));
+
+        Assert.Null(row.PaymentMethod);
+        Assert.Null(row.ProductName);
+        Assert.Null(row.MachineName);
+    }
+
+    /// <summary>
+    /// Each row carries its own number in the file, counting the header as row 1, so an invalid row
+    /// is reported where an operator can find it rather than by position in a filtered list.
+    /// </summary>
+    [Fact]
+    public void Every_row_carries_its_own_file_row_number()
+    {
+        var rows = ReadCsv(
+            "TransactionID,MachineID,MachineAuthorizationTime\n" +
+            "1001,7,2/9/2026 2:30:00 PM\n" +
+            "1002,7,2/9/2026 2:30:00 PM");
+
+        Assert.Equal([2, 3], rows.Select(row => row.RowNumber));
     }
 
     [Fact]

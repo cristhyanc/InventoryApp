@@ -20,11 +20,14 @@ describe('auth-config', () => {
 
   // Issue #710 added a second trusted issuer to the API; issue #711 added the SPA's side of it, as
   // a second authority with its own client id, its own API audience and therefore its own MSAL
-  // cache partition. **With no customer identity tenant configured - the shipped state - there is
-  // still exactly one authority and exactly one audience**, which is what keeps "no stale or
-  // wrong-provider token can be sent or selected" true for every deployment that has not been
-  // configured by a human.
+  // cache partition. **With no customer identity tenant configured there is still exactly one
+  // authority and exactly one audience**, which is what keeps "no stale or wrong-provider token can
+  // be sent or selected" true for any build whose `externalIdSettings` are cleared. Source control
+  // now carries filled-in identifiers, so this test clears them itself to prove the unconfigured
+  // (rollback) state rather than relying on the committed values.
   it('signs in against exactly one authority and asks for exactly one API audience', () => {
+    unconfigureExternalId();
+
     const { auth } = createMsalConfig();
 
     expect(auth.authority).toBe('https://login.microsoftonline.com/common');

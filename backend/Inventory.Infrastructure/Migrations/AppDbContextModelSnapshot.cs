@@ -1369,6 +1369,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int?>("ParsedMdb")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ParsedOutgoingProductName")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ParsedProductName")
                         .HasColumnType("TEXT");
 

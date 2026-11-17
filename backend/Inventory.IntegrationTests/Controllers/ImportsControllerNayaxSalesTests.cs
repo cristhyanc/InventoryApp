@@ -42,7 +42,7 @@ public class ImportsControllerNayaxSalesTests
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.FindByTransactionIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((CostableSale?)null);
+            .ReturnsAsync((StoredImportedSale?)null);
         store.Setup(x => x.Add(It.IsAny<ImportedNayaxSale>()))
             .Returns((ImportedNayaxSale sale) => new CostableSale
             {
@@ -101,18 +101,30 @@ public class ImportsControllerNayaxSalesTests
         Assert.Equal("Only .xlsx, .xls, or .csv files are supported.", badRequest.Value);
     }
 
+    /// <summary>
+    /// The three original count keys are unchanged, and issue #1298 added the two facts an operator
+    /// could not otherwise see beside them: how many rows kept a stored value because the file's
+    /// cell was blank or its column was missing, and which rows carried a value nobody could read.
+    /// A client that reads only the first three keeps working.
+    /// </summary>
     [Fact]
-    public void The_response_keeps_its_three_count_keys()
+    public void The_response_keeps_its_three_count_keys_and_reports_kept_and_invalid_rows()
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(
-            new NayaxSalesImportResult(4, 2, 1), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            new NayaxSalesImportResult(4, 2, 1, 3) { InvalidRows = [new(7, 1001)] },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 
         Assert.Equal(
-            ["imported", "updated", "skipped"],
+            ["imported", "updated", "skipped", "keptStoredValues", "invalidRows", "invalid"],
             document.RootElement.EnumerateObject().Select(property => property.Name));
         Assert.Equal(4, document.RootElement.GetProperty("imported").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("updated").GetInt32());
         Assert.Equal(1, document.RootElement.GetProperty("skipped").GetInt32());
+        Assert.Equal(3, document.RootElement.GetProperty("keptStoredValues").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("invalid").GetInt32());
+        var invalid = Assert.Single(document.RootElement.GetProperty("invalidRows").EnumerateArray());
+        Assert.Equal(7, invalid.GetProperty("rowNumber").GetInt32());
+        Assert.Equal(1001, invalid.GetProperty("transactionId").GetInt64());
     }
 
     private static NayaxSalesImportRow Row(long transactionId) =>

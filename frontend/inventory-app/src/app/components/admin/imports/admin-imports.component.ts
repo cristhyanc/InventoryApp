@@ -5,7 +5,7 @@ import { Subscription } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import { PlanFeature, SubscriptionPlanName, planRequiredOfError, requiredPlanOf } from '../../../access/plan-feature';
 import { PlanLock, planLockOf } from '../../../access/plan-lock';
-import { ImportService } from '../../../services/import.service';
+import { ImportService, NayaxSalesImportResult } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -23,6 +23,27 @@ const SALES_FILE_IMPORT_DESTINATION = 'Importing a Nayax sales file';
  */
 export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanName): string {
   return `${SALES_FILE_IMPORT_DESTINATION} needs the ${requiredPlan} plan.`;
+}
+
+/**
+ * What one finished sales import is reported as (issue #1298). The three original counts read
+ * exactly as they did; the two sentences after them are the facts the counts alone could not say,
+ * and both are always shown rather than only when they are not zero - "no row kept a stored value
+ * and no row was unreadable" is itself the answer an operator uploading a corrected export is
+ * looking for.
+ *
+ * <p>A kept value means the file's cell was blank or its column was missing, so a stored value -
+ * the status, the amount, the payment method, the product name or the machine name - was left
+ * alone; an unreadable row means the file stated something nobody could read and nothing of that
+ * row was applied. The server decides both - this only renders them.</p>
+ */
+export function salesImportSummary(result: NayaxSalesImportResult): string {
+  const rows = (count: number): string => (count === 1 ? 'row' : 'rows');
+  return (
+    `Imported ${result.imported} sales, updated ${result.updated}, skipped ${result.skipped}. ` +
+    `Kept stored values on ${result.keptStoredValues} ${rows(result.keptStoredValues)}; ` +
+    `${result.invalid} ${rows(result.invalid)} could not be read.`
+  );
 }
 
 /**
@@ -58,6 +79,13 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
  * refusal that arrives anyway - a downgrade between reads, or an entitlement that could not be read
  * at all - is rendered in the card too rather than as a generic toast with a futile Retry behind
  * it.</p>
+ *
+ * <p><strong>A finished import is reported with every count the server sends</strong> (issue
+ * #1298), through {@link salesImportSummary}: the imported, updated and skipped counts as before,
+ * plus how many rows kept a stored value because the file's cell was blank or its column was
+ * missing, and how many rows carried a value that could not be read at all. No rule about any
+ * of them is decided here - the server owns which row is which, and this page only shows what it
+ * answered.</p>
  *
  * <p>Role and support session are checked ahead of the plan and are unchanged: the route's
  * `requireCapability('Imports.Run')` is what decides whether this page exists for a member at all,
@@ -192,7 +220,7 @@ export class AdminImportsComponent implements OnDestroy {
     }
     this.loading = true;
     this.importService.importNayaxSales(file).subscribe({
-      next: result => { this.loading = false; this.toast.success(`Imported ${result.imported} sales, updated ${result.updated}, skipped ${result.skipped}.`); },
+      next: result => { this.loading = false; this.toast.success(salesImportSummary(result)); },
       error: err => {
         this.loading = false;
         // A `403 plan_required` is rendered in the card, never as a toast (issue #979): it is this

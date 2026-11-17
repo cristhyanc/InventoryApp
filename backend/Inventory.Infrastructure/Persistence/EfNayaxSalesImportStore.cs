@@ -42,11 +42,20 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
             .Select(conflict => conflict.TransactionId)
             .ToListAsync(cancellationToken);
 
-    public async Task<CostableSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken)
+    public async Task<StoredImportedSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken)
     {
         var existing = await _db.NayaxSales
             .FirstOrDefaultAsync(x => x.TransactionID == transactionId, cancellationToken);
-        return existing is null ? null : new NayaxCostableSale(existing);
+        // The costing view the import already used, plus the three imported facts it does not carry
+        // and a blank cell in the file must not erase (issue #1298). Read from the same tracked row,
+        // so what the use case compares against is what Update then writes onto.
+        return existing is null
+            ? null
+            : new StoredImportedSale(
+                new NayaxCostableSale(existing),
+                existing.SettlementValue,
+                existing.PaymentMethod,
+                existing.MachineName);
     }
 
     public CostableSale Add(ImportedNayaxSale sale)

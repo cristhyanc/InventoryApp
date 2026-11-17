@@ -215,7 +215,13 @@ public enum NayaxStockEventApplyDecision
     /// Already resolved as "already recorded manually" (issue #196): re-applying, or re-resolving,
     /// must never create a movement or change storage.
     /// </summary>
-    ReconciledDuplicate
+    ReconciledDuplicate,
+
+    /// <summary>
+    /// A Nayax product replacement (Event 510, issue #1325). It is never applied as a refill: until
+    /// applying a replacement exists (#1326) the only resolution is "already recorded manually".
+    /// </summary>
+    ProductReplacementNotApplicable
 }
 
 /// <summary>
@@ -260,6 +266,11 @@ public readonly record struct NayaxStockEventApplyRuling(NayaxStockEventApplyDec
 /// </summary>
 public static class NayaxMachineStockApplyPolicy
 {
+    /// <summary>Why a product replacement (Event 510) is refused by every apply path (issue #1325).</summary>
+    public const string ProductReplacementMessage =
+        "A product replacement is not a refill and cannot be applied yet. Mark it as already recorded "
+        + "once the change is recorded.";
+
     public static NayaxStockEventApplyRuling Decide(
         NayaxStockEventProcessingStatus processingStatus,
         NayaxStockEventMatchStatus matchStatus,
@@ -268,7 +279,8 @@ public static class NayaxMachineStockApplyPolicy
         int? parsedQuantity,
         int? availableStorageQuantity,
         bool isPossibleDuplicate = false,
-        NayaxDuplicateResolution duplicateResolution = NayaxDuplicateResolution.None)
+        NayaxDuplicateResolution duplicateResolution = NayaxDuplicateResolution.None,
+        int eventCode = NayaxMachineAlertEventCodes.StockAdjustForMachine)
     {
         if (processingStatus == NayaxStockEventProcessingStatus.Applied)
             return new(NayaxStockEventApplyDecision.AlreadyApplied, "Already applied.");
@@ -278,6 +290,13 @@ public static class NayaxMachineStockApplyPolicy
             return new(
                 NayaxStockEventApplyDecision.ReconciledDuplicate,
                 "Already reconciled as recorded manually; no Nayax movement was applied.");
+        }
+
+        // Only a 501 stock adjustment is ever a refill (issue #1325). Anything else - a product
+        // replacement today - is refused before its match or quantity is even looked at.
+        if (eventCode != NayaxMachineAlertEventCodes.StockAdjustForMachine)
+        {
+            return new(NayaxStockEventApplyDecision.ProductReplacementNotApplicable, ProductReplacementMessage);
         }
 
         if (isPossibleDuplicate && duplicateResolution == NayaxDuplicateResolution.None)

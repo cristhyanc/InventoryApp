@@ -132,10 +132,39 @@
                 </td>
                 <td class="table-cell">{{ event.eventDateTimeGmt | businessDateTime }}</td>
                 <td class="table-cell">{{ event.parsedMdb }}</td>
-                <td class="table-cell font-medium text-md-gray-800">{{ event.matchedProductName || event.parsedProductName || '—' }}</td>
-                <td class="table-cell">{{ event.parsedQuantity }}</td>
+                <td class="table-cell font-medium text-md-gray-800">
+                  <ng-container *ngIf="event.productReplacement as replacement; else plainProduct">
+                    <div data-testid="replacement-names">{{ replacement.outgoingProductName }} replaced by {{ replacement.incomingProductName }}</div>
+                    <div class="value-muted font-normal" data-testid="replacement-outgoing-suggestion">
+                      Out:
+                      <ng-container *ngIf="replacement.suggestedOutgoingProductName; else noOutgoing">{{ replacement.suggestedOutgoingProductName }}</ng-container>
+                      <ng-template #noOutgoing>no suggestion ({{ replacement.outgoingSuggestionReason }})</ng-template>
+                    </div>
+                    <div class="value-muted font-normal" data-testid="replacement-incoming-suggestion">
+                      In:
+                      <ng-container *ngIf="replacement.suggestedIncomingProductName; else noIncoming">{{ replacement.suggestedIncomingProductName }}<span *ngIf="replacement.incomingSuggestionSource === SuggestionSource.LiveSlot"> (from the machine)</span></ng-container>
+                      <ng-template #noIncoming>no suggestion ({{ replacement.incomingSuggestionReason }})</ng-template>
+                    </div>
+                  </ng-container>
+                  <ng-template #plainProduct>{{ event.matchedProductName || event.parsedProductName || '—' }}</ng-template>
+                </td>
                 <td class="table-cell">
-                  <span *ngIf="event.matchStatus === MatchStatus.NeedsReview" class="badge badge-warning">Needs review: {{ event.needsReviewReason }}</span>
+                  <ng-container *ngIf="event.productReplacement as replacement; else plainQuantity">
+                    <span *ngIf="replacement.suggestedIncomingQuantity !== null; else noQuantity" data-testid="replacement-quantity">Suggested {{ replacement.suggestedIncomingQuantity }}</span>
+                    <ng-template #noQuantity><span class="value-muted" data-testid="replacement-quantity-reason">— {{ replacement.suggestedIncomingQuantityReason }}</span></ng-template>
+                  </ng-container>
+                  <ng-template #plainQuantity>{{ event.parsedQuantity }}</ng-template>
+                </td>
+                <td class="table-cell">
+                  <span *ngIf="isProductReplacement(event)" data-testid="replacement-badge" class="badge badge-info mb-1">Product replacement: mark as already recorded</span>
+                  <span
+                    *ngIf="event.isPossibleReplacementDoubleCount"
+                    data-testid="replacement-double-count"
+                    class="badge badge-warning mb-1"
+                    [title]="event.replacementDoubleCountNotes"
+                  >Possible double count</span>
+                  <div *ngIf="event.isPossibleReplacementDoubleCount" class="value-muted">{{ event.replacementDoubleCountNotes }}</div>
+                  <span *ngIf="event.matchStatus === MatchStatus.NeedsReview && (!isProductReplacement(event) || event.needsReviewReason)" class="badge badge-warning">Needs review: {{ event.needsReviewReason }}</span>
                   <span *ngIf="event.matchStatus === MatchStatus.Matched && event.isDiscrepancy" class="badge badge-danger">Discrepancy (machine reports fewer units)</span>
                   <span *ngIf="event.matchStatus === MatchStatus.Matched && event.isInsufficientStock" class="badge badge-danger">Insufficient storage: needs {{ event.parsedQuantity }}, has {{ event.availableStorageQuantity }} (short {{ event.unaccountedDifference }})</span>
                   <span *ngIf="isReadyToApply(event)" class="badge badge-success">Ready to apply</span>
@@ -212,7 +241,8 @@
         *ngIf="((syncPreview$ | async)?.events?.length ?? 0) > 0"
         type="button"
         (click)="applySelectedEvents()"
-        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0 || sessionActive"
+        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0 || sessionActive || selectionHasProductReplacement(syncPreview$ | async)"
+        [title]="selectionHasProductReplacement(syncPreview$ | async) ? 'Product replacements can only be marked as already recorded.' : ''"
         class="btn btn-primary"
       >
         {{ (applying$ | async) ? 'Applying…' : 'Apply selected (' + selectedEventIds.size + ')' }}
