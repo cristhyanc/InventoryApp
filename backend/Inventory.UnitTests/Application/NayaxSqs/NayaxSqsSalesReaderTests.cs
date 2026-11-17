@@ -59,17 +59,43 @@ public class NayaxSqsSalesReaderTests
     }
 
     /// <summary>
-    /// Transient: not deleted, and its visibility set to the bounded backoff the policy decides from
-    /// the queue's own receive count.
+    /// Transient because something outside this application is unavailable (issue #1305): not
+    /// deleted, and its visibility set to the step the outage schedule holds for the queue's own
+    /// receive count - hours rather than seconds, so an outage that lasts a night is still waited
+    /// out rather than ending in the dead-letter queue.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxSqsProcessingReason.StoreUnavailable)]
+    [InlineData(NayaxSqsProcessingReason.ConnectionUnavailable)]
+    [InlineData(NayaxSqsProcessingReason.ProviderUnavailable)]
+    public async Task An_outage_outcome_is_not_deleted_and_waits_the_scheduled_step_for_its_receive_count(
+        NayaxSqsProcessingReason reason)
+    {
+        var harness = new Harness();
+        harness.Queue.Returns(Message("m1", "rh-1", receiveCount: 3));
+        harness.Scopes.WithSender(Sender, BusinessId);
+        harness.Scopes.Outcome = _ => NayaxSqsProcessingOutcome.Transient(reason);
+
+        await harness.Reader.PollOnceAsync(CancellationToken.None);
+
+        Assert.Empty(harness.Queue.Deleted);
+        Assert.Equal(TimeSpan.FromHours(3), harness.LastVisibilityOf("rh-1"));
+    }
+
+    /// <summary>
+    /// A transient outcome that is <em>not</em> an outage - a cost rebuild that is still pending -
+    /// keeps the short backoff it has always had (issue #1305): the thing it waits for is this
+    /// application's own work, not a remote system coming back, so parking it for hours would only
+    /// delay the sale.
     /// </summary>
     [Fact]
-    public async Task A_transient_outcome_is_not_deleted_and_is_backed_off_by_its_receive_count()
+    public async Task A_pending_rebuild_is_not_deleted_and_keeps_the_short_backoff()
     {
         var harness = new Harness();
         harness.Queue.Returns(Message("m1", "rh-1", receiveCount: 3));
         harness.Scopes.WithSender(Sender, BusinessId);
         harness.Scopes.Outcome =
-            _ => NayaxSqsProcessingOutcome.Transient(NayaxSqsProcessingReason.StoreUnavailable);
+            _ => NayaxSqsProcessingOutcome.Transient(NayaxSqsProcessingReason.RebuildPending);
 
         await harness.Reader.PollOnceAsync(CancellationToken.None);
 

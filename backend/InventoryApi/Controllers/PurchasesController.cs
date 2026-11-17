@@ -69,6 +69,7 @@ public class PurchasesController : ControllerBase
     private readonly GetPurchase _getPurchase;
     private readonly GetPurchaseFile _getPurchaseFile;
     private readonly UploadPurchase _uploadPurchase;
+    private readonly FindPossibleDuplicatePurchase _findPossibleDuplicate;
     private readonly AttachPurchaseDocument _attachPurchaseDocument;
     private readonly UpdatePurchase _updatePurchase;
     private readonly DeletePurchase _deletePurchase;
@@ -83,6 +84,7 @@ public class PurchasesController : ControllerBase
         GetPurchase getPurchase,
         GetPurchaseFile getPurchaseFile,
         UploadPurchase uploadPurchase,
+        FindPossibleDuplicatePurchase findPossibleDuplicate,
         AttachPurchaseDocument attachPurchaseDocument,
         UpdatePurchase updatePurchase,
         DeletePurchase deletePurchase,
@@ -99,6 +101,7 @@ public class PurchasesController : ControllerBase
         _getPurchase = getPurchase;
         _getPurchaseFile = getPurchaseFile;
         _uploadPurchase = uploadPurchase;
+        _findPossibleDuplicate = findPossibleDuplicate;
         _attachPurchaseDocument = attachPurchaseDocument;
         _updatePurchase = updatePurchase;
         _deletePurchase = deletePurchase;
@@ -123,6 +126,28 @@ public class PurchasesController : ControllerBase
         return Ok(ToResponseDto(purchase, visibility));
     }
 
+    /// <summary>
+    /// Whether a purchase is already recorded for this supplier, with this invoice number, on this
+    /// business day (issue #1247) - the warning the Add Purchase form shows before it saves.
+    ///
+    /// <para>It is a read that changes nothing and refuses nothing: the operator saves anyway or
+    /// does not, and the create endpoint is unaffected by what this answers. A request that carries
+    /// no supplier, no invoice number or no date is answered with no match rather than refused,
+    /// because there is nothing a repeat could be recognised by.</para>
+    /// </summary>
+    [HttpGet("possible-duplicate")]
+    public async Task<ActionResult<PurchaseDuplicateWarningDto>> PossibleDuplicate(
+        [FromQuery] int? supplierId,
+        [FromQuery] string? invoiceNumber,
+        [FromQuery] DateTime? purchaseDate,
+        CancellationToken cancellationToken)
+    {
+        var match = await _findPossibleDuplicate.Handle(
+            supplierId, invoiceNumber, purchaseDate, cancellationToken);
+        return Ok(new PurchaseDuplicateWarningDto(
+            match is null ? null : new PurchaseDuplicateMatchDto(match.PurchaseId, match.Title, match.PurchaseDate)));
+    }
+
     [HttpGet("{id:int}/file")]
     public async Task<IActionResult> GetFile(int id)
     {
@@ -131,10 +156,22 @@ public class PurchasesController : ControllerBase
         return File(file.Content, file.ContentType, file.FileName);
     }
 
+    /// <summary>
+    /// Records a purchase.
+    ///
+    /// <para><b>An optional <c>idempotencyKey</c> makes a retry safe</b> (issue #1247). With one,
+    /// the same key and the same content answer with the purchase the first request saved and write
+    /// nothing at all, and the same key with <em>different</em> content is answered <c>409</c> with
+    /// <c>PurchaseIdempotencyPolicy.KeyReusedMessage</c> - mapped centrally by
+    /// <c>DomainExceptionHandler</c> from the <c>DomainConflictException</c> the use case raises -
+    /// having written nothing either. Without one the create behaves exactly as it always has, which
+    /// is what every client that predates this issue sends.</para>
+    /// </summary>
     // multipart/form-data: file (optional, issue #976) + title + notes + invoiceNumber (optional,
     // issue #1162) + totalAmount + deliveryCost
     // + deliveryGstClassification + packageCost + packageGstClassification + purchaseDate
     // + supplierId + items + completeSupplierOrderId + completeSupplierOrderFingerprint
+    // + idempotencyKey (optional, issue #1247)
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
@@ -152,7 +189,8 @@ public class PurchasesController : ControllerBase
         [FromForm] int? supplierId,
         [FromForm] string? items,
         [FromForm] int? completeSupplierOrderId,
-        [FromForm] string? completeSupplierOrderFingerprint)
+        [FromForm] string? completeSupplierOrderFingerprint,
+        [FromForm] string? idempotencyKey)
     {
         // The uploaded file stays an HTTP concern: the controller is the only place that sees
         // IFormFile and adapts it to the Application layer's PurchaseFileInput port. A body with no
@@ -171,6 +209,7 @@ public class PurchasesController : ControllerBase
                     deliveryGstClassification, packageGstClassification, invoiceNumber),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 ToCompletionRequest(completeSupplierOrderId, completeSupplierOrderFingerprint),
+                idempotencyKey,
                 CancellationToken.None);
         }
         catch (InvalidOperationException ex)

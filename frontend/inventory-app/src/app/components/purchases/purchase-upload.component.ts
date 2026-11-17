@@ -10,10 +10,12 @@ import {
   GstClassification,
   Product,
   Supplier,
+  SupplierGstDefaults,
   SupplierOrder,
   SupplierOrderCompletionPreview
 } from '../../models/models';
-import { PurchaseItemPayload } from '../../services/purchase.service';
+import { PurchaseDuplicateMatch, PurchaseItemPayload } from '../../services/purchase.service';
+import { generateIdempotencyKey } from '../pick-list/idempotency-key';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { isChargePresent } from './gst-classification-options';
@@ -32,7 +34,11 @@ import {
 } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { SupplierOrderCompletionDialogComponent } from './supplier-order-completion-dialog/supplier-order-completion-dialog.component';
-import { PurchaseFormLayoutComponent, missingProductErrorMessage } from './purchase-form/purchase-form-layout.component';
+import {
+  PurchaseFormLayoutComponent,
+  PurchaseLineGstRuleSource,
+  missingProductErrorMessage
+} from './purchase-form/purchase-form-layout.component';
 import { purchaseTitleSuggestion } from './purchase-form/purchase-title-suggestion';
 import {
   PurchaseScannedLevy,
@@ -61,6 +67,34 @@ export function isAttachmentStorageRefusal(message: unknown): boolean {
   return typeof message === 'string' && message.includes(STORAGE_ALLOWANCE_REFUSAL);
 }
 
+/** What is shown when a save is refused and nothing more specific was returned. */
+const SAVE_REFUSED_MESSAGE = 'Failed to add purchase.';
+
+/**
+ * The refusal to show for a failed save. The create endpoint answers its own refusals as a plain
+ * `400` sentence, and the reused-key conflict of issue #1247 as a `409` ProblemDetails document
+ * whose `detail` is the sentence written for the person - so both are shown verbatim, and anything
+ * else falls back to the generic message rather than rendering an object.
+ */
+export function refusalMessage(error: unknown): string {
+  const body = (error as { error?: unknown } | null)?.error;
+  if (typeof body === 'string' && body.trim().length > 0) {
+    return body;
+  }
+
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  return typeof detail === 'string' && detail.trim().length > 0 ? detail : SAVE_REFUSED_MESSAGE;
+}
+
+/**
+ * The sentence shown when the server reports a purchase that already records this supplier, this
+ * invoice number and this date (issue #1247). It names the purchase so the person can go and look,
+ * and says nothing about what they should do: saving anyway is allowed and sometimes right.
+ */
+export function possibleDuplicateMessage(match: PurchaseDuplicateMatch): string {
+  return `A purchase with this supplier, invoice number and date is already recorded: "${match.title}" (#${match.purchaseId}).`;
+}
+
 // Draft item representation where the quantity and either price may be null
 interface DraftPurchaseItem {
   productId: number;
@@ -76,11 +110,14 @@ interface DraftPurchaseItem {
   /** The per-unit cost the request carries: entered while `unit` wins, calculated while `total` does. */
   unitCost: number | null;
   /**
-   * This line's GST classification (issue #431). A new line starts as `Unknown`/Not classified and
-   * stays that way unless a person picks something: nothing here pre-fills a classification from the
-   * product, the supplier or the amount (parent issue #62, decision D4).
+   * This line's GST classification (issue #431). Until a person picks one (`gstChosen`), it is
+   * pre-filled from the product's GST rule, else the supplier's product-line default (issue #1348,
+   * which reverses parent issue #62's decision D4 for new purchases), and left out of the request so
+   * the server applies the same rule. Nothing is ever inferred from an amount.
    */
   gstClassification: GstClassification;
+  gstChosen?: boolean;
+  gstRuleSource?: PurchaseLineGstRuleSource;
 
   /**
    * What a scanned receipt said about this line (issue #1166), and absent on a line somebody typed.
@@ -169,6 +206,38 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
    */
   private titleEdited = false;
 
+  /**
+   * The key this form's save is claimed under (issue #1247). It is created when the form opens and
+   * kept through every failed or timed-out attempt, which is what makes a retry safe: if the first
+   * attempt did save the purchase, the server answers with it and nothing is recorded twice; if it
+   * did not, the retry records it. A new key is created only after a save actually succeeds and
+   * whenever the form is reset, because by then the next save is a different purchase.
+   */
+  private idempotencyKey = generateIdempotencyKey();
+
+  /**
+   * The "this looks like a purchase you already recorded" sentence (issue #1247), or `null`. It is
+   * the server's answer, formatted: this page decides nothing about what counts as a duplicate and
+   * never blocks the save.
+   */
+  duplicateWarning: string | null = null;
+
+  /** The in-flight duplicate lookup, cancelled whenever a newer one starts or the form is reset. */
+  private duplicateLookup: Subscription | null = null;
+
+  /**
+   * Product GST rules already read for this page (issue #1348), by product id. A product whose
+   * rule could not be read is recorded as having none: the line then shows Not classified, and the
+   * server still applies the real rule when the untouched line is saved.
+   */
+  private readonly productGstRules = new Map<number, GstClassification>();
+  private readonly productGstRuleRequests = new Set<number>();
+
+  /** The chosen supplier's GST defaults (issue #1348), or `null` while none is chosen or known. */
+  private supplierGstDefaults: SupplierGstDefaults | null = null;
+  private supplierGstDefaultsFor: number | null = null;
+  private supplierGstDefaultsLookup: Subscription | null = null;
+
   form = {
     title: '',
     notes: '',
@@ -178,6 +247,8 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     deliveryGstClassification: GstClassification.Unknown,
     packageCost: null as number | null,
     packageGstClassification: GstClassification.Unknown,
+    deliveryGstChosen: false,
+    packageGstChosen: false,
     purchaseDate: PurchaseUploadComponent.localDate(new Date()),
     supplierId: '' as number | ''
   };
@@ -197,6 +268,8 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+    this.duplicateLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup?.unsubscribe();
   }
 
   ngOnInit(): void {
@@ -254,6 +327,12 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.storageRefusedReceipt = false;
     this.error = '';
     this.saving = false;
+    // A reset form is a different purchase, so it is saved under a key of its own (issue #1247),
+    // and nothing is yet known about whether it looks like one already recorded.
+    this.idempotencyKey = generateIdempotencyKey();
+    this.duplicateLookup?.unsubscribe();
+    this.duplicateLookup = null;
+    this.duplicateWarning = null;
 
     this.form = {
       title: '',
@@ -264,9 +343,15 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       deliveryGstClassification: GstClassification.Unknown,
       packageCost: null,
       packageGstClassification: GstClassification.Unknown,
+      deliveryGstChosen: false,
+      packageGstChosen: false,
       purchaseDate: PurchaseUploadComponent.localDate(new Date()),
       supplierId: ''
     };
+    this.supplierGstDefaultsLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup = null;
+    this.supplierGstDefaults = null;
+    this.supplierGstDefaultsFor = null;
 
     this.supplierOrderId = null;
     this.supplierOrder = null;
@@ -280,11 +365,133 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.refreshSuggestedTitle();
   }
 
+  /**
+   * The supplier or the purchase date changed. Both feed a title the person has not typed, and both
+   * are part of what makes this purchase look like one already recorded (issue #1247).
+   */
+  onDetailsChange(): void {
+    this.refreshSuggestedTitle();
+    this.checkForPossibleDuplicate();
+    this.loadSupplierGstDefaults();
+  }
+
+  /** A line's product changed, so its GST follows that product's rule until a person picks one. */
+  onLineProductChange(): void {
+    this.loadGstRules();
+  }
+
+  /**
+   * Reads whatever product rules and supplier defaults the current lines and supplier need, then
+   * pre-fills every GST picker nobody has picked (issue #1348).
+   */
+  private loadGstRules(): void {
+    this.loadSupplierGstDefaults();
+    for (const productId of new Set(this.items.map((item) => Number(item.productId)).filter((id) => id > 0))) {
+      if (this.productGstRules.has(productId) || this.productGstRuleRequests.has(productId)) continue;
+      this.productGstRuleRequests.add(productId);
+      this.productService.getGstRule(productId).subscribe({
+        next: (rule) => this.recordProductGstRule(productId, rule.gstRule),
+        error: () => this.recordProductGstRule(productId, GstClassification.Unknown)
+      });
+    }
+    this.applyGstRules();
+  }
+
+  private recordProductGstRule(productId: number, rule: GstClassification): void {
+    this.productGstRuleRequests.delete(productId);
+    this.productGstRules.set(productId, rule);
+    this.applyGstRules();
+  }
+
+  /** Reads the chosen supplier's GST defaults, once per supplier, and drops a stale answer. */
+  private loadSupplierGstDefaults(): void {
+    const supplierId = this.form.supplierId === '' ? null : Number(this.form.supplierId);
+    if (supplierId === this.supplierGstDefaultsFor) return;
+
+    this.supplierGstDefaultsLookup?.unsubscribe();
+    this.supplierGstDefaultsLookup = null;
+    this.supplierGstDefaultsFor = supplierId;
+    this.supplierGstDefaults = null;
+    this.applyGstRules();
+    if (supplierId === null) return;
+
+    this.supplierGstDefaultsLookup = this.supplierService.getGstDefaults(supplierId).subscribe({
+      next: (defaults) => {
+        if (this.supplierGstDefaultsFor !== supplierId) return;
+        this.supplierGstDefaults = defaults;
+        this.applyGstRules();
+      },
+      // Unknown defaults pre-fill nothing; the server still applies the real ones on save.
+      error: () => undefined
+    });
+  }
+
+  /**
+   * Pre-fills every GST picker a person has not picked, with the server's precedence: a line takes
+   * the product's rule, then the supplier's product-line default; a charge takes only the supplier's
+   * matching fee default. It is only what the picker shows: an unpicked component is left out of the
+   * request, and the server classifies it from the rules as they stand when it saves.
+   */
+  private applyGstRules(): void {
+    const defaults = this.supplierGstDefaults;
+    for (const item of this.items) {
+      if (item.gstChosen) continue;
+      const productRule = this.productGstRules.get(Number(item.productId)) ?? GstClassification.Unknown;
+      const supplierDefault = defaults?.productLineGstDefault ?? GstClassification.Unknown;
+      if (item.productId && productRule !== GstClassification.Unknown) {
+        item.gstClassification = productRule;
+        item.gstRuleSource = 'product';
+      } else if (item.productId && supplierDefault !== GstClassification.Unknown) {
+        item.gstClassification = supplierDefault;
+        item.gstRuleSource = 'supplier';
+      } else {
+        item.gstClassification = GstClassification.Unknown;
+        item.gstRuleSource = undefined;
+      }
+    }
+    if (!this.form.deliveryGstChosen) {
+      this.form.deliveryGstClassification = defaults?.deliveryGstDefault ?? GstClassification.Unknown;
+    }
+    if (!this.form.packageGstChosen) {
+      this.form.packageGstClassification = defaults?.packageGstDefault ?? GstClassification.Unknown;
+    }
+  }
+
   /** The supplier or the date changed, so a title the person has not typed follows them. */
   refreshSuggestedTitle(): void {
     if (this.titleEdited) return;
     const supplier = this.suppliers.find((s) => s.id === this.form.supplierId);
     this.form.title = purchaseTitleSuggestion(supplier?.name ?? null, this.form.purchaseDate);
+  }
+
+  /**
+   * Asks the server whether a purchase with this supplier, this invoice number and this date is
+   * already recorded (issue #1247), and shows what it answers.
+   *
+   * It is a warning and nothing else: it never blocks Save, it is never waited for, and a failed
+   * lookup simply shows nothing - a purchase must be recordable when this question cannot be asked.
+   * The server decides what counts as a match, including which day the date falls on in the
+   * business's own calendar.
+   */
+  checkForPossibleDuplicate(): void {
+    this.duplicateLookup?.unsubscribe();
+    this.duplicateWarning = null;
+
+    const supplierId = this.form.supplierId === '' ? null : this.form.supplierId;
+    const invoiceNumber = this.form.invoiceNumber.trim() || null;
+    const purchaseDate = this.purchaseTimestamp();
+    if (supplierId === null || invoiceNumber === null || purchaseDate === null) {
+      return;
+    }
+
+    this.duplicateLookup = this.purchaseService
+      .possibleDuplicate(supplierId, invoiceNumber, purchaseDate)
+      .subscribe({
+        next: (match) => {
+          this.duplicateWarning = match === null ? null : possibleDuplicateMessage(match);
+        },
+        error: () => (this.duplicateWarning = null)
+      });
   }
 
   /** The person typed a title of their own, which no suggestion may replace from now on. */
@@ -317,8 +524,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Use draft items with nullable unitCost - do NOT convert null to 0. The GST classification
-    // stays Not classified: a supplier order says nothing about a line's GST status.
+    // Use draft items with nullable unitCost - do NOT convert null to 0. A supplier order says
+    // nothing about a line's GST status: each line's GST follows its product's rule or the
+    // supplier's default (issue #1348), read below.
     //
     // The line opens with Total price as the winning field, on the total that prefilled unit price
     // already implies, and the unit cost itself is left exactly as the order recorded it: receiving
@@ -331,6 +539,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       unitCost: line.unitPrice ?? null,
       gstClassification: GstClassification.Unknown
     }));
+    this.loadGstRules();
   }
 
   /**
@@ -371,6 +580,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     this.items = fill.lines;
     this.scannedLevies = fill.levies;
+    // The receipt's GST marker is the receipt's claim, never a classification; a matched line's GST
+    // follows its product's rule or the supplier's default (issue #1348).
+    this.loadGstRules();
     this.selectedFile = result.file;
     this.scannedReceipt = result.file;
     this.error = '';
@@ -378,6 +590,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     // The supplier and the date may both have moved, and a title nobody typed follows them.
     this.refreshSuggestedTitle();
+
+    // The same receipt scanned twice is exactly what the duplicate warning is for (issue #1247),
+    // and a scan fills the supplier, the invoice number and the date without anybody typing - so
+    // the question is asked here rather than waiting for a field to be left.
+    this.checkForPossibleDuplicate();
 
     // The lines are not the ones any completion projection was made against, so the question is
     // asked again rather than a stale fingerprint being resubmitted (issue #974).
@@ -472,7 +689,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       productId: item.productId,
       quantity: item.quantity as number,  // Safe to cast after validation
       unitCost: item.unitCost as number,  // Safe to cast after validation
-      gstClassification: PurchaseUploadComponent.submittedClassification(item.gstClassification)
+      gstClassification: item.gstChosen ? item.gstClassification : undefined
     }));
 
     // Before the final save, when this purchase was started from a supplier order, ask the server
@@ -495,18 +712,26 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         totalAmount: this.form.totalAmount,
         deliveryCost: this.form.deliveryCost,
         deliveryGstClassification: this.chargeClassification(
-          this.form.deliveryCost, this.form.deliveryGstClassification),
+          this.form.deliveryCost, this.form.deliveryGstClassification, this.form.deliveryGstChosen),
         packageCost: this.form.packageCost,
         packageGstClassification: this.chargeClassification(
-          this.form.packageCost, this.form.packageGstClassification),
+          this.form.packageCost, this.form.packageGstClassification, this.form.packageGstChosen),
         purchaseDate: this.purchaseTimestamp(),
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
         items: validItems,
         completeSupplierOrderId: this.completionDecision?.supplierOrderId ?? null,
-        completeSupplierOrderFingerprint: this.completionDecision?.fingerprint ?? null
+        completeSupplierOrderFingerprint: this.completionDecision?.fingerprint ?? null,
+        // The same key for every attempt at this purchase (issue #1247), so a retry after a
+        // timeout is answered with the purchase the first attempt saved rather than saving a
+        // second one.
+        idempotencyKey: this.idempotencyKey
       })
       .subscribe({
         next: () => {
+          // The purchase is saved, so the key is spent: the next save this form makes - after a
+          // reset, or on a page it navigates back to - is a different purchase and gets its own.
+          this.idempotencyKey = generateIdempotencyKey();
+
           // Only now, after the server stored it, is a completion reported as having happened.
           if (this.completionDecision) {
             this.toastService.success('Purchase created and the supplier order completed.');
@@ -520,7 +745,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
           }
         },
         error: (err) => {
-          this.error = err?.error ?? 'Failed to add purchase.';
+          // The endpoint answers most refusals as a plain sentence and the reused-key conflict as a
+          // ProblemDetails document (issue #1247); both are shown as they were written. The key is
+          // deliberately left alone: a refused save recorded nothing, so the same key is still the
+          // right one for the next attempt at this purchase.
+          this.error = refusalMessage(err);
           this.saving = false;
           // The receipt is what was refused, not the purchase (issue #968): everything entered stays
           // on screen and the purchase is offered without the document, which it is allowed to have
@@ -674,20 +903,12 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   /**
    * The classification to submit for a delivery or package charge: nothing at all unless the charge
-   * exists and a person actually picked a state for it.
+   * exists and a person actually picked a state for it - including Not classified, which then stays
+   * unresolved rather than taking the supplier's default (issue #1348).
    */
   private chargeClassification(
-    amount: number | null, classification: GstClassification): GstClassification | undefined {
-    return isChargePresent(amount) ? PurchaseUploadComponent.submittedClassification(classification) : undefined;
-  }
-
-  /**
-   * What a new purchase submits for one component. `Unknown` is left out of the request rather than
-   * sent: it is already the server's state for a component nobody classified, and omitting it keeps
-   * the request free of choices the person did not make.
-   */
-  private static submittedClassification(classification: GstClassification): GstClassification | undefined {
-    return classification === GstClassification.Unknown ? undefined : classification;
+    amount: number | null, classification: GstClassification, chosen: boolean | undefined): GstClassification | undefined {
+    return isChargePresent(amount) && chosen ? classification : undefined;
   }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
 

@@ -126,7 +126,7 @@ public class MachineStockSyncTests
             new SyncMachineStockFromNayax(
                 nayax,
                 store,
-                new EfNayaxProductLinkStore(db),
+                TestMachineStockSyncUseCases.Rematch(store, new EfNayaxProductLinkStore(db), nayax),
                 // The successful-fetch coverage of issue #891 is not what these fixtures are about:
                 // they are given a usable connection and an in-memory coverage store, so the sync
                 // behaves exactly as it does in production and records its claim somewhere nothing
@@ -135,7 +135,8 @@ public class MachineStockSyncTests
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
                 new FakeMachineRestockSyncCoverageStore(),
                 new FakeBusinessCalendar(EventTime)),
-            new ApplyMachineStockSync(store, new RecordingMachineStockSyncLog()));
+            TestMachineStockSyncUseCases.Apply(
+                store, new EfNayaxProductLinkStore(db), new RecordingMachineStockSyncLog(), nayax));
     }
 
     private static ResolveMachineStockDuplicate ResolveUseCase(

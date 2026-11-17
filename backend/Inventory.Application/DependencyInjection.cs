@@ -334,6 +334,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetSiteCommissionReport>(sp => sp.GetRequiredService<GetSiteCommissionReport>());
         services.AddScoped<GetSiteCommissionAgreements>();
         services.AddScoped<SaveSiteCommissionAgreement>();
+        // Ending an agreement on a date (issue #1254). Its audit port is satisfied at the
+        // InventoryApi boundary, which is the only layer that knows the request's correlation id -
+        // the same terms the member, invite and business-settings audits are satisfied on.
+        services.AddScoped<EndSiteCommissionAgreement>();
         services.AddScoped<ListCategories>();
         services.AddScoped<GetCategory>();
         services.AddScoped<CreateCategory>();
@@ -390,6 +394,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();
         services.AddScoped<GetMachineLatestSales>();
+        services.AddScoped<RematchMachineStockEvents>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
@@ -452,6 +457,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetPurchase>();
         services.AddScoped<GetPurchaseFile>();
         services.AddScoped<UploadPurchase>();
+        // The "this looks like a purchase you already recorded" warning the Add Purchase form shows
+        // before it saves (issue #1247). Scoped like every other use case, and it writes nothing.
+        services.AddScoped<FindPossibleDuplicatePurchase>();
         services.AddScoped<AttachPurchaseDocument>();
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();

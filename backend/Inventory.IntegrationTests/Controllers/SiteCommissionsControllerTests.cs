@@ -1,11 +1,15 @@
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Tenancy;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -36,7 +40,32 @@ public class SiteCommissionsControllerTests
         return new(
             report,
             new GetSiteCommissionAgreements(store),
-            new SaveSiteCommissionAgreement(store));
+            new SaveSiteCommissionAgreement(store),
+            new EndSiteCommissionAgreement(
+                store,
+                new FakeCurrentBusinessProvider(1),
+                FakeAuthenticatedActorAccessor.Identified(Actor),
+                new RecordingAudit(),
+                new FakeClock(new DateTime(2026, 11, 16, 3, 0, 0, DateTimeKind.Utc))));
+    }
+
+    private static ActorIdentity Actor
+    {
+        get
+        {
+            ActorIdentity.TryCreate(
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+                out var actor);
+            return actor!;
+        }
+    }
+
+    private sealed class RecordingAudit : ISiteCommissionAgreementAudit
+    {
+        public void Record(SiteCommissionAgreementEndedAuditEntry entry)
+        {
+        }
     }
 
     private static SiteCommissionAgreementDto Dto(long siteId, DateTime from, DateTime? to) =>

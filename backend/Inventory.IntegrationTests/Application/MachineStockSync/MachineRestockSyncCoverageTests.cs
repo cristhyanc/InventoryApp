@@ -1309,10 +1309,25 @@ public class MachineRestockSyncCoverageTests
         DateTime startedAtUtc,
         INayaxConnectionStore connections,
         IMachineRestockSyncCoverageStore? coverage = null) =>
+        SyncOver(
+            new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)),
+            db,
+            nayax,
+            startedAtUtc,
+            connections,
+            coverage);
+
+    private static SyncMachineStockFromNayax SyncOver(
+        EfMachineStockEventStore store,
+        AppDbContext db,
+        Mock<INayaxLynxClient> nayax,
+        DateTime startedAtUtc,
+        INayaxConnectionStore connections,
+        IMachineRestockSyncCoverageStore? coverage) =>
         new(
             nayax.Object,
-            new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)),
-            new EfNayaxProductLinkStore(db),
+            store,
+            TestMachineStockSyncUseCases.Rematch(store, new EfNayaxProductLinkStore(db), nayax.Object),
             new FakeClock(startedAtUtc),
             connections,
             coverage ?? new EfMachineRestockSyncCoverageStore(db),

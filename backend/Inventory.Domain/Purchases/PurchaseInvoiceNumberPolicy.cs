@@ -21,8 +21,9 @@ namespace Inventory.Domain.Purchases;
 /// reported back as though it were what the supplier printed.</para>
 ///
 /// <para>This policy says nothing about <em>which</em> invoice numbers exist or whether two
-/// purchases may share one: duplicate warnings and uniqueness rules are explicitly out of this
-/// issue's scope, and so are searching and filtering by the number.</para>
+/// purchases may share one: a number is never unique, and searching and filtering by it were
+/// explicitly out of issue #1162's scope. The one rule that compares two purchases' numbers is
+/// <see cref="PurchaseDuplicateWarningPolicy"/> (issue #1247), which warns and never refuses.</para>
 /// </summary>
 public static class PurchaseInvoiceNumberPolicy
 {

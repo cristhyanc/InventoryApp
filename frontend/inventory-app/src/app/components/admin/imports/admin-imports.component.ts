@@ -54,20 +54,22 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
  * reinterpreted here.
  *
  * <p><strong>Importing the product catalogue happens on its own page</strong> (issue #888):
- * `/products/import` (`ProductImportPageComponent`) hosts the catalogue review of issue #739, so
- * this page's Import products card is a link to it and renders no review of its own. It stopped
- * reading `?review=catalogue` (issue #875) with it, which that issue's own entry point - All
- * Products' Import products button - now points straight at the new page instead.</p>
+ * `/products/import` (`ProductImportPageComponent`) hosts the catalogue review of issue #739, and
+ * this page renders no review of its own and reads no `?review=catalogue` (issue #875). So does the
+ * reimbursement report (issue #1152): `/admin/imports/reimbursement-report`
+ * (`ReimbursementReportPageComponent`) hosts #1149's ZIP upload and its job status list. The
+ * `Import XML files` card that used to stand here moved there and went with the server-folder
+ * import issue #1237 retired.</p>
  *
- * <p><strong>And so does the reimbursement report</strong> (issue #1152):
- * `/admin/imports/reimbursement-report` (`ReimbursementReportPageComponent`) hosts #1149's ZIP
- * upload and its job status list, so this page's Reimbursement Report card is a link to it and runs
- * no reimbursement import of its own. The `Import XML files` card that used to stand here moved
- * there with issue #1152 and went with the server-folder import issue #1237 retired. The Nayax
- * sales upload and the timestamp repair are unchanged.</p>
+ * <p><strong>This page links to neither of them any more</strong> (owner's request, 17 November
+ * 2026). The short Import products and Reimbursement Report cards that linked to those pages were
+ * removed: each is reached from its own sidebar entry (Import products under Inventory, Reimbursement
+ * Report directly after Imports), and Import products also from All Products' Import products
+ * button. This page holds only the import it runs itself - the Nayax sales file upload and its CSV
+ * template.</p>
  *
  * <p><strong>The Nayax sales card carries an inline plan lock</strong> (issue #979), and only that
- * card: this is a mixed page, so the two links beside it and the client-side template download are
+ * card: the client-side template download beside it is
  * not plan-locked and the page itself is never route-locked. The lock is the
  * inline shape of issue #979 rather than the route-level one for exactly that reason, and it is
  * decided from the entitlement `GET /api/me/access` already carries (issue #966), through the same
@@ -132,38 +134,6 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-body">
-            <h2 class="card-title">Import products</h2>
-            <p class="mt-1 text-sm value-muted">
-              Review the Nayax catalogue against your own products and categories, then link, create
-              or update them per entry. Nothing is written until you apply the review.
-            </p>
-            <!--
-              A link to the review's own page (issue #888) rather than a button that opened it here.
-              It is not withheld or disabled during a support session: the destination renders the
-              support notice instead of the review, so the import cannot be started either way.
-            -->
-            <a routerLink="/products/import" class="btn btn-primary mt-4">Import products</a>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-body">
-            <h2 class="card-title">Reimbursement Report</h2>
-            <p class="mt-1 text-sm value-muted">
-              Upload the reimbursement report ZIP Nayax emails you, follow what each upload imported,
-              and process pending reimbursement XML files.
-            </p>
-            <!--
-              A link to the import's own page (issue #1152) rather than the buttons that ran here.
-              It is not withheld or disabled during a support session, for the reason the Import
-              products link is not: the destination withholds both of its writes itself, so hiding
-              the link would only hide where the import lives from the page that is meant to say so.
-            -->
-            <a routerLink="/admin/imports/reimbursement-report" class="btn btn-primary mt-4">Open Reimbursement Report</a>
-          </div>
-        </section>
       </div>
     </div>
   `
@@ -175,9 +145,7 @@ export class AdminImportsComponent implements OnDestroy {
    * Whether a support session is active (issue #661): the one import this page still runs is
    * disabled while it is, because a session grants `ImportsRun` - the capability this page and its
    * endpoints are gated on - and the backend refuses the write itself only by its read-only method
-   * rule, never by withholding the capability. See `SupportSessionService.active$`. Neither link is
-   * one of them: a link starts nothing, and `/products/import` (issue #888) and
-   * `/admin/imports/reimbursement-report` (issue #1152) each apply the same rule themselves.
+   * rule, never by withholding the capability. See `SupportSessionService.active$`.
    */
   sessionActive = false;
 

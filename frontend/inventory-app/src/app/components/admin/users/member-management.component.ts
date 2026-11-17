@@ -20,6 +20,13 @@ type PendingMemberAction =
  * duplicating the rule. That authority is also why the role control is displayed from this
  * component's own `selectedRoles` state rather than straight from `member.role`: see
  * `displayedRole`.
+ *
+ * **Narrow layout (issue #1274):** below `md` the table - whose five columns, including a long
+ * unwrapped email, forced the page to scroll sideways and squeezed the role `<select>` down to its
+ * arrow - is replaced by the same one-column card list the Expenses register uses below `md`. Both
+ * layouts render the same `members` and share every method, the confirmation dialog and
+ * `selectedRoles`, so a role chosen, revoked or reinstated in one is identical in the other; only
+ * the markup differs. At `md` and above the table is exactly as before.
  */
 @Component({
   selector: 'app-member-management',
@@ -38,54 +45,103 @@ type PendingMemberAction =
         } @else if (members.length === 0) {
           <p class="text-sm value-muted">No members found.</p>
         } @else {
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Name</th>
-                <th scope="col" class="table-cell">Email</th>
-                <th scope="col" class="table-cell">Role</th>
-                <th scope="col" class="table-cell">Status</th>
-                <th scope="col" class="table-cell">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (member of members; track member.membershipId) {
-                <tr class="table-row">
-                  <td class="table-cell">{{ member.displayName ?? '—' }}</td>
-                  <td class="table-cell">{{ member.email ?? '—' }}</td>
-                  <td class="table-cell">
-                    <select
-                      #roleSelect
-                      [disabled]="!member.isActive"
-                      [attr.aria-label]="'Role for ' + memberLabel(member)"
-                      (change)="requestRoleChange(member, roleSelect.value)"
-                    >
-                      @if (!member.role) {
-                        <option value="" disabled [selected]="!displayedRole(member)">Unknown</option>
-                      }
-                      @for (role of roles; track role) {
-                        <option [value]="role" [selected]="role === displayedRole(member)">{{ role }}</option>
-                      }
-                    </select>
-                  </td>
-                  <td class="table-cell">
-                    <span class="badge" [class.badge-success]="member.isActive" [class.badge-neutral]="!member.isActive">
-                      {{ member.isActive ? 'Active' : 'Revoked' }}
-                    </span>
-                  </td>
-                  <td class="table-cell">
-                    @if (member.isActive) {
-                      <button type="button" class="btn btn-danger btn-sm" (click)="requestRevoke(member)">Revoke</button>
-                    } @else {
-                      <button type="button" class="btn btn-secondary btn-sm" (click)="requestReinstate(member)">
-                        Reinstate
-                      </button>
-                    }
-                  </td>
+          <div class="hidden overflow-x-auto md:block" data-testid="members-table">
+            <table class="table">
+              <thead class="table-head">
+                <tr>
+                  <th scope="col" class="table-cell">Name</th>
+                  <th scope="col" class="table-cell">Email</th>
+                  <th scope="col" class="table-cell">Role</th>
+                  <th scope="col" class="table-cell">Status</th>
+                  <th scope="col" class="table-cell">Actions</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (member of members; track member.membershipId) {
+                  <tr class="table-row" data-testid="member-row">
+                    <td class="table-cell">{{ member.displayName ?? '—' }}</td>
+                    <td class="table-cell">{{ member.email ?? '—' }}</td>
+                    <td class="table-cell">
+                      <select
+                        #roleSelect
+                        [disabled]="!member.isActive"
+                        [attr.aria-label]="'Role for ' + memberLabel(member)"
+                        (change)="requestRoleChange(member, roleSelect.value)"
+                      >
+                        @if (!member.role) {
+                          <option value="" disabled [selected]="!displayedRole(member)">Unknown</option>
+                        }
+                        @for (role of roles; track role) {
+                          <option [value]="role" [selected]="role === displayedRole(member)">{{ role }}</option>
+                        }
+                      </select>
+                    </td>
+                    <td class="table-cell">
+                      <span class="badge" [class.badge-success]="member.isActive" [class.badge-neutral]="!member.isActive">
+                        {{ member.isActive ? 'Active' : 'Revoked' }}
+                      </span>
+                    </td>
+                    <td class="table-cell">
+                      @if (member.isActive) {
+                        <button type="button" class="btn btn-danger btn-sm" (click)="requestRevoke(member)">Revoke</button>
+                      } @else {
+                        <button type="button" class="btn btn-secondary btn-sm" (click)="requestReinstate(member)">
+                          Reinstate
+                        </button>
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <!--
+            Below the md breakpoint, one card per member: the email wraps in full rather than
+            forcing the page wide (issue #1274), and the role control is a full-width select so its
+            chosen role reads as text rather than shrinking to its arrow.
+          -->
+          <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="member-cards">
+            @for (member of members; track member.membershipId) {
+              <li class="flex flex-col gap-3 rounded-xl border border-md-gray-200 bg-white p-3" data-testid="member-card">
+                <div class="min-w-0">
+                  <p class="m-0 font-bold text-md-gray-800" data-testid="member-card-name">{{ member.displayName ?? '—' }}</p>
+                  <p class="m-0 mt-0.5 text-sm text-md-gray-600 [overflow-wrap:anywhere]" data-testid="member-card-email">
+                    {{ member.email ?? '—' }}
+                  </p>
+                </div>
+                <label class="flex min-w-0 flex-col gap-1 text-sm">
+                  <span class="text-md-gray-600">Role</span>
+                  <select
+                    #roleSelectNarrow
+                    class="min-h-11 w-full rounded-lg border border-md-gray-200 bg-white px-2 text-sm font-semibold text-md-gray-800"
+                    [disabled]="!member.isActive"
+                    [attr.aria-label]="'Role for ' + memberLabel(member)"
+                    (change)="requestRoleChange(member, roleSelectNarrow.value)"
+                  >
+                    @if (!member.role) {
+                      <option value="" disabled [selected]="!displayedRole(member)">Unknown</option>
+                    }
+                    @for (role of roles; track role) {
+                      <option [value]="role" [selected]="role === displayedRole(member)">{{ role }}</option>
+                    }
+                  </select>
+                </label>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="badge" [class.badge-success]="member.isActive" [class.badge-neutral]="!member.isActive">
+                    {{ member.isActive ? 'Active' : 'Revoked' }}
+                  </span>
+                  @if (member.isActive) {
+                    <button type="button" class="btn btn-danger btn-sm" (click)="requestRevoke(member)">Revoke</button>
+                  } @else {
+                    <button type="button" class="btn btn-secondary btn-sm" (click)="requestReinstate(member)">
+                      Reinstate
+                    </button>
+                  }
+                </div>
+              </li>
+            }
+          </ul>
         }
       </div>
     </section>

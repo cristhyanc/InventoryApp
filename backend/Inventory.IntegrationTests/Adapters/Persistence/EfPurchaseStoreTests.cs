@@ -111,6 +111,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
                 FileMetadata(),
                 supplierOrderCompletion: null,
                 attachmentReservation: null,
+                idempotency: null,
                 CancellationToken.None);
         }
 
@@ -159,6 +160,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
                 FileMetadata(),
                 supplierOrderCompletion: null,
                 attachmentReservation: null,
+                idempotency: null,
                 CancellationToken.None);
         }
 

@@ -151,8 +151,9 @@ public sealed class PurchaseDocumentAttachConcurrencyTests : IDisposable
             file: null,
             supplierOrderCompletion: null,
             attachmentReservation: null,
+            idempotency: null,
             CancellationToken.None);
-        return purchase.Id;
+        return purchase.Purchase.Id;
     }
 
     private static async Task<AttachAnswer> AttachAsync(

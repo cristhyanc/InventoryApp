@@ -1,5 +1,7 @@
+using Inventory.Infrastructure.Data;
 using InventoryApi.Bootstrap;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace InventoryApi.Tests.Operations;
@@ -112,6 +114,33 @@ public sealed class SqliteBackupRestoreTests : IDisposable
         secondRestored.Open();
         AssertIntegrityOk(secondRestored);
         Assert.Equal(2, CountRows(secondRestored));
+    }
+
+    /// <summary>
+    /// Pins the behaviour docs/architecture.md § SQLite operating assumptions and scale strategy
+    /// (issue #53) relies on: EF Core's SQLite database creator leaves a newly created file in WAL
+    /// mode, not the rollback journal this repository never configures, so that section's
+    /// concurrency and storage reasoning can't drift from what <c>Database.Migrate()</c> actually
+    /// produces.
+    /// </summary>
+    [Fact]
+    public void A_database_file_created_by_migrate_is_in_wal_mode()
+    {
+        var migratedPath = Path.Combine(_root, "migrated.db");
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite($"Data Source={migratedPath}")
+            .Options;
+
+        using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            db.Database.Migrate();
+        }
+
+        using var connection = new SqliteConnection($"Data Source={migratedPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", (string)command.ExecuteScalar()!);
     }
 }
 

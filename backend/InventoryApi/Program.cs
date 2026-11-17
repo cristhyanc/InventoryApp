@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.Commissions;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Imports;
 using Inventory.Application.Members;
@@ -20,6 +21,7 @@ using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Commissions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
@@ -302,6 +304,12 @@ builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
 // transport fact. The event names the fields that changed and never a value - see
 // LoggingBusinessSettingsAudit.
 builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The commission-agreement audit trail (issue #1254), on exactly the same terms. It is a separate
+// port because ending an agreement is a different event with different fields - and because its
+// entry type has no field for a site name, a commission rate or any money figure, which keeps the
+// business's financial configuration out of the audit trail structurally rather than by a sink's
+// discretion.
+builder.Services.AddScoped<ISiteCommissionAgreementAudit, LoggingSiteCommissionAgreementAudit>();
 // The bulk product GST rule audit trail (issue #1076), on exactly the terms the settings one above
 // is satisfied: a structured event at the boundary that knows the request's correlation id, and no
 // audit table, because this issue authorises no schema change. It is a separate port because
@@ -599,8 +607,10 @@ app.Services.GetRequiredService<PriceCollectorAuthenticationDecision>()
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and
 // fails closed unless explicitly opted in. A migration failure always stops startup rather than
-// serving requests against a schema its code does not match. See DatabaseSchemaStartup (including
-// its concurrency note) and docs/tenant-rollout.md.
+// serving requests against a schema its code does not match, and since issue #1299 so does a
+// schema that is *newer* than this build - an applied migration id this build does not contain -
+// which is checked before anything is applied. See DatabaseSchemaStartup (including its
+// concurrency note) and docs/tenant-rollout.md.
 //
 // Schema migrations never assign tenant ownership or perform the business backfill - that is
 // exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and

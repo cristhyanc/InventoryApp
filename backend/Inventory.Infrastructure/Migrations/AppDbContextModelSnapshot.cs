@@ -2704,6 +2704,14 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<long?>("FileSizeBytes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("IdempotencyFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("InvoiceNumber")
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
@@ -2741,6 +2749,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId");
 
                     b.HasIndex("SupplierId");
+
+                    b.HasIndex("BusinessId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasFilter("\"IdempotencyKey\" IS NOT NULL");
 
                     b.ToTable("Receipts", null, t =>
                         {

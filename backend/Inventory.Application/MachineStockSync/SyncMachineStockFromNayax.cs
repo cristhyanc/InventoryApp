@@ -21,6 +21,14 @@ namespace Inventory.Application.MachineStockSync;
 /// is the state <c>NayaxMachineStockMatchPolicy</c> already reports as Needs Review ("no local
 /// product is mapped to Nayax product ..."), so such an event still never moves inventory.
 ///
+/// <para><strong>Events already waiting are re-matched against that same map</strong> (issue
+/// #1248). A match used to be decided once, at import, so an event imported while the MDB position
+/// or the product's Nayax id was missing stayed Needs Review for ever and its refill had to be
+/// entered by hand. Every load of the list now re-evaluates the events still waiting for a match
+/// through <see cref="RematchMachineStockEvents"/>, against the mapping this same run read, so the
+/// preview the operator is handed already shows the refreshed match and a newly matched event can
+/// simply be applied. Processed, reconciled and separately-applied events are never re-matched.</para>
+///
 /// <para><strong>A run that fully succeeds records that it did</strong> (issue #891), so the
 /// Dashboard can say when this machine's restock alerts were last really fetched instead of guessing
 /// it from an event's timestamps. The claim is deliberately narrow: it is recorded only after the
@@ -58,7 +66,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
 {
     private readonly INayaxLynxClient _nayax;
     private readonly IMachineStockEventStore _store;
-    private readonly INayaxProductLinkStore _productLinks;
+    private readonly RematchMachineStockEvents _rematch;
     private readonly IClock _clock;
     private readonly INayaxConnectionStore _connections;
     private readonly IMachineRestockSyncCoverageStore _coverage;
@@ -67,7 +75,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
     public SyncMachineStockFromNayax(
         INayaxLynxClient nayax,
         IMachineStockEventStore store,
-        INayaxProductLinkStore productLinks,
+        RematchMachineStockEvents rematch,
         IClock clock,
         INayaxConnectionStore connections,
         IMachineRestockSyncCoverageStore coverage,
@@ -75,7 +83,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
     {
         _nayax = nayax;
         _store = store;
-        _productLinks = productLinks;
+        _rematch = rematch;
         _clock = clock;
         _connections = connections;
         _coverage = coverage;
@@ -132,35 +140,31 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         var alreadyImported = (await _store.GetImportedNayaxEventLogIdsAsync(machineId, cancellationToken)).ToHashSet();
         var newAlerts = stockAlerts.Where(alert => !alreadyImported.Contains(alert.EventLogId)).ToList();
 
-        if (newAlerts.Count > 0)
+        // Read before the import, so what is re-matched is exactly the events that were already
+        // waiting: the alerts this run imports are resolved by the same mapping as they are stored.
+        var waiting = await _store.FindRematchCandidatesAsync(machineId, cancellationToken);
+
+        if (newAlerts.Count > 0 || waiting.Count > 0)
         {
             // Machine + MDB is the primary mapping, read from the same live machine-products
             // projection the machine detail view already uses - and read fresh (issue #842), because
-            // this mapping decides which product a stock adjustment is recorded against.
-            var machineProducts = await _nayax.GetMachineProductsFreshAsync(machineId, cancellationToken);
-            var nayaxProductIdByMdb = machineProducts
-                .Where(product => product.MDBCode.HasValue && product.NayaxProductID.HasValue)
-                .GroupBy(product => product.MDBCode!.Value)
-                .ToDictionary(group => group.Key, group => group.First().NayaxProductID!.Value);
+            // this mapping decides which product a stock adjustment is recorded against. One read
+            // serves both the import and the re-match, so the two cannot disagree about it.
+            var mapping = await _rematch.ReadCurrentMappingAsync(machineId, cancellationToken);
 
-            // The Nayax ids the machine reported, resolved to the local products they name through
-            // the link table; the storage read that follows is given local product ids only.
-            var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
-                nayaxProductIdByMdb.Values.Distinct().ToList(), cancellationToken);
-            var storageProducts = await _store.GetStorageProductsAsync(
-                localProductIdByNayaxId.Values.Distinct().ToList(), cancellationToken);
+            if (newAlerts.Count > 0)
+            {
+                await _store.ImportAsync(
+                    newAlerts.Select(alert => ToImport(machineId, alert, mapping)).ToList(),
+                    cancellationToken);
+            }
 
-            // Re-keyed by Nayax id for the Domain policy, which resolves MDB -> Nayax product ->
-            // local product. A Nayax id with no link, or whose linked product the storage read did
-            // not return, is simply absent, which is the policy's "no local product is mapped"
-            // branch.
-            var localProducts = localProductIdByNayaxId
-                .Where(link => storageProducts.ContainsKey(link.Value))
-                .ToDictionary(link => link.Key, link => storageProducts[link.Value]);
-
-            await _store.ImportAsync(
-                newAlerts.Select(alert => ToImport(machineId, alert, nayaxProductIdByMdb, localProducts)).ToList(),
-                cancellationToken);
+            // Issue #1248: an event whose MDB position or product link has been fixed since it was
+            // imported becomes applicable here, rather than staying Needs Review for ever.
+            if (waiting.Count > 0)
+            {
+                await _rematch.RefreshAsync(machineId, waiting, mapping, cancellationToken);
+            }
         }
 
         var preview = await BuildPreviewAsync(
@@ -223,10 +227,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
     }
 
     private static MachineStockEventImport ToImport(
-        long machineId,
-        NayaxMachineAlert alert,
-        IReadOnlyDictionary<int, long> nayaxProductIdByMdb,
-        IReadOnlyDictionary<long, NayaxStockSyncProduct> localProducts)
+        long machineId, NayaxMachineAlert alert, MachineStockMatchRefresh mapping)
     {
         if (!NayaxStockAdjustmentEventParser.TryParse(alert.EventData, out var parsed, out var failureReason))
         {
@@ -234,7 +235,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             return NewImport(machineId, alert, null, null, null, unparsed);
         }
 
-        var resolution = NayaxMachineStockMatchPolicy.Resolve(machineId, parsed, nayaxProductIdByMdb, localProducts);
+        var resolution = mapping.Resolve(parsed);
         return NewImport(machineId, alert, parsed.Mdb, parsed.ProductName, parsed.SignedQuantity, resolution);
     }
 

@@ -19,7 +19,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
-- Effective-dated Nayax processing fees and site commission agreements.
+- Effective-dated Nayax processing fees and site commission agreements. An Owner or a Manager adds an agreement and can **end** an existing one on a date, which is how a site's rate changes: the application refuses overlapping agreements, so the open-ended one has to stop before the new rate starts. Ending only ever shortens an agreement — the end date must be on or after its start date and can never be pushed out — commission due for dates up to that end date is unchanged, the screen warns before you confirm an end date that has already passed, and every ending is recorded in the audit log. Correcting an agreement's rate or start date, and deleting one, are deliberately not offered: either would rewrite commission already reported.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
 - Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports; **Bookkeeping is the one consolidated financial summary report** (issue #806 retired the separate Reporting Dashboard page once Bookkeeping covered its distinct figures; the old address now redirects to Bookkeeping, filters and all). Monthly Bookkeeping reports its own sales volume too — the number of completed transactions in the selected dates and machine scope, and the average sale over them; both figures follow the same date and machine filters as the rest of the report, appear in its CSV/XLSX export, and show their availability state rather than a zero when provider data does not cover the period. Monthly Bookkeeping also reconciles the reimbursement it expects — the period's card sales less the Nayax fees including GST — against the reimbursement an imported Nayax settlement actually recorded for that period, showing the signed difference and a Reconciled, Needs Review or Pending status (pending until a settlement import covers the period), with the same tolerance, filters, CSV/XLSX columns and availability labelling as the rest of the report; the calculated expectation stays separate from the imported actual and from the existing net reimbursement figure.
 - CSV/XLSX exports that use the same backend calculations as the UI.
@@ -1129,6 +1129,18 @@ A message reaches the dead-letter queue after five receives that did not finish 
 report on its own — it is the queue doing what it was configured to do — but it always means at least
 one transaction was **not** imported, so it is worth looking at every time.
 
+**How long that takes depends on why the message failed.** A message refused for good — an unknown
+sender, a business that is not trading, a message that is not a transaction this application consumes —
+is released immediately and is in the dead-letter queue within minutes. A message that failed because
+something was *unavailable* (the database, the business's Nayax connection, or Nayax itself) now waits
+out a growing schedule instead: **45 s, then 30 min, then 3 h, then 9 h, then 11 h** between receives
+(issue #1305). Its fifth and last attempt is therefore about **12½ hours** after the first one, and it
+appears in the dead-letter queue roughly **23½ hours** after that first receive. So an outage that is
+fixed overnight — an expired Nayax token, say — is retried by the queue itself and needs no redrive, and
+a sale that *has* reached the dead-letter queue has already been retried across more than a day. The
+hourly `lastSales` reconciliation still covers those sales in the meantime, so a dead-letter message is
+not automatically a missing sale; check the sale before concluding it was lost.
+
 1. **Find out why.** The reader's own log lines name the queue message id and a fixed reason code for
    every message it refused. The codes worth acting on are: `SenderUnknown` or `SenderDisabled` (no
    business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin
@@ -1300,8 +1312,8 @@ capabilities](#roles-and-capabilities)).
 ### Where the page is, and what is on it
 
 **Admin → Reimbursement Report** (`/admin/imports/reimbursement-report`, issue #1152). It is in the
-sidebar's **Admin** group directly after **Imports**, and the Imports page itself carries a
-**Reimbursement Report** card that opens it; the breadcrumb reads Admin › Imports › Reimbursement
+sidebar's **Admin** group directly after **Imports** (the Imports page itself no longer links to it);
+the breadcrumb reads Admin › Imports › Reimbursement
 Report. The entry needs the same access as Imports (`Imports.Run`), is left out of the menu while the
 Nayax connection is not usable for the same reason Imports is, and is covered by the **same**
 Super Admin menu switch as Imports — switching `admin.imports` off hides both ways in (see
@@ -1913,9 +1925,25 @@ sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 ```
 
 Store the verified backup somewhere other than the App Service's own `/home` mount — which is what
-`--upload` does for you. Restoring (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`)
-overwrites live data and must be run deliberately, by a human, after stopping the API — never
-automatically. Retention/alerting and automated restore remain out of scope for
+`--upload` does for you.
+
+The database created by this application runs in **WAL mode** (EF Core's SQLite database creator
+sets it when it builds a new file; see
+[docs/architecture.md § SQLite operating assumptions](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53)
+for why, and what production's mode depends on). That keeps these two procedures separate and
+non-interchangeable:
+
+- **Backup, while the app runs** — only with `backup-database` or `sqlite3 ".backup"`, both shown
+  above. **Never copy `inventory.db` on its own while `inventory.db-wal` exists**: a plain
+  filesystem copy can capture the file mid-write, and in WAL mode it can also simply miss committed
+  data still sitting in `inventory.db-wal` rather than in `inventory.db` itself.
+- **Restore, with the app stopped** — replace the live database file with the verified backup
+  (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`), then remove any leftover
+  `inventory.db-wal` and `inventory.db-shm` left behind by the database being replaced (the
+  restored backup is its own complete snapshot and has no use for them), before starting the API
+  again. This must be run deliberately, by a human — never automatically.
+
+Retention/alerting and automated restore remain out of scope for
 `backup-database`. The full
 step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
@@ -2882,8 +2910,8 @@ does not manage.
   support session is active, and Nayax has not refused this application permission to read the
   catalogue — a refused catalogue read hides that button even though the connection itself is usable
   (`PendingPermissions` is a usable status), while a permission nothing has stated yet still offers
-  it. **Admin → Imports → Import products** is a link to the same page, so every entry point opens
-  the identical review; the review itself used to be a panel at the bottom of Admin → Imports, and
+  it. Admin → Imports no longer links to it (removed at the owner's request, 17 November 2026); the
+  review itself used to be a panel at the bottom of Admin → Imports, and
   closing it now returns you to Products. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
@@ -4271,9 +4299,8 @@ every business exactly as it is today.
   plan rather than claiming Nayax is not connected — which would be untrue of a business whose
   credentials are stored and working. **Importing a Nayax sales file** is the same kind of lock on
   **Admin → Imports**: that one card says it needs the Pro plan and withholds the file
-  controls, so nothing is uploaded that could only be refused, while the pending reimbursement XML
-  import, the product-catalogue import link and the CSV template download on the same page keep
-  working exactly as they do now. A refusal that arrives anyway — the plan changed between reads, or
+  controls, so nothing is uploaded that could only be refused, while the CSV template download on
+  the same page keeps working exactly as it does now. A refusal that arrives anyway — the plan changed between reads, or
   it could not be read at all — is shown in that card too, naming the plan the refusal itself named,
   rather than as a failed-import message with a retry that would be refused again.
 - **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does

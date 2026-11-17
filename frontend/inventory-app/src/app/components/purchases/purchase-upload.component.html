@@ -76,13 +76,16 @@
       [scannedReceipt]="scannedReceipt"
       [scannedLevies]="scannedLevies"
       [offerSaveWithoutReceipt]="storageRefusedReceipt"
+      [duplicateWarning]="duplicateWarning"
       (submitted)="upload()"
       (cancelled)="cancel()"
       (addLine)="addItem()"
       (removeLine)="removeItem($event)"
       (pendingFileChange)="onReceiptChange($event)"
       (saveWithoutReceipt)="saveWithoutReceipt()"
-      (detailsChange)="refreshSuggestedTitle()"
+      (detailsChange)="onDetailsChange()"
+      (lineProductChange)="onLineProductChange()"
+      (invoiceNumberEntered)="checkForPossibleDuplicate()"
       (titleEdited)="onTitleEdited()"
     />
   }

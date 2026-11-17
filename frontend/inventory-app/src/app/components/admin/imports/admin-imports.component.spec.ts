@@ -58,10 +58,10 @@ function importResult(result: Partial<NayaxSalesImportResult>): NayaxSalesImport
 }
 
 /**
- * Since issue #888 this page runs two imports - the Nayax sales upload and the pending
- * reimbursement XML - and hosts no catalogue review: the product catalogue import has its own page
- * at `/products/import` (`ProductImportPageComponent`, with its own spec) and this page's Import
- * products card is a link to it.
+ * This page runs one import - the Nayax sales upload - and hosts no catalogue review and no
+ * reimbursement import: both have their own pages (`/products/import`, issue #888, and
+ * `/admin/imports/reimbursement-report`, issue #1152), each with its own spec, and since the owner's
+ * request of 17 November 2026 this page no longer links to either of them.
  */
 async function render(
   importService: Partial<ImportService>,
@@ -208,9 +208,7 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
     fixture.componentInstance.loading = true;
     fixture.detectChanges();
 
-    // The one import this page still runs, and not Download template, which calls no API. Import
-    // products (issue #888) and Reimbursement Report (issue #1152) are links to their own pages and
-    // are not controls this flag reaches.
+    // The one import this page still runs, and not Download template, which calls no API.
     const disabled = Array.from(host.querySelectorAll('button')).filter(button => button.disabled);
     expect(disabled).toHaveLength(1);
     expect(disabled[0].textContent).toContain('Importing');
@@ -268,56 +266,37 @@ describe('AdminImportsComponent Nayax sales template (issue #389)', () => {
   });
 });
 
-describe('AdminImportsComponent product catalogue import (issues #739 and #888)', () => {
-  it('links its Import products card to the dedicated page and renders no review of its own', async () => {
-    const { host } = await render({});
-
-    const card = Array.from(host.querySelectorAll('section.card')).find((section) =>
-      section.querySelector('.card-title')?.textContent?.includes('Import products')
-    );
-    expect(card).toBeTruthy();
-
-    // The card keeps its title and its description, so the page still says what the import is.
-    expect(card!.querySelector('.card-title')?.textContent?.trim()).toBe('Import products');
-    expect(card!.textContent).toContain('Review the Nayax catalogue against your own products');
-
-    const link = card!.querySelector('a');
-    expect(link?.textContent?.trim()).toBe('Import products');
-    expect(link?.getAttribute('href')).toBe('/products/import');
-
-    // Nothing opens here any more, and the page starts no import of its own.
-    expect(card!.querySelector('button')).toBeNull();
-    expect(host.querySelector('[data-testid="catalogue-review"]')).toBeNull();
-  });
-});
-
 /**
- * The reimbursement report left this page for its own one (issue #1152). What is left here is a
- * short card that links to it: the ZIP upload and the job status list are both
- * `/admin/imports/reimbursement-report`'s, with their own specs. The `Import XML files` card that
- * moved with them went with the server-folder import issue #1237 retired.
+ * The product catalogue import (issue #888) and the reimbursement report (issue #1152) each have
+ * their own page, and this page used to keep a short card linking to each. Both cards were removed
+ * at the owner's request (17 November 2026): the pages are reached from their own sidebar entries,
+ * and Import products also from All Products. What is left is the Nayax sales card alone.
  */
-describe('AdminImportsComponent Reimbursement Report card (issue #1152)', () => {
-  function card(host: HTMLElement, title: string): HTMLElement | undefined {
-    return Array.from(host.querySelectorAll<HTMLElement>('section.card')).find((section) =>
-      section.querySelector('.card-title')?.textContent?.includes(title)
-    );
+describe('AdminImportsComponent cards', () => {
+  function cardTitles(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll<HTMLElement>('section.card .card-title')).map((title) => title.textContent?.trim() ?? '');
   }
 
-  it('links to the Reimbursement Report page instead of hosting the reimbursement import', async () => {
+  it('shows only the Nayax sales import card', async () => {
     const { host } = await render({});
 
-    const reimbursement = card(host, 'Reimbursement Report');
-    expect(reimbursement?.querySelector('a')?.getAttribute('href')).toBe('/admin/imports/reimbursement-report');
-    expect(reimbursement?.querySelector('button')).toBeNull();
+    expect(cardTitles(host)).toEqual(['Import Nayax sales']);
   });
 
-  /** The two imports the issue leaves alone are still here, and still this page's own. */
-  it('keeps the Nayax sales upload and the product-catalogue link exactly as they were', async () => {
+  it('no longer links to the Import products or Reimbursement Report pages', async () => {
     const { host } = await render({});
 
-    expect(card(host, 'Import Nayax sales')).toBeDefined();
-    expect(card(host, 'Import products')?.querySelector('a')?.getAttribute('href')).toBe('/products/import');
+    const hrefs = Array.from(host.querySelectorAll('a')).map((a) => a.getAttribute('href'));
+    expect(hrefs).not.toContain('/products/import');
+    expect(hrefs).not.toContain('/admin/imports/reimbursement-report');
+    expect(host.textContent).not.toContain('Reimbursement Report');
+    expect(host.textContent).not.toContain('Import products');
+  });
+
+  it('renders no catalogue review of its own', async () => {
+    const { host } = await render({});
+
+    expect(host.querySelector('[data-testid="catalogue-review"]')).toBeNull();
   });
 });
 
@@ -340,31 +319,6 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
     expect(importButton(host, 'Choose sales file').disabled).toBe(false);
   });
 
-  /**
-   * The Reimbursement Report card is a link, not a control this page disables (issue #1152), for the
-   * reason the Import products link is not: it starts nothing, and the destination withholds both of
-   * its writes itself.
-   */
-  it('leaves the Reimbursement Report link in place, because the destination refuses the import itself', async () => {
-    const { host } = await render({}, undefined, of(true));
-
-    const link = Array.from(host.querySelectorAll('a')).find((x) => x.textContent?.includes('Reimbursement Report'));
-    expect(link?.getAttribute('href')).toBe('/admin/imports/reimbursement-report');
-  });
-
-  /**
-   * The Import products card is a link, not a control this page disables (issue #888): it starts
-   * nothing, and `/products/import` withholds the review and shows its own notice during a session,
-   * so the import is unavailable from here either way. Hiding the link would hide where the import
-   * lives from the one page that is meant to say so.
-   */
-  it('leaves the Import products link in place, because the destination refuses the import itself', async () => {
-    const { host } = await render({}, undefined, of(true));
-
-    const link = Array.from(host.querySelectorAll('a')).find((x) => x.textContent?.trim() === 'Import products');
-    expect(link?.getAttribute('href')).toBe('/products/import');
-  });
-
   it('leaves the client-side template download available, because it calls no API', async () => {
     const { host } = await render({}, undefined, of(true));
 
@@ -384,9 +338,9 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
 
 /**
  * The inline plan lock on the Nayax sales card (issue #979). `POST /api/imports/nayax-sales` carries
- * `[RequirePlan(PlanFeature.SalesFileImport)]` (issue #967), which is the `Pro` plan, and this is a
- * mixed page: only that one card is locked, the page itself is never route-locked, and the other
- * import workflows on it are untouched.
+ * `[RequirePlan(PlanFeature.SalesFileImport)]` (issue #967), which is the `Pro` plan, and only
+ * that card is locked: the page itself is never route-locked, and the template download beside it
+ * is untouched.
  */
 describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
   function salesCard(host: HTMLElement): HTMLElement {
@@ -457,22 +411,11 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
     expect(lock!.className).toContain('flex-wrap');
   });
 
-  it('leaves the other import workflows on this mixed page exactly as they were', async () => {
+  it('leaves the template download outside the lock', async () => {
     const success = jest.fn();
     const { host } = await render({}, { success }, of(false), of(granted(enforced('Free'))));
 
-    // The reimbursement report is not a plan-locked feature either, and its link is never withheld
-    // (issue #1152): neither it nor the page it leads to depends on the sales-file plan feature.
-    expect(
-      Array.from(host.querySelectorAll('a'))
-        .find((x) => x.textContent?.includes('Reimbursement Report'))
-        ?.getAttribute('href')
-    ).toBe('/admin/imports/reimbursement-report');
-
-    // The product catalogue import keeps its link, and the template download calls no API at all.
-    expect(
-      Array.from(host.querySelectorAll('a')).find((x) => x.textContent?.trim() === 'Import products')?.getAttribute('href')
-    ).toBe('/products/import');
+    // The template download calls no API at all, so the lock leaves it alone.
     expect(button(host, 'Download template')?.disabled).toBe(false);
 
     // And the page is not locked as a whole: no other card carries the lock.

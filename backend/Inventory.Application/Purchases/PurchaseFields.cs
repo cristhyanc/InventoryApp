@@ -7,7 +7,8 @@ namespace Inventory.Application.Purchases;
 ///
 /// The two GST classifications are nullable because "not submitted" and "submitted as unknown" are
 /// different requests on an edit (issue #429): a <c>null</c> leaves the stored classification of
-/// that charge alone, while an explicit value replaces it. A submitted classification is persisted
+/// that charge alone, while an explicit value replaces it; on a create, a <c>null</c> lets the
+/// supplier's matching fee default classify a present charge (issue #1348). A submitted classification is persisted
 /// with provenance <see cref="GstClassificationSource.Manual"/>, and a charge that is absent or
 /// zero carries no classification at all - both decided by
 /// <c>Inventory.Domain.Purchases.PurchaseGstPolicy</c>.

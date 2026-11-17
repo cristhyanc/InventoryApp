@@ -195,6 +195,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
                 new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                 supplierOrderCompletion: null,
                 attachmentReservation: null,
+                idempotency: null,
                 CancellationToken.None);
         }
 
@@ -226,6 +227,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
                     new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                     supplierOrderCompletion: null,
                     attachmentReservation: null,
+                    idempotency: null,
                     CancellationToken.None));
             Assert.Contains($"Product New product ({FreshProduct}) stored physical quantity 20 does not reconcile to its movement history (10).", refusal.Message);
         }
@@ -266,8 +268,9 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
             supplierOrderCompletion: null,
             attachmentReservation: null,
+            idempotency: null,
             CancellationToken.None);
-        return (purchase.Id, purchase.Items.Single().Id);
+        return (purchase.Purchase.Id, purchase.Purchase.Items.Single().Id);
     }
 
     private async Task UpdateAsync(int purchaseId, params PurchaseItemInput[] items)

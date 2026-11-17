@@ -99,6 +99,18 @@ export class ReportingService {
   siteCommissionAgreements(): Observable<SiteCommissionAgreement[]> {
     return this.http.get<SiteCommissionAgreement[]>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`);
   }
+  /**
+   * Ends one agreement on a date (issue #1254), so a site's rate can change without a database
+   * edit. The body carries the end date and nothing else: a rate or a start date is not editable,
+   * and which agreement is being ended is the route.
+   */
+  endSiteCommissionAgreement(agreementId: number, endDate: string): Observable<SiteCommissionAgreement> {
+    const base = this.config.apiBaseUrl.replace(/\/$/, '');
+    return this.http.post<SiteCommissionAgreement>(
+      `${base}/site-commissions/agreements/${agreementId}/end`,
+      { endDate }
+    );
+  }
   gst(filter: ReportingFilter): Observable<GstReport> { return this.http.get<GstReport>(`${this.baseUrl}/gst`, { params: this.params(filter) }); }
   /**
    * The GST and BAS summary Bookkeeping shows for a GST-registered business (issue #1318). The

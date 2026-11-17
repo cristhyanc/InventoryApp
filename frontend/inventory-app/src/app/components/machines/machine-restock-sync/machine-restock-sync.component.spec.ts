@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { SimpleChange } from '@angular/core';
@@ -350,6 +351,33 @@ describe('MachineRestockSyncComponent resolveDuplicate', () => {
 
     expect(harness.component.resolvingEventId$.value).toBeNull();
     expect(harness.toast.error).toHaveBeenCalledWith('Failed to resolve the possible duplicate.');
+  });
+
+  // Issue #1248: the other resolution won the race, so the server answered 409 having written
+  // nothing. The server's own sentence says which way the event went, and the list is reloaded so
+  // the row stops offering a decision that has already been taken.
+  it('reports a 409 conflict with the server sentence and re-syncs the preview', () => {
+    const conflict = new HttpErrorResponse({
+      status: 409,
+      error: {
+        eventId: 3,
+        outcome: NayaxStockEventApplyOutcome.ResolutionConflict,
+        message: 'This event has already been applied as a Nayax inventory movement and cannot be marked as already recorded manually.',
+        stockAdjustmentId: null
+      } as NayaxStockEventApplyResult
+    });
+    const syncRestock = jest.fn(() => of(preview([])));
+    const resolveSyncRestockDuplicate = jest.fn(() => throwError(() => conflict));
+    const harness = createHarness(syncRestock, jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(harness.toast.warning).toHaveBeenCalledWith(
+      'This event has already been applied as a Nayax inventory movement and cannot be marked as already recorded manually.');
+    expect(harness.toast.error).not.toHaveBeenCalled();
+    expect(syncRestock).toHaveBeenCalledTimes(1);
+    expect(harness.component.resolvingEventId$.value).toBeNull();
+    expect(harness.applied).toBe(0);
   });
 });
 

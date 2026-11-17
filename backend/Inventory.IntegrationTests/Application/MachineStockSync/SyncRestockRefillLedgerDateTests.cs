@@ -263,8 +263,9 @@ public class SyncRestockRefillLedgerDateTests
             .Select(stockEvent => stockEvent.Id)
             .ToListAsync();
 
-        var useCase = new ApplyMachineStockSync(
+        var useCase = TestMachineStockSyncUseCases.Apply(
             new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)),
+            new EfNayaxProductLinkStore(db),
             new RecordingMachineStockSyncLog());
 
         return await useCase.Handle(Machine, eventIds, CancellationToken.None);

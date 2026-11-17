@@ -52,7 +52,14 @@ public sealed record PendingMachineStockEvent(
 public sealed record MachineStockEventsPage(
     IReadOnlyList<PendingMachineStockEvent> Events, int HiddenReconciledCount);
 
-/// <summary>The stored state one apply attempt needs in order to decide what to do.</summary>
+/// <summary>
+/// The stored state one apply attempt needs in order to decide what to do.
+///
+/// <para><see cref="ParsedMdb"/> and <see cref="ParsedProductName"/> are what the alert's own
+/// EventData parsed to, carried since issue #1248 because they are what the machine's current MDB
+/// mapping is re-matched against. Both are absent for an alert whose EventData never parsed at all,
+/// which is an event no mapping can ever resolve.</para>
+/// </summary>
 public sealed record MachineStockEventState(
     int Id,
     long NayaxEventLogId,
@@ -63,7 +70,21 @@ public sealed record MachineStockEventState(
     long? MatchedProductId,
     int? ParsedQuantity,
     int? StockAdjustmentId,
-    NayaxDuplicateResolution DuplicateResolution);
+    NayaxDuplicateResolution DuplicateResolution,
+    int? ParsedMdb = null,
+    string? ParsedProductName = null);
+
+/// <summary>
+/// One event's refreshed product match (issue #1248): what the machine's current MDB mapping and
+/// the local catalogue now say about an event that is still waiting for one. It carries only the
+/// three match columns, so re-matching can never change an event's processing status, its duplicate
+/// resolution, its movement, its parsed values or the imported alert itself.
+/// </summary>
+public sealed record MachineStockEventMatchUpdate(
+    int EventId,
+    NayaxStockEventMatchStatus MatchStatus,
+    long? MatchedProductId,
+    string? NeedsReviewReason);
 
 /// <summary>
 /// One accepted event's refill, as the use case decided it: the event to mark processed, the
@@ -192,6 +213,34 @@ public interface IMachineStockEventStore
     /// </summary>
     Task<IReadOnlyList<MachineStockEventState>> FindEventsAsync(
         long nayaxMachineId, IReadOnlyCollection<int> eventIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The machine's events that are still waiting for a product match (issue #1248): unprocessed,
+    /// with no duplicate resolution recorded, not matched to a local product, and carrying the
+    /// parsed MDB and product name a mapping resolves them by. A processed event - applied,
+    /// reconciled as already recorded manually, or applied as a separate restock - is never
+    /// returned, because its match already decided what was written and re-matching it would
+    /// rewrite the record of a movement that happened; nor is an alert whose EventData never
+    /// parsed, which no mapping can resolve.
+    /// </summary>
+    Task<IReadOnlyList<MachineStockEventState>> FindRematchCandidatesAsync(
+        long nayaxMachineId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records the refreshed match of each of <paramref name="updates"/> and returns how many rows
+    /// actually changed (issue #1248). It writes the three match columns and nothing else, and only
+    /// on an event of this machine that is still waiting for a match - the same condition
+    /// <see cref="FindRematchCandidatesAsync"/> reads by, re-checked at the write, so an event
+    /// applied or resolved since that read is left exactly as the writer that settled it left it.
+    ///
+    /// <para>It saves inside the caller's transaction where there is one and deliberately does
+    /// <b>not</b> commit, so an apply that re-matches an event under its write lock commits the
+    /// refreshed match and the movement it decided together, or neither.</para>
+    /// </summary>
+    Task<int> UpdateMatchesAsync(
+        long nayaxMachineId,
+        IReadOnlyList<MachineStockEventMatchUpdate> updates,
+        CancellationToken cancellationToken);
 
     Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken);
 
