@@ -981,6 +981,41 @@ export enum NayaxDuplicateResolutionChoice {
   ApplyAsSeparateRestock = 1
 }
 
+/** The Nayax alert codes Sync Restock imports (issue #1325). */
+export const NayaxMachineAlertEventCodes = {
+  /** Event 501, "Stock Adjust for Machine": a refill or a discrepancy. */
+  StockAdjustForMachine: 501,
+  /** Event 510, "Machine Product Changed": the product in one MDB position was replaced. */
+  MachineProductChanged: 510
+} as const;
+
+/** Where a product replacement's suggested local product came from (issue #1325). */
+export enum NayaxReplacementSuggestionSource {
+  None = 0,
+  LiveSlot = 1,
+  ExactName = 2
+}
+
+/**
+ * What a Nayax product replacement reported and what the backend suggests for it (issue #1325).
+ * Every suggestion is advice only; an empty one carries its reason. The suggested quantity is the
+ * units Nayax currently shows in the MDB (PAR minus missing stock), not the slot's capacity.
+ */
+export interface NayaxProductReplacementPreview {
+  outgoingProductName: string;
+  incomingProductName: string;
+  suggestedOutgoingProductId: number | null;
+  suggestedOutgoingProductName: string | null;
+  outgoingSuggestionSource: NayaxReplacementSuggestionSource;
+  outgoingSuggestionReason: string | null;
+  suggestedIncomingProductId: number | null;
+  suggestedIncomingProductName: string | null;
+  incomingSuggestionSource: NayaxReplacementSuggestionSource;
+  incomingSuggestionReason: string | null;
+  suggestedIncomingQuantity: number | null;
+  suggestedIncomingQuantityReason: string | null;
+}
+
 export interface NayaxStockEventPreview {
   id: number;
   /** The Nayax EventLogID: the upstream identity of the alert. */
@@ -1015,6 +1050,16 @@ export interface NayaxStockEventPreview {
   possibleDuplicateEffectiveAt: string | null;
   /** How many other manual refills also qualified inside the 24-hour window. */
   otherPossibleDuplicateCount: number;
+  /** The Nayax alert code: 501 stock adjustment or 510 product replacement (issue #1325). */
+  eventCode: number;
+  /** The replacement's names and suggestions; null for a 501 and for an unparsed 510. */
+  productReplacement: NayaxProductReplacementPreview | null;
+  /**
+   * A pending 501 and a pending product replacement for the same MDB within 24 hours of each other
+   * may record the same refill (issue #1325). A warning only: it blocks nothing.
+   */
+  isPossibleReplacementDoubleCount: boolean;
+  replacementDoubleCountNotes: string | null;
 }
 
 export interface NayaxProductImpactPreview {

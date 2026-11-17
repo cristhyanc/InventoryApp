@@ -61,6 +61,15 @@ namespace Inventory.Application.MachineStockSync;
 /// <c>GET /v1/machines/{MachineID}/lastAlerts</c> is "the most recent alerts" and declares neither a
 /// range nor a completeness guarantee (Nayax developer portal, Get Machine Last Alerts), so what is
 /// recorded is when this workflow last succeeded and nothing more.</para>
+///
+/// <para><strong>Product replacements are imported beside stock adjustments</strong> (issue #1325).
+/// A Nayax "Machine Product Changed" alert (Event 510) is stored with the same
+/// <c>NayaxEventLogId</c> deduplication as a 501 alert, parsed by
+/// <see cref="NayaxProductReplacementEventParser"/>, and shown in the same working list with both
+/// reported names. It is never matched to a product and never moves stock: its local-product and
+/// quantity suggestions come from <see cref="NayaxProductReplacementSuggestionPolicy"/>, computed
+/// from the live machine read every time the list is built, and its only resolution is "already
+/// recorded manually" until applying a replacement exists (#1326).</para>
 /// </summary>
 public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
 {
@@ -132,7 +141,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         var machineId = machine.RequiredNayaxMachineId;
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
         var stockAlerts = alerts
-            .Where(alert => alert.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine)
+            .Where(alert => IsImportedEventCode(alert.EventCode))
             .GroupBy(alert => alert.EventLogId)
             .Select(group => group.First())
             .ToList();
@@ -144,13 +153,14 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         // waiting: the alerts this run imports are resolved by the same mapping as they are stored.
         var waiting = await _store.FindRematchCandidatesAsync(machineId, cancellationToken);
 
+        MachineStockMatchRefresh? mapping = null;
         if (newAlerts.Count > 0 || waiting.Count > 0)
         {
             // Machine + MDB is the primary mapping, read from the same live machine-products
             // projection the machine detail view already uses - and read fresh (issue #842), because
             // this mapping decides which product a stock adjustment is recorded against. One read
             // serves both the import and the re-match, so the two cannot disagree about it.
-            var mapping = await _rematch.ReadCurrentMappingAsync(machineId, cancellationToken);
+            mapping = await _rematch.ReadCurrentMappingAsync(machineId, cancellationToken);
 
             if (newAlerts.Count > 0)
             {
@@ -168,7 +178,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         }
 
         var preview = await BuildPreviewAsync(
-            machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
+            machine, newAlerts.Count, fromDateGmt, includeReconciled, mapping, cancellationToken);
 
         await RecordSuccessfulFetchAsync(
             machine.LocalMachineId, machineId, startedAtUtc, candidateCredentialRevision, cancellationToken);
@@ -226,9 +236,19 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         }
     }
 
+    /// <summary>The alert kinds Sync Restock imports: 501 stock adjustments and, since issue #1325, 510 product replacements.</summary>
+    private static bool IsImportedEventCode(int eventCode) =>
+        eventCode is NayaxMachineAlertEventCodes.StockAdjustForMachine
+            or NayaxMachineAlertEventCodes.MachineProductChanged;
+
     private static MachineStockEventImport ToImport(
         long machineId, NayaxMachineAlert alert, MachineStockMatchRefresh mapping)
     {
+        if (alert.EventCode == NayaxMachineAlertEventCodes.MachineProductChanged)
+        {
+            return ToReplacementImport(machineId, alert);
+        }
+
         if (!NayaxStockAdjustmentEventParser.TryParse(alert.EventData, out var parsed, out var failureReason))
         {
             var unparsed = NayaxMachineStockMatchPolicy.Unparsed(failureReason);
@@ -239,13 +259,37 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         return NewImport(machineId, alert, parsed.Mdb, parsed.ProductName, parsed.SignedQuantity, resolution);
     }
 
+    /// <summary>
+    /// A product replacement is stored with both reported names and no match and no quantity
+    /// (issue #1325): it is Needs Review by construction, because nothing about it may be applied,
+    /// and a parsed one carries no reason because the list explains it from its suggestions. Text
+    /// that does not parse keeps the raw EventData and the parser's reason, like a 501 alert.
+    /// </summary>
+    private static MachineStockEventImport ToReplacementImport(long machineId, NayaxMachineAlert alert)
+    {
+        if (!NayaxProductReplacementEventParser.TryParse(alert.EventData, out var parsed, out var failureReason))
+        {
+            return NewImport(machineId, alert, null, null, null, NayaxMachineStockMatchPolicy.Unparsed(failureReason));
+        }
+
+        return NewImport(
+            machineId,
+            alert,
+            parsed.Mdb,
+            parsed.IncomingProductName,
+            null,
+            new NayaxStockEventResolution(NayaxStockEventMatchStatus.NeedsReview, null, null),
+            parsed.OutgoingProductName);
+    }
+
     private static MachineStockEventImport NewImport(
         long machineId,
         NayaxMachineAlert alert,
         int? parsedMdb,
         string? parsedProductName,
         int? parsedQuantity,
-        NayaxStockEventResolution resolution) =>
+        NayaxStockEventResolution resolution,
+        string? parsedOutgoingProductName = null) =>
         new(
             alert.EventLogId,
             machineId,
@@ -259,7 +303,8 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             parsedQuantity,
             resolution.MatchedProductId,
             resolution.MatchStatus,
-            resolution.NeedsReviewReason);
+            resolution.NeedsReviewReason,
+            parsedOutgoingProductName);
 
     /// <summary>
     /// EventDateTimeGMT is documented as GMT; a value that arrives without an offset is therefore
@@ -277,15 +322,18 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         int newEventCount,
         DateTime? fromDateGmt,
         bool includeReconciled,
+        MachineStockMatchRefresh? mapping,
         CancellationToken cancellationToken)
     {
         var page = await _store.GetUnprocessedEventsAsync(
             machine.RequiredNayaxMachineId, cancellationToken, fromDateGmt, includeReconciled);
         var pendingEvents = page.Events;
         var manualRefills = await _store.GetManualMachineRefillsAsync(machine.LocalMachineId, cancellationToken);
+        var replacements = await ReadReplacementContextAsync(
+            machine.RequiredNayaxMachineId, pendingEvents, fromDateGmt, includeReconciled, mapping, cancellationToken);
 
         var events = pendingEvents
-            .Select(pending => ToPreviewDto(machine.LocalMachineId, pending, manualRefills))
+            .Select(pending => ToPreviewDto(machine.LocalMachineId, pending, manualRefills, replacements))
             .ToList();
 
         var productImpacts = pendingEvents
@@ -320,7 +368,10 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
     /// route named.
     /// </summary>
     private static NayaxStockEventPreviewDto ToPreviewDto(
-        long localMachineId, PendingMachineStockEvent pending, IReadOnlyList<ManualRefillEvidence> manualRefills)
+        long localMachineId,
+        PendingMachineStockEvent pending,
+        IReadOnlyList<ManualRefillEvidence> manualRefills,
+        ReplacementContext replacements)
     {
         var impact = NayaxMachineStockImpactPolicy.Evaluate(
             pending.MatchStatus, pending.ParsedQuantity, pending.MatchedProductQuantityInStock);
@@ -358,7 +409,169 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             // marked UTC here. Without it the preview would publish an offset-less timestamp the
             // browser would read as its own local time and show the refill at the wrong hour.
             possibleDuplicate is { } timed ? AsUtc(timed.Match.EffectiveAt) : null,
-            possibleDuplicate?.OtherQualifyingCount ?? 0);
+            possibleDuplicate?.OtherQualifyingCount ?? 0,
+            pending.EventCode,
+            replacements.Describe(pending),
+            replacements.DoubleCountNotes(pending) is not null,
+            replacements.DoubleCountNotes(pending));
+    }
+
+    /// <summary>
+    /// Everything a product replacement's row needs beyond the row itself (issue #1325), read once
+    /// for the whole list - and not at all when the machine has no pending replacement. The
+    /// pending events it compares against are the machine's <em>whole</em> unresolved list, never
+    /// the page the operator's From date or Show reconciled filter produced, so a filter cannot hide
+    /// the newer event or the 501 that a suggestion or a double-count flag depends on.
+    /// </summary>
+    private async Task<ReplacementContext> ReadReplacementContextAsync(
+        long nayaxMachineId,
+        IReadOnlyList<PendingMachineStockEvent> page,
+        DateTime? fromDateGmt,
+        bool includeReconciled,
+        MachineStockMatchRefresh? mapping,
+        CancellationToken cancellationToken)
+    {
+        // Only a row with an MDB can carry a suggestion or a double-count flag, so a page without
+        // one needs nothing more - and no further read.
+        if (!page.Any(pending => pending.ParsedMdb is not null))
+        {
+            return ReplacementContext.None;
+        }
+
+        // The unresolved list: unprocessed and not reconciled as already recorded manually. With no
+        // filter it is the page itself; with one it is read whole, so a 501 on the page is still
+        // flagged against a replacement the From date filtered out.
+        var unresolved = fromDateGmt is null && !includeReconciled
+            ? page
+            : (await _store.GetUnprocessedEventsAsync(nayaxMachineId, cancellationToken)).Events;
+
+        if (!page.Any(IsParsedReplacement))
+        {
+            return unresolved.Any(IsParsedReplacement)
+                ? new ReplacementContext(unresolved, null, [])
+                : ReplacementContext.None;
+        }
+
+        // The same live read the import used when this run imported or re-matched anything;
+        // otherwise read here, because a suggestion must come from what Nayax reports now.
+        mapping ??= await _rematch.ReadCurrentMappingAsync(nayaxMachineId, cancellationToken);
+        var activeProducts = await _store.GetActiveProductCandidatesAsync(cancellationToken);
+
+        return new ReplacementContext(unresolved, mapping, activeProducts);
+    }
+
+    private static bool IsParsedReplacement(PendingMachineStockEvent pending) =>
+        pending.EventCode == NayaxMachineAlertEventCodes.MachineProductChanged
+        && pending.ParsedMdb is not null
+        && pending.ParsedProductName is not null
+        && pending.ParsedOutgoingProductName is not null;
+
+    private static ParsedNayaxProductReplacement AsReplacement(PendingMachineStockEvent pending) =>
+        new(pending.ParsedMdb!.Value, pending.ParsedOutgoingProductName!, pending.ParsedProductName!);
+
+    /// <summary>
+    /// The suggestions and double-count flags of one list's product replacements (issue #1325),
+    /// all decided by <see cref="NayaxProductReplacementSuggestionPolicy"/>.
+    /// </summary>
+    private sealed class ReplacementContext
+    {
+        public static readonly ReplacementContext None = new([], null, []);
+
+        private readonly IReadOnlyList<PendingMachineStockEvent> _unresolved;
+        private readonly MachineStockMatchRefresh? _mapping;
+        private readonly IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate> _activeProducts;
+
+        public ReplacementContext(
+            IReadOnlyList<PendingMachineStockEvent> unresolved,
+            MachineStockMatchRefresh? mapping,
+            IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate> activeProducts)
+        {
+            _unresolved = unresolved;
+            _mapping = mapping;
+            _activeProducts = activeProducts;
+        }
+
+        public NayaxProductReplacementPreviewDto? Describe(PendingMachineStockEvent pending)
+        {
+            if (_mapping is null || !IsParsedReplacement(pending))
+            {
+                return null;
+            }
+
+            var replacement = AsReplacement(pending);
+            var slot = _mapping.SlotReading(replacement.Mdb);
+            var outgoing = NayaxProductReplacementSuggestionPolicy.SuggestOutgoing(replacement, _activeProducts);
+            var incoming = NayaxProductReplacementSuggestionPolicy.SuggestIncoming(replacement, slot, _activeProducts);
+            var quantity = NayaxProductReplacementSuggestionPolicy.SuggestIncomingQuantity(
+                replacement, slot, HasNewerPendingEvent(pending));
+
+            return new NayaxProductReplacementPreviewDto(
+                replacement.OutgoingProductName,
+                replacement.IncomingProductName,
+                outgoing.ProductId,
+                outgoing.ProductName,
+                outgoing.Source,
+                outgoing.Reason,
+                incoming.ProductId,
+                incoming.ProductName,
+                incoming.Source,
+                incoming.Reason,
+                quantity.Quantity,
+                quantity.Reason);
+        }
+
+        /// <summary>
+        /// The possible double count between a pending replacement and a pending 501 for the same
+        /// machine and MDB within 24 hours of it, described on both rows, or <see langword="null"/>.
+        /// A safeguard only: it blocks nothing and changes no resolution.
+        /// </summary>
+        public string? DoubleCountNotes(PendingMachineStockEvent pending)
+        {
+            if (!IsUnresolved(pending) || pending.ParsedMdb is not int mdb)
+            {
+                return null;
+            }
+
+            if (IsParsedReplacement(pending))
+            {
+                var adjustments = _unresolved.Count(other =>
+                    other.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine
+                    && other.ParsedMdb == mdb
+                    && NayaxProductReplacementSuggestionPolicy.IsPossibleDoubleCount(
+                        pending.EventDateTimeGmt, other.EventDateTimeGmt));
+
+                return adjustments == 0
+                    ? null
+                    : $"{adjustments} pending stock adjustment{(adjustments == 1 ? string.Empty : "s")} for MDB "
+                        + $"{mdb} within 24 hours of this replacement may record the same refill.";
+            }
+
+            if (pending.EventCode != NayaxMachineAlertEventCodes.StockAdjustForMachine)
+            {
+                return null;
+            }
+
+            var replaced = _unresolved.Any(other =>
+                IsParsedReplacement(other)
+                && other.ParsedMdb == mdb
+                && NayaxProductReplacementSuggestionPolicy.IsPossibleDoubleCount(
+                    other.EventDateTimeGmt, pending.EventDateTimeGmt));
+
+            return replaced
+                ? $"A pending product replacement for MDB {mdb} within 24 hours may record the same refill."
+                : null;
+        }
+
+        private static bool IsUnresolved(PendingMachineStockEvent pending) =>
+            pending.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+            && pending.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually;
+
+        private bool HasNewerPendingEvent(PendingMachineStockEvent pending) =>
+            _unresolved.Any(other =>
+                other.Id != pending.Id
+                && other.ParsedMdb == pending.ParsedMdb
+                && (other.EventDateTimeGmt > pending.EventDateTimeGmt
+                    || (other.EventDateTimeGmt == pending.EventDateTimeGmt && other.Id > pending.Id)));
     }
 
     /// <summary>

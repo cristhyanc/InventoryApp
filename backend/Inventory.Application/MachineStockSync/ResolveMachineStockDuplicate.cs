@@ -182,7 +182,8 @@ public sealed class ResolveMachineStockDuplicate
             locked.NeedsReviewReason,
             locked.MatchedProductId,
             locked.ParsedQuantity,
-            product?.QuantityInStock);
+            product?.QuantityInStock,
+            eventCode: locked.EventCode);
 
         switch (ruling.Decision)
         {
@@ -190,6 +191,7 @@ public sealed class ResolveMachineStockDuplicate
                 return new(locked.Id, NayaxStockEventApplyOutcome.NotMatched, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.NegativeDiscrepancy:
+            case NayaxStockEventApplyDecision.ProductReplacementNotApplicable:
                 return new(locked.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.InsufficientStorage:

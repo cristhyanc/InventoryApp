@@ -49,7 +49,18 @@ public class NayaxMachineStockEvent : IBusinessOwned
     public string? RawSourceMetadata { get; set; }
 
     public int? ParsedMdb { get; set; }
+
+    /// <summary>
+    /// The product name the alert reported. For a 501 stock adjustment it is the adjusted product;
+    /// for a 510 product replacement (issue #1325) it is the <em>incoming</em> product.
+    /// </summary>
     public string? ParsedProductName { get; set; }
+
+    /// <summary>
+    /// The <em>outgoing</em> product name of a 510 product replacement (issue #1325); always null
+    /// for a 501 stock adjustment.
+    /// </summary>
+    public string? ParsedOutgoingProductName { get; set; }
 
     /// <summary>The signed quantity Nayax reported. Positive is a refill; negative is a discrepancy.</summary>
     public int? ParsedQuantity { get; set; }

@@ -18208,8 +18208,10 @@ that meaning.
    without an offset is treated as UTC), `EventDateTimeVMC` (the machine clock, kept as source data
    only) and `EventData` (the raw text the parser reads, never modified). The descriptive fields
    (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
-   documented meanings and are not substituted for one another. Only Event 501 rows are relevant
-   to this feature.
+   documented meanings and are not substituted for one another. Only Event 501 rows and, since
+   issue #1325, Event 510 product replacements are relevant to this feature (see
+   [Product replacements](#product-replacements-event-510-issue-1325) below); every other code is
+   ignored.
 
    **The timestamp contract: which instant each side uses** (issue #1243). `EventDateTimeGMT` is the
    instant the machine was physically refilled, and `EventDateTimeVMC` - the machine's own clock - is
@@ -18651,6 +18653,79 @@ insufficient-storage shortfall, and auto-deciding the accounting/tax treatment o
 discrepancy are all explicitly out of scope for this feature. Issue #891 adds a Dashboard
 **reminder** that this sync is overdue, which is not a schedule: it only tells an operator that the
 explicit action above is waiting for them.
+
+#### Product replacements (Event 510, issue #1325)
+
+When an operator replaces the product in one MDB position in Nayax Core, Nayax records a
+"Machine Product Changed" alert. Before issue #1325 the import kept only Event 501 and dropped it,
+so a replacement left no trace in Sync Restock. It is now imported and shown, read-only: **nothing
+here writes stock**. Applying a replacement is #1326 and its editing UI is #1327.
+
+- **The contract and its evidence.** The Nayax developer portal documents `lastAlerts` but lists no
+  event codes and no `EventData` format, so the contract rests on one real `lastAlerts` item the
+  repository owner captured on 17 November 2026, anonymised and kept as the test fixture
+  `NayaxProductChangedAlertFixture` (`backend/Inventory.UnitTests/Domain/Nayax/`). It shows
+  `EventCode` `510`, `EventDescription` "Machine Product Changed", `EventGroupName` "Stock",
+  `EventCategoryName` "Inventory", and `EventData` of the form
+  `<operator> 'has replaced product <outgoing> with product <incoming> | Product MDB: <mdb>` - a
+  single quote opens before `has replaced product` and is never closed, and nothing follows the MDB
+  number. `NayaxMachineAlertEventCodes.MachineProductChanged` is the constant.
+- **Import.** `SyncMachineStockFromNayax` keeps 510 alerts beside 501 alerts and deduplicates them
+  by `NayaxEventLogId` exactly as 501 alerts are, so a repeated sync imports nothing twice.
+  `Inventory.Domain.Nayax.NayaxProductReplacementEventParser` reads the MDB, the outgoing name and
+  the incoming name, anchored on the text markers (`has replaced product`, `with product`,
+  `| Product MDB:`) and never on the operator prefix. Text that does not match, or that is ambiguous
+  because ` with product ` appears more than once, is stored as Needs Review with the raw text and
+  the parser's reason, exactly like an unparsable 501.
+- **Storage.** The row is a `NayaxMachineStockEvents` row with `EventCode` `510`.
+  `ParsedProductName` holds the **incoming** name and the additive, nullable
+  `ParsedOutgoingProductName` (migration `AddNayaxMachineStockEventOutgoingProductName`) the
+  outgoing one; it is null on every 501 row, whose meaning is unchanged. A replacement is stored
+  with `MatchStatus` Needs Review, no `MatchedProductId` and no `ParsedQuantity`: its product and
+  quantity suggestions are advice, recomputed on every read, never a stored match. A parsed
+  replacement carries no review reason; the list explains it.
+- **Suggestions** (`NayaxProductReplacementSuggestionPolicy`, advice only). Each is computed from
+  the same live machine-products read that the import and the re-match use
+  (`MachineStockMatchRefresh.SlotReading`), read fresh when the list holds a pending replacement.
+  The **incoming product** comes from the live slot first - MDB -> Nayax product id ->
+  `Product.ExternalProductId` - when the slot still reports a product whose normalised name equals
+  the incoming name; otherwise, for either name, it is a unique match on
+  `ProductMatcher.NormalizeName` among the business's active products. A tie, no match or a
+  mismatch leaves the suggestion empty with a reason. The **suggested incoming quantity** is the
+  units Nayax currently shows in that MDB, `PAR - MissingStockByMDB` (the Pick List's "current"
+  arithmetic), offered only when the slot still reports the incoming product, both values are
+  present, the result is not negative and no newer pending event exists for that machine and MDB;
+  otherwise it is null with a reason. The owner decided on 16 November 2026 that this is the
+  closest figure to what was loaded, because the operator's Adjust Stock in Nayax has already
+  filled the slot; it can read low by the sales since the replacement, the operator edits it, and
+  it is never called capacity.
+- **Possible double count.** A pending 501 for the same machine and MDB within 24 hours of a
+  pending replacement (either side) is flagged on both rows. It is a safeguard only and blocks
+  nothing: the owner confirmed that the Adjust Stock done after a replacement creates no 501, so
+  the replacement is normally the only record of that refill. The pending events compared against
+  are the machine's whole unresolved list, never the page a From date or Show reconciled filter
+  produced.
+- **Every reader of the event table** treats the new kind deliberately:
+  - *Apply* (`ApplyMachineStockSync`) and *Apply as separate restock*
+    (`ResolveMachineStockDuplicate`) refuse it: `NayaxMachineStockApplyPolicy.Decide` takes the
+    event code and answers `ProductReplacementNotApplicable` (outcome `NotApplicable`) for anything
+    but a 501, after the settled "already applied" and "already reconciled" answers.
+  - *Already recorded manually* (`ResolveMachineStockEventsAsAlreadyRecorded`) accepts it and writes
+    no stock, exactly as for a 501.
+  - *Re-match* (`RematchMachineStockEvents.IsWaitingForAMatch` and
+    `EfMachineStockEventStore.WaitingForAMatch`) excludes it, so its stored match never changes.
+  - *Pending counts*: the Dashboard reminder and the #1018 "nothing left to sync" coverage fence
+    (`EfMachineRestockSyncCoverageStore.IsPendingSince`, whose `ParsedQuantity == null` branch it
+    falls into) and the machine ledger's unprocessed-event count
+    (`EfMachineStockLedgerStore`) count it like a 501 until it is resolved.
+  - *Stock History presence* (`EfProductInventoryHistoryQueries`) reads `MatchedProductId`, which a
+    replacement never has, so it adds no product history; the platform diagnostics surface still
+    excludes the whole table.
+- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time,
+  both Nayax names, the suggestions and their reasons, the suggested quantity and any double-count
+  flag. It has no quantity or reason inputs, is never pre-selected or counted as applicable, and
+  can only be marked **Already recorded manually**; **Apply selected** is disabled while a
+  replacement is selected.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 

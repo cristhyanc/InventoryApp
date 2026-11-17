@@ -9,21 +9,50 @@ namespace Inventory.Application.MachineStockSync;
 /// ids. It is the exact input <see cref="NayaxMachineStockMatchPolicy"/> resolves an alert with at
 /// import, held as a value so an import and a re-match of an older event are decided by the same
 /// mapping read in the same breath, and never by two reads that disagree.
+///
+/// <para>Since issue #1325 it also keeps what that same read reported for each MDB position - the
+/// product name, PAR and <c>MissingStockByMDB</c> - so a product replacement's suggestions are
+/// computed from the read that resolved everything else, through <see cref="SlotReading"/>.</para>
 /// </summary>
 public sealed class MachineStockMatchRefresh
 {
     private readonly long _nayaxMachineId;
     private readonly IReadOnlyDictionary<int, long> _nayaxProductIdByMdb;
     private readonly IReadOnlyDictionary<long, NayaxStockSyncProduct> _localProductsByNayaxId;
+    private readonly IReadOnlyDictionary<int, NayaxMachineProduct> _positionsByMdb;
 
     public MachineStockMatchRefresh(
         long nayaxMachineId,
         IReadOnlyDictionary<int, long> nayaxProductIdByMdb,
-        IReadOnlyDictionary<long, NayaxStockSyncProduct> localProductsByNayaxId)
+        IReadOnlyDictionary<long, NayaxStockSyncProduct> localProductsByNayaxId,
+        IReadOnlyDictionary<int, NayaxMachineProduct>? positionsByMdb = null)
     {
         _nayaxMachineId = nayaxMachineId;
         _nayaxProductIdByMdb = nayaxProductIdByMdb;
         _localProductsByNayaxId = localProductsByNayaxId;
+        _positionsByMdb = positionsByMdb ?? new Dictionary<int, NayaxMachineProduct>();
+    }
+
+    /// <summary>
+    /// What Nayax reported for <paramref name="mdb"/> in this read (issue #1325), or
+    /// <see langword="null"/> when the machine reported no such position. The linked product is the
+    /// local product the position's Nayax product id resolves to, when the business has one.
+    /// </summary>
+    public NayaxReplacementSlotReading? SlotReading(int mdb)
+    {
+        if (!_positionsByMdb.TryGetValue(mdb, out var position))
+        {
+            return null;
+        }
+
+        Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate? linked =
+            _nayaxProductIdByMdb.TryGetValue(mdb, out var nayaxProductId)
+            && _localProductsByNayaxId.TryGetValue(nayaxProductId, out var product)
+                ? new(product.Id, product.Name)
+                : null;
+
+        return new NayaxReplacementSlotReading(
+            position.ProductName, linked, position.PAR, position.MissingStockByMDB);
     }
 
     /// <summary>How this mapping resolves a freshly parsed alert. The import's own resolution.</summary>
@@ -92,7 +121,10 @@ public sealed class RematchMachineStockEvents
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        return state.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+        // Only a 501 stock adjustment is matched to a product (issue #1325): a 510 product
+        // replacement's suggestions are advice computed on every read and never a stored match.
+        return state.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine
+            && state.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
             && state.DuplicateResolution == NayaxDuplicateResolution.None
             && state.MatchStatus != NayaxStockEventMatchStatus.Matched
             && state.ParsedMdb is not null
@@ -116,6 +148,16 @@ public sealed class RematchMachineStockEvents
             .GroupBy(product => product.MDBCode!.Value)
             .ToDictionary(group => group.Key, group => group.First().NayaxProductID!.Value);
 
+        // The same positions as the reading a product replacement's suggestions are made from
+        // (issue #1325): the same row the mapping above chose wherever the MDB has one, and
+        // otherwise the position Nayax reported with no product, so an emptied slot reads as empty.
+        var positionsByMdb = machineProducts
+            .Where(product => product.MDBCode.HasValue)
+            .GroupBy(product => product.MDBCode!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => group.FirstOrDefault(product => product.NayaxProductID.HasValue) ?? group.First());
+
         // The Nayax ids the machine reported, resolved to the local products they name through the
         // product row's own external id; the storage read that follows is given local ids only.
         var localProductIdByNayaxId = await _productLinks
@@ -132,7 +174,7 @@ public sealed class RematchMachineStockEvents
             .Where(link => storageProducts.ContainsKey(link.Value))
             .ToDictionary(link => link.Key, link => storageProducts[link.Value]);
 
-        return new MachineStockMatchRefresh(nayaxMachineId, nayaxProductIdByMdb, localProducts);
+        return new MachineStockMatchRefresh(nayaxMachineId, nayaxProductIdByMdb, localProducts, positionsByMdb);
     }
 
     /// <summary>

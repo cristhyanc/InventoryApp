@@ -27,7 +27,9 @@ import { SupportSessionService } from '../../../support-session/support-session.
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
+  NayaxMachineAlertEventCodes,
   NayaxMachineStockSyncPreview,
+  NayaxReplacementSuggestionSource,
   NayaxStockEventApplyOutcome,
   NayaxStockEventApplyResult,
   NayaxStockEventMatchStatus,
@@ -249,6 +251,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   readonly MatchStatus = NayaxStockEventMatchStatus;
   readonly DuplicateResolution = NayaxDuplicateResolution;
   readonly DuplicateResolutionChoice = NayaxDuplicateResolutionChoice;
+  readonly SuggestionSource = NayaxReplacementSuggestionSource;
 
   @ViewChild('syncTrigger') private syncTrigger?: ElementRef<HTMLButtonElement>;
 
@@ -329,11 +332,30 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
    * movement, the latter must go through explicit resolution first.
    */
   isReadyToApply(event: NayaxStockEventPreview): boolean {
-    return event.matchStatus === NayaxStockEventMatchStatus.Matched &&
+    return !this.isProductReplacement(event) &&
+      event.matchStatus === NayaxStockEventMatchStatus.Matched &&
       (event.parsedQuantity ?? 0) > 0 &&
       !event.isInsufficientStock &&
       event.duplicateResolution === NayaxDuplicateResolution.None &&
       !this.isUnresolvedDuplicate(event);
+  }
+
+  /**
+   * A Nayax product replacement (Event 510, issue #1325). It is never applied: its only resolution
+   * is "Already recorded manually", until applying a replacement exists.
+   */
+  isProductReplacement(event: NayaxStockEventPreview): boolean {
+    return event.eventCode === NayaxMachineAlertEventCodes.MachineProductChanged;
+  }
+
+  /**
+   * Whether the current selection holds a product replacement, which Apply refuses (issue #1325).
+   * Apply is disabled while it does, so a replacement is only ever marked already recorded.
+   */
+  selectionHasProductReplacement(preview: NayaxMachineStockSyncPreview | null): boolean {
+    return (preview?.events ?? []).some(
+      (event) => this.selectedEventIds.has(event.id) && this.isProductReplacement(event)
+    );
   }
 
   /** A flagged possible duplicate the operator has not yet explicitly resolved. */
@@ -546,7 +568,12 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
 
   applySelectedEvents(): void {
     const machineId = this.machineId;
-    if (!machineId || this.selectedEventIds.size === 0 || this.sessionActive) {
+    if (
+      !machineId ||
+      this.selectedEventIds.size === 0 ||
+      this.sessionActive ||
+      this.selectionHasProductReplacement(this.syncPreview$.value)
+    ) {
       return;
     }
 

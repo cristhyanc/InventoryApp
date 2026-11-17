@@ -62,6 +62,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\Gst\FakeCurrentBusinessProvider.cs" Link="Application\Gst\FakeCurrentBusinessProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Machines\FakeLocalMachineStore.cs" Link="Application\Machines\FakeLocalMachineStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\MachineStockSync\FakeMachineRestockSyncCoverageStore.cs" Link="Application\MachineStockSync\FakeMachineRestockSyncCoverageStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Domain\Nayax\NayaxProductChangedAlertFixture.cs" Link="Domain\Nayax\NayaxProductChangedAlertFixture.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxConnectionStore.cs" Link="Application\Nayax\FakeNayaxConnectionStore.cs" />
