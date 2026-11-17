@@ -209,6 +209,76 @@ public class SyncRestockProductReplacementTests
     }
 
     [Fact]
+    public async Task A_new_replacement_is_saved_and_listed_when_the_live_machine_read_fails()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var nayax = Nayax([CapturedReplacement()]);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(NayaxMachineId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Nayax is unavailable."));
+
+        await using (var db = Scoped(options))
+        {
+            // A replacement needs no MDB mapping, so its import never waits on the live read.
+            var preview = await Sync(db, nayax.Object).Handle(Machine, CancellationToken.None);
+            Assert.Equal(1, preview.NewEventCount);
+            var replacement = Assert.Single(preview.Events).ProductReplacement!;
+            Assert.Null(replacement.SuggestedIncomingQuantity);
+            Assert.Contains(
+                NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason,
+                replacement.SuggestedIncomingQuantityReason,
+                StringComparison.Ordinal);
+        }
+
+        await using var verify = Scoped(options);
+        var stored = await verify.NayaxMachineStockEvents.SingleAsync();
+        Assert.Equal(NayaxMachineAlertEventCodes.MachineProductChanged, stored.EventCode);
+        Assert.Equal(OutgoingName, stored.ParsedOutgoingProductName);
+    }
+
+    [Fact]
+    public async Task A_new_replacement_is_kept_even_when_the_live_read_the_501s_need_fails()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var nayax = Nayax(
+        [
+            CapturedReplacement(1),
+            StockAlert(2, $"[operator] 'Adjusted Stock, Product MDB: {Mdb} | {IncomingName} | 6", ReplacedAt.AddMinutes(5)),
+        ]);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(NayaxMachineId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Nayax is unavailable."));
+
+        // A 501 still needs the live mapping, so the sync fails exactly as it did before #1325 and
+        // the 501 is left for the next sync - but the replacement was saved first and is not lost.
+        await using (var db = Scoped(options))
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(
+                () => Sync(db, nayax.Object).Handle(Machine, CancellationToken.None));
+        }
+
+        await using (var verify = Scoped(options))
+        {
+            var stored = await verify.NayaxMachineStockEvents.SingleAsync();
+            Assert.Equal(NayaxMachineAlertEventCodes.MachineProductChanged, stored.EventCode);
+        }
+
+        // Once Nayax answers again the 501 is imported, and the replacement is not imported twice.
+        await using (var retry = Scoped(options))
+        {
+            var preview = await Sync(retry, Nayax(
+            [
+                CapturedReplacement(1),
+                StockAlert(2, $"[operator] 'Adjusted Stock, Product MDB: {Mdb} | {IncomingName} | 6", ReplacedAt.AddMinutes(5)),
+            ]).Object).Handle(Machine, CancellationToken.None);
+            Assert.Equal(1, preview.NewEventCount);
+        }
+
+        await using var final = Scoped(options);
+        Assert.Equal(2, await final.NayaxMachineStockEvents.CountAsync());
+    }
+
+    [Fact]
     public async Task A_repeated_sync_imports_nothing_twice_and_other_alert_codes_are_still_ignored()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");

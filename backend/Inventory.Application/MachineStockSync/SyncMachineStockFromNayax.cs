@@ -153,8 +153,27 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         // waiting: the alerts this run imports are resolved by the same mapping as they are stored.
         var waiting = await _store.FindRematchCandidatesAsync(machineId, cancellationToken);
 
+        // Issue #1325: a product replacement needs no MDB mapping - it is stored as Needs Review
+        // with no match - so it is saved first and on its own. A failure of the live machine read
+        // below then cannot lose it, and the next sync does not have to find it again in lastAlerts
+        // (which returns only recent alerts). Replacements are deduplicated by NayaxEventLogId like
+        // every alert, so the 501 import that follows can never save one twice.
+        var newReplacements = newAlerts
+            .Where(alert => alert.EventCode == NayaxMachineAlertEventCodes.MachineProductChanged)
+            .ToList();
+        var newStockAdjustments = newAlerts
+            .Where(alert => alert.EventCode != NayaxMachineAlertEventCodes.MachineProductChanged)
+            .ToList();
+
+        if (newReplacements.Count > 0)
+        {
+            await _store.ImportAsync(
+                newReplacements.Select(alert => ToReplacementImport(machineId, alert)).ToList(),
+                cancellationToken);
+        }
+
         MachineStockMatchRefresh? mapping = null;
-        if (newAlerts.Count > 0 || waiting.Count > 0)
+        if (newStockAdjustments.Count > 0 || waiting.Count > 0)
         {
             // Machine + MDB is the primary mapping, read from the same live machine-products
             // projection the machine detail view already uses - and read fresh (issue #842), because
@@ -162,10 +181,10 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             // serves both the import and the re-match, so the two cannot disagree about it.
             mapping = await _rematch.ReadCurrentMappingAsync(machineId, cancellationToken);
 
-            if (newAlerts.Count > 0)
+            if (newStockAdjustments.Count > 0)
             {
                 await _store.ImportAsync(
-                    newAlerts.Select(alert => ToImport(machineId, alert, mapping)).ToList(),
+                    newStockAdjustments.Select(alert => ToImport(machineId, alert, mapping)).ToList(),
                     cancellationToken);
             }
 
@@ -244,11 +263,6 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
     private static MachineStockEventImport ToImport(
         long machineId, NayaxMachineAlert alert, MachineStockMatchRefresh mapping)
     {
-        if (alert.EventCode == NayaxMachineAlertEventCodes.MachineProductChanged)
-        {
-            return ToReplacementImport(machineId, alert);
-        }
-
         if (!NayaxStockAdjustmentEventParser.TryParse(alert.EventData, out var parsed, out var failureReason))
         {
             var unparsed = NayaxMachineStockMatchPolicy.Unparsed(failureReason);

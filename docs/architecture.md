@@ -18682,7 +18682,10 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   single quote opens before `has replaced product` and is never closed, and nothing follows the MDB
   number. `NayaxMachineAlertEventCodes.MachineProductChanged` is the constant.
 - **Import.** `SyncMachineStockFromNayax` keeps 510 alerts beside 501 alerts and deduplicates them
-  by `NayaxEventLogId` exactly as 501 alerts are, so a repeated sync imports nothing twice.
+  by `NayaxEventLogId` exactly as 501 alerts are, so a repeated sync imports nothing twice. A
+  replacement needs no MDB mapping, so new replacements are saved **first and on their own**,
+  before the live machine-products read: a failure of that read can never lose one (`lastAlerts`
+  returns only recent alerts). New 501 alerts still need the read and fail with it as before.
   `Inventory.Domain.Nayax.NayaxProductReplacementEventParser` reads the MDB, the outgoing name and
   the incoming name, anchored on the text markers (`has replaced product`, `with product`,
   `| Product MDB:`) and never on the operator prefix. Text that does not match, or that is ambiguous
