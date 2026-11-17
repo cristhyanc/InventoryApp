@@ -166,7 +166,21 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         return null;
     }
 
-    private static string? TextValue(IXLCell? cell) => cell is null || cell.IsEmpty() ? null : cell.GetString().Trim();
+    /// <summary>
+    /// A cell's own text, trimmed, or <c>null</c> when the export carries no such column, the cell
+    /// is empty, or it holds nothing but whitespace (issue #1298). A cell of spaces states nothing
+    /// about a transaction, exactly as an empty one does - the same reading
+    /// <see cref="IntInput"/> and <see cref="DecimalInput"/> already apply to the status and the
+    /// amount - so it must not reach the import as an empty machine name, payment method or product
+    /// name, which the update would then write over a stored one.
+    /// </summary>
+    private static string? TextValue(IXLCell? cell)
+    {
+        if (cell is null || cell.IsEmpty())
+            return null;
+        var text = cell.GetString().Trim();
+        return text.Length == 0 ? null : text;
+    }
 
     private static long LongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : 0;
 

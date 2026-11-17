@@ -1,4 +1,5 @@
 using System.Text;
+using ClosedXML.Excel;
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
 using Inventory.Domain.FinancialConfiguration;
@@ -261,6 +262,87 @@ public class ImportNayaxSalesBlankValueTests
     }
 
     /// <summary>
+    /// A whitespace-only payment method, product name and machine name cell, in a real <c>.xlsx</c>
+    /// workbook with a valid status and amount beside them. A cell of spaces states nothing about a
+    /// transaction, so the stored metadata and the product association it names are preserved and
+    /// the row is counted once - the file's status and amount still win. Such a cell used to reach
+    /// the import trimmed to <c>""</c> and overwrote all three with blanks.
+    /// </summary>
+    [Fact]
+    public async Task A_whitespace_only_metadata_cell_keeps_the_stored_value_and_is_counted()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedStoredSaleAsync(connection);
+
+        NayaxSalesImportResult upload;
+        await using (var db = Context(connection))
+            upload = await Import(db).Handle(Xlsx(
+                FullHeader + "\n" +
+                $"{TransactionId},{NayaxTransactionStatusIds.Refunded},{MachineId},4.25,   ,  ,   ,{GmtCell}"));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 1), upload);
+        Assert.Empty(upload.InvalidRows);
+        await using var read = Context(connection);
+        var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
+        // What the file states still wins.
+        Assert.Equal(NayaxTransactionStatusIds.Refunded, sale.TransactionStatusId);
+        Assert.Equal(4.25m, sale.SettlementValue);
+        // The three stored values the whitespace cells said nothing about, and the product the kept
+        // name belongs to.
+        Assert.Equal("Credit Card", sale.PaymentMethod);
+        Assert.Equal("Water 600ml", sale.ProductName);
+        Assert.Equal("Machine A", sale.MachineName);
+        Assert.Equal(10, sale.ProductId);
+    }
+
+    /// <summary>
+    /// The same rule where it is decided, rather than where the workbook is read: given a row whose
+    /// metadata is whitespace, <see cref="ImportNayaxSales"/> itself writes none of it onto the
+    /// stored sale. The reader no longer produces such a row, but which values an update may
+    /// overwrite is the use case's rule (AGENTS.md § Sales, payment methods, and statuses), so no
+    /// future reader or caller can reintroduce a blank that erases stored metadata.
+    /// </summary>
+    [Fact]
+    public async Task A_row_whose_metadata_is_whitespace_overwrites_no_stored_value()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await SeedStoredSaleAsync(connection);
+
+        var reader = new Mock<INayaxSalesWorkbookReader>();
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>()))
+            .Returns([new NayaxSalesImportRow(
+                TransactionId,
+                MachineId,
+                null,
+                NayaxTransactionStatusIds.Refunded,
+                null,
+                "   ",
+                4.25m,
+                " ",
+                "\t",
+                null,
+                StoredInstant,
+                NayaxSalesGmtInput.Valid,
+                NayaxSalesCellInput.Valid,
+                NayaxSalesCellInput.Valid,
+                2)]);
+
+        NayaxSalesImportResult upload;
+        await using (var db = Context(connection))
+            upload = await Import(db, reader.Object).Handle(Csv("ignored by the stubbed reader"));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 1), upload);
+        await using var read = Context(connection);
+        var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
+        Assert.Equal(NayaxTransactionStatusIds.Refunded, sale.TransactionStatusId);
+        Assert.Equal(4.25m, sale.SettlementValue);
+        Assert.Equal("Credit Card", sale.PaymentMethod);
+        Assert.Equal("Water 600ml", sale.ProductName);
+        Assert.Equal("Machine A", sale.MachineName);
+        Assert.Equal(10, sale.ProductId);
+    }
+
+    /// <summary>
     /// The count stays a count of rows when the kept fields are metadata: one row keeping two of
     /// them counts once, and a row beside it that states every value keeps nothing.
     /// </summary>
@@ -371,11 +453,11 @@ public class ImportNayaxSalesBlankValueTests
         await db.SaveChangesAsync();
     }
 
-    private static ImportNayaxSales Import(AppDbContext db)
+    private static ImportNayaxSales Import(AppDbContext db, INayaxSalesWorkbookReader? reader = null)
     {
         var rebuild = Mock.Of<IRebuildProductCost>();
         return new ImportNayaxSales(
-            new ClosedXmlNayaxSalesWorkbookReader(),
+            reader ?? new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild,
@@ -384,6 +466,29 @@ public class ImportNayaxSalesBlankValueTests
 
     private static NayaxSalesFileInput Csv(string content) =>
         new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(content)));
+
+    /// <summary>
+    /// The same comma-separated layout uploaded as a real <c>.xlsx</c> workbook of text cells - the
+    /// format the Nayax export is actually uploaded in, and the one where a whitespace-only cell is
+    /// a cell the file holds rather than an empty one.
+    /// </summary>
+    private static NayaxSalesFileInput Xlsx(string content)
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.Worksheets.Add("Sales");
+        var lines = content.Split('\n');
+        for (var line = 0; line < lines.Length; line++)
+        {
+            var cells = lines[line].Split(',');
+            for (var column = 0; column < cells.Length; column++)
+                sheet.Cell(line + 1, column + 1).Value = cells[column];
+        }
+
+        using var saved = new MemoryStream();
+        workbook.SaveAs(saved);
+        var bytes = saved.ToArray();
+        return new NayaxSalesFileInput("sales.xlsx", () => new MemoryStream(bytes));
+    }
 
     private static async Task<SqliteConnection> CreateSqliteAsync()
     {

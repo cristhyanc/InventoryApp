@@ -14342,9 +14342,10 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   invariant-culture numbers, an unparsable number left `null` rather than zero (the one exception,
   an absent settlement value the legacy import read as `0`, ended with issue #1298 - see [What a
   blank cell or a missing column does to a stored
-  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298)), and an instant taken from
-  a date cell, an Excel serial number, or the export's own `d/M/yyyy h:mm:ss tt` text and otherwise
-  left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298)), text cells
+  trimmed and a cell of nothing but whitespace left `null` rather than `""` (issue #1298, same
+  section), and an instant taken from a date cell, an Excel serial number, or the export's own
+  `d/M/yyyy h:mm:ss tt` text and otherwise left `null` so the row is skipped. Unlike `ZipReimbursementArchiveReader`, a read failure is
   deliberately *not* translated into a plain answer: a corrupt upload stays a failure (ClosedXML's
   `FileFormatException`, which the controller's `InvalidOperationException` handling does not claim,
   so it reaches `GlobalExceptionHandler` as a generic `500` exactly as before) rather than being
@@ -14407,6 +14408,11 @@ value it does not carry changes nothing.
   `abc` are still unreadable; what changed is that being unreadable is now *reported* instead of
   looking exactly like an empty cell. Each row also carries its own `RowNumber`, counting the
   header row as row 1.
+- **A text cell of nothing but whitespace states nothing either**, in the payment method, the
+  product name and the machine name. `ClosedXmlNayaxSalesWorkbookReader.TextValue` answers `null`
+  for it rather than the `""` it used to trim it to, so the row carries "the file said nothing"
+  for those three facts exactly as it does for the status and the amount; `null` in the row is the
+  port's contract for a value the file does not state.
 - **`ImportNayaxSales` decides what an update writes**, as it already did for the transaction cost
   price, and `EfNayaxSalesImportStore.Update` still applies no rule of its own: the use case merges
   the row with the stored sale (read through the import's own `StoredImportedSale`, which carries
@@ -14414,7 +14420,9 @@ value it does not carry changes nothing.
   not) and hands the store the values it decided. A blank or missing status, amount, payment method,
   product name or machine name leaves the stored one exactly as it is; a product name that is kept
   is also the name the product association is resolved against, so a kept name keeps the product it
-  names.
+  names. Whether a text cell said anything is decided here too, by the use case's own `StatedText` -
+  no column, an empty value or whitespace only is nothing stated - so the rule holds however a
+  reader trimmed the cell, and the merge and the kept count share one notion of blank.
 - **A row whose status or amount is `Malformed` is applied nowhere.** The stored sale is untouched,
   and the row is reported in `NayaxSalesImportResult.InvalidRows` with its row number and
   transaction id so an operator can fix the file. It is never counted as updated, imported or

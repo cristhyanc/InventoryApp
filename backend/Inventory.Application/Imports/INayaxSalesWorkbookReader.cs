@@ -40,7 +40,13 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// those it was is <paramref name="TransactionStatusInput"/>.
 /// </param>
 /// <param name="NayaxProductId">The raw remote product identifier, matched against the local catalogue.</param>
-/// <param name="MachineName">The machine name as the export reported it.</param>
+/// <param name="MachineName">
+/// The machine name as the export reported it, or <c>null</c> when the file states none - a missing
+/// column, an empty cell, or a cell holding nothing but whitespace (issue #1298). The same holds for
+/// <paramref name="PaymentMethod"/> and <paramref name="ProductName"/>: a value the file does not
+/// state must not reach <see cref="ImportNayaxSales"/> as an empty string, which it could not tell
+/// from a reported blank and would write over a stored value.
+/// </param>
 /// <param name="SettlementValue">
 /// The settled amount the file states, or <c>null</c> when it states none (issue #1298). It is no
 /// longer defaulted to <c>0</c>: a blank cell and a missing column used to be indistinguishable

@@ -92,7 +92,8 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   <item><b>Nor does it erase any other stored fact with a cell the file left empty</b> (issue
 ///   #1298). The file is the source of truth for a transaction's status and amount: a value it
 ///   carries replaces the stored one in either direction, an explicit <c>0</c> amount included.
-///   But a blank cell and a missing column say nothing about a transaction, so the stored status,
+///   But a blank cell and a missing column say nothing about a transaction - and for the three text
+///   facts a cell holding nothing but whitespace is a blank cell - so the stored status,
 ///   amount, payment method, product name and machine name are kept, and the row is counted once in
 ///   <see cref="NayaxSalesImportResult.KeptStoredValues"/>. A non-blank value that cannot be read
 ///   is never mistaken for a blank one: the row is applied nowhere and is reported in
@@ -262,8 +263,11 @@ public sealed class ImportNayaxSales
             // What this row actually states, with the stored value kept wherever it states nothing
             // (issue #1298). The file is still the source of truth for every value it carries - a
             // present status replaces the stored one in either direction, and an explicit 0 amount
-            // is a value it carries - so only a blank cell or a missing column is ignored.
-            var productName = row.ProductName ?? stored?.Sale.ProductName;
+            // is a value it carries - so only a blank cell or a missing column is ignored. For the
+            // three text facts, a cell holding nothing but whitespace is a blank cell: StatedText
+            // decides that here, where the keep-or-overwrite rule lives, rather than relying on how
+            // a reader happened to trim it.
+            var productName = StatedText(row.ProductName) ?? stored?.Sale.ProductName;
             var facts = new ImportedNayaxSale(
                 row.TransactionId,
                 row.MachineId,
@@ -277,9 +281,9 @@ public sealed class ImportNayaxSales
                 ProductMatcher.MatchLinked(
                     candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), productName),
                 row.NayaxProductId,
-                row.MachineName ?? stored?.MachineName,
+                StatedText(row.MachineName) ?? stored?.MachineName,
                 row.SettlementValue ?? stored!.SettlementValue,
-                row.PaymentMethod ?? stored?.PaymentMethod,
+                StatedText(row.PaymentMethod) ?? stored?.PaymentMethod,
                 productName,
                 // Never erase a transaction cost price the business already holds with a row that
                 // simply does not carry the column.
@@ -356,11 +360,23 @@ public sealed class ImportNayaxSales
         || KeptStoredText(row.MachineName, stored.MachineName);
 
     /// <summary>
-    /// Whether the merge kept one stored text fact: the file carried none - exactly the condition
-    /// <c>row.X ?? stored.X</c> keeps the stored value on - and the stored sale holds one to keep.
+    /// Whether the merge kept one stored text fact: the file stated none - exactly the condition
+    /// <see cref="StatedText"/> makes the merge keep the stored value on - and the stored sale holds
+    /// one to keep.
     /// </summary>
     private static bool KeptStoredText(string? fromFile, string? storedValue) =>
-        fromFile is null && !string.IsNullOrWhiteSpace(storedValue);
+        StatedText(fromFile) is null && !string.IsNullOrWhiteSpace(storedValue);
+
+    /// <summary>
+    /// What the file states in one text cell, or <see langword="null"/> when it states nothing
+    /// (issue #1298): no column, an empty cell, or a cell holding nothing but whitespace. One
+    /// notion of "the file said nothing" for the merge and for the kept count, so a row of spaces
+    /// cannot erase a stored payment method, product name or machine name - the reading the status
+    /// and the amount have had since this change. The value itself is passed through untouched;
+    /// trimming stays the reader's business.
+    /// </summary>
+    private static string? StatedText(string? fromFile) =>
+        string.IsNullOrWhiteSpace(fromFile) ? null : fromFile;
 
     /// <summary>
     /// The instant a row is imported at (issue #380), or <c>null</c> when it has no trustworthy one

@@ -154,6 +154,35 @@ public class ClosedXmlNayaxSalesWorkbookReaderTests
     }
 
     /// <summary>
+    /// A cell holding nothing but whitespace states nothing about a transaction, exactly as an empty
+    /// cell does (issue #1298). It used to be trimmed to <c>""</c>, which the import could not tell
+    /// from a reported name - so a row of spaces overwrote a stored payment method, product name or
+    /// machine name with a blank, the very thing a blank cell must never do. Asserted on a real
+    /// workbook, because that is the format the export is uploaded in and a whitespace cell is one
+    /// the workbook holds rather than an empty one.
+    /// </summary>
+    [Fact]
+    public void A_whitespace_only_text_cell_states_nothing_rather_than_an_empty_value()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.Worksheets.Add("Sales");
+        Header(sheet, "TransactionID", "MachineID", "PaymentMethod", "ProductName", "MachineName",
+            "MachineAuthorizationTime");
+        sheet.Cell(2, 1).Value = 1001;
+        sheet.Cell(2, 2).Value = 7;
+        sheet.Cell(2, 3).Value = "   ";
+        sheet.Cell(2, 4).Value = "\t";
+        sheet.Cell(2, 5).Value = " ";
+        sheet.Cell(2, 6).Value = Authorized;
+
+        var row = Assert.Single(Read(workbook, "sales.xlsx"));
+
+        Assert.Null(row.PaymentMethod);
+        Assert.Null(row.ProductName);
+        Assert.Null(row.MachineName);
+    }
+
+    /// <summary>
     /// Each row carries its own number in the file, counting the header as row 1, so an invalid row
     /// is reported where an operator can find it rather than by position in a filtered list.
     /// </summary>
