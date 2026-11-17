@@ -18148,6 +18148,27 @@ whole apply over one such decision and would throw away every other answer on th
 are disabled while a support session is active, for the reason every other write on this page is
 (issue #661): a session grants `Imports.Run` and the read-only rule refuses the `POST` itself.
 
+**A one-tap "Closest match" suggestion is a client-side hint, nothing more (issue #1353).** For each
+unlinked entry the screen scores the provider name against the local rows its link may name
+(`frontend/inventory-app/src/app/components/admin/imports/catalogue-review/catalogue-match.ts`,
+`scoreCatalogueNameMatch`): a Jaccard similarity of the two names' word sets once each is lower-cased,
+stripped of punctuation and stripped of the size/pack-count phrase it states, so that `COKE ZERO
+600ML` and `Coke Zero 600 mL` score as an exact match and small wording differences (`Monster Energy
+Original 500ml` vs `Monster Original 500ml`) score highly without being one. A size (volume
+normalised to mL, `1.25L` = `1250 mL`; weight to g) or pack count (`24pk`, `24 pack`, `x24`, `24 x`)
+that both names state and disagree on withholds the suggestion whatever the score — `Coke Zero
+375 mL` is never suggested against only `Coke Zero 600 mL` — but never removes the candidate from the
+Link to dropdown, which lists every candidate with no such conflict first, each group ordered by the
+same score then by name. Showing a suggestion, or the dropdown's order, changes no answer: the entry
+stays on Skip until the operator presses the suggestion's "Link to this" (which does exactly what
+choosing that row from the dropdown does) or picks one by hand. The server still links only the row
+the operator names (issue #738) — this is a display calculation over rows the page already loaded,
+never a new read, write or server-side matching rule, and it is unrelated to master product matching
+(#1049/#1051) and the price collector matcher. The same rule runs for a provider group against local
+categories. `catalogue-match.spec.ts` pins the scoring/conflict rule and
+`catalogue-review.component.spec.ts` pins the screen's side of it: shown/hidden, the default
+unchanged, "Link to this", the dropdown order and the category case.
+
 ### Nayax product catalogue import (issue #300)
 
 **This import no longer exists** (the heading is kept because the sections above and below link to
