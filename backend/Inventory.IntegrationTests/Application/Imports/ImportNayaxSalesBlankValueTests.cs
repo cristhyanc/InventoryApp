@@ -410,6 +410,34 @@ public class ImportNayaxSalesBlankValueTests
     }
 
     /// <summary>
+    /// A blank status over a sale that holds no status preserves nothing, and is not counted:
+    /// the stored status column is nullable and this import stores a new sale whose status cell is
+    /// blank, so a later upload of the same blank cell keeps no value. Seeded through the import
+    /// itself, the path that produces such a sale.
+    /// </summary>
+    [Fact]
+    public async Task A_blank_status_over_a_sale_that_holds_no_status_is_not_counted()
+    {
+        await using var connection = await CreateSqliteAsync();
+        const string header = "TransactionID,TransactionStatusId,MachineID,SettlementValue,AuthorizationDateTimeGMT\n";
+
+        NayaxSalesImportResult first;
+        await using (var db = Context(connection))
+            first = await Import(db).Handle(Csv(header + $"{TransactionId},,{MachineId},3.50,{GmtCell}"));
+        Assert.Equal(new NayaxSalesImportResult(1, 0, 0, 0), first);
+
+        NayaxSalesImportResult again;
+        await using (var db = Context(connection))
+            again = await Import(db).Handle(Csv(header + $"{TransactionId},,{MachineId},4.25,{GmtCell}"));
+
+        Assert.Equal(new NayaxSalesImportResult(0, 1, 0, 0), again);
+        await using var read = Context(connection);
+        var sale = Assert.Single(await read.NayaxSales.AsNoTracking().ToListAsync());
+        Assert.Null(sale.TransactionStatusId);
+        Assert.Equal(4.25m, sale.SettlementValue);
+    }
+
+    /// <summary>
     /// The kept count is a count of rows, not of fields: a row that kept five stored values counts
     /// once, so the number an operator sees is "rows this file said nothing new about".
     /// </summary>

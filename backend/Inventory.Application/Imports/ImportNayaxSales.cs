@@ -347,13 +347,13 @@ public sealed class ImportNayaxSales
     /// <para>A kept payment method, product name or machine name counts only where the stored sale
     /// <em>holds</em> one. An export written without those columns is ordinary and long-standing,
     /// and a column absent from the file for a sale that has nothing stored under it preserves
-    /// nothing - counting it would report a kept value where no value exists. The status and the
-    /// amount are decided from the file's cell alone, as this count always has: the stored amount
-    /// column is never null, so an absent amount always keeps one, and a stored status is the fact
-    /// a blank cell must never erase whatever it currently holds.</para>
+    /// nothing - counting it would report a kept value where no value exists. The same holds for
+    /// the status: the stored status column is nullable and this import can store a sale with no
+    /// status, so a blank status counts only where the stored sale holds one. The amount needs no
+    /// such check: the stored amount column is never null, so an absent amount always keeps one.</para>
     /// </summary>
     private static bool KeptAStoredValue(NayaxSalesImportRow row, StoredImportedSale stored) =>
-        row.TransactionStatusId is null
+        (row.TransactionStatusId is null && stored.Sale.TransactionStatusId is not null)
         || row.SettlementValue is null
         || KeptStoredText(row.PaymentMethod, stored.PaymentMethod)
         || KeptStoredText(row.ProductName, stored.Sale.ProductName)

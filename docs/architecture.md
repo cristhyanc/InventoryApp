@@ -14597,9 +14597,11 @@ value it does not carry changes nothing.
   said nothing about it, and `InvalidRows`, with `Invalid` as its count. The count covers every
   field the merge keeps - status, amount, payment method, product name and machine name - and a row
   that kept four of them counts once, so the number is "rows this file said nothing new about". A
-  kept payment method, product name or machine name counts only where the stored sale holds one:
-  an export written without those columns is ordinary and long-standing, and a column absent for a
-  sale that has nothing stored under it preserves nothing. Admin → Imports shows both counts in the
+  kept status, payment method, product name or machine name counts only where the stored sale
+  holds one: an export written without those columns is ordinary and long-standing, a column absent
+  for a sale that has nothing stored under it preserves nothing, and the import can itself store a
+  new sale whose status cell was blank. The stored amount is never null, so a blank amount always
+  keeps one. Admin → Imports shows both counts in the
   toast it already showed the three counts in (`salesImportSummary`); the page decides none of them.
 
 Out of scope, and unchanged: nothing stops a file from changing a stored status (refunded,
