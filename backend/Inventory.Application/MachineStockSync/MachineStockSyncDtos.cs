@@ -38,7 +38,37 @@ public record NayaxStockEventPreviewDto(
     NayaxDuplicateResolution DuplicateResolution,
     int? PossibleDuplicateQuantity,
     DateTime? PossibleDuplicateEffectiveAt,
-    int OtherPossibleDuplicateCount
+    int OtherPossibleDuplicateCount,
+    int EventCode = NayaxMachineAlertEventCodes.StockAdjustForMachine,
+    NayaxProductReplacementPreviewDto? ProductReplacement = null,
+    bool IsPossibleReplacementDoubleCount = false,
+    string? ReplacementDoubleCountNotes = null
+);
+
+/// <summary>
+/// What a Nayax product replacement (Event 510, issue #1325) reported and what the app suggests for
+/// it. <see cref="NayaxStockEventPreviewDto.ProductReplacement"/> carries it only for a 510 event
+/// whose EventData parsed; an unparsed one is a Needs Review row with its reason instead.
+///
+/// <para>Every suggestion here is advice only, recomputed from the live machine read on every load,
+/// and never stored: a suggestion that has no answer carries its reason instead.
+/// <see cref="SuggestedIncomingQuantity"/> is the units Nayax currently shows in the MDB
+/// (<c>PAR - MissingStockByMDB</c>); it is not the slot's capacity and can read low by the sales
+/// since the replacement.</para>
+/// </summary>
+public record NayaxProductReplacementPreviewDto(
+    string OutgoingProductName,
+    string IncomingProductName,
+    long? SuggestedOutgoingProductId,
+    string? SuggestedOutgoingProductName,
+    NayaxReplacementSuggestionSource OutgoingSuggestionSource,
+    string? OutgoingSuggestionReason,
+    long? SuggestedIncomingProductId,
+    string? SuggestedIncomingProductName,
+    NayaxReplacementSuggestionSource IncomingSuggestionSource,
+    string? IncomingSuggestionReason,
+    int? SuggestedIncomingQuantity,
+    string? SuggestedIncomingQuantityReason
 );
 
 /// <summary>

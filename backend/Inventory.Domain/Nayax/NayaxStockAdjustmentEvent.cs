@@ -7,6 +7,13 @@ public static class NayaxMachineAlertEventCodes
 {
     /// <summary>Event 501, "Stock Adjust for Machine".</summary>
     public const int StockAdjustForMachine = 501;
+
+    /// <summary>
+    /// Event 510, "Machine Product Changed" (issue #1325): an operator replaced the product in one
+    /// MDB position in Nayax Core. Confirmed by one real <c>lastAlerts</c> response captured by the
+    /// repository owner on 17 November 2026; the Nayax developer portal lists no event codes.
+    /// </summary>
+    public const int MachineProductChanged = 510;
 }
 
 /// <summary>

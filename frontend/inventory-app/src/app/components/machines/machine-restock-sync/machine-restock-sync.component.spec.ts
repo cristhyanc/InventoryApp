@@ -22,7 +22,10 @@ function supportSessionStub(active: Observable<boolean> = of(false)): SupportSes
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
+  NayaxMachineAlertEventCodes,
   NayaxMachineStockApplyResponse,
+  NayaxProductReplacementPreview,
+  NayaxReplacementSuggestionSource,
   NayaxMachineStockSyncPreview,
   NayaxStockEventApplyOutcome,
   NayaxStockEventApplyResult,
@@ -64,8 +67,48 @@ function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPrevi
     possibleDuplicateQuantity: null,
     possibleDuplicateEffectiveAt: null,
     otherPossibleDuplicateCount: 0,
+    eventCode: NayaxMachineAlertEventCodes.StockAdjustForMachine,
+    productReplacement: null,
+    isPossibleReplacementDoubleCount: false,
+    replacementDoubleCountNotes: null,
     ...overrides
   };
+}
+
+/** A parsed Nayax product replacement (Event 510, issue #1325), as the backend previews it. */
+function replacementEvent(
+  overrides: Partial<NayaxStockEventPreview> = {},
+  replacement: Partial<NayaxProductReplacementPreview> = {}
+): NayaxStockEventPreview {
+  return event({
+    id: 9,
+    eventCode: NayaxMachineAlertEventCodes.MachineProductChanged,
+    rawEventData: "[operator] 'has replaced product V Energy 250ML with product Redbull Red Edition | Product MDB: 58",
+    parsedMdb: 58,
+    parsedProductName: 'Redbull Red Edition',
+    parsedQuantity: null,
+    matchedProductId: null,
+    matchedProductName: null,
+    matchStatus: NayaxStockEventMatchStatus.NeedsReview,
+    needsReviewReason: null,
+    availableStorageQuantity: null,
+    productReplacement: {
+      outgoingProductName: 'V Energy 250ML',
+      incomingProductName: 'Redbull Red Edition',
+      suggestedOutgoingProductId: 301,
+      suggestedOutgoingProductName: 'V Energy 250ML',
+      outgoingSuggestionSource: NayaxReplacementSuggestionSource.ExactName,
+      outgoingSuggestionReason: null,
+      suggestedIncomingProductId: 300,
+      suggestedIncomingProductName: 'Red Bull Red Edition 250mL',
+      incomingSuggestionSource: NayaxReplacementSuggestionSource.LiveSlot,
+      incomingSuggestionReason: null,
+      suggestedIncomingQuantity: 7,
+      suggestedIncomingQuantityReason: null,
+      ...replacement
+    },
+    ...overrides
+  });
 }
 
 /** The business wall-clock rendering the dialog uses for an instant, for the comparison line. */
@@ -1276,6 +1319,106 @@ describe('MachineRestockSyncComponent dialog', () => {
 
     expect(host.querySelector('[data-testid="possible-duplicate-comparison"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="possible-duplicate-others"]')).toBeNull();
+  });
+
+  describe('product replacements (issue #1325)', () => {
+    it('shows both Nayax names, the suggestions and the suggested quantity, and is never ready to apply', async () => {
+      const replacement = replacementEvent();
+      const { fixture, host, requireElement, openDialog } = await render(jest.fn(() => of(preview([replacement]))));
+
+      openDialog();
+
+      expect(requireElement('[data-testid="replacement-names"]').textContent)
+        .toContain('V Energy 250ML replaced by Redbull Red Edition');
+      expect(requireElement('[data-testid="replacement-outgoing-suggestion"]').textContent).toContain('V Energy 250ML');
+      expect(requireElement('[data-testid="replacement-incoming-suggestion"]').textContent)
+        .toContain('Red Bull Red Edition 250mL (from the machine)');
+      expect(requireElement('[data-testid="replacement-quantity"]').textContent).toContain('Suggested 7');
+      expect(requireElement('[data-testid="replacement-badge"]').textContent).toContain('mark as already recorded');
+      // A parsed replacement has no review reason of its own, so no empty "Needs review:" badge.
+      expect(host.textContent).not.toContain('Needs review:');
+      // No quantity or reason inputs: the only resolution is "already recorded".
+      expect(host.querySelectorAll('tbody input:not([type="checkbox"]), tbody select')).toHaveLength(0);
+      expect(fixture.componentInstance.isReadyToApply(replacement)).toBe(false);
+      expect(fixture.componentInstance.isEligibleForManualResolution(replacement)).toBe(true);
+    });
+
+    it('shows each empty suggestion with its reason', async () => {
+      const replacement = replacementEvent({}, {
+        suggestedOutgoingProductId: null,
+        suggestedOutgoingProductName: null,
+        outgoingSuggestionSource: NayaxReplacementSuggestionSource.None,
+        outgoingSuggestionReason: "More than one active product is named 'V Energy 250ML'.",
+        suggestedIncomingProductId: null,
+        suggestedIncomingProductName: null,
+        incomingSuggestionSource: NayaxReplacementSuggestionSource.None,
+        incomingSuggestionReason: "No active product is named 'Redbull Red Edition'.",
+        suggestedIncomingQuantity: null,
+        suggestedIncomingQuantityReason: "MDB 58 now reports 'Mother 500mL', not 'Redbull Red Edition'."
+      });
+      const { host, requireElement, openDialog } = await render(jest.fn(() => of(preview([replacement]))));
+
+      openDialog();
+
+      expect(requireElement('[data-testid="replacement-outgoing-suggestion"]').textContent).toContain('More than one active product');
+      expect(requireElement('[data-testid="replacement-incoming-suggestion"]').textContent).toContain('No active product');
+      expect(requireElement('[data-testid="replacement-quantity-reason"]').textContent).toContain("now reports 'Mother 500mL'");
+      expect(host.querySelector('[data-testid="replacement-quantity"]')).toBeNull();
+    });
+
+    it('shows an unparsed replacement as needs review with its reason', async () => {
+      const unparsed = event({
+        id: 10,
+        eventCode: NayaxMachineAlertEventCodes.MachineProductChanged,
+        parsedMdb: null,
+        parsedProductName: null,
+        parsedQuantity: null,
+        matchedProductId: null,
+        matchedProductName: null,
+        matchStatus: NayaxStockEventMatchStatus.NeedsReview,
+        needsReviewReason: 'EventData does not contain the supported form.'
+      });
+      const { host, openDialog } = await render(jest.fn(() => of(preview([unparsed]))));
+
+      openDialog();
+
+      expect(host.textContent).toContain('Needs review: EventData does not contain the supported form.');
+      expect(host.querySelector('[data-testid="replacement-badge"]')).not.toBeNull();
+    });
+
+    it('flags a possible double count on the row that carries it', async () => {
+      const flagged = event({
+        id: 11,
+        isPossibleReplacementDoubleCount: true,
+        replacementDoubleCountNotes: 'A pending product replacement for MDB 58 within 24 hours may record the same refill.'
+      });
+      const { requireElement, openDialog } = await render(jest.fn(() => of(preview([flagged]))));
+
+      openDialog();
+
+      expect(requireElement('[data-testid="replacement-double-count"]').textContent).toContain('Possible double count');
+    });
+
+    it('marks a selected replacement as already recorded but never sends it to Apply', async () => {
+      const replacement = replacementEvent();
+      const resolveSyncRestockManually = jest.fn(() => of({
+        results: [{ eventId: 9, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null }]
+      } as NayaxMachineStockApplyResponse));
+      const applySyncRestock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse));
+      const { fixture, requireElement, requireButton, click, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), applySyncRestock, undefined, resolveSyncRestockManually
+      );
+      openDialog();
+
+      click(requireElement<HTMLInputElement>('tbody input[type="checkbox"]'));
+
+      expect(requireButton('Apply selected').disabled).toBe(true);
+      fixture.componentInstance.applySelectedEvents();
+      expect(applySyncRestock).not.toHaveBeenCalled();
+
+      click(requireButton('Already recorded manually'));
+      expect(resolveSyncRestockManually).toHaveBeenCalledWith(7, [9]);
+    });
   });
 
   it('resolves a possible duplicate as already recorded manually and refreshes the preview', async () => {

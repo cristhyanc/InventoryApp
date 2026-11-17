@@ -848,6 +848,71 @@ public class MachineRestockSyncCoverageTests
                 stockEvent => stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed));
     }
 
+    /// <summary>
+    /// A product replacement (Event 510, issue #1325) is pending work exactly like a 501: it is
+    /// counted by the Dashboard reminder's aggregate read while unresolved, stops counting once it
+    /// is marked already recorded, and while it is pending the #1018 "nothing left to sync" fence
+    /// refuses to record coverage.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_product_replacement_counts_like_a_501_and_blocks_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.AddRange(
+                Replacement(1, EventTime.AddDays(-1), NayaxDuplicateResolution.None),
+                Replacement(2, EventTime.AddDays(-2), NayaxDuplicateResolution.ReconciledManually));
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            var store = new EfMachineRestockSyncCoverageStore(db);
+            var machine = Assert.Single(await store.GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
+
+            Assert.Equal(1, machine.KnownPendingEventCount);
+            Assert.Equal(EventTime.AddDays(-1), machine.OldestKnownPendingEventAtUtc);
+            Assert.False(await store.TryRecordSuccessfulSyncAsync(
+                LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AllTime, default));
+        }
+
+        await using (var resolve = Scoped(options))
+        {
+            var pending = await resolve.NayaxMachineStockEvents.SingleAsync(stockEvent => stockEvent.NayaxEventLogId == 1);
+            pending.DuplicateResolution = NayaxDuplicateResolution.ReconciledManually;
+            await resolve.SaveChangesAsync();
+        }
+
+        await using var after = Scoped(options);
+        var cleared = new EfMachineRestockSyncCoverageStore(after);
+        Assert.Equal(
+            0,
+            Assert.Single(await cleared.GetProviderMachineCoverageAsync(AllTime, CancellationToken.None))
+                .KnownPendingEventCount);
+        Assert.True(await cleared.TryRecordSuccessfulSyncAsync(
+            LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AllTime, default));
+    }
+
+    private static NayaxMachineStockEvent Replacement(
+        long eventLogId, DateTime eventDateTimeGmt, NayaxDuplicateResolution duplicateResolution) => new()
+        {
+            NayaxEventLogId = eventLogId,
+            MachineId = NayaxMachineId,
+            EventCode = NayaxMachineAlertEventCodes.MachineProductChanged,
+            EventDateTimeGmt = eventDateTimeGmt,
+            EventDateTimeVmc = DateTime.SpecifyKind(eventDateTimeGmt.AddHours(10), DateTimeKind.Unspecified),
+            RawEventData = "[operator] 'has replaced product Coke with product Sprite | Product MDB: 13",
+            ParsedMdb = Mdb,
+            ParsedProductName = "Sprite",
+            ParsedOutgoingProductName = "Coke",
+            MatchStatus = NayaxStockEventMatchStatus.NeedsReview,
+            ProcessingStatus = NayaxStockEventProcessingStatus.Unprocessed,
+            DuplicateResolution = duplicateResolution,
+        };
+
     [Fact]
     public async Task A_provider_named_machine_with_nothing_outstanding_is_reported_with_no_pending_work()
     {

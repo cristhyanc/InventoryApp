@@ -3,6 +3,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -41,7 +42,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             e.StockAdjustmentId,
             e.DuplicateResolution,
             e.ParsedMdb,
-            e.ParsedProductName);
+            e.ParsedProductName,
+            e.EventCode);
 
     /// <summary>
     /// The one predicate for "this event is still waiting for a product match" (issue #1248),
@@ -52,7 +54,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     /// <see cref="RematchMachineStockEvents.IsWaitingForAMatch"/>.
     /// </summary>
     private static readonly Expression<Func<NayaxMachineStockEvent, bool>> WaitingForAMatch =
-        e => e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+        e => e.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine
+            && e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
             && e.DuplicateResolution == NayaxDuplicateResolution.None
             && e.MatchStatus != NayaxStockEventMatchStatus.Matched
             && e.ParsedMdb != null
@@ -92,6 +95,19 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             p => new NayaxStockSyncProduct(p.Id, p.Name, p.QuantityInStock));
     }
 
+    public async Task<IReadOnlyList<ProductMatchCandidate>> GetActiveProductCandidatesAsync(
+        CancellationToken cancellationToken)
+    {
+        var products = await _db.Products
+            .AsNoTracking()
+            .Where(p => p.IsActive)
+            .OrderBy(p => p.Id)
+            .Select(p => new { p.Id, p.Name })
+            .ToListAsync(cancellationToken);
+
+        return products.Select(p => new ProductMatchCandidate(p.Id, p.Name)).ToList();
+    }
+
     public async Task ImportAsync(
         IReadOnlyList<MachineStockEventImport> events, CancellationToken cancellationToken)
     {
@@ -118,6 +134,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 MatchedProductId = imported.MatchedProductId,
                 MatchStatus = imported.MatchStatus,
                 NeedsReviewReason = imported.NeedsReviewReason,
+                ParsedOutgoingProductName = imported.ParsedOutgoingProductName,
             });
         }
 
@@ -164,7 +181,9 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 e.MatchStatus,
                 e.NeedsReviewReason,
                 e.ProcessingStatus,
-                e.DuplicateResolution))
+                e.DuplicateResolution,
+                e.EventCode,
+                e.ParsedOutgoingProductName))
             .ToListAsync(cancellationToken);
 
         return new MachineStockEventsPage(events, hiddenReconciledCount);
