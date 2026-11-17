@@ -22,13 +22,23 @@ public readonly record struct ParsedNayaxProductReplacement(
 /// <para>The parser anchors on the text markers - <c>has replaced product</c>, <c>with product</c>
 /// and <c>| Product MDB:</c> - and never on the operator prefix, so a different operator name, a
 /// missing quote or no prefix at all parses the same way. Text that does not match, or that is
-/// ambiguous because <c> with product </c> appears more than once (which name is which could then
+/// ambiguous because <c>with product</c> appears more than once (which name is which could then
 /// only be guessed), fails to parse: the caller stores it as Needs Review with the raw text and the
 /// reason, and this type never guesses a value.</para>
 /// </summary>
 public static class NayaxProductReplacementEventParser
 {
-    private const string IncomingMarker = " with product ";
+    // The incoming-name marker exactly as the pattern accepts it: any run of whitespace, tabs and
+    // line breaks included, around and between the two words. Counting it with this same rule is
+    // what makes the ambiguity check agree with the match - a literal " with product " count would
+    // miss "with  product" or a line break, and would then either reject text the pattern read
+    // unambiguously or accept a name the lazy match split in the wrong place. The surrounding
+    // whitespace is only looked at, never consumed, so two markers that share one space between
+    // them ("with product with product") are both counted.
+    private static readonly Regex IncomingMarker = new(
+        @"(?<=\s)with\s+product(?=\s)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
 
     private static readonly Regex Pattern = new(
         @"has\s+replaced\s+product\s+(?<outgoing>.+?)\s+with\s+product\s+(?<incoming>.+?)\s*\|\s*Product\s+MDB:\s*(?<mdb>\d+)\s*$",
@@ -56,7 +66,7 @@ public static class NayaxProductReplacementEventParser
             return false;
         }
 
-        if (CountOccurrences(text, IncomingMarker) != 1)
+        if (IncomingMarker.Count(text) != 1)
         {
             failureReason =
                 "EventData contains 'with product' more than once, so the outgoing and incoming product "
@@ -81,19 +91,6 @@ public static class NayaxProductReplacementEventParser
         failureReason = null;
         parsed = new ParsedNayaxProductReplacement(mdb, outgoing, incoming);
         return true;
-    }
-
-    private static int CountOccurrences(string text, string marker)
-    {
-        var count = 0;
-        var index = text.IndexOf(marker, StringComparison.Ordinal);
-        while (index >= 0)
-        {
-            count++;
-            index = text.IndexOf(marker, index + marker.Length, StringComparison.Ordinal);
-        }
-
-        return count;
     }
 }
 
@@ -179,6 +176,37 @@ public static class NayaxProductReplacementSuggestionPolicy
         var slotNote = SlotNote(replacement, slot);
         return slotNote is null ? byName : NayaxReplacementProductSuggestion.Empty($"{slotNote} {byName.Reason}");
     }
+
+    /// <summary>
+    /// Why there is no live-slot advice when the machine's products could not be read from Nayax
+    /// at all: the list is still shown, and only what needs the live read is left out.
+    /// </summary>
+    public const string SlotReadUnavailableReason =
+        "Nayax could not be reached to read this machine's products just now.";
+
+    /// <summary>
+    /// The local product for the incoming name when the live machine read failed: the slot cannot
+    /// be consulted, so only a unique exact-name match is offered, and an empty answer says that
+    /// the machine could not be read as well as why no name matched.
+    /// </summary>
+    public static NayaxReplacementProductSuggestion SuggestIncomingWithoutSlotRead(
+        ParsedNayaxProductReplacement replacement,
+        IReadOnlyCollection<ProductMatchCandidate> activeProducts)
+    {
+        ArgumentNullException.ThrowIfNull(activeProducts);
+
+        var byName = SuggestByName(replacement.IncomingProductName, activeProducts);
+        return byName.ProductId is not null
+            ? byName
+            : NayaxReplacementProductSuggestion.Empty($"{SlotReadUnavailableReason} {byName.Reason}");
+    }
+
+    /// <summary>
+    /// No incoming quantity when the live machine read failed: the slot's PAR and missing stock are
+    /// the only source of one, and a figure is never guessed without them.
+    /// </summary>
+    public static NayaxReplacementQuantitySuggestion IncomingQuantityWithoutSlotRead() =>
+        new(null, $"{SlotReadUnavailableReason} No quantity is suggested.");
 
     /// <summary>The local product for the outgoing name: an exact, unique name match or nothing.</summary>
     public static NayaxReplacementProductSuggestion SuggestOutgoing(

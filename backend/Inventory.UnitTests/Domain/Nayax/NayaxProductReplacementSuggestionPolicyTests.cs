@@ -93,6 +93,26 @@ public class NayaxProductReplacementSuggestionPolicyTests
         Assert.Contains("More than one active product", suggestion.Reason, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Without_a_live_read_incoming_is_an_exact_name_match()
+    {
+        var suggestion = NayaxProductReplacementSuggestionPolicy.SuggestIncomingWithoutSlotRead(
+            Replacement, [Redbull, VEnergy]);
+
+        Assert.Equal(Redbull.Id, suggestion.ProductId);
+        Assert.Equal(NayaxReplacementSuggestionSource.ExactName, suggestion.Source);
+    }
+
+    [Fact]
+    public void Without_a_live_read_and_no_name_match_incoming_is_empty_and_says_both()
+    {
+        var suggestion = NayaxProductReplacementSuggestionPolicy.SuggestIncomingWithoutSlotRead(Replacement, [VEnergy]);
+
+        Assert.Null(suggestion.ProductId);
+        Assert.Contains(NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason, suggestion.Reason, StringComparison.Ordinal);
+        Assert.Contains("No active product is named 'Redbull Red Edition'", suggestion.Reason, StringComparison.Ordinal);
+    }
+
     #endregion
 
     #region Outgoing product
@@ -197,6 +217,15 @@ public class NayaxProductReplacementSuggestionPolicyTests
 
         Assert.Null(quantity.Quantity);
         Assert.Contains("more missing units (6) than PAR (5)", quantity.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void No_quantity_without_a_live_read()
+    {
+        var quantity = NayaxProductReplacementSuggestionPolicy.IncomingQuantityWithoutSlotRead();
+
+        Assert.Null(quantity.Quantity);
+        Assert.Contains(NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason, quantity.Reason, StringComparison.Ordinal);
     }
 
     #endregion

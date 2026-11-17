@@ -411,7 +411,7 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
             possibleDuplicate is { } timed ? AsUtc(timed.Match.EffectiveAt) : null,
             possibleDuplicate?.OtherQualifyingCount ?? 0,
             pending.EventCode,
-            replacements.Describe(pending),
+            replacements.DescribeReplacement(pending),
             replacements.DoubleCountNotes(pending) is not null,
             replacements.DoubleCountNotes(pending));
     }
@@ -448,16 +448,37 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         if (!page.Any(IsParsedReplacement))
         {
             return unresolved.Any(IsParsedReplacement)
-                ? new ReplacementContext(unresolved, null, [])
+                ? ReplacementContext.FlagsOnly(unresolved)
                 : ReplacementContext.None;
         }
 
         // The same live read the import used when this run imported or re-matched anything;
-        // otherwise read here, because a suggestion must come from what Nayax reports now.
-        mapping ??= await _rematch.ReadCurrentMappingAsync(nayaxMachineId, cancellationToken);
+        // otherwise read here, because a suggestion must come from what Nayax reports now. The
+        // events themselves are already stored, so a failed read must not cost the operator the
+        // list: the rows are still shown, with the advice that needs the live read left out and
+        // the reason given, exactly as Apply decides from what is stored when the same read fails.
+        mapping ??= await TryReadCurrentMappingAsync(nayaxMachineId, cancellationToken);
         var activeProducts = await _store.GetActiveProductCandidatesAsync(cancellationToken);
 
-        return new ReplacementContext(unresolved, mapping, activeProducts);
+        return ReplacementContext.WithSuggestions(unresolved, mapping, activeProducts);
+    }
+
+    private async Task<MachineStockMatchRefresh?> TryReadCurrentMappingAsync(
+        long nayaxMachineId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _rematch.ReadCurrentMappingAsync(nayaxMachineId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Deliberately swallowed: see above. A null mapping is the "could not be read" answer.
+            return null;
+        }
     }
 
     private static bool IsParsedReplacement(PendingMachineStockEvent pending) =>
@@ -466,44 +487,69 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
         && pending.ParsedProductName is not null
         && pending.ParsedOutgoingProductName is not null;
 
-    private static ParsedNayaxProductReplacement AsReplacement(PendingMachineStockEvent pending) =>
-        new(pending.ParsedMdb!.Value, pending.ParsedOutgoingProductName!, pending.ParsedProductName!);
-
     /// <summary>
     /// The suggestions and double-count flags of one list's product replacements (issue #1325),
     /// all decided by <see cref="NayaxProductReplacementSuggestionPolicy"/>.
     /// </summary>
     private sealed class ReplacementContext
     {
-        public static readonly ReplacementContext None = new([], null, []);
+        public static readonly ReplacementContext None = new([], suggests: false, null, []);
 
         private readonly IReadOnlyList<PendingMachineStockEvent> _unresolved;
+        private readonly bool _suggests;
         private readonly MachineStockMatchRefresh? _mapping;
         private readonly IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate> _activeProducts;
 
-        public ReplacementContext(
+        private ReplacementContext(
             IReadOnlyList<PendingMachineStockEvent> unresolved,
+            bool suggests,
             MachineStockMatchRefresh? mapping,
             IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate> activeProducts)
         {
             _unresolved = unresolved;
+            _suggests = suggests;
             _mapping = mapping;
             _activeProducts = activeProducts;
         }
 
-        public NayaxProductReplacementPreviewDto? Describe(PendingMachineStockEvent pending)
+        /// <summary>Double-count flags only: the page itself holds no parsed replacement.</summary>
+        public static ReplacementContext FlagsOnly(IReadOnlyList<PendingMachineStockEvent> unresolved) =>
+            new(unresolved, suggests: false, null, []);
+
+        /// <summary>
+        /// Suggestions and flags. A <see langword="null"/> <paramref name="mapping"/> means the live
+        /// machine read failed, and only what needs no live read is suggested.
+        /// </summary>
+        public static ReplacementContext WithSuggestions(
+            IReadOnlyList<PendingMachineStockEvent> unresolved,
+            MachineStockMatchRefresh? mapping,
+            IReadOnlyList<Inventory.Domain.Reporting.ProductMatching.ProductMatchCandidate> activeProducts) =>
+            new(unresolved, suggests: true, mapping, activeProducts);
+
+        public NayaxProductReplacementPreviewDto? DescribeReplacement(PendingMachineStockEvent pending)
         {
-            if (_mapping is null || !IsParsedReplacement(pending))
+            if (!_suggests || !IsParsedReplacement(pending))
             {
                 return null;
             }
 
             var replacement = AsReplacement(pending);
-            var slot = _mapping.SlotReading(replacement.Mdb);
             var outgoing = NayaxProductReplacementSuggestionPolicy.SuggestOutgoing(replacement, _activeProducts);
-            var incoming = NayaxProductReplacementSuggestionPolicy.SuggestIncoming(replacement, slot, _activeProducts);
-            var quantity = NayaxProductReplacementSuggestionPolicy.SuggestIncomingQuantity(
-                replacement, slot, HasNewerPendingEvent(pending));
+            NayaxReplacementProductSuggestion incoming;
+            NayaxReplacementQuantitySuggestion quantity;
+            if (_mapping is null)
+            {
+                incoming = NayaxProductReplacementSuggestionPolicy.SuggestIncomingWithoutSlotRead(
+                    replacement, _activeProducts);
+                quantity = NayaxProductReplacementSuggestionPolicy.IncomingQuantityWithoutSlotRead();
+            }
+            else
+            {
+                var slot = _mapping.SlotReading(replacement.Mdb);
+                incoming = NayaxProductReplacementSuggestionPolicy.SuggestIncoming(replacement, slot, _activeProducts);
+                quantity = NayaxProductReplacementSuggestionPolicy.SuggestIncomingQuantity(
+                    replacement, slot, HasNewerPendingEvent(pending));
+            }
 
             return new NayaxProductReplacementPreviewDto(
                 replacement.OutgoingProductName,
@@ -540,10 +586,14 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
                     && NayaxProductReplacementSuggestionPolicy.IsPossibleDoubleCount(
                         pending.EventDateTimeGmt, other.EventDateTimeGmt));
 
-                return adjustments == 0
-                    ? null
-                    : $"{adjustments} pending stock adjustment{(adjustments == 1 ? string.Empty : "s")} for MDB "
-                        + $"{mdb} within 24 hours of this replacement may record the same refill.";
+                if (adjustments == 0)
+                {
+                    return null;
+                }
+
+                var plural = adjustments == 1 ? string.Empty : "s";
+                return $"{adjustments} pending stock adjustment{plural} for MDB {mdb} within 24 hours of "
+                    + "this replacement may record the same refill.";
             }
 
             if (pending.EventCode != NayaxMachineAlertEventCodes.StockAdjustForMachine)
@@ -561,6 +611,9 @@ public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
                 ? $"A pending product replacement for MDB {mdb} within 24 hours may record the same refill."
                 : null;
         }
+
+        private static ParsedNayaxProductReplacement AsReplacement(PendingMachineStockEvent pending) =>
+            new(pending.ParsedMdb!.Value, pending.ParsedOutgoingProductName!, pending.ParsedProductName!);
 
         private static bool IsUnresolved(PendingMachineStockEvent pending) =>
             pending.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed

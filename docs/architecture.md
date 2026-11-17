@@ -18675,7 +18675,9 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   `Inventory.Domain.Nayax.NayaxProductReplacementEventParser` reads the MDB, the outgoing name and
   the incoming name, anchored on the text markers (`has replaced product`, `with product`,
   `| Product MDB:`) and never on the operator prefix. Text that does not match, or that is ambiguous
-  because ` with product ` appears more than once, is stored as Needs Review with the raw text and
+  because `with product` appears more than once (counted with the same whitespace rule the pattern
+  matches it by, so a second marker spaced with tabs, line breaks or several spaces still counts),
+  is stored as Needs Review with the raw text and
   the parser's reason, exactly like an unparsable 501.
 - **Storage.** The row is a `NayaxMachineStockEvents` row with `EventCode` `510`.
   `ParsedProductName` holds the **incoming** name and the additive, nullable
@@ -18698,7 +18700,11 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   otherwise it is null with a reason. The owner decided on 16 November 2026 that this is the
   closest figure to what was loaded, because the operator's Adjust Stock in Nayax has already
   filled the slot; it can read low by the sales since the replacement, the operator edits it, and
-  it is never called capacity.
+  it is never called capacity. **If that live read fails** (Nayax unreachable), the preview is
+  still returned from what is stored: the incoming suggestion falls back to the unique name match
+  and the quantity is left out, each with the reason
+  (`NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason`), exactly as Apply decides
+  from what is stored when the same read fails. A cancelled request is not swallowed.
 - **Possible double count.** A pending 501 for the same machine and MDB within 24 hours of a
   pending replacement (either side) is flagged on both rows. It is a safeguard only and blocks
   nothing: the owner confirmed that the Adjust Stock done after a replacement creates no 501, so

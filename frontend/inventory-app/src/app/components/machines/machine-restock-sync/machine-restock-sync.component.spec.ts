@@ -1338,7 +1338,7 @@ describe('MachineRestockSyncComponent dialog', () => {
       // A parsed replacement has no review reason of its own, so no empty "Needs review:" badge.
       expect(host.textContent).not.toContain('Needs review:');
       // No quantity or reason inputs: the only resolution is "already recorded".
-      expect(host.querySelectorAll('tbody input:not([type="checkbox"]), tbody select').length).toBe(0);
+      expect(host.querySelectorAll('tbody input:not([type="checkbox"]), tbody select')).toHaveLength(0);
       expect(fixture.componentInstance.isReadyToApply(replacement)).toBe(false);
       expect(fixture.componentInstance.isEligibleForManualResolution(replacement)).toBe(true);
     });

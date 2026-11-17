@@ -315,6 +315,58 @@ public class SyncRestockProductReplacementTests
     }
 
     [Fact]
+    public async Task A_failed_live_machine_read_still_lists_the_replacement_with_name_advice_and_the_reason()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var importDb = Scoped(options))
+        {
+            await Sync(importDb, Nayax([CapturedReplacement()]).Object).Handle(Machine, CancellationToken.None);
+        }
+
+        // A later sync imports nothing new, so the preview's own live read is the only machine read,
+        // and Nayax fails it. The stored replacement must still be listed and resolvable.
+        var nayax = Nayax([CapturedReplacement()]);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(NayaxMachineId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Nayax is unavailable."));
+
+        await using var db = Scoped(options);
+        var preview = await Sync(db, nayax.Object).Handle(Machine, CancellationToken.None);
+
+        var row = Assert.Single(preview.Events);
+        var replacement = Assert.IsType<NayaxProductReplacementPreviewDto>(row.ProductReplacement);
+        Assert.Equal(NamedIncomingId, replacement.SuggestedIncomingProductId);
+        Assert.Equal(NayaxReplacementSuggestionSource.ExactName, replacement.IncomingSuggestionSource);
+        Assert.Equal(OutgoingId, replacement.SuggestedOutgoingProductId);
+        Assert.Null(replacement.SuggestedIncomingQuantity);
+        Assert.Contains(
+            NayaxProductReplacementSuggestionPolicy.SlotReadUnavailableReason,
+            replacement.SuggestedIncomingQuantityReason,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_cancelled_live_machine_read_is_not_swallowed()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var importDb = Scoped(options))
+        {
+            await Sync(importDb, Nayax([CapturedReplacement()]).Object).Handle(Machine, CancellationToken.None);
+        }
+
+        var nayax = Nayax([CapturedReplacement()]);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(NayaxMachineId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        await using var db = Scoped(options);
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Sync(db, nayax.Object).Handle(Machine, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task A_name_tie_or_no_match_leaves_the_suggestion_empty_with_a_reason()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");

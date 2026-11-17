@@ -38,6 +38,9 @@ public class NayaxProductReplacementEventParserTests
     [InlineData("Jane Doe has replaced product Coke 375mL with product Sprite 375mL | Product MDB: 7")]
     [InlineData("has replaced product Coke 375mL with product Sprite 375mL | Product MDB: 7")]
     [InlineData("  [operator] 'has replaced product   Coke 375mL   with product Sprite 375mL|Product MDB:7  ")]
+    [InlineData("[operator] 'has replaced product Coke 375mL with  product Sprite 375mL | Product MDB: 7")]
+    [InlineData("[operator] 'has replaced product Coke 375mL\twith\tproduct\tSprite 375mL | Product MDB: 7")]
+    [InlineData("[operator] 'has replaced product Coke 375mL\r\nwith product\nSprite 375mL | Product MDB: 7")]
     public void Parses_whatever_the_operator_prefix_and_spacing(string eventData)
     {
         var ok = NayaxProductReplacementEventParser.TryParse(eventData, out var parsed, out var reason);
@@ -80,13 +83,16 @@ public class NayaxProductReplacementEventParserTests
         Assert.Contains(reasonFragment, reason, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void A_name_containing_the_with_product_marker_is_ambiguous_and_is_not_guessed()
+    [Theory]
+    [InlineData("[operator] 'has replaced product Box with product inside with product Sprite | Product MDB: 7")]
+    [InlineData("[operator] 'has replaced product Box with  product inside with product Sprite | Product MDB: 7")]
+    [InlineData("[operator] 'has replaced product Box with product inside with\tproduct Sprite | Product MDB: 7")]
+    [InlineData("[operator] 'has replaced product Box with product with product Sprite | Product MDB: 7")]
+    public void A_name_containing_the_with_product_marker_is_ambiguous_and_is_not_guessed(string eventData)
     {
-        var ok = NayaxProductReplacementEventParser.TryParse(
-            "[operator] 'has replaced product Box with product inside with product Sprite | Product MDB: 7",
-            out var parsed,
-            out var reason);
+        // The marker is counted with the same whitespace rule the pattern matches it by, so a second
+        // marker spaced differently, or sharing a single space with the first, is still a second one.
+        var ok = NayaxProductReplacementEventParser.TryParse(eventData, out var parsed, out var reason);
 
         Assert.False(ok);
         Assert.Equal(default, parsed);
