@@ -81,6 +81,21 @@ before(() => {
       "  it('does the thing', () => {",
       '    expect(true).toBe(true);',
       '  });',
+      '',
+      '  test(',
+      "    'spans several lines',",
+      '    () => {',
+      '      expect(true).toBe(true);',
+      '    },',
+      '  );',
+      '',
+      "  // it('commented out test', () => {});",
+      '',
+      '  const example = `test("string only test", () => {});`;',
+      '',
+      '  test("retired test" + " suffix", () => {',
+      '    expect(example).toContain(\'retired\');',
+      '  });',
       '});',
       '',
     ].join('\n'),
@@ -390,6 +405,49 @@ describe('testExists assertions', () => {
       { root },
     );
     assert.equal(result.status, 'PASS');
+  });
+
+  it('passes for a Jest test() whose title literal is its complete first argument across several lines', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'spans several lines' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'PASS');
+    assert.deepEqual(result.failures, []);
+  });
+
+  it('fails when a test-shaped string literal only looks like a Jest declaration', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'string only test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('string only test'));
+  });
+
+  it('fails when the title is only the literal prefix of a computed Jest title', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'retired test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.failures[0].includes('retired test'));
+  });
+
+  it('fails when a computed Jest title is named in full, because no literal declares it', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'retired test suffix' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
+  });
+
+  it('fails when a Jest title appears only in a commented-out it() call', () => {
+    const result = evaluateCase(
+      baseCase({ assertions: [{ type: 'testExists', file: 'sample.spec.ts', test: 'commented out test' }] }),
+      { root },
+    );
+    assert.equal(result.status, 'FAIL');
   });
 
   it('fails when the referenced file does not exist', () => {

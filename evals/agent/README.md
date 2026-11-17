@@ -92,11 +92,18 @@ A `testExists` assertion recognises two test shapes, chosen by `file`'s extensio
   attributes needs to end before the method line for the match to require a fresh one). Comments
   are stripped before matching, so a method name that appears only in a `//`/`///` comment or a
   `/* */` block does not count.
-- Any other file (for example `.ts`): a Jest/node `it(` or `test(` call whose first argument is a
-  string literal matching `test` exactly.
+- Any other file (for example `.ts`): a real Jest/node `it(` or `test(` call whose **complete**
+  first argument is a string literal (`'…'`, `"…"` or a plain `` `…` ``) whose text is exactly
+  `test`. The file is scanned as code, so comments and string literals are skipped: a
+  commented-out call, or a test-shaped string such as ``const sample = `test("x", () => {});` ``,
+  does not count. A computed title does not count either — `test('a' + 'b', …)` declares neither
+  `a` nor `a b`, because the literal `'a'` is not the whole argument and `'a b'` never appears.
+  Only the bare `it(`/`test(` form is recognised: a modified call (`it.only(`, `it.skip(`,
+  `it.each(`) or a title built at runtime has to be named by a different, literal test.
 
 A missing file, or a file that no longer declares that exact test (deleted or renamed), fails the
-case and names which.
+case and names which. An unrecognised shape fails the same way, so the assertion errs towards
+failing loudly rather than vouching for a test it did not actually find.
 
 ## Running the deterministic runner
 

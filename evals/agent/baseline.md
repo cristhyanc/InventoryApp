@@ -523,8 +523,10 @@ The model-decision set (corpus version 7 above) was not re-run for this change; 
 
 - **Corpus version:** 10. Adds the `testExists` assertion type to `scripts/run-agent-evals.mjs`: it
   passes only when a named repo-relative file still declares a named test (an xUnit `[Fact]`/
-  `[Theory]` method, or a Jest/node `it(`/`test(` with that exact title) — proving the test is
-  still declared, never that it is correct. Adds at least one `testExists` assertion to every
+  `[Theory]` method, or a real Jest/node `it(`/`test(` call whose complete first argument is a
+  string literal with exactly that title) — proving the test is still declared, never that it is
+  correct. A commented-out call, a test-shaped string literal and a computed title (`test('a' +
+  'b', …)`) are all rejected. Adds at least one `testExists` assertion to every
   critical case in `inventory-costing`, `tenant-security` and `time`, binding each to a behavioural
   test that enforces its rule (see the case-to-test table below). No case was added or removed, no
   `repoFileContains`/`repoFileNotContains` assertion was removed, and no expected decision,
@@ -606,9 +608,12 @@ Agent evals: PASS
 `node --test scripts/run-agent-evals.test.mjs` also ran as part of `bash scripts/validate.sh` on
 the same commit and passed, including the new `testExists` coverage (pass on a `[Fact]` method,
 pass on a `[Theory]` followed by several `[InlineData]` lines before the method, pass on a Jest
-`it()` exact-title match, fail on a missing file, fail on a missing/renamed test, fail on a name
-that appears only in a `//` comment or only inside a `/* */` block, pass on a `[Fact]` method
-declared after a block comment, and schema validation of the new `file`/`test` fields).
+`it()` exact-title match and on a `test()` call whose literal title is its complete first argument
+across several lines, fail on a missing file, fail on a missing/renamed test, fail on a name that
+appears only in a `//` comment or only inside a `/* */` block, fail on a commented-out `it()` call,
+fail on a test-shaped string literal, fail on a title that is only the literal prefix of a computed
+title and on that computed title named in full, pass on a `[Fact]` method declared after a block
+comment, and schema validation of the new `file`/`test` fields).
 
 The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
 

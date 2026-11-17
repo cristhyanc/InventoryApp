@@ -290,10 +290,112 @@ function declaresXunitTest(content, testName) {
   return false;
 }
 
-/** True when `content` declares a Jest/node `it(`/`test(` whose title is exactly `testName`. */
+const JEST_TEST_FUNCTIONS = Object.freeze(['it', 'test']);
+const JEST_QUOTES = Object.freeze(["'", '"', '`']);
+const IDENTIFIER_CHARACTER = /[\w$]/;
+
+function skipJsWhitespace(content, from) {
+  let index = from;
+  while (index < content.length && /\s/.test(content[index])) index += 1;
+  return index;
+}
+
+/**
+ * Reads the string or template literal that starts at `content[start]`. Returns its body, whether
+ * that body is a plain literal (no escape, no `${}` interpolation), and the index just past the
+ * closing quote — or `null` when the literal is never closed. A quoted literal ends at a newline;
+ * a template literal may span lines.
+ */
+function readStringLiteral(content, start) {
+  const quote = content[start];
+  let escaped = false;
+  let index = start + 1;
+  while (index < content.length) {
+    const character = content[index];
+    if (character === '\\') {
+      escaped = true;
+      index += 2;
+      continue;
+    }
+    if (character === quote) {
+      const body = content.slice(start + 1, index);
+      return { body, plain: !escaped && !body.includes('${'), end: index + 1 };
+    }
+    if (character === '\n' && quote !== '`') return null;
+    index += 1;
+  }
+  return null;
+}
+
+/**
+ * Index just past the comment or string/template literal that starts at `index`, or `-1` when
+ * code (not a comment or a literal) starts there. An unterminated literal is treated as code, so
+ * the scan continues instead of swallowing the rest of the file.
+ */
+function endOfNonCodeSpan(content, index) {
+  if (content[index] === '/' && content[index + 1] === '/') {
+    const lineEnd = content.indexOf('\n', index + 2);
+    return lineEnd === -1 ? content.length : lineEnd + 1;
+  }
+  if (content[index] === '/' && content[index + 1] === '*') {
+    const blockEnd = content.indexOf('*/', index + 2);
+    return blockEnd === -1 ? content.length : blockEnd + 2;
+  }
+  if (JEST_QUOTES.includes(content[index])) {
+    const literal = readStringLiteral(content, index);
+    return literal === null ? -1 : literal.end;
+  }
+  return -1;
+}
+
+/**
+ * True when an `it(`/`test(` call starts exactly at `index` and its complete first argument is a
+ * plain string literal whose text is `testName`. Requiring the literal to be followed by `,` or
+ * `)` is what rejects a computed title such as `test('a' + 'b', ...)`, whose real title is not the
+ * name being looked for. A member call (`suite.test(`) or a longer identifier (`unitTest(`,
+ * `items(`) is not a declaration either.
+ */
+function startsJestTestCall(content, index, testName) {
+  const functionName = JEST_TEST_FUNCTIONS.find((name) => content.startsWith(name, index));
+  if (functionName === undefined) return false;
+
+  const before = index === 0 ? '' : content[index - 1];
+  if (before === '.' || IDENTIFIER_CHARACTER.test(before)) return false;
+
+  let cursor = index + functionName.length;
+  if (cursor < content.length && IDENTIFIER_CHARACTER.test(content[cursor])) return false;
+
+  cursor = skipJsWhitespace(content, cursor);
+  if (content[cursor] !== '(') return false;
+
+  cursor = skipJsWhitespace(content, cursor + 1);
+  if (!JEST_QUOTES.includes(content[cursor])) return false;
+
+  const title = readStringLiteral(content, cursor);
+  if (title === null || !title.plain || title.body !== testName) return false;
+
+  const afterTitle = content[skipJsWhitespace(content, title.end)];
+  return afterTitle === ',' || afterTitle === ')';
+}
+
+/**
+ * True when `content` declares a Jest/node test named exactly `testName`: a real `it(`/`test(`
+ * call whose complete first argument is the literal title. The source is scanned left to right so
+ * that comments and string literals are skipped as text, which is what keeps a commented-out call
+ * or a test-shaped string (`const sample = 'test("x", () => {})'`) from counting as a declaration.
+ * Modified calls such as `it.only(`, `it.skip(` or `it.each(` are deliberately not recognised: an
+ * unrecognised shape fails the case loudly instead of vouching for a test that may not run.
+ * Regular-expression literals are not tracked, so a quote inside one is read as a string; that can
+ * only hide a declaration (a failing case), never invent one.
+ */
 function declaresJestTest(content, testName) {
-  const pattern = new RegExp(`\\b(it|test)\\s*\\(\\s*(['"\`])${escapeRegExp(testName)}\\2`);
-  return pattern.test(stripComments(content));
+  let index = 0;
+  while (index < content.length) {
+    if (startsJestTestCall(content, index, testName)) return true;
+    const endOfSpan = endOfNonCodeSpan(content, index);
+    index = endOfSpan === -1 ? index + 1 : endOfSpan;
+  }
+  return false;
 }
 
 /** Dispatches on file extension: `.cs` is xUnit, everything else is Jest/node. */
