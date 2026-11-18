@@ -18,6 +18,7 @@ import { CategoryService } from '../../../../services/category.service';
 import { ProductService } from '../../../../services/product.service';
 import { ToastService } from '../../../../services/toast.service';
 import { SupportSessionService } from '../../../../support-session/support-session.service';
+import { closestCatalogueMatch, rankCatalogueCandidates } from './catalogue-match';
 
 /** Which half of the review the operator is deciding. Categories come first, and deliberately so. */
 export type CatalogueReviewStep = 'categories' | 'products';
@@ -176,27 +177,68 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
 
   /**
    * The local categories a link may name: the ones this business maintains itself, filtered by the
-   * row's search text. A category the provider already manages carries a provider id, so linking it
-   * to a second provider group is refused by the server - it is not offered here either.
+   * row's search text and ordered the way the dropdown lists them - every candidate with no size or
+   * pack conflict with the provider's name first, each group by closest-match score then by name
+   * (issue #1353). A category the provider already manages carries a provider id, so linking it to a
+   * second provider group is refused by the server - it is not offered here either.
    */
   categoryCandidates(itemId: number): Category[] {
     const search = this.answer(itemId).search.trim().toLowerCase();
-    return this.localCategories
-      .filter((category) => !this.isProviderManaged(category.providerManagedFields))
-      .filter((category) => search === '' || category.name.toLowerCase().includes(search));
+    const matching = this.candidateCategories().filter(
+      (category) => search === '' || category.name.toLowerCase().includes(search)
+    );
+
+    const entry = this.categoryEntries.find((category) => category.itemId === itemId);
+    if (!entry) return matching;
+    return rankCatalogueCandidates(entry.providerName, matching, (category) => category.name).map(
+      (ranked) => ranked.candidate
+    );
   }
 
-  /** The local products a link may name, on the same two rules. */
+  /** The local products a link may name, on the same rules. */
   productCandidates(itemId: number): Product[] {
     const search = this.answer(itemId).search.trim().toLowerCase();
-    return this.localProducts
-      .filter((product) => !this.isProviderManaged(product.providerManagedFields))
-      .filter(
-        (product) =>
-          search === '' ||
-          product.name.toLowerCase().includes(search) ||
-          (product.sku ?? '').toLowerCase().includes(search)
-      );
+    const matching = this.candidateProducts().filter(
+      (product) =>
+        search === '' ||
+        product.name.toLowerCase().includes(search) ||
+        (product.sku ?? '').toLowerCase().includes(search)
+    );
+
+    const entry = this.productEntries.find((product) => product.itemId === itemId);
+    if (!entry) return matching;
+    return rankCatalogueCandidates(entry.providerName, matching, (product) => product.name).map(
+      (ranked) => ranked.candidate
+    );
+  }
+
+  /**
+   * The one local category closest to this unlinked provider group's name, worked out from name
+   * similarity against the categories a link may name - or `null` when nothing scores above the
+   * documented minimum, or every candidate's size/pack conflicts with the provider's name (issue
+   * #1353). A hint only: it never changes the operator's answer, only "Link to this" does.
+   */
+  closestCategoryMatch(itemId: number): Category | null {
+    const entry = this.categoryEntries.find((category) => category.itemId === itemId);
+    if (!entry) return null;
+    return closestCatalogueMatch(entry.providerName, this.candidateCategories(), (category) => category.name);
+  }
+
+  /** The one local product closest to this unlinked provider product's name, on the same rule. */
+  closestProductMatch(itemId: number): Product | null {
+    const entry = this.productEntries.find((product) => product.itemId === itemId);
+    if (!entry) return null;
+    return closestCatalogueMatch(entry.providerName, this.candidateProducts(), (product) => product.name);
+  }
+
+  /**
+   * What "Link to this" does: exactly what choosing that row from the dropdown does - set the
+   * action to Link and name the row. The default stays Skip until this, or a manual choice, is
+   * taken.
+   */
+  linkToSuggestion(itemId: number, localRowId: number): void {
+    this.setAction(itemId, CatalogueReviewAction.LinkExisting);
+    this.setLocalRow(itemId, localRowId);
   }
 
   /**
@@ -386,6 +428,16 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
 
   private isProviderManaged(fields: string[] | null | undefined): boolean {
     return (fields?.length ?? 0) > 0;
+  }
+
+  /** The local categories any link may name, before the row's own search text narrows them. */
+  private candidateCategories(): Category[] {
+    return this.localCategories.filter((category) => !this.isProviderManaged(category.providerManagedFields));
+  }
+
+  /** The local products any link may name, before the row's own search text narrows them. */
+  private candidateProducts(): Product[] {
+    return this.localProducts.filter((product) => !this.isProviderManaged(product.providerManagedFields));
   }
 
   // Some admin actions answer a plain string body and others a ProblemDetails object; both shapes
