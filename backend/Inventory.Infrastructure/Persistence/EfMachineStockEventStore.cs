@@ -554,7 +554,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             moved.Add(choice.IncomingProductId);
 
         if (plan.WritesOutgoingReturn && !moved.Contains(choice.OutgoingProductId!.Value))
-            moved.Add(choice.OutgoingProductId!.Value);
+            moved.Add(choice.OutgoingProductId.Value);
 
         return moved;
     }
