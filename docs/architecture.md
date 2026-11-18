@@ -14603,6 +14603,20 @@ what this implements.
 - **The stored sales of the whole file are read once**, through
   `INayaxSalesImportStore.FindByTransactionIdsAsync`, in fixed-size batches of 500 identifiers
   instead of one query per row — 40 statements for a file at the row limit instead of 20,000.
+- **That one read is the pass's starting state, not its only one.** A file may name the same
+  transaction more than once, so every row that inserts or updates a sale writes that sale back into
+  the state the pass carries, and a later row for the same transaction merges against what the
+  earlier row left. Without that the one read would be a snapshot taken before any row ran: a second
+  row with a blank amount or payment-method cell would restore the value the first row had just
+  written — undoing it, against [what a blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298) — and a second row naming a
+  transaction the file itself introduced would stage a second insert of it, which the unique index
+  over `(BusinessId, TransactionID)` refuses. The per-row lookup this batching replaced could not get
+  that wrong, because it read the row again, already updated; the import now tracks the row it wrote
+  instead of re-reading it, so this stays one read. The file's **last** word about a transaction is
+  what the business holds, the sale exists once, and a row the import applies nowhere (no
+  trustworthy instant, an unreadable value, a new sale with no amount) leaves the transaction exactly
+  as it was. `NayaxSalesImportRepeatedTransactionTests` pins all of it over real SQLite.
 - **The find-and-save runs inside the shared `BEGIN IMMEDIATE` transaction**, through the narrow
   `INayaxSalesImportTransactions` port and `EfNayaxSalesImportTransactions`, which opens the same
   `SqliteWriteLockTransaction` the two `EfLatestNayaxSalesStore` save paths open (issue #1103). The

@@ -442,6 +442,11 @@ public class ImportNayaxSalesTests
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        // The lookup the import makes for the file's identifiable rows - none here - answers the
+        // empty dictionary the port promises rather than Moq's default null.
+        store.Setup(x => x.FindByTransactionIdsAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, StoredImportedSale>());
         var reader = new Mock<INayaxSalesWorkbookReader>();
         reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<NayaxSalesFileLimits>()))
             .Returns(new NayaxSalesWorkbookReadResult(

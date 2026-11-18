@@ -86,7 +86,10 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   but that cannot be read never triggers that fallback.</item>
 ///   <item>A transaction this business already holds is updated in place rather than double
 ///   counted; a transaction another business holds is a new sale of this one, because a remote
-///   <c>TransactionID</c> is unique only within the operator account that issued it.</item>
+///   <c>TransactionID</c> is unique only within the operator account that issued it. One
+///   <em>file</em> naming a transaction twice is the same rule: its later row updates the sale its
+///   earlier row inserted or updated, so the file's last word about a transaction is what the
+///   business ends up holding and the sale exists once (issue #1300).</item>
 ///   <item><b>What this business already holds is read once, for the whole file, inside the
 ///   import's own write-locked transaction</b> (issue #1300). It used to be one query per row,
 ///   outside any transaction: a 4,000-row upload took 30 seconds and an 8,000-row one 124, and a
@@ -290,6 +293,16 @@ public sealed class ImportNayaxSales
     ///
     /// <para>Nothing else moved: the per-row rules, their order and the counts are unchanged, and a
     /// file that produced no insert and no update still saves nothing at all.</para>
+    ///
+    /// <para><strong>What one read for the whole file may not become is one answer for the whole
+    /// file.</strong> A file may name the same transaction more than once, and the row that comes
+    /// second has to see what the row before it applied - not what the lookup found before either of
+    /// them ran. So the state each transaction is in is carried through the pass and refreshed from
+    /// every row that applied one, which is how the per-row lookup this replaced behaved: it read the
+    /// row again, already updated. Without that, a second row whose cells are blank restores the
+    /// values the first row had just overwritten (issue #1298's keep rule, applied against a stale
+    /// sale), and a second row naming a transaction the <em>file</em> introduced inserts it a second
+    /// time - which the unique index refuses, or, where the index cannot see it, double counts.</para>
     /// </summary>
     private async Task<AppliedRows> ApplyRowsAsync(
         IReadOnlyList<NayaxSalesImportRow> rows,
@@ -312,13 +325,18 @@ public sealed class ImportNayaxSales
         // before the lock, what it answers is the state this save is actually decided on. Only the
         // rows that could be applied are asked about, through the same rule the loop skips on, so
         // the read is the file's own transactions and not every number in it.
-        var storedByTransactionId = await _store.FindByTransactionIdsAsync(
-            rows
-                .Where(IsIdentifiable)
-                .Select(row => row.TransactionId)
-                .Distinct()
-                .ToList(),
-            cancellationToken);
+        //
+        // It is the pass's starting state and not its only one: every row that applies a sale writes
+        // that sale back here, so a second row naming the same transaction merges against what the
+        // first row left rather than against what the business held before the file ran.
+        var storedByTransactionId = new Dictionary<long, StoredImportedSale>(
+            await _store.FindByTransactionIdsAsync(
+                rows
+                    .Where(IsIdentifiable)
+                    .Select(row => row.TransactionId)
+                    .Distinct()
+                    .ToList(),
+                cancellationToken));
 
         foreach (var row in rows)
         {
@@ -352,6 +370,11 @@ public sealed class ImportNayaxSales
             updated += applied.Updated;
             skipped += applied.Skipped;
             keptStoredValues += applied.KeptStoredValues;
+
+            // The sale this row left behind, for a later row naming the same transaction. A row that
+            // applied nothing left the transaction exactly as it was.
+            if (applied.Stored is not null)
+                storedByTransactionId[row.TransactionId] = applied.Stored;
         }
 
         if (imported > 0 || updated > 0)
@@ -369,9 +392,12 @@ public sealed class ImportNayaxSales
     /// reports what it did as the counts it adds, so the pass stays a pass over rows.
     ///
     /// <para>The row reaching here is already known identifiable and free of unreadable values, and
-    /// <paramref name="stored"/> is the sale this business already holds under the row's transaction
-    /// identifier as the one read inside the transaction found it - <see langword="null"/> for a
-    /// transaction it does not hold.</para>
+    /// <paramref name="stored"/> is the sale held under the row's transaction identifier as this
+    /// import last saw it: what the read inside the transaction found, or what an earlier row of the
+    /// same file applied to it - <see langword="null"/> for a transaction neither the business nor
+    /// the rows before this one hold. The sale this row leaves behind comes back as
+    /// <see cref="AppliedRow.Stored"/>, which is what makes the second occurrence of a transaction
+    /// merge against the first one's values.</para>
     ///
     /// <para>The rules here are unchanged and so is their order; they are a method of their own only
     /// because one method holding both the pass and every per-row rule was past the complexity this
@@ -429,7 +455,7 @@ public sealed class ImportNayaxSales
         if (stored is null)
         {
             sale = _store.Add(facts);
-            applied = AppliedRow.NewSale;
+            applied = AppliedRow.NewSale(SaleLeftBehind(sale, facts));
         }
         else
         {
@@ -437,17 +463,16 @@ public sealed class ImportNayaxSales
             // an update that moves a completed sale to another product or an earlier time
             // replays both the product it left and the product it joined.
             TrackStoredProduct(stored.Sale, affected);
-            sale = _store.Update(
-                stored.Sale,
-                facts with
-                {
-                    // A conflicting sale keeps the product it has - none - until a human names
-                    // one through the audited operation (issue #758).
-                    ProductId = conflictingTransactionIds.Contains(row.TransactionId)
-                        ? stored.Sale.ProductId
-                        : facts.ProductId,
-                });
-            applied = AppliedRow.UpdatedSale(KeptAStoredValue(row, stored));
+            var written = facts with
+            {
+                // A conflicting sale keeps the product it has - none - until a human names
+                // one through the audited operation (issue #758).
+                ProductId = conflictingTransactionIds.Contains(row.TransactionId)
+                    ? stored.Sale.ProductId
+                    : facts.ProductId,
+            };
+            sale = _store.Update(stored.Sale, written);
+            applied = AppliedRow.UpdatedSale(KeptAStoredValue(row, stored), SaleLeftBehind(sale, written));
         }
 
         var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
@@ -457,6 +482,21 @@ public sealed class ImportNayaxSales
 
         return applied;
     }
+
+    /// <summary>
+    /// The sale a row has just inserted or updated, in the shape the next row naming the same
+    /// transaction has to read it in (issue #1300). <paramref name="sale"/> is the view the store
+    /// answered for the row it wrote, so it carries what was actually written - including the
+    /// product a conflicting sale kept and the queue verification the stored row holds - and
+    /// <paramref name="written"/> supplies the three imported facts the costing view does not carry
+    /// and a blank cell must not erase (issue #1298).
+    ///
+    /// <para>Its costing columns are the ones from before this row's decided cost was staged, which
+    /// nothing in the merge reads: the next row costs the fresh view
+    /// <see cref="INayaxSalesImportStore.Update"/> answers for it, read from the row itself.</para>
+    /// </summary>
+    private static StoredImportedSale SaleLeftBehind(CostableSale sale, ImportedNayaxSale written) =>
+        new(sale, written.SettlementValue, written.PaymentMethod, written.MachineName);
 
     /// <summary>
     /// Whether a row carries the three identity facts the import refuses to guess at: a positive
@@ -490,20 +530,30 @@ public sealed class ImportNayaxSales
     /// the three outcomes a row can have is named by the three values below, so the pass adds them
     /// without re-deciding anything the row's own rules already decided.
     /// </summary>
-    private readonly record struct AppliedRow(int Imported, int Updated, int Skipped, int KeptStoredValues)
+    /// <param name="Imported">1 for a row stored as a new sale, otherwise 0.</param>
+    /// <param name="Updated">1 for a row that updated a sale already held, otherwise 0.</param>
+    /// <param name="Skipped">1 for a row applied nowhere, otherwise 0.</param>
+    /// <param name="KeptStoredValues">1 for an updated row that kept a stored value, otherwise 0.</param>
+    /// <param name="Stored">
+    /// The sale the row left behind, for a later row of the same file naming the same transaction,
+    /// or <see langword="null"/> when the row applied nothing and so left the transaction exactly as
+    /// it was (issue #1300).
+    /// </param>
+    private readonly record struct AppliedRow(
+        int Imported, int Updated, int Skipped, int KeptStoredValues, StoredImportedSale? Stored)
     {
         /// <summary>A row applied nowhere: no trustworthy instant, or a new sale with no amount.</summary>
-        public static AppliedRow SkippedRow { get; } = new(0, 0, 1, 0);
+        public static AppliedRow SkippedRow { get; } = new(0, 0, 1, 0, null);
 
-        /// <summary>A row stored as a sale this business did not hold.</summary>
-        public static AppliedRow NewSale { get; } = new(1, 0, 0, 0);
+        /// <summary>A row stored as a sale neither the business nor an earlier row of the file held.</summary>
+        public static AppliedRow NewSale(StoredImportedSale stored) => new(1, 0, 0, 0, stored);
 
         /// <summary>
-        /// A row that updated a sale this business already held, counted once in
+        /// A row that updated a sale already held, counted once in
         /// <see cref="NayaxSalesImportResult.KeptStoredValues"/> when it kept a stored value.
         /// </summary>
-        public static AppliedRow UpdatedSale(bool keptStoredValue) =>
-            new(0, 1, 0, keptStoredValue ? 1 : 0);
+        public static AppliedRow UpdatedSale(bool keptStoredValue, StoredImportedSale stored) =>
+            new(0, 1, 0, keptStoredValue ? 1 : 0, stored);
     }
 
     /// <summary>

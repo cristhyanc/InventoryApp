@@ -1296,7 +1296,10 @@ queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-
 
 **Admin → Imports** takes a Nayax transaction export (`.xlsx`, `.xls` or `.csv`) and stores each row
 as a sale: a transaction the business already holds is updated, a new one is imported, and a row
-without a usable transaction, machine or time is reported as skipped rather than guessed at.
+without a usable transaction, machine or time is reported as skipped rather than guessed at. If the
+file lists the same transaction on more than one row, those rows are applied in file order onto the
+one sale — the file's last word about it is what you end up holding — so a repeated transaction is
+never stored twice and a later row with empty cells keeps what the earlier one stated.
 
 **One file may carry up to 20,000 sales.** A file with more rows is refused with
 *"This file has more than 20,000 sales. For a longer history, export one file per quarter, or use the

@@ -37,6 +37,11 @@ public sealed record ImportedNayaxSale(
 /// <para>The costing contract stays what it says it is - the facts historical sale costing reads -
 /// so a settlement value, a payment method and a machine name, which costing never reads, are
 /// carried here instead of being added to it.</para>
+///
+/// <para>It is also how <see cref="ImportNayaxSales"/> carries a sale one of the file's own rows has
+/// just applied (issue #1300), so a second row naming that transaction merges against it rather
+/// than against the state the batched read found before either row ran. The store answers these from
+/// the rows it loaded; the import builds one from the row it just wrote.</para>
 /// </summary>
 /// <param name="Sale">The stored sale's costing view, carrying its status, product and instant.</param>
 /// <param name="SettlementValue">The stored settled amount; the column is not nullable.</param>
@@ -84,7 +89,9 @@ public interface INayaxSalesImportStore
     /// import's write-locked transaction, so what it answers is the state the save is then decided
     /// on: a transaction the Nayax SQS queue reader stored while the file was being read is found
     /// here and updated, instead of being inserted a second time and refused by the unique index on
-    /// <c>(BusinessId, TransactionID)</c>.</para>
+    /// <c>(BusinessId, TransactionID)</c>. What the file's own rows then make of those sales is the
+    /// import's business: it tracks a sale a row of the file applied itself rather than reading it
+    /// again, so this stays one read.</para>
     /// </summary>
     Task<IReadOnlyDictionary<long, StoredImportedSale>> FindByTransactionIdsAsync(
         IReadOnlyCollection<long> transactionIds, CancellationToken cancellationToken);
