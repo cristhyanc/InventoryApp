@@ -491,6 +491,9 @@ public static class InfrastructureServiceCollectionExtensions
         // AppDbContext, and the review's link-or-create apply is decided inside its transaction.
         services.AddScoped<ICatalogueReviewStore, EfCatalogueReviewStore>();
         services.AddScoped<ILinkedProviderSaleResolutionStore, EfLinkedProviderSaleResolutionStore>();
+        // The Dashboard's unimported-provider-product read (issue #1352): stored sales and stored
+        // products of the caller's own business, through the central query filters.
+        services.AddScoped<IUnimportedProviderProductReader, EfUnimportedProviderProductReader>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
         services.AddScoped<IProviderDataCoverageStore, EfProviderDataCoverageStore>();
         services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();

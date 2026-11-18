@@ -580,11 +580,18 @@ changed, and every "Unavailable" still means unavailable, never zero.
   Business-owned inventory at cost. The inventory card says separately that its storage-unit count
   excludes stock in machines.
 - **Needs attention** collects what is waiting for you: empty selections, machines needing refill,
-  products needing ordering and the [restock sync reminder](#machine-restock-sync-reminder)
-  ("Recorded refills haven't been synced yet."). Its count is the number of alerts actually shown,
-  and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
-  and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
-  reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
+  products needing ordering, the [restock sync reminder](#machine-restock-sync-reminder)
+  ("Recorded refills haven't been synced yet.") and **"3 Nayax products are selling but aren't in
+  your products"** - machines are selling Nayax products you have never imported, so those sales take
+  no stock and carry no cost until you bring the products in. That alert names the most recently sold
+  few of them, links straight to **Import products**, and disappears once they are linked or created
+  there. An **Owner** and a **Manager** see it; it counts only products sold in the last 30 days, so
+  an old one-off sale of something you do not stock does not nag for ever, and it is not shown at all
+  if Nayax is not connected or during a support session. Its count is the number of alerts actually
+  shown, and the panel is hidden when there is none. It is two columns on a wide screen and one on a
+  phone, and it offers only the two existing actions, **Open pick list** and **View needs ordering**.
+  The reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending
+  date.
 - **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
   how many machines it has, its stock level in words as well as in colour, its low and empty
   selections and its sales - and an expand button under the site's name reveals that site's machines,

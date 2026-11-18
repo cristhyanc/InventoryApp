@@ -16,6 +16,11 @@ import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
+import {
+  CatalogueReviewAttentionService,
+  UnimportedProviderProductAttention
+} from '../../services/catalogue-review-attention.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
@@ -129,12 +134,19 @@ function reminder(): MachineRestockSyncReminder {
 
 const NOT_APPLICABLE: MachineRestockSyncReminderResponse = { applicable: false } as MachineRestockSyncReminderResponse;
 
+/** Nothing waiting on the import (issue #1352), which is what most of these cases arrange. */
+const NOTHING_UNIMPORTED: UnimportedProviderProductAttention = {
+  unimportedProductCount: 0,
+  examples: []
+};
+
 interface Options {
   summary?: DashboardSummary;
   reminder?: Observable<MachineRestockSyncReminderResponse>;
   canViewFinancials?: boolean;
   machines?: Machine[];
   sites?: Site[];
+  unimportedProducts?: Observable<UnimportedProviderProductAttention>;
 }
 
 async function render(options: Options = {}): Promise<{ fixture: ComponentFixture<DashboardComponent>; host: HTMLElement }> {
@@ -159,6 +171,11 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
+      {
+        provide: CatalogueReviewAttentionService,
+        useValue: { read: () => options.unimportedProducts ?? of(NOTHING_UNIMPORTED) }
+      },
+      { provide: ProviderAvailabilityService, useValue: { featureOffered: () => of(true) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(options.summary ?? SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
@@ -222,6 +239,39 @@ describe('Dashboard Needs attention (issue #972)', () => {
     expect(panel(host).hidden).toBe(false);
     expect(alertIds(host)).toEqual([]);
     expect(host.querySelector('[data-testid="needs-attention-count"]')?.textContent?.trim()).toBe('1 item');
+  });
+
+  /**
+   * Issue #1352's alert is one more tile in this panel, counted once however many products it names,
+   * because the badge is a count of alerts and not of the things each alert is about.
+   */
+  it('puts the unimported-Nayax-product alert inside the panel and counts it once', async () => {
+    const { host } = await render({
+      summary: QUIET_SUMMARY,
+      unimportedProducts: of({
+        unimportedProductCount: 3,
+        examples: [
+          { nayaxProductId: '901', productName: 'Monster Original' },
+          { nayaxProductId: '902', productName: 'Coke Zero 600ml' },
+          { nayaxProductId: '903', productName: 'Chips' }
+        ]
+      })
+    });
+    const tile = panel(host).querySelector('[data-testid="unimported-nayax-product-alert"]');
+
+    expect(panel(host).hidden).toBe(false);
+    expect(tile?.textContent).toContain("3 Nayax products are selling but aren't in your products");
+    expect(tile?.querySelector('[data-testid="unimported-nayax-product-alert-link"]')?.getAttribute('href')).toBe(
+      '/products/import'
+    );
+    expect(host.querySelector('[data-testid="needs-attention-count"]')?.textContent?.trim()).toBe('1 item');
+  });
+
+  it('counts no unimported-product alert while every selling product is imported', async () => {
+    const { host } = await render({ summary: QUIET_SUMMARY, unimportedProducts: of(NOTHING_UNIMPORTED) });
+
+    expect(panel(host).hidden).toBe(true);
+    expect(panel(host).querySelector('[data-testid="unimported-nayax-product-alert"]')).toBeNull();
   });
 
   it('says out loud that the reminder failed, inside the panel, rather than hiding it', async () => {

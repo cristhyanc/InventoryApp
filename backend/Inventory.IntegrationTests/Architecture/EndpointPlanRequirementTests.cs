@@ -109,6 +109,12 @@ public class EndpointPlanRequirementTests
         new("CatalogueReviewController.ResolveUnresolvedSales", PlanRequirementKind.None), // POST api/catalogue-review/unresolved-sales/apply
         new("CatalogueReviewController.Start", PlanRequirementKind.ViaProviderGate), // POST api/catalogue-review
 
+        // The Dashboard's unimported-provider-product alert (issue #1352). It makes no Nayax call at
+        // all - the evidence is this business's own stored sales - so every plan includes it, and a
+        // plan requirement here would hide from a downgraded business the fact that sales it already
+        // took are taking no stock and carrying no cost.
+        new("CatalogueReviewAttentionController.Get", PlanRequirementKind.None), // GET api/catalogue-review/attention
+
         // The catalogue: Free's own feature throughout.
         new("CategoriesController.Create", PlanRequirementKind.None), // POST api/Categories
         new("CategoriesController.Delete", PlanRequirementKind.None), // DELETE api/Categories/{id:long}

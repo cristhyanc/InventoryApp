@@ -47,6 +47,13 @@ const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachine
 const REVIEW_SUMMARY = '/api/nayax-sale-review/summary';
 // The Dashboard's "costs need attention" alert asks for its list as the page renders.
 const COST_ATTENTION = '/api/inventory-cost-attention';
+/**
+ * The Dashboard's unimported-Nayax-product alert (issue #1352), answered as nothing to import. Like
+ * the restock-sync reminder, it asks nothing at all inside a support session, so `match` tolerates
+ * its absence.
+ */
+const UNIMPORTED_PRODUCTS = '/api/catalogue-review/attention';
+const NOTHING_TO_IMPORT = { unimportedProductCount: 0, examples: [] };
 const NOTHING_TO_REVIEW = { needsReviewCount: 0, notCountedCount: 0 };
 
 /** One business's Dashboard, as the figures a test can recognise on screen. */
@@ -270,9 +277,24 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
   const answered: TestRequest[] = [];
   const answer = (
     url: string,
-    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | typeof NOTHING_TO_REVIEW | null
+    body:
+      | Machine[]
+      | Site[]
+      | DashboardSummary
+      | typeof HIDDEN_REMINDER
+      | typeof NOTHING_TO_REVIEW
+      | typeof NOTHING_TO_IMPORT
+      | null
   ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
+      // A read the outgoing context dropped on its way out has nothing left to answer - the same
+      // outcome `flushStale` tolerates. The unimported-product alert of issue #1352 does this by
+      // design: a context change cancels the read in flight rather than letting its answer arrive
+      // for a business the page is no longer showing.
+      if (request.cancelled) {
+        continue;
+      }
+
       answered.push(request);
       request.flush(body);
     }
@@ -288,6 +310,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
   answer(REMINDER, HIDDEN_REMINDER);
   answer(REVIEW_SUMMARY, NOTHING_TO_REVIEW);
   answer(COST_ATTENTION, []);
+  answer(UNIMPORTED_PRODUCTS, NOTHING_TO_IMPORT);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);
@@ -326,7 +349,9 @@ function flushStale(requests: readonly TestRequest[], figures: Figures): void {
               ? HIDDEN_REMINDER
               : request.request.url === REVIEW_SUMMARY
                 ? NOTHING_TO_REVIEW
-                : []
+                : request.request.url === UNIMPORTED_PRODUCTS
+                  ? NOTHING_TO_IMPORT
+                  : []
     );
   }
 }
