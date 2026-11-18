@@ -14574,7 +14574,9 @@ what this implements.
 - **Two limits, in one Domain policy.** `Inventory.Domain.Imports.NayaxSalesFilePolicy` holds both
   numbers, the refusal sentence and the write-lock budget, for the reason
   `ReimbursementArchivePolicy` holds its own: a limit written where the bytes happen to be read is a
-  limit the next reader forgets. **`MaxRows` is 20,000** data rows, excluding the header. An
+  limit the next reader forgets. **`MaxRows` is 5,000** data rows, excluding the header — the
+  measured ceiling rather than the 20,000 the owner's decision first named, for the reason the
+  measured-lock-hold bullet below sets out. An
   **XLSX's sheet data may expand to `MaxUncompressedSheetBytes`, 50 MB uncompressed** — the worksheet
   parts and the shared string table, summed from the package's own ZIP entry sizes. The two are
   independent because an XLSX's row count is not knowable until it has been loaded, and loading it is
@@ -14588,21 +14590,22 @@ what this implements.
   because what an operator is told is the use case's rule. An upload that is not a readable archive
   is deliberately **not** caught by the size guard: that stays ClosedXML's own failure and the
   generic `500` it has always produced, rather than becoming a "too large" message.
-- **The refusal is `400 Bad Request` with one sentence**: *"This file has more than 20,000 sales. For
+- **The refusal is `400 Bad Request` with one sentence**: *"This file has more than 5,000 sales. For
   a longer history, export one file per quarter, or use the sales history import."* It is
   `NayaxSalesFilePolicy.TooLargeMessage`, built from the row-limit constant so the number cannot
   drift from what is enforced, and `ImportNayaxSales` raises it as the same
   `InvalidOperationException` the unsupported-format rule raises, which `ImportsController` already
   answers that status with. **Nothing is read, looked up, costed or written**: the refusal happens
   before the catalogue read. The longer-history import the sentence names is issue #1304 and is not
-  built yet; until it is, one file per quarter is the whole of the answer.
+  built yet; until it is, uploading a shorter period at a time — a quarter for a quiet fleet, a month
+  for a busy one, now that the ceiling is 5,000 rows — is the whole of the answer.
 - **The limits are the *import's*, not the reader's.** `INayaxSalesWorkbookReader.Read` takes a
   `NayaxSalesFileLimits`, and the sale timestamp repair preview (issue #472) passes
   `NayaxSalesFileLimits.None`: it reads an export for its authorization instants alone and writes
   nothing, so capping it is a decision of its own rather than a side effect of this one.
 - **The stored sales of the whole file are read once**, through
   `INayaxSalesImportStore.FindByTransactionIdsAsync`, in fixed-size batches of 500 identifiers
-  instead of one query per row — 40 statements for a file at the row limit instead of 20,000.
+  instead of one query per row — 10 statements for a file at the row limit instead of 5,000.
 - **That one read is the pass's starting state, not its only one.** A file may name the same
   transaction more than once, so every row that inserts or updates a sale writes that sale back into
   the state the pass carries, and a later row for the same transaction merges against what the
@@ -14630,13 +14633,19 @@ what this implements.
   writer may be made to serve. It is the reason
   `EfLatestNayaxSalesStore.RebuildInventoryCostsAsync` drains its pending rebuilds outside the lock
   too.
-- **The row limit is sized by a measured lock hold, not a guess.** `MaxWriteLockHoldSeconds` is 10,
-  because every other write gives up after SQLite's 30-second busy timeout.
-  `NayaxSalesImportWriteLockHoldTests` imports a synthetic 20,000-row file over a real SQLite file
-  with the production wiring and asserts the measured hold is inside that budget; on the CI runner it
-  is **5.8 s** for a fresh import of 20,000 rows and **0.9 s** for a re-upload of the same file, where
-  every row is an update of an already costed sale. If that measurement ever exceeds the budget, the
-  row limit comes down — the budget does not go up, and the refusal sentence follows the constant.
+- **The row limit is sized by a measured lock hold, not a guess, and the measurement is what brought
+  it down to 5,000.** `MaxWriteLockHoldSeconds` is 10, because every other write gives up after
+  SQLite's 30-second busy timeout. `NayaxSalesImportWriteLockHoldTests` imports a synthetic file of
+  `MaxRows` rows over a real SQLite file with the production wiring and asserts the measured hold is
+  inside that budget, for a fresh import and for a re-upload where every row updates an already
+  costed sale. At the owner's first figure of 20,000 rows that assertion failed on the slower CI
+  runners — **13.8 s** measured here and **14.6 s** on the merge-validation runner, against **5.8 s**
+  on a fast one — so the row limit came down, which is what the owner's decision of 14 November 2026
+  provides for ("lower the row limit if needed"). The hold is linear in the rows at roughly 0.7 ms a
+  row on a slow runner, and at 5,000 rows it measures **3.5 s** for a fresh import and **0.3 s** for a
+  re-upload: about a third of the budget, so the ceiling holds on a runner slower still rather than
+  only on a good day. The budget itself does not go up, and the refusal sentence follows the
+  constant.
 
 ##### What a blank cell or a missing column does to a stored sale (issue #1298)
 

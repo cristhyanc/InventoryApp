@@ -23,11 +23,19 @@ namespace Inventory.Domain.Imports;
 public static class NayaxSalesFilePolicy
 {
     /// <summary>
-    /// How many data rows an uploaded file may carry: 20,000. A busy machine fleet exports a few
-    /// thousand transactions a month, so this is a quarter or more of real history in one file, and
-    /// it is the figure the measured write-lock budget below was chosen against.
+    /// How many data rows an uploaded file may carry: 5,000 - a month or two of a busy machine
+    /// fleet's real history in one file.
+    ///
+    /// <para><strong>It is the figure the measured write-lock budget allows, which is why it is not
+    /// the 20,000 the owner's decision named.</strong> That decision set the budget below as well,
+    /// and said to lower the row limit if the measured hold exceeded it; it did. A synthetic file of
+    /// 20,000 new rows held the lock for 13.8 s on this repository's slower CI runners (14.6 s on the
+    /// merge-validation runner, 5.8 s on a fast one), against a budget of
+    /// <see cref="MaxWriteLockHoldSeconds"/>. The hold is linear in the rows, at roughly 0.7 ms a row
+    /// on the slow runners, so 5,000 rows measures about 3.5 s - a third of the budget, which leaves
+    /// room for a runner slower still rather than a limit that only fits on a good day.</para>
     /// </summary>
-    public const int MaxRows = 20_000;
+    public const int MaxRows = 5_000;
 
     /// <summary>
     /// How far an uploaded XLSX's sheet data may expand: 50 MB uncompressed, summed from the ZIP
@@ -38,8 +46,8 @@ public static class NayaxSalesFilePolicy
     /// because the row count of an XLSX is not knowable until it has been loaded - and loading it is
     /// exactly the cost the limit exists to refuse. A spreadsheet is a compressed archive, so 10 MB
     /// of upload is hundreds of megabytes of XML; this limit is generous for any file inside the row
-    /// limit (20,000 rows of this export is a few megabytes of sheet XML) and refuses the file that
-    /// would be read into memory before anything could count it.</para>
+    /// limit (5,000 rows of this export is well under a megabyte of sheet XML) and refuses the file
+    /// that would be read into memory before anything could count it.</para>
     /// </summary>
     public const long MaxUncompressedSheetBytes = 50L * 1024 * 1024;
 
@@ -48,7 +56,7 @@ public static class NayaxSalesFilePolicy
     /// <see cref="MaxRows"/>: 10 seconds, the owner's decision of 14 November 2026. Every other
     /// write waits on that lock and gives up after the 30-second busy timeout, so this is the budget
     /// <see cref="MaxRows"/> is chosen to fit - if a measured save at the row limit exceeds it, the
-    /// row limit comes down, not this.
+    /// row limit comes down, not this. That is what happened: see <see cref="MaxRows"/>.
     /// </summary>
     public const int MaxWriteLockHoldSeconds = 10;
 

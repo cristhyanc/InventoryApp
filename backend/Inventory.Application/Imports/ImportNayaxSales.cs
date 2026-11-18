@@ -321,7 +321,7 @@ public sealed class ImportNayaxSales
         await using var transaction = await _transactions.BeginAsync(cancellationToken);
 
         // One read for the whole file, inside the lock (issue #1300). It replaces a query per row -
-        // 20,000 of them for a file at the row limit - and, because it is made here rather than
+        // 5,000 of them for a file at the row limit - and, because it is made here rather than
         // before the lock, what it answers is the state this save is actually decided on. Only the
         // rows that could be applied are asked about, through the same rule the loop skips on, so
         // the read is the file's own transactions and not every number in it.

@@ -40,27 +40,29 @@ public class NayaxSalesFileLimitTests
     private const string GmtCell = "2026-10-04T12:30:00Z";
 
     /// <summary>
-    /// The owner's limits of 14 November 2026, pinned as the named constants the refusal and the
-    /// guard are written against. The message is derived from the row limit, so lowering the limit -
-    /// which issue #1300 allows if the measured write-lock hold exceeds its budget - cannot leave
-    /// the sentence claiming a number the import no longer enforces.
+    /// The import's limits, pinned as the named constants the refusal and the guard are written
+    /// against. The row limit is 5,000 rather than the 20,000 the owner's decision of 14 November
+    /// 2026 named, because that same decision set the 10-second write-lock budget and said to lower
+    /// the row limit if the measured hold exceeded it, and at 20,000 it did (13.8 s on a slow CI
+    /// runner). The message is derived from the row limit, so lowering it cannot leave the sentence
+    /// claiming a number the import no longer enforces - which is what this case checks.
     /// </summary>
     [Fact]
     public void The_limits_are_the_owners_named_constants()
     {
-        Assert.Equal(20_000, NayaxSalesFilePolicy.MaxRows);
+        Assert.Equal(5_000, NayaxSalesFilePolicy.MaxRows);
         Assert.Equal(50L * 1024 * 1024, NayaxSalesFilePolicy.MaxUncompressedSheetBytes);
         Assert.Equal(10, NayaxSalesFilePolicy.MaxWriteLockHoldSeconds);
         Assert.Equal(
-            "This file has more than 20,000 sales. For a longer history, export one file per "
+            "This file has more than 5,000 sales. For a longer history, export one file per "
                 + "quarter, or use the sales history import.",
             NayaxSalesFilePolicy.TooLargeMessage);
     }
 
     /// <summary>
     /// <strong>The required row-limit case.</strong> One row past the limit refuses the whole file
-    /// with the operator's sentence, and no sale is stored - not the 20,000 rows that were inside
-    /// the limit either, because a half-imported file is worse than a refused one.
+    /// with the operator's sentence, and no sale is stored - not the 5,000 rows that were inside the
+    /// limit either, because a half-imported file is worse than a refused one.
     /// </summary>
     [Fact]
     public async Task A_file_with_more_rows_than_the_limit_is_refused_and_imports_nothing()

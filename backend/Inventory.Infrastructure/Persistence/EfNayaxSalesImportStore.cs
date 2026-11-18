@@ -38,8 +38,8 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
     /// How many transaction identifiers one stored-sale lookup statement carries (issue #1300). The
     /// import reads what the business already holds in one pass over the file's identifiers rather
     /// than one query per row, and batching that pass keeps each statement a fixed, modest size
-    /// whatever the provider does with a long <c>IN</c> list - a file at the row limit is 40
-    /// statements instead of 20,000.
+    /// whatever the provider does with a long <c>IN</c> list - a file at the row limit is 10
+    /// statements instead of 5,000.
     /// </summary>
     private const int LookupBatchSize = 500;
 

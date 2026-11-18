@@ -24,7 +24,10 @@ namespace InventoryApi.Tests.Application.Imports;
 /// a stock adjustment, the Nayax SQS queue reader's own save - waits on that lock and gives up after
 /// the 30-second busy timeout. An import that held it for minutes therefore did not merely run
 /// slowly: it failed everything else happening at the time. The row limit is chosen to fit this
-/// budget, so if this case ever exceeds it the limit comes down rather than the budget going up.</para>
+/// budget, so if this case ever exceeds it the limit comes down rather than the budget going up -
+/// which is what this case made happen: at the owner's first figure of 20,000 rows it measured 13.8 s
+/// here and 14.6 s on the merge-validation runner, so <see cref="NayaxSalesFilePolicy.MaxRows"/> came
+/// down to 5,000.</para>
 ///
 /// <para><strong>What is measured.</strong> The interval between the import's transaction being
 /// opened and committed, from outside the use case, over a real SQLite <strong>file</strong> and the
@@ -80,7 +83,7 @@ public class NayaxSalesImportWriteLockHoldTests
     /// A re-upload of the same file, which is the other shape an operator produces: every row is an
     /// update of a sale that is already stored and already costed. It is measured too, because the
     /// budget is about the lock and not about a particular file - and because this is the pass that
-    /// reads 20,000 stored rows before it writes anything.
+    /// reads a file's worth of stored rows before it writes anything.
     /// </summary>
     [Fact]
     public async Task A_re_upload_of_a_file_at_the_row_limit_holds_the_write_lock_inside_its_budget()
