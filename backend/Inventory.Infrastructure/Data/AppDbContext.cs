@@ -1316,6 +1316,18 @@ public class AppDbContext : DbContext
             .HasForeignKey(e => e.MatchedManualStockAdjustmentId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // An applied product replacement's own columns (issue #1326) are deliberately plain,
+        // constraint-free columns, exactly like StockAdjustmentId above them: they are the record of
+        // a decision - which products the operator confirmed, how many units, which movements it
+        // created - and nothing joins on them. The products are validated as *active products of
+        // the caller's own business* by the tenant-filtered read the apply makes inside its own
+        // write transaction (IMachineStockEventStore.FindActiveStorageProductAsync), so a retired,
+        // foreign or missing product never reaches the write; and adding a foreign key would make
+        // SQLite rebuild the whole imported-event table for an audit column, which issue #1326's
+        // additive migration deliberately avoids. The replacement does not touch MatchedProductId,
+        // whose foreign key and SetNull above are unchanged, because a replacement's match is still
+        // read live from Nayax rather than stored.
+
         // A machine-stock count is read by machine, then by product, in count order (issue #56), and
         // the tenant column leads the index because every query is filtered by it first.
         modelBuilder.Entity<MachineStockCount>()

@@ -102,6 +102,7 @@ public class MachinesControllerTests
                 FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
                 new RecordingMachineStockSyncLog(),
                 nayaxClient),
+            new ApplyMachineStockProductReplacement(store, new RecordingMachineStockSyncLog()),
             new ResolveMachineStockDuplicate(store, new RecordingMachineStockSyncLog()),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),
             new GetMachineStockReconciliation(ledgerStore, observationSource, Time.Clock),
@@ -260,6 +261,122 @@ public class MachinesControllerTests
         // The movement and its rebuild are committed, not left to the transaction's disposal.
         transaction.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    /// <summary>
+    /// Issue #1326: the confirmed product replacement reaches its use case as the operator entered
+    /// it, and the applied result is the ordinary 200.
+    /// </summary>
+    [Fact]
+    public async Task ApplySyncRestockReplacement_applies_the_confirmed_choice()
+    {
+        var transaction = new Mock<IMachineStockRefillWriteTransaction>();
+        var store = new Mock<IMachineStockEventStore>();
+        store.Setup(x => x.BeginRefillWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(transaction.Object);
+        store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(PendingReplacement());
+        store.Setup(x => x.FindActiveStorageProductAsync(200, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NayaxStockSyncProduct(200, "Coke 375mL", 10));
+        store.Setup(x => x.FindActiveStorageProductAsync(201, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NayaxStockSyncProduct(201, "Nu Pure Spring Water 600mL", 4));
+        store.Setup(x => x.ApplyProductReplacementAsync(
+                Machine,
+                It.Is<MachineStockReplacementWrite>(write =>
+                    write.EventId == 7
+                    && write.NayaxEventLogId == 5001
+                    && write.Choice == new NayaxProductReplacementChoice(
+                        200, 6, NayaxReplacementOutgoingDisposition.Damaged, 201, 3)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineReplacementApplication(
+                true, new AppliedProductReplacement(99, 100, 101)));
+
+        var result = await Controller(store.Object).ApplySyncRestockReplacement(
+            LocalMachineId,
+            new NayaxApplyProductReplacementRequestDto(
+                7, 200, 6, NayaxReplacementOutgoingDisposition.Damaged, 201, 3),
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var applied = Assert.IsType<NayaxStockEventApplyResultDto>(ok.Value);
+        Assert.Equal(7, applied.EventId);
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Outcome);
+
+        // The incoming refill is the movement the result reports, as the event row records it.
+        Assert.Equal(99, applied.StockAdjustmentId);
+        store.VerifyAll();
+        transaction.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Issue #1326: a refusal about the request itself is a 400 the dialog can show and correct, and
+    /// nothing is written for it.
+    /// </summary>
+    [Fact]
+    public async Task ApplySyncRestockReplacement_answers_bad_request_for_a_refused_choice()
+    {
+        var store = new Mock<IMachineStockEventStore>();
+
+        var result = await Controller(store.Object).ApplySyncRestockReplacement(
+            LocalMachineId,
+            new NayaxApplyProductReplacementRequestDto(
+                7, 200, -1, NayaxReplacementOutgoingDisposition.None),
+            CancellationToken.None);
+
+        var refused = Assert.IsType<NayaxStockEventApplyResultDto>(
+            Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+        Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, refused.Outcome);
+        Assert.Equal(NayaxProductReplacementWritePolicy.IncomingQuantityMessage, refused.Message);
+
+        // A choice this wrong is refused before a lock is taken or a row is read.
+        store.Verify(
+            x => x.BeginRefillWriteTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Issue #1326: an event the operator already marked as recorded manually is the established
+    /// resolution conflict, answered 409 with the same result shape.
+    /// </summary>
+    [Fact]
+    public async Task ApplySyncRestockReplacement_answers_conflict_for_an_event_already_reconciled()
+    {
+        var transaction = new Mock<IMachineStockRefillWriteTransaction>();
+        var store = new Mock<IMachineStockEventStore>();
+        store.Setup(x => x.BeginRefillWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(transaction.Object);
+        store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(PendingReplacement() with
+            {
+                DuplicateResolution = NayaxDuplicateResolution.ReconciledManually,
+            });
+
+        var result = await Controller(store.Object).ApplySyncRestockReplacement(
+            LocalMachineId,
+            new NayaxApplyProductReplacementRequestDto(7, 200, 6, NayaxReplacementOutgoingDisposition.None),
+            CancellationToken.None);
+
+        var conflict = Assert.IsType<NayaxStockEventApplyResultDto>(
+            Assert.IsType<ConflictObjectResult>(result.Result).Value);
+        Assert.Equal(NayaxStockEventApplyOutcome.ResolutionConflict, conflict.Outcome);
+        Assert.Null(conflict.StockAdjustmentId);
+        transaction.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>An imported 510 event as issue #1325 stores it: no match and no quantity.</summary>
+    private static MachineStockEventState PendingReplacement() =>
+        new(
+            7,
+            5001,
+            DateTime.UtcNow,
+            NayaxStockEventMatchStatus.NeedsReview,
+            null,
+            NayaxStockEventProcessingStatus.Unprocessed,
+            null,
+            null,
+            null,
+            NayaxDuplicateResolution.None,
+            ParsedMdb: 13,
+            ParsedProductName: "Coke 375mL",
+            EventCode: NayaxMachineAlertEventCodes.MachineProductChanged);
 
     [Fact]
     public async Task ResolveSyncRestockManually_passes_the_requested_event_ids_through()

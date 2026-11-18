@@ -18673,11 +18673,15 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `NayaxMachineStockApplyPolicy` rules, plus the `NayaxStockEventMatchStatus`/
   `NayaxStockEventProcessingStatus`/`NayaxDuplicateResolution`/`NayaxDuplicateResolutionChoice`
   states, are deterministic `Inventory.Domain.Nayax` types with no Nayax, HTTP, or EF Core
-  dependency.
+  dependency. Issue #1326 adds `NayaxProductReplacementWritePolicy` beside them, with its
+  `NayaxProductReplacementChoice`/`NayaxReplacementOutgoingDisposition`/
+  `NayaxReplacementMovementPlan` values, on exactly the same terms.
 - **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
   issue #196 - `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
-  #242 - and `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
+  #242 - `ApplyMachineStockProductReplacement` - the replacement apply, issue #1326, which holds
+  the persistence port and the log and deliberately no Nayax client - and
+  `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
   #1248), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
@@ -18689,7 +18693,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   product's cost once; and, since issue #1248, with the re-match pair `FindRematchCandidatesAsync`
   and `UpdateMatchesAsync`, whose `MachineStockEventMatchUpdate` carries the three match columns and
   nothing else - the use cases decide every event and own the commit, so no policy moved behind the
-  port). `MachineStockEventState` carries the event's parsed MDB and product name for the same
+  port; and, since issue #1326, with `FindActiveStorageProductAsync` and
+  `ApplyProductReplacementAsync`, whose `MachineStockReplacementWrite` carries the one event and the
+  Domain choice and whose `MachineReplacementApplication` reports the up-to-three movements it wrote
+  or the same `MachineRefillFailure` a refill batch reports).
+  `MachineStockEventState` carries the event's parsed MDB and product name for the same
   issue, because they are what a refreshed mapping resolves a stored event by. The Nayax read stays
   on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
@@ -18704,8 +18712,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `Inventory.Infrastructure` in issue #307.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`, and `POST /api/machines/{id}/sync-restock/resolve-manual`
-  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`.
+  binding for `ResolveMachineStockDuplicate`, `POST /api/machines/{id}/sync-restock/resolve-manual`
+  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`, and
+  `POST /api/machines/{id}/sync-restock/apply-replacement` (issue #1326) is the fifth, for
+  `ApplyMachineStockProductReplacement` (see
+  [Applying a confirmed product replacement](#applying-a-confirmed-product-replacement-issue-1326)).
   `POST /api/machines/{id}/sync-restock` additionally
   binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
   `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
@@ -18755,8 +18766,11 @@ explicit action above is waiting for them.
 
 When an operator replaces the product in one MDB position in Nayax Core, Nayax records a
 "Machine Product Changed" alert. Before issue #1325 the import kept only Event 501 and dropped it,
-so a replacement left no trace in Sync Restock. It is now imported and shown, read-only: **nothing
-here writes stock**. Applying a replacement is #1326 and its editing UI is #1327.
+so a replacement left no trace in Sync Restock. It is now imported and shown; **nothing in this
+subsection writes stock** - importing, listing and suggesting are read-only, and what an applied
+replacement writes is
+[Applying a confirmed product replacement](#applying-a-confirmed-product-replacement-issue-1326)
+below (issue #1326). Its editing UI is #1327.
 
 - **The contract and its evidence.** The Nayax developer portal documents `lastAlerts` but lists no
   event codes and no `EventData` format, so the contract rests on one real `lastAlerts` item the
@@ -18815,7 +18829,11 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   - *Apply* (`ApplyMachineStockSync`) and *Apply as separate restock*
     (`ResolveMachineStockDuplicate`) refuse it: `NayaxMachineStockApplyPolicy.Decide` takes the
     event code and answers `ProductReplacementNotApplicable` (outcome `NotApplicable`) for anything
-    but a 501, after the settled "already applied" and "already reconciled" answers.
+    but a 501, after the settled "already applied" and "already reconciled" answers. A replacement
+    carries two product names and no quantity, so a refill path has nothing to apply; its own apply
+    is the separate action below. Issue #1326 changed that refusal's **sentence** to point at that
+    action instead of saying a replacement cannot be applied at all, and changed nothing about which
+    events the refill path accepts.
   - *Already recorded manually* (`ResolveMachineStockEventsAsAlreadyRecorded`) accepts it and writes
     no stock, exactly as for a 501.
   - *Re-match* (`RematchMachineStockEvents.IsWaitingForAMatch` and
@@ -18831,7 +18849,121 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   both Nayax names, the suggestions and their reasons, the suggested quantity and any double-count
   flag. It has no quantity or reason inputs, is never pre-selected or counted as applicable, and
   can only be marked **Already recorded manually**; **Apply selected** is disabled while a
-  replacement is selected.
+  replacement is selected. The dialog that offers the apply below is issue #1327; until it ships,
+  that apply is reachable through its API endpoint only, and the dialog is unchanged.
+
+#### Applying a confirmed product replacement (issue #1326)
+
+Issue #1325 left a replacement with one resolution, "already recorded manually", which is the right
+answer only when the operator already entered the movements by hand. The other answer is this one:
+the operator says what the replacement actually did to the units, and it is recorded in one step
+that can neither half-apply nor apply twice.
+`POST /api/machines/{id}/sync-restock/apply-replacement` runs
+`Inventory.Application.MachineStockSync.ApplyMachineStockProductReplacement` for **one** event.
+
+**It is deliberately a separate action from Apply.** A 501 stock adjustment carries its own matched
+product and its own signed quantity, so the ordinary apply needs nothing from the operator. A 510
+replacement carries two product *names* and no quantity at all, so the products and the quantities
+are the operator's and arrive in the request: the incoming product id and a whole quantity of `0` or
+more, and an outgoing choice of `None`, `ReturnedToStorage`, `Damaged` or `Expired` with an outgoing
+product id and a whole quantity of at least `1` for every choice but `None` (absent for that one).
+The incoming product is required even for a quantity of `0`, because the replacement records which
+product the slot now holds. `Inventory.Domain.Nayax.NayaxProductReplacementWritePolicy` is the one
+deterministic rule for all of it - the shape of the choice, whether both products are usable, and
+whether storage holds what was loaded - and it reads and writes nothing itself.
+
+**What each choice writes.** `NayaxProductReplacementWritePolicy.Movements` is the one place that
+answers it, and `EfMachineStockEventStore.ApplyProductReplacementAsync` stages exactly that, in this
+order:
+
+| Choice | Movements written |
+| --- | --- |
+| Incoming quantity > 0 | one `MachineRefill` with a **negative** storage change, `StockAdjustmentSource.Nayax`, the event's own `EventLogID` in its note, and the event's `EventDateTimeGMT` as its `MachineLedgerEffectiveAt` - written exactly as a Sync Restock refill is, under the same insufficient-storage rule and the same costing rebuild |
+| Incoming quantity 0 | no incoming movement at all |
+| `None` | nothing for the outgoing product |
+| `ReturnedToStorage` | one `MachineRefill` with a **positive** storage change: the return of those units to storage, costing-neutral |
+| `Damaged` / `Expired` | that same return, and then one `Damaged` / `Expired` adjustment of **−N** for the same product |
+
+So a disposal leaves storage **unchanged**, machine stock lower by N, and the loss costed once by
+the existing cost replay. A replacement that loaded nothing and recorded nothing for the outgoing
+units writes no movement at all and is still settled, so it leaves the working list.
+
+**Why a plain storage write-off is not used for machine units.** `Damaged` and `Expired` remove
+units from **storage**, and the units a replacement takes out of a slot are in the **machine**.
+Writing one off on its own would take units out of a storeroom that never held them - making
+physical storage stock wrong, and refused outright by the negative-stock guard once the storeroom is
+empty of that product - while leaving the machine's own ledger still expecting them. Returning them
+first is what makes both ledgers true at once, and it is also why the return comes first in the
+order above and in the cost replay (`MachineRefill` already replays before an "other" adjustment at
+the same instant). **No adjustment reason is added and no existing reason changes meaning**: the
+three movements use `MachineRefill` in both directions and the two write-off reasons that already
+exist.
+
+**Storage is checked on the incoming side only.** The loaded quantity must be available in storage,
+refused with `InsufficientStock` and the quantity/available pair exactly as a refill is. The
+outgoing quantity never needs storage to hold it first, because the return puts those units in and
+the write-off takes the same number straight back out - so a replacement may legitimately write off
+more units than the storeroom holds, and the business's **costing** inventory is what bounds it,
+since every unit in the machine is still counted there.
+
+**Both products must be active products of the current business.** The apply reads each one through
+`IMachineStockEventStore.FindActiveStorageProductAsync` - the ordinary tenant-filtered read, plus
+`IsActive` - **inside** its write transaction, and a retired product, another business's product and
+a product that no longer exists are refused by the same single sentence, deliberately: saying which
+of the three it is would say whether an id another business owns exists. It is a separate port
+method from `FindStorageProductAsync`, which the ordinary apply uses on a product the *import*
+matched; that match may legitimately name a product the operator has since retired, and holding it
+to the stricter rule would change the 501 apply's behaviour.
+
+**One event, one transaction, the shape every other write path here already uses.** The transaction
+is the same `BEGIN IMMEDIATE` `IMachineStockEventStore.BeginRefillWriteTransactionAsync` lock an
+apply batch and both duplicate resolutions take, and the event's own status and the incoming
+product's storage quantity are read **inside** it, because both decide a write. The three movements,
+the event's applied state and the choice it was applied with are one unit of work, and each product
+whose stock actually moved is rebuilt **once** (the two sides may legitimately be the same product,
+which is then rebuilt once). A validation refusal, a movement that cannot be recorded, a fatal
+costing data-quality refusal and a commit the database refuses all leave the event **pending** with
+no movement, because the transaction's disposal discards everything staged; each failure leaves one
+`IMachineStockSyncLog` warning and the established
+`Failed to apply this event; no inventory movement was recorded.` sentence, with the cost
+data-quality message appended for that one failure, exactly as a refill's failure is reported
+(issue #1240). Two simultaneous applies of one event serialise: the loser waits, re-reads the
+winner's committed state and reports the established `Already applied.` with the movement that
+apply recorded, having written nothing - and so does a straightforward repeat, whatever quantities
+it carries.
+
+**What the event records, for history.** Seven additive, nullable columns on
+`NayaxMachineStockEvents` (migration `AddNayaxMachineStockEventAppliedReplacement`):
+`ReplacementIncomingProductId`/`ReplacementIncomingQuantity`, `ReplacementOutgoingDisposition`,
+`ReplacementOutgoingProductId`/`ReplacementOutgoingQuantity`, and
+`ReplacementOutgoingReturnStockAdjustmentId`/`ReplacementOutgoingWriteOffStockAdjustmentId`. The
+existing `StockAdjustmentId` keeps its meaning and holds the **incoming** refill, so it is `NULL`
+for a replacement that loaded nothing. They are plain columns with no foreign key, like
+`StockAdjustmentId` itself: they record a decision rather than being a key anything joins on, the
+products are validated inside the write transaction as described above, and a constraint would make
+SQLite rebuild the whole imported-event table for an audit column. There is no backfill, and every
+pre-existing row keeps exactly the meaning it had.
+
+**An applied replacement never changes a slot's product link.** `MatchStatus`/`MatchedProductId` are
+left exactly as the import left them, the use case holds no Nayax client and no product-link port at
+all - so applying one, including an old one, makes no Nayax call - and `Product.ExternalProductId`
+is untouched. Which product an MDB position holds keeps being read live from Nayax, which is why
+the replacement's suggestions were advice in #1325 and why its record of what was applied is not a
+stored match either. The consequence for every other reader is the one #1325 already describes: an
+applied replacement has no `MatchedProductId`, so it adds no Stock History *presence* for a product,
+while the movements it wrote are ordinary `StockAdjustmentSource.Nayax` movements that appear in
+Stock History and the machine-stock ledger like any other. It becomes `Applied`, so the pending
+counts and the #1018 coverage fence stop counting it.
+
+**API.** `MachinesController.ApplySyncRestockReplacement` is the fifth equally thin Sync Restock
+binding. It answers `200` with the established `NayaxStockEventApplyResultDto` for an applied (or
+replayed) event and for an outcome of the attempt - `InsufficientStock`, or the `Error` of a failed
+write; `400` for a `NotApplicable` refusal about the request itself, which is a quantity that is not
+a count, a product that is not an active product of this business, or an event that is a 501 rather
+than a replacement; and the established `409` `ResolutionConflict` for an event already reconciled
+as recorded manually, because the operator decided that replacement needs no movement at all. It
+keeps `MachinesController`'s `Inventory.Operate` capability and declares no plan requirement, since
+it writes local movements and makes no Nayax call.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 

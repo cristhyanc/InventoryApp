@@ -143,6 +143,27 @@ public record NayaxMachineStockApplyResponseDto(IReadOnlyList<NayaxStockEventApp
 public record NayaxResolveDuplicateRequestDto(int EventId, NayaxDuplicateResolutionChoice Resolution);
 
 /// <summary>
+/// An operator's confirmed product replacement, for one 510 event (issue #1326): the product loaded
+/// into the slot and how many units of it, and what happened to the units taken out.
+///
+/// <para><see cref="IncomingQuantity"/> is whole and may be <c>0</c> - the replacement happened but
+/// nothing was loaded - while <see cref="IncomingProductId"/> is always required, because the
+/// replacement records which product the slot now holds. <see cref="OutgoingProductId"/> and
+/// <see cref="OutgoingQuantity"/> (whole, at least <c>1</c>) are required for every
+/// <see cref="OutgoingDisposition"/> but <c>None</c>, and must be absent for that one;
+/// <see cref="Inventory.Domain.Nayax.NayaxProductReplacementWritePolicy"/> is the one rule and
+/// refuses anything else before a lock is taken or a row is read.</para>
+/// </summary>
+public record NayaxApplyProductReplacementRequestDto(
+    int EventId,
+    long IncomingProductId,
+    int IncomingQuantity,
+    NayaxReplacementOutgoingDisposition OutgoingDisposition,
+    long? OutgoingProductId = null,
+    int? OutgoingQuantity = null
+);
+
+/// <summary>
 /// An operator's explicit bulk request to resolve every listed Sync Restock event as "already
 /// recorded manually" in one action (issue #242). Unlike <see cref="NayaxResolveDuplicateRequestDto"/>,
 /// this is never limited to events the app flagged as a possible duplicate - that flag is only a

@@ -397,6 +397,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RematchMachineStockEvents>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
+        // Applying a confirmed product replacement (issue #1326): the other resolution of a 510
+        // event beside "already recorded manually". Scoped like every other use case, and
+        // deliberately holding no Nayax client: applying a replacement makes no Nayax call.
+        services.AddScoped<ApplyMachineStockProductReplacement>();
         services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
 
