@@ -135,15 +135,19 @@ function jaccard(left: string[], right: string[]): number {
   return intersection / union;
 }
 
+/**
+ * Whether two parsed sizes conflict: only when both names state a size, the sizes are of the same
+ * kind (both volumes, or both weights) and the normalised values differ. A name that states no size,
+ * or one that states a size of the other kind, never conflicts.
+ */
+function sizesConflict(providerSize: CatalogueParsedSize | null, localSize: CatalogueParsedSize | null): boolean {
+  if (providerSize === null || localSize === null) return false;
+  return providerSize.kind === localSize.kind && providerSize.valueInBaseUnit !== localSize.valueInBaseUnit;
+}
+
 /** Compares one provider name against one local name. The one documented scoring/conflict rule. */
 export function scoreCatalogueNameMatch(providerName: string, localName: string): CatalogueMatchResult {
-  const providerSize = parseSize(providerName);
-  const localSize = parseSize(localName);
-  const sizeConflict =
-    providerSize != null &&
-    localSize != null &&
-    providerSize.kind === localSize.kind &&
-    providerSize.valueInBaseUnit !== localSize.valueInBaseUnit;
+  const sizeConflict = sizesConflict(parseSize(providerName), parseSize(localName));
 
   const providerPack = parsePackCount(providerName);
   const localPack = parsePackCount(localName);
