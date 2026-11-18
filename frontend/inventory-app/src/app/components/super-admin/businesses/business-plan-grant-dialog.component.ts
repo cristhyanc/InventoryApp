@@ -26,6 +26,10 @@ import {
  * **It can grant a plan and nothing else.** There is no payment, billing or subscription field here,
  * because the endpoint behind it has none: a grant and a paid subscription are two records and
  * neither writes the other.
+ *
+ * **It is also where the beta Pro grant of issue #1258 is seen and ended.** A grant an approval
+ * wrote is the same record as a complimentary one, so it loads, reports and ends here with nothing
+ * added for it beyond saying which it is - the server's own `source`.
  */
 @Component({
   selector: 'app-business-plan-grant-dialog',
@@ -178,8 +182,25 @@ export class BusinessPlanGrantDialogComponent implements OnInit {
     const plan = this.grant.plan ?? 'an unknown plan';
     const until = this.grant.endsOnUtc ? ` until ${this.grant.endsOnUtc} (UTC)` : ' with no end date';
     return this.grant.active
-      ? `Granted ${plan}${until}.`
-      : `A ${plan} grant was ended and no longer applies.`;
+      ? `Granted ${plan}${until} (${this.grantSourceSummary}).`
+      : `A ${plan} ${this.grantSourceSummary} was ended and no longer applies.`;
+  }
+
+  /**
+   * Why the grant exists, in the words the page uses (issue #1258). It is a label for the source the
+   * server reported and never a guess: a source this build does not recognise, and an older server
+   * that reports none at all, both read as the plain "manual grant" the page said before sources
+   * were published.
+   */
+  get grantSourceSummary(): string {
+    switch (this.grant?.source) {
+      case 'Beta':
+        return 'public beta grant';
+      case 'Complimentary':
+        return 'complimentary grant';
+      default:
+        return 'manual grant';
+    }
   }
 
   close(): void {

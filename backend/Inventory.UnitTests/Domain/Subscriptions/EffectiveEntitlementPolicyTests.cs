@@ -220,6 +220,47 @@ public class EffectiveEntitlementPolicyTests
             entitlement);
     }
 
+    /// <summary>
+    /// The beta grant of issue #1258 entitles exactly what a complimentary one does: this rule reads
+    /// a grant's plan and period and never its source, so a new source entitles without this table
+    /// gaining a row for it.
+    /// </summary>
+    [Fact]
+    public void A_beta_grant_entitles_exactly_as_a_complimentary_grant_does()
+    {
+        var beta = Enforcing(
+            [Grant(SubscriptionPlan.Pro, LastMonth, null, ManualPlanGrantSource.Beta)],
+            null);
+
+        Assert.Equal(
+            Enforcing([Grant(SubscriptionPlan.Pro, LastMonth, null, ManualPlanGrantSource.Complimentary)], null),
+            beta);
+        Assert.Equal(
+            new EffectiveEntitlement(
+                Enforced: true,
+                SubscriptionPlan.Pro,
+                EntitlementSource.ManualGrant,
+                EndsAtUtc: null),
+            beta);
+    }
+
+    /// <summary>And an ended beta grant entitles nothing, exactly as any other ended grant does.</summary>
+    [Fact]
+    public void An_ended_beta_grant_leaves_the_business_on_free()
+    {
+        var entitlement = Enforcing(
+            [Grant(SubscriptionPlan.Pro, LastMonth, LastMonth.AddDays(1), ManualPlanGrantSource.Beta)],
+            null);
+
+        Assert.Equal(
+            new EffectiveEntitlement(
+                Enforced: true,
+                SubscriptionPlan.Free,
+                EntitlementSource.NoActiveRecord,
+                EndsAtUtc: null),
+            entitlement);
+    }
+
     [Fact]
     public void A_complimentary_grant_with_an_end_date_reports_that_end()
     {

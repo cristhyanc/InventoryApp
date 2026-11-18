@@ -8,6 +8,7 @@ const noGrant: SuperAdminPlanGrant = {
   name: 'Snack Co',
   hasGrant: false,
   plan: null,
+  source: null,
   startsAtUtc: null,
   endsAtUtc: null,
   endsOnUtc: null,
@@ -22,6 +23,7 @@ const proGrant: SuperAdminPlanGrant = {
   name: 'Snack Co',
   hasGrant: true,
   plan: 'Pro',
+  source: 'Complimentary',
   startsAtUtc: '2026-10-29T13:45:00Z',
   endsAtUtc: '2027-01-01T00:00:00Z',
   endsOnUtc: '2026-12-31',
@@ -29,6 +31,16 @@ const proGrant: SuperAdminPlanGrant = {
   revision: 4,
   grantedAtUtc: '2026-10-29T13:45:00Z',
   active: true
+};
+
+/** The grant an approval wrote while the public beta setting was on (issue #1258). */
+const betaGrant: SuperAdminPlanGrant = {
+  ...proGrant,
+  source: 'Beta',
+  endsAtUtc: null,
+  endsOnUtc: null,
+  reason: 'Public beta introductory Pro access',
+  revision: 1
 };
 
 async function render(service: Partial<SuperAdminPlanGrantsService>) {
@@ -77,11 +89,49 @@ describe('BusinessPlanGrantDialogComponent (issue #982)', () => {
   it('shows the existing grant, its end date and its reason, and offers to end it', async () => {
     const { host, component } = await render({ get: jest.fn(() => of(proGrant)) });
 
-    expect(host.querySelector('[data-testid="current-grant"]')?.textContent).toContain('Granted Pro');
+    const summary = host.querySelector('[data-testid="current-grant"]')?.textContent;
+    expect(summary).toContain('Granted Pro');
+    expect(summary).toContain('complimentary grant');
     expect(component.plan).toBe('Pro');
     expect(component.endsOn).toBe('2026-12-31');
     expect(component.reason).toBe('Complimentary pilot');
     expect(host.querySelector('[data-testid="end-grant"]')).not.toBeNull();
+  });
+
+  /**
+   * The criterion of issue #1258: the grant an approval wrote appears here with its source, and the
+   * existing End action is offered for it like any other - the dialog gained no second surface.
+   */
+  it('shows a beta grant as the public beta grant and offers to end it', async () => {
+    const end = jest.fn(() => of({ ...betaGrant, active: false, revision: 2 }));
+    const { fixture, host, component } = await render({ get: jest.fn(() => of(betaGrant)), end });
+
+    const summary = host.querySelector('[data-testid="current-grant"]')?.textContent;
+    expect(summary).toContain('Granted Pro');
+    expect(summary).toContain('with no end date');
+    expect(summary).toContain('public beta grant');
+
+    type(host, '#grant-reason', 'Beta over for this business', fixture);
+    click(host, 'end-grant');
+    fixture.detectChanges();
+
+    expect(end).toHaveBeenCalledWith(9, 'Beta over for this business', 1);
+    expect(component.active).toBe(false);
+    expect(host.querySelector('[data-testid="current-grant"]')?.textContent).toContain(
+      'A Pro public beta grant was ended'
+    );
+  });
+
+  /**
+   * A source this build does not recognise - and an older server that reports none - read as the
+   * plain "manual grant" the page said before sources were published, never as a guess.
+   */
+  it('describes an unrecognised source as a manual grant', async () => {
+    const { host } = await render({
+      get: jest.fn(() => of({ ...proGrant, source: 'SomethingNewer' }))
+    });
+
+    expect(host.querySelector('[data-testid="current-grant"]')?.textContent).toContain('manual grant');
   });
 
   it('saves the chosen plan, end date and reason with the revision the server reported', async () => {

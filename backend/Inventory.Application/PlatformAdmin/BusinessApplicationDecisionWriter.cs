@@ -1,3 +1,4 @@
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
@@ -47,14 +48,28 @@ namespace Inventory.Application.PlatformAdmin;
 /// still waiting. A failure there therefore rolls the status change back with it and no audit event
 /// is emitted. A rejection provisions nothing - there is no business to equip.</para>
 ///
+/// <para><strong>And, while the public beta setting is on, an approval grants that business Pro
+/// (issue #1258).</strong> In the same transaction, after the provisioning,
+/// <see cref="BetaProGrantOnApproval"/> writes the approved business's open-ended beta Pro grant and
+/// the audit row beside it through the plan-grant store of issue #982. It is one operation with the
+/// approval for the provisioning's reason: a business that was publicly promised free Pro during the
+/// beta and did not get it, and a grant held by a business that is still waiting for a decision, are
+/// both states this refuses to produce, so a failure there rolls the status change back with it and
+/// no audit event of either kind is emitted. While the setting is off nothing is read or written and
+/// approval behaves exactly as it did before. A rejection grants nothing, and so do the deactivation
+/// and reactivation beside this class, which do not reach it at all.</para>
+///
 /// <para><strong>The audit event is emitted after the commit, and carries no name, address or
-/// reason text.</strong> See <see cref="PlatformBusinessDecisionAuditEntry"/>.</para>
+/// reason text.</strong> See <see cref="PlatformBusinessDecisionAuditEntry"/>. The beta grant's own
+/// log event is emitted after the same commit, for the same reason, and carries neither a name nor
+/// the reason the grant records.</para>
 /// </summary>
 public sealed class BusinessApplicationDecisionWriter
 {
     private readonly IAuthenticatedActorAccessor _actorAccessor;
     private readonly IPlatformBusinessDirectoryStore _store;
     private readonly IBusinessSupplierProvisioningStore _provisioning;
+    private readonly BetaProGrantOnApproval _betaGrant;
     private readonly MembershipWriteGuard _guard;
     private readonly IPlatformBusinessDecisionAudit _audit;
     private readonly IClock _clock;
@@ -63,6 +78,7 @@ public sealed class BusinessApplicationDecisionWriter
         IAuthenticatedActorAccessor actorAccessor,
         IPlatformBusinessDirectoryStore store,
         IBusinessSupplierProvisioningStore provisioning,
+        BetaProGrantOnApproval betaGrant,
         MembershipWriteGuard guard,
         IPlatformBusinessDecisionAudit audit,
         IClock clock)
@@ -70,6 +86,7 @@ public sealed class BusinessApplicationDecisionWriter
         _actorAccessor = actorAccessor;
         _store = store;
         _provisioning = provisioning;
+        _betaGrant = betaGrant;
         _guard = guard;
         _audit = audit;
         _clock = clock;
@@ -143,7 +160,7 @@ public sealed class BusinessApplicationDecisionWriter
         var applied = await _guard
             .ExecuteAsync(
                 intent,
-                token => WriteAsync(businessId, approved, reason, existing, token),
+                token => WriteAsync(businessId, approved, reason, existing, actor, token),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -164,6 +181,13 @@ public sealed class BusinessApplicationDecisionWriter
             applied.Decision.RejectionReason is not null,
             applied.Decision.DecidedAtUtc));
 
+        if (applied.BetaGrant is { } betaGrant)
+        {
+            // The beta grant's own log event, after the same commit as the decision's and never
+            // before it: a grant that rolled back has nothing to report (issue #1258).
+            _betaGrant.RecordCommitted(betaGrant);
+        }
+
         return applied.Decision;
     }
 
@@ -180,6 +204,7 @@ public sealed class BusinessApplicationDecisionWriter
         bool approved,
         string? reason,
         PlatformBusinessDecisionTarget expected,
+        ActorIdentity actor,
         CancellationToken cancellationToken)
     {
         var current = await _store.FindDecisionTargetAsync(businessId, cancellationToken)
@@ -226,6 +251,15 @@ public sealed class BusinessApplicationDecisionWriter
                 .CopyEnabledSupplierPresetsAsync(current.BusinessId, decidedAtUtc, cancellationToken)
                 .ConfigureAwait(false);
 
+            // And, while the public beta setting is on, the business's open-ended Pro grant (issue
+            // #1258), in this same transaction and with the same instant. The business id handed
+            // over is current.BusinessId for the reason the provisioning's is: it is the key of the
+            // row this transaction read, never the route value. If this throws, the status change
+            // and the supplier copies roll back with it and no audit event is emitted.
+            var betaGrant = await _betaGrant
+                .WriteAsync(current.BusinessId, decidedAtUtc, actor, cancellationToken)
+                .ConfigureAwait(false);
+
             return new Applied(
                 current.Status,
                 new PlatformBusinessDecision(
@@ -233,7 +267,8 @@ public sealed class BusinessApplicationDecisionWriter
                     current.Name,
                     BusinessStatus.Active,
                     decidedAtUtc,
-                    RejectionReason: null));
+                    RejectionReason: null),
+                betaGrant);
         }
 
         // A rejection asks nothing of the applicant: it releases them. An applicant that cannot be
@@ -253,7 +288,9 @@ public sealed class BusinessApplicationDecisionWriter
                 current.Name,
                 BusinessStatus.Rejected,
                 decidedAtUtc,
-                reason));
+                reason),
+            // A rejection grants nothing: there is no business to put on a plan (issue #1258).
+            BetaGrant: null);
     }
 
     /// <summary>
@@ -271,6 +308,17 @@ public sealed class BusinessApplicationDecisionWriter
 
     private readonly record struct ApprovableApplicant(int MembershipId, ActorIdentity Identity);
 
-    /// <summary>What the in-transaction write actually did, so the audit can describe it exactly.</summary>
-    private sealed record Applied(BusinessStatus FromStatus, PlatformBusinessDecision Decision);
+    /// <summary>
+    /// What the in-transaction write actually did, so the audit can describe it exactly.
+    ///
+    /// <para><paramref name="BetaGrant"/> is the beta Pro grant's audit entry when one was written
+    /// (issue #1258) and <see langword="null"/> otherwise - the setting off, a business that already
+    /// holds a manual grant, or a rejection. It travels out of the transaction rather than being
+    /// logged inside it, because the one log event a committed grant emits must follow the
+    /// commit.</para>
+    /// </summary>
+    private sealed record Applied(
+        BusinessStatus FromStatus,
+        PlatformBusinessDecision Decision,
+        PlatformPlanGrantAuditEntry? BetaGrant);
 }

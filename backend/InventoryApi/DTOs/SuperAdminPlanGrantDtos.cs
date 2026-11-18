@@ -68,6 +68,13 @@ public sealed record SuperAdminEndPlanGrantRequest(
 /// The granted plan's published name, or <c>null</c> when there is no grant - or when the stored
 /// value is one this code does not declare, which is reported as unknown rather than guessed at.
 /// </param>
+/// <param name="Source">
+/// Why the grant exists, as its stored name: <c>Complimentary</c> for a Super Admin's own decision,
+/// or <c>Beta</c> for the grant an approval wrote while the public beta setting was on (issue
+/// #1258). It is <c>null</c> when there is no grant, and also when the stored value is one this code
+/// does not declare - reported as unknown rather than guessed at, exactly as the plan is. The
+/// grandfathered grant is never reported here, because this surface does not read it.
+/// </param>
 /// <param name="StartsAtUtc">The instant the grant applies from, inclusive, or <c>null</c>.</param>
 /// <param name="EndsAtUtc">
 /// The instant it stops at, <strong>exclusive</strong>, or <c>null</c> for an open-ended grant. It is
@@ -93,6 +100,7 @@ public sealed record SuperAdminPlanGrantResponse(
     string Name,
     bool HasGrant,
     string? Plan,
+    string? Source,
     DateTime? StartsAtUtc,
     DateTime? EndsAtUtc,
     DateOnly? EndsOnUtc,
@@ -117,6 +125,7 @@ public sealed record SuperAdminPlanGrantResponse(
                 view.Name,
                 HasGrant: false,
                 Plan: null,
+                Source: null,
                 StartsAtUtc: null,
                 EndsAtUtc: null,
                 EndsOnUtc: null,
@@ -133,6 +142,9 @@ public sealed record SuperAdminPlanGrantResponse(
             // A stored value this code does not declare is reported as unknown rather than as the
             // nearest plan - the same restraint the members list shows about a role nobody granted.
             SubscriptionPlans.IsDeclared(grant.Plan) ? grant.Plan.ToString() : null,
+            // The same restraint about the source: a value a newer deployment wrote is reported as
+            // unknown rather than as the nearest source this build happens to declare.
+            Enum.IsDefined(grant.Source) ? grant.Source.ToString() : null,
             grant.Period.StartsAtUtc,
             grant.Period.EndsAtUtc,
             grant.Period.EndsAtUtc is { } endsAtUtc
