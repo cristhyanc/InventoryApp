@@ -339,82 +339,19 @@ public sealed class ImportNayaxSales
                 continue;
             }
 
-            var stored = storedByTransactionId.GetValueOrDefault(row.TransactionId);
-            var instant = ResolveInstant(row, stored?.Sale);
-            if (instant is null)
-            {
-                skipped++;
-                continue;
-            }
+            var applied = await ApplyRowAsync(
+                row,
+                storedByTransactionId.GetValueOrDefault(row.TransactionId),
+                candidates,
+                conflictingTransactionIds,
+                localProductIdByNayaxId,
+                affected,
+                cancellationToken);
 
-            // A new sale has no stored amount to keep, and a blank cell is not a zero sale: such a
-            // row is skipped and stays visible, exactly as a row with no usable identity does.
-            if (stored is null && row.SettlementValue is null)
-            {
-                skipped++;
-                continue;
-            }
-
-            // What this row actually states, with the stored value kept wherever it states nothing
-            // (issue #1298). The file is still the source of truth for every value it carries - a
-            // present status replaces the stored one in either direction, and an explicit 0 amount
-            // is a value it carries - so only a blank cell or a missing column is ignored. For the
-            // three text facts, a cell holding nothing but whitespace is a blank cell: StatedText
-            // decides that here, where the keep-or-overwrite rule lives, rather than relying on how
-            // a reader happened to trim it.
-            var productName = StatedText(row.ProductName) ?? stored?.Sale.ProductName;
-            var facts = new ImportedNayaxSale(
-                row.TransactionId,
-                row.MachineId,
-                instant.Value,
-                row.TransactionStatusId ?? stored?.Sale.TransactionStatusId,
-                // The local product this row belongs to, decided here and persisted on the sale
-                // (issue #758). The rule is the one this import has always applied - the recorded
-                // provider id first (issue #745), then the unambiguous name - but its answer is now
-                // stored instead of re-derived by every later reader. It is resolved against the
-                // name that will be stored, so a kept product name keeps the association it names.
-                ProductMatcher.MatchLinked(
-                    candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), productName),
-                row.NayaxProductId,
-                StatedText(row.MachineName) ?? stored?.MachineName,
-                row.SettlementValue ?? stored!.SettlementValue,
-                StatedText(row.PaymentMethod) ?? stored?.PaymentMethod,
-                productName,
-                // Never erase a transaction cost price the business already holds with a row that
-                // simply does not carry the column.
-                row.NayaxProductCostPrice ?? stored?.Sale.NayaxProductCostPrice);
-
-            CostableSale sale;
-            if (stored is null)
-            {
-                sale = _store.Add(facts);
-                imported++;
-            }
-            else
-            {
-                // The stored row's own product and instant are tracked before it is overwritten, so
-                // an update that moves a completed sale to another product or an earlier time
-                // replays both the product it left and the product it joined.
-                TrackStoredProduct(stored.Sale, affected);
-                sale = _store.Update(
-                    stored.Sale,
-                    facts with
-                    {
-                        // A conflicting sale keeps the product it has - none - until a human names
-                        // one through the audited operation (issue #758).
-                        ProductId = conflictingTransactionIds.Contains(row.TransactionId)
-                            ? stored.Sale.ProductId
-                            : facts.ProductId,
-                    });
-                updated++;
-                if (KeptAStoredValue(row, stored))
-                    keptStoredValues++;
-            }
-
-            var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
-            if (cost is not null)
-                _store.StageCost(sale, cost);
-            TrackImportedProduct(sale, affected);
+            imported += applied.Imported;
+            updated += applied.Updated;
+            skipped += applied.Skipped;
+            keptStoredValues += applied.KeptStoredValues;
         }
 
         if (imported > 0 || updated > 0)
@@ -423,6 +360,102 @@ public sealed class ImportNayaxSales
         await transaction.CommitAsync(cancellationToken);
 
         return new AppliedRows(imported, updated, skipped, keptStoredValues, invalidRows);
+    }
+
+    /// <summary>
+    /// What one row whose identity and cell values the pass above accepted does to this business's
+    /// sales: the merge with what is stored, the insert or the update, the costing and the record of
+    /// which products to replay. It runs inside the write-locked transaction that pass opened, and
+    /// reports what it did as the counts it adds, so the pass stays a pass over rows.
+    ///
+    /// <para>The row reaching here is already known identifiable and free of unreadable values, and
+    /// <paramref name="stored"/> is the sale this business already holds under the row's transaction
+    /// identifier as the one read inside the transaction found it - <see langword="null"/> for a
+    /// transaction it does not hold.</para>
+    ///
+    /// <para>The rules here are unchanged and so is their order; they are a method of their own only
+    /// because one method holding both the pass and every per-row rule was past the complexity this
+    /// repository allows.</para>
+    /// </summary>
+    private async Task<AppliedRow> ApplyRowAsync(
+        NayaxSalesImportRow row,
+        StoredImportedSale? stored,
+        IReadOnlyList<ProductMatchCandidate> candidates,
+        IReadOnlySet<long> conflictingTransactionIds,
+        IReadOnlyDictionary<long, long> localProductIdByNayaxId,
+        IDictionary<long, DateTime> affected,
+        CancellationToken cancellationToken)
+    {
+        var instant = ResolveInstant(row, stored?.Sale);
+        if (instant is null)
+            return AppliedRow.SkippedRow;
+
+        // A new sale has no stored amount to keep, and a blank cell is not a zero sale: such a
+        // row is skipped and stays visible, exactly as a row with no usable identity does.
+        if (stored is null && row.SettlementValue is null)
+            return AppliedRow.SkippedRow;
+
+        // What this row actually states, with the stored value kept wherever it states nothing
+        // (issue #1298). The file is still the source of truth for every value it carries - a
+        // present status replaces the stored one in either direction, and an explicit 0 amount
+        // is a value it carries - so only a blank cell or a missing column is ignored. For the
+        // three text facts, a cell holding nothing but whitespace is a blank cell: StatedText
+        // decides that here, where the keep-or-overwrite rule lives, rather than relying on how
+        // a reader happened to trim it.
+        var productName = StatedText(row.ProductName) ?? stored?.Sale.ProductName;
+        var facts = new ImportedNayaxSale(
+            row.TransactionId,
+            row.MachineId,
+            instant.Value,
+            row.TransactionStatusId ?? stored?.Sale.TransactionStatusId,
+            // The local product this row belongs to, decided here and persisted on the sale
+            // (issue #758). The rule is the one this import has always applied - the recorded
+            // provider id first (issue #745), then the unambiguous name - but its answer is now
+            // stored instead of re-derived by every later reader. It is resolved against the
+            // name that will be stored, so a kept product name keeps the association it names.
+            ProductMatcher.MatchLinked(
+                candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), productName),
+            row.NayaxProductId,
+            StatedText(row.MachineName) ?? stored?.MachineName,
+            row.SettlementValue ?? stored!.SettlementValue,
+            StatedText(row.PaymentMethod) ?? stored?.PaymentMethod,
+            productName,
+            // Never erase a transaction cost price the business already holds with a row that
+            // simply does not carry the column.
+            row.NayaxProductCostPrice ?? stored?.Sale.NayaxProductCostPrice);
+
+        CostableSale sale;
+        AppliedRow applied;
+        if (stored is null)
+        {
+            sale = _store.Add(facts);
+            applied = AppliedRow.NewSale;
+        }
+        else
+        {
+            // The stored row's own product and instant are tracked before it is overwritten, so
+            // an update that moves a completed sale to another product or an earlier time
+            // replays both the product it left and the product it joined.
+            TrackStoredProduct(stored.Sale, affected);
+            sale = _store.Update(
+                stored.Sale,
+                facts with
+                {
+                    // A conflicting sale keeps the product it has - none - until a human names
+                    // one through the audited operation (issue #758).
+                    ProductId = conflictingTransactionIds.Contains(row.TransactionId)
+                        ? stored.Sale.ProductId
+                        : facts.ProductId,
+                });
+            applied = AppliedRow.UpdatedSale(KeptAStoredValue(row, stored));
+        }
+
+        var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
+        if (cost is not null)
+            _store.StageCost(sale, cost);
+        TrackImportedProduct(sale, affected);
+
+        return applied;
     }
 
     /// <summary>
@@ -451,6 +484,27 @@ public sealed class ImportNayaxSales
         int Skipped,
         int KeptStoredValues,
         IReadOnlyList<NayaxSalesImportInvalidRow> InvalidRows);
+
+    /// <summary>
+    /// What <em>one</em> row did, as the counts it adds to those of the whole pass. Exactly one of
+    /// the three outcomes a row can have is named by the three values below, so the pass adds them
+    /// without re-deciding anything the row's own rules already decided.
+    /// </summary>
+    private readonly record struct AppliedRow(int Imported, int Updated, int Skipped, int KeptStoredValues)
+    {
+        /// <summary>A row applied nowhere: no trustworthy instant, or a new sale with no amount.</summary>
+        public static AppliedRow SkippedRow { get; } = new(0, 0, 1, 0);
+
+        /// <summary>A row stored as a sale this business did not hold.</summary>
+        public static AppliedRow NewSale { get; } = new(1, 0, 0, 0);
+
+        /// <summary>
+        /// A row that updated a sale this business already held, counted once in
+        /// <see cref="NayaxSalesImportResult.KeptStoredValues"/> when it kept a stored value.
+        /// </summary>
+        public static AppliedRow UpdatedSale(bool keptStoredValue) =>
+            new(0, 1, 0, keptStoredValue ? 1 : 0);
+    }
 
     /// <summary>
     /// Whether an updated row left a stored value in place because the file carried none for it
