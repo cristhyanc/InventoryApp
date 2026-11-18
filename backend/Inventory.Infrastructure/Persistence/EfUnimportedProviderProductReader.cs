@@ -77,11 +77,17 @@ public sealed class EfUnimportedProviderProductReader : IUnimportedProviderProdu
             .ToList();
 
         var examples = new List<UnimportedProviderProductExample>();
-        foreach (var product in missing.Take(Math.Max(0, maxExamples)))
+        var named = missing
+            .Take(Math.Max(0, maxExamples))
+            .Select(product => product.NayaxProductId);
+
+        // Asked one at a time, in order: the names come from this context's own queries, which may
+        // not run concurrently.
+        foreach (var nayaxProductId in named)
         {
             examples.Add(new UnimportedProviderProductExample(
-                NayaxExternalId.From(product.NayaxProductId),
-                await LatestStoredNameAsync(product.NayaxProductId, fromUtc, toUtc, cancellationToken)));
+                NayaxExternalId.From(nayaxProductId),
+                await LatestStoredNameAsync(nayaxProductId, fromUtc, toUtc, cancellationToken)));
         }
 
         return new UnimportedProviderProductAttention(missing.Count, examples);

@@ -38,7 +38,7 @@ export class CatalogueReviewAttentionService {
     return `${this.config.apiBaseUrl.replace(/\/$/, '')}/catalogue-review/attention`;
   }
 
-  constructor(private http: HttpClient, private config: ConfigService) {}
+  constructor(private readonly http: HttpClient, private readonly config: ConfigService) {}
 
   read(): Observable<UnimportedProviderProductAttention> {
     return this.http.get<UnimportedProviderProductAttention>(this.url);
