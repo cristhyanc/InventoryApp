@@ -58,6 +58,45 @@ public class StreamingNayaxSalesHistoryCsvReaderTests
     }
 
     /// <summary>
+    /// <strong>The other parity case.</strong> A header row that names one column twice states
+    /// nothing about which of the two the rows below it belong to, and the uploaded import's reader
+    /// fails outright on such a file. So this reader refuses it instead of choosing an occurrence:
+    /// the two imports must not read one file differently, which is exactly what reading the first
+    /// column here while the normal upload refuses the file would mean.
+    /// </summary>
+    [Fact]
+    public void A_file_naming_one_column_twice_is_refused_rather_than_read()
+    {
+        const string csv =
+            "TransactionID,TransactionStatusId,MachineID,SettlementValue,SettlementValue\n"
+            + "9000001,12,942488501,3.50,9.99\n";
+
+        Assert.Equal(NayaxSalesHistoryFileState.DuplicateColumn, Check(csv).State);
+        Assert.Equal(0, Check(csv).DataRows);
+
+        // The same file through the uploaded import's own reader: it fails outright, which is the
+        // behaviour this refusal keeps the two readers agreed on.
+        using var workbookContent = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+        Assert.ThrowsAny<Exception>(() => new ClosedXmlNayaxSalesWorkbookReader()
+            .Read(workbookContent, "history.csv", NayaxSalesFileLimits.None));
+
+        // And nothing reads such a file row by row either, however it was reached.
+        Assert.Throws<InvalidOperationException>(() => Read(csv).ToList());
+    }
+
+    /// <summary>
+    /// A heading repeated only in the letters and digits the reader normalises away - the spelling
+    /// an export might vary - is the same duplicate, because that is how the columns are matched.
+    /// </summary>
+    [Fact]
+    public void A_heading_repeated_in_another_spelling_is_the_same_duplicate()
+    {
+        Assert.Equal(
+            NayaxSalesHistoryFileState.DuplicateColumn,
+            Check("TransactionID,Transaction Id,MachineID\n9000001,9000001,942488501\n").State);
+    }
+
+    /// <summary>
     /// The row ceiling is enforced while the file is being counted, and the count stops at the first
     /// row past it - so a file far over the limit costs no more to refuse than one row over it.
     /// </summary>

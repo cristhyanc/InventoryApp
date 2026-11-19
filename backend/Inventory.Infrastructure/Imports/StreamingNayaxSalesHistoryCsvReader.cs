@@ -22,12 +22,16 @@ namespace Inventory.Infrastructure.Imports;
 /// column this reader does not recognise is ignored, exactly as it is there, and a line with fewer
 /// fields than the header row simply states nothing in the columns it does not reach.</para>
 ///
-/// <para><strong>A duplicated column heading keeps its first occurrence.</strong> The workbook
+/// <para><strong>A duplicated column heading is refused, not interpreted.</strong> The workbook
 /// reader builds its header map with <c>ToDictionary</c> and so fails outright on a file that names
-/// one column twice; this reader takes the first and carries on, which is the more forgiving reading
-/// and the one a 250,000-row history deserves rather than a refusal on the last column of the header
-/// row. No row rule depends on which it is: a second column of the same name would hold the same
-/// kind of value.</para>
+/// one column twice, and this reader refuses it too - <see cref="Check"/> answers
+/// <see cref="NayaxSalesHistoryFileState.DuplicateColumn"/>, so the upload is refused with
+/// <c>NayaxSalesHistoryPolicy.DuplicateColumnMessage</c> and nothing is stored. A header row that
+/// names a column twice states nothing about which of the two the rows below it belong to, and the
+/// one thing the two imports may not do is read the same file differently: a history that quietly
+/// took the first occurrence would store different values than the same file uploaded the normal
+/// way. The reading is the operator's one-line fix to the header row, not this reader's
+/// guess.</para>
 ///
 /// <para><strong>A failure is a failure.</strong> As in the workbook reader, bytes that are not
 /// readable text are not reported as an import of zero rows - the exception reaches the caller. What
@@ -55,7 +59,14 @@ public sealed class StreamingNayaxSalesHistoryCsvReader : INayaxSalesHistoryCsvR
         if (reader.ReadLine() is not { } header)
             return NayaxSalesHistoryFileCheck.Unreadable;
 
-        if (!Columns(header).ContainsKey(TransactionIdColumn))
+        var columns = Columns(header, out var duplicated);
+
+        // Before the row count, because the refusal is about the header row and counting a quarter
+        // of a million lines to say so would be work for nothing.
+        if (duplicated)
+            return NayaxSalesHistoryFileCheck.DuplicateColumn;
+
+        if (!columns.ContainsKey(TransactionIdColumn))
             return NayaxSalesHistoryFileCheck.Unreadable;
 
         // The lines are read and discarded: counting 250,000 rows allocates one line at a time, and
@@ -92,7 +103,20 @@ public sealed class StreamingNayaxSalesHistoryCsvReader : INayaxSalesHistoryCsvR
         if (reader.ReadLine() is not { } header)
             yield break;
 
-        var columns = Columns(header);
+        var columns = Columns(header, out var duplicated);
+
+        // Unreachable through the upload, which refuses such a file before a job exists for it
+        // (Check above). Stated here as well so that the two ways into this reader cannot answer
+        // differently about one header row, and so that a caller that skipped the check fails
+        // loudly rather than importing a column it chose - which is what the workbook reader does
+        // with the same file.
+        if (duplicated)
+        {
+            throw new InvalidOperationException(
+                "The sales history's header row names the same column twice, so which column the "
+                + "rows belong to is not stated. It is refused at upload.");
+        }
+
         var gmtColumn = Index(columns, "AuthorizationDateTimeGMT") is not null;
 
         // The header row is row 1, which is what makes a reported row number one an operator can
@@ -166,17 +190,25 @@ public sealed class StreamingNayaxSalesHistoryCsvReader : INayaxSalesHistoryCsvR
 
     /// <summary>
     /// The header row's columns, normalised to their letters and digits and mapped to their
-    /// position. An empty heading names no column, and the first of two columns of the same name
-    /// wins.
+    /// position. An empty heading names no column.
     /// </summary>
-    private static IReadOnlyDictionary<string, int> Columns(string header)
+    /// <param name="header">The file's first line.</param>
+    /// <param name="duplicated">
+    /// Whether the row names one column twice, which is a refusal rather than a reading: both
+    /// callers above say so instead of choosing an occurrence.
+    /// </param>
+    private static IReadOnlyDictionary<string, int> Columns(string header, out bool duplicated)
     {
         var fields = NayaxSalesCells.ParseLine(header);
         var columns = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
+        duplicated = false;
         for (var index = 0; index < fields.Count; index++)
-            if (NayaxSalesCells.Text(fields[index]) is { } name)
-                columns.TryAdd(NayaxSalesCells.NormalizeHeader(name), index);
+            if (NayaxSalesCells.Text(fields[index]) is { } name
+                && !columns.TryAdd(NayaxSalesCells.NormalizeHeader(name), index))
+            {
+                duplicated = true;
+            }
 
         return columns;
     }

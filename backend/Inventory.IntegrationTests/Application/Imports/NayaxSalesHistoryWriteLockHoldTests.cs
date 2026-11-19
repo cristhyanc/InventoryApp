@@ -19,14 +19,15 @@ namespace InventoryApi.Tests.Application.Imports;
 /// <see cref="NayaxSalesHistoryPolicy.BatchRows"/> rows, which is why a history fifty times the size
 /// of the uploaded import's ceiling is safe at all.</para>
 ///
-/// <para><strong>Why the file in this case is not 250,000 rows.</strong> The hold being measured is
-/// per batch and a batch is <see cref="NayaxSalesHistoryPolicy.BatchRows"/> rows whatever the file
-/// holds, so twelve batches measure the same thing as five hundred of them - and this repository
-/// stops any test that runs past 90 seconds (AGENTS.md § Commands), which a quarter of a million
-/// rows of real costing would. The measured per-batch figures are written to the test output, which
-/// is where the pull request's numbers come from, and the total for a full-length history is stated
-/// there as what it is: the per-batch figure multiplied by the batches, not a measured end-to-end
-/// run.</para>
+/// <para><strong>Why the file in this case is not 250,000 rows.</strong> This repository stops any
+/// test that runs past 90 seconds (AGENTS.md § Commands), which a quarter of a million rows of real
+/// costing would not fit inside. So what runs on every validation is this case - twelve batches, and
+/// the assertion that each is inside the budget - while
+/// <see cref="NayaxSalesHistoryFullSizeBenchmark"/> is the opt-in measurement at full-size depth and
+/// beyond it. <strong>Twelve batches here are not a substitute for that one</strong>: the hold grows
+/// with the sales already stored per product, so a figure measured at 1,500 sales a product says
+/// nothing about one measured at five thousand, and the benchmark's own summary records what it
+/// does - including the depth at which the budget stops being met.</para>
 ///
 /// <para>What is measured is the interval between a batch's transaction being opened and committed,
 /// from outside the use case, over a real SQLite <strong>file</strong> and the production wiring -

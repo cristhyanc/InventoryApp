@@ -20,6 +20,9 @@ internal sealed class FakeNayaxSalesImportTransactions : INayaxSalesImportTransa
     /// <summary>How many of them it committed.</summary>
     public int Committed { get; private set; }
 
+    /// <summary>How many of them it discarded instead, because the batch failed.</summary>
+    public int Discarded { get; private set; }
+
     public Task<INayaxSalesImportTransaction> BeginAsync(CancellationToken cancellationToken)
     {
         Begun++;
@@ -37,6 +40,12 @@ internal sealed class FakeNayaxSalesImportTransactions : INayaxSalesImportTransa
             _owner.Committed++;
             return Task.CompletedTask;
         }
+
+        /// <summary>
+        /// Counted and otherwise nothing: these cases have no unit of work to discard, which is the
+        /// same reason this transaction begins nothing.
+        /// </summary>
+        public void DiscardStagedChanges() => _owner.Discarded++;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

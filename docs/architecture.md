@@ -14919,9 +14919,30 @@ instead of files.
   6,000-row history on four products - a quarter of the budget at the fast end of that growth.
   `NayaxSalesHistoryWriteLockHoldTests` asserts every batch is inside
   `MaxWriteLockHoldSeconds` and writes the figures to the test output. The quadratic per-row costing
-  itself is pre-existing and unchanged; what it means for a 250,000-row history is a job of minutes
-  (extrapolated, not measured end to end - a quarter of a million rows of real costing does not fit
-  this repository's 90-second per-test ceiling).
+  itself is pre-existing and unchanged.
+- **What the hold depends on is the sales stored *per product*, and at 500 rows a batch it leaves the
+  budget somewhere around three thousand of them.** `NayaxSalesHistoryFullSizeBenchmark` is the
+  opt-in measurement (`INVENTORY_NAYAX_HISTORY_BENCHMARK=1`, outside repository validation because it
+  runs for minutes to tens of minutes), and what it measured on this repository's runners is:
+
+  | Rows | Products | Sales a product | Longest batch | Whole import |
+  | --- | --- | --- | --- | --- |
+  | 2,000 | 200 | 10 | 1.1 s | 4 s |
+  | 25,000 | 20 | 1,250 | **4.6 s** | 1.9 min |
+  | 20,000 | 4 | 5,000 | **12.6 s** - over budget from batch 31 (about 3,000 sales a product) | 4.2 min |
+
+  The middle row is the depth a **250,000-row history over a 200-product catalogue** ends at (250,000
+  ÷ 200 = 1,250 sales a product), measured directly rather than extrapolated: the hold grows from
+  1.0 s to 4.6 s and no batch leaves the budget. The last row is the small-catalogue case and it
+  **exceeds** `MaxWriteLockHoldSeconds`: ten of its forty batches held the lock for 10.3 s to 12.6 s.
+  So the budget holds for a history spread over a real catalogue and does not hold for one that
+  concentrates a quarter of a million rows on a handful of products, and no batch size fixes that -
+  halving the batch halves the hold once, while the per-row replay keeps growing with the history.
+  Bounding it needs the incremental sale-time ledger read listed under
+  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds) as follow-up work, which
+  changes costing internals and is outside issue #1304. **A full 250,000-row end-to-end run has still
+  not completed in this environment**: the attempt exceeded the 30-minute command ceiling, so the
+  total duration for that size is known only as *more than half an hour*, not as a figure.
 - **The replays are recorded once per product, not once per batch.** Each batch stages its own
   affected products through the shared `PendingInventoryCostRebuildRecorder` - behind the new narrow
   `IPendingInventoryCostRebuildStore` port, because this is the first writer that stores sales through

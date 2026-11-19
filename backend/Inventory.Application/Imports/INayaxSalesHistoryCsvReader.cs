@@ -1,8 +1,8 @@
 namespace Inventory.Application.Imports;
 
 /// <summary>
-/// What checking an uploaded sales history file found (issue #1304). Exactly one of the four, and
-/// three of them are refusals the operator is told about with nothing stored.
+/// What checking an uploaded sales history file found (issue #1304). Exactly one of the five, and
+/// four of them are refusals the operator is told about with nothing stored.
 /// </summary>
 public enum NayaxSalesHistoryFileState
 {
@@ -24,6 +24,15 @@ public enum NayaxSalesHistoryFileState
     /// no more to refuse than one row over it.
     /// </summary>
     TooManyRows,
+
+    /// <summary>
+    /// A header row that names the same column twice, which states nothing about which of the two
+    /// the rows below it are read from. It is refused rather than interpreted: the uploaded import's
+    /// reader fails outright on such a file, and a history that silently read one of the columns
+    /// would apply different values to the same business's sales than the same file uploaded the
+    /// other way.
+    /// </summary>
+    DuplicateColumn,
 }
 
 /// <summary>
@@ -51,6 +60,10 @@ public sealed record NayaxSalesHistoryFileCheck(NayaxSalesHistoryFileState State
     /// <summary>A file carrying more rows than the policy allows.</summary>
     public static NayaxSalesHistoryFileCheck TooManyRows { get; } =
         new(NayaxSalesHistoryFileState.TooManyRows, 0);
+
+    /// <summary>A file whose header row names one column twice.</summary>
+    public static NayaxSalesHistoryFileCheck DuplicateColumn { get; } =
+        new(NayaxSalesHistoryFileState.DuplicateColumn, 0);
 
     /// <summary>Whether the file may be stored as a job.</summary>
     public bool IsReadable => State == NayaxSalesHistoryFileState.Readable;

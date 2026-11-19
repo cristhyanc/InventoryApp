@@ -1382,8 +1382,15 @@ for no gain.
 holds the file's rows in memory — and commits them in **batches of 500**, each batch in its own short
 database transaction. Between batches the database's single write lock is released, so a purchase, a
 stock adjustment or the Nayax SQS queue reader's own save goes through while a year of history is
-importing instead of waiting behind it. A batch holds that lock for a second or two and never more
-than ten (measured: 1.0 s to 3.1 s over twelve batches), and a long history is a job of minutes rather
+importing instead of waiting behind it. A batch holds that lock for a second or two early in a
+history and longer as the history grows, because each row's cost replays its own product's ledger:
+measured, a batch took 1.0 s at the start and 4.6 s by the point a 250,000-row history over a
+200-product catalogue reaches — inside the ten-second goal. **A history that concentrates that many
+rows on a handful of products is the case that leaves it**: on four products, batches passed ten
+seconds (up to 12.6 s) once each product held about three thousand sales. Nothing is lost when that
+happens — the batch still commits and the next writer still waits rather than failing — but another
+save can wait longer than the ten seconds this application aims for, and the fix for it (a cheaper
+sale-time cost replay) is follow-up work. A long history is in any case a job of many minutes rather
 than one request nothing else can write around.
 
 **You can follow it, leave the page, and come back.** The card lists this business's recent history

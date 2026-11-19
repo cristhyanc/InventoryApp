@@ -98,6 +98,23 @@ public class UploadNayaxSalesHistoryTests
     }
 
     /// <summary>
+    /// A header row that names one column twice is refused with nothing stored, rather than
+    /// imported under a reading of its own: the uploaded import's reader fails outright on the same
+    /// file, and one file may not mean two things depending on which upload it was sent to.
+    /// </summary>
+    [Fact]
+    public async Task A_file_naming_one_column_twice_is_refused()
+    {
+        var rejection = await RefusalAsync(
+            "history.csv",
+            Encoding.UTF8.GetBytes(
+                "TransactionID,TransactionStatusId,MachineID,SettlementValue,SettlementValue\n"
+                + "9000001,12,942488501,3.50,9.99\n"));
+
+        Assert.Equal(NayaxSalesHistoryPolicy.DuplicateColumnMessage, rejection);
+    }
+
+    /// <summary>
     /// The row ceiling, with the reader asked for the policy's own number: a file one row past it is
     /// refused with the sentence that says what to do about it.
     /// </summary>

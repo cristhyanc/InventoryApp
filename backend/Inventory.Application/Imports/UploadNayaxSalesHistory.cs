@@ -133,6 +133,7 @@ public sealed class UploadNayaxSalesHistory
     {
         NayaxSalesHistoryFileState.TooManyRows => NayaxSalesHistoryPolicy.TooManyRowsMessage,
         NayaxSalesHistoryFileState.NoRows => NayaxSalesHistoryPolicy.NoRowsMessage,
+        NayaxSalesHistoryFileState.DuplicateColumn => NayaxSalesHistoryPolicy.DuplicateColumnMessage,
         _ => NayaxSalesHistoryPolicy.UnreadableMessage,
     };
 

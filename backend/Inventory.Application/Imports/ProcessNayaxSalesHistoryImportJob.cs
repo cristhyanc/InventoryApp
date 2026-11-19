@@ -179,8 +179,10 @@ public sealed class ProcessNayaxSalesHistoryImportJob
             }
             catch (Exception exception) when (NotCancellation(exception, cancellationToken))
             {
-                // The batch's transaction rolled back, so this batch has neither sales nor progress,
-                // and every batch before it is committed. What reaches here is the database - the
+                // The batch's transaction rolled back and discarded what it had staged, so this
+                // batch has neither sales nor progress - in the database or in the unit of work this
+                // outcome is about to be recorded through - and every batch before it is committed.
+                // What reaches here is the database - the
                 // writer was busy, the connection dropped, a constraint the application does not
                 // model refused the write - or a cost replay that could not be staged; either way the
                 // attempt ends and the job is retried from the rows that did commit.
@@ -226,16 +228,34 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         var affected = new Dictionary<long, DateTime>();
 
         NayaxSalesHistoryImportProgress applied;
-        await using (var transaction = await _transactions.BeginAsync(cancellationToken))
+        var transaction = await _transactions.BeginAsync(cancellationToken);
+        await using (transaction)
         {
-            applied = progress.Plus(
-                batch.Length, await _rows.ApplyAsync(batch, facts, affected, cancellationToken));
+            try
+            {
+                applied = progress.Plus(
+                    batch.Length, await _rows.ApplyAsync(batch, facts, affected, cancellationToken));
 
-            await _rebuilds.StageAsync(affected, cancellationToken);
+                await _rebuilds.StageAsync(affected, cancellationToken);
 
-            await _jobs.SaveProgressAsync(jobId, applied, cancellationToken);
+                await _jobs.SaveProgressAsync(jobId, applied, cancellationToken);
 
-            await transaction.CommitAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            catch
+            {
+                // This batch is lost, and the rollback that follows undoes what the database was
+                // told - but not what the unit of work is still holding. A row that failed to cost
+                // leaves the sales applied before it staged; a failure at the commit leaves those
+                // sales, the batch's pending cost rebuilds and the progress staged onto the job row.
+                // The save that records the requeue or the failure next is outside any transaction,
+                // so without this it would write the lost batch after all, and report a progress no
+                // committed row supports. Discarding here is what makes the batch all or nothing in
+                // the application's state too, and what makes the failure record re-read the job's
+                // durable progress.
+                transaction.DiscardStagedChanges();
+                throw;
+            }
         }
 
         // Committed, so there is nothing staged to lose: the sales this batch loaded and wrote are
@@ -249,6 +269,10 @@ public sealed class ProcessNayaxSalesHistoryImportJob
     /// Ends the attempt: the job stops for good when it has used its last attempt, and is queued
     /// again otherwise. Either way the batches it committed stay committed and the progress row says
     /// how far it got, which is what the next attempt - or a re-upload - resumes from.
+    ///
+    /// <para>Both writes are made outside any transaction, on a unit of work the lost batch has
+    /// already been discarded from (see <see cref="ApplyBatchAsync"/>), so each one loads the job's
+    /// durable row and saves the outcome and nothing else.</para>
     /// </summary>
     private async Task<NayaxSalesHistoryImportJobRunResult> StopOrRequeueAsync(
         NayaxSalesHistoryImportJobClaim claim, Exception exception, CancellationToken cancellationToken)

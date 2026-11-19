@@ -1,4 +1,5 @@
 using System.Text;
+using Inventory.Application.Costing;
 using Inventory.Application.Imports;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Providers;
@@ -35,7 +36,7 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     /// <summary>A second business, for the isolation cases.</summary>
     public const int BusinessB = 2;
 
-    /// <summary>How many products each business's catalogue holds.</summary>
+    /// <summary>How many products each business's catalogue holds unless a case asks for more.</summary>
     public const int ProductCount = 4;
 
     /// <summary>The machine every synthetic row names.</summary>
@@ -60,28 +61,41 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     private readonly SqliteConnection _connection;
     private readonly string? _databasePath;
 
-    private NayaxSalesHistoryImportFixture(SqliteConnection connection, string? databasePath)
+    private NayaxSalesHistoryImportFixture(
+        SqliteConnection connection, string? databasePath, int catalogue)
     {
         _connection = connection;
         _databasePath = databasePath;
+        Catalogue = catalogue;
         Options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
     }
 
     public DbContextOptions<AppDbContext> Options { get; }
 
+    /// <summary>
+    /// How many products each business's catalogue actually holds in this fixture. It is the one
+    /// number the per-row costing's cost depends on besides the row count: the ledger replay each
+    /// row makes reads that product's stored sales before the sale's instant, so the sales a history
+    /// stores per product - rows divided by this - is what makes later batches slower than earlier
+    /// ones.
+    /// </summary>
+    public int Catalogue { get; }
+
     /// <summary>The clock every adapter and use case in the fixture reads.</summary>
     public FakeClock Clock { get; } = new(RunAt);
 
     /// <summary>A fixture on one in-memory connection, which is enough for one writer.</summary>
-    public static Task<NayaxSalesHistoryImportFixture> CreateAsync() => CreateAsync(onDisk: false);
+    public static Task<NayaxSalesHistoryImportFixture> CreateAsync(int catalogue = ProductCount) =>
+        CreateAsync(onDisk: false, catalogue);
 
     /// <summary>
     /// A fixture on a real SQLite <strong>file</strong>, so a second connection is a second writer
     /// and the write lock between batches is the real one.
     /// </summary>
-    public static Task<NayaxSalesHistoryImportFixture> OnDiskAsync() => CreateAsync(onDisk: true);
+    public static Task<NayaxSalesHistoryImportFixture> OnDiskAsync(int catalogue = ProductCount) =>
+        CreateAsync(onDisk: true, catalogue);
 
-    private static async Task<NayaxSalesHistoryImportFixture> CreateAsync(bool onDisk)
+    private static async Task<NayaxSalesHistoryImportFixture> CreateAsync(bool onDisk, int catalogue)
     {
         var path = onDisk
             ? Path.Combine(Path.GetTempPath(), $"nayax-sales-history-{Guid.NewGuid():N}.db")
@@ -91,7 +105,7 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
             path is null ? "Data Source=:memory:" : $"Data Source={path};Default Timeout=30");
         await connection.OpenAsync();
 
-        var fixture = new NayaxSalesHistoryImportFixture(connection, path);
+        var fixture = new NayaxSalesHistoryImportFixture(connection, path, catalogue);
 
         await using (var setup = TestAppDbContext.Unrestricted(fixture.Options))
         {
@@ -158,10 +172,13 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     ///
     /// <para><paramref name="transactions"/> is how the batching, the lock timing and the
     /// interrupted-attempt cases get at the transaction from outside; left unset, it is the real
-    /// one.</para>
+    /// one. <paramref name="saleCosting"/> is the same opening on the one per-row collaboration that
+    /// can fail with part of a batch already staged; left unset, it is the real costing.</para>
     /// </summary>
     public ProcessNayaxSalesHistoryImportJob Process(
-        AppDbContext db, INayaxSalesImportTransactions? transactions = null)
+        AppDbContext db,
+        INayaxSalesImportTransactions? transactions = null,
+        ICostSale? saleCosting = null)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
 
@@ -169,7 +186,7 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
             Jobs(db),
             Reader(),
             new EfNayaxSalesImportStore(db),
-            TestCostingUseCases.CostSale(db, rebuild, Clock),
+            saleCosting ?? TestCostingUseCases.CostSale(db, rebuild, Clock),
             new EfNayaxProductLinkStore(db),
             new EfPendingInventoryCostRebuildStore(db, Clock),
             transactions ?? new EfNayaxSalesImportTransactions(db),
@@ -249,14 +266,27 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     /// <param name="rows">How many data rows to write.</param>
     /// <param name="firstTransactionId">Where the transaction identifiers start.</param>
     /// <param name="status">The transaction status every row carries.</param>
+    /// <param name="products">
+    /// How many of the catalogue's products the rows are spread over, which is the distribution the
+    /// per-row costing's cost grows with: the fewer products a history names, the more sales each of
+    /// them ends up holding and the longer each later row's ledger replay takes.
+    /// </param>
+    /// <param name="firstProduct">The first product number the rows name.</param>
+    /// <param name="firstSaleAt">The instant the first row is authorized at; the rows are a minute apart.</param>
     public static string Csv(
-        int rows, long firstTransactionId = 9_000_001, int? status = null)
+        int rows,
+        long firstTransactionId = 9_000_001,
+        int? status = null,
+        int products = ProductCount,
+        int firstProduct = 1,
+        DateTime? firstSaleAt = null)
     {
+        var first = firstSaleAt ?? FirstSale;
         var csv = new StringBuilder(Header).Append('\n');
 
         for (var row = 0; row < rows; row++)
         {
-            var product = (row % ProductCount) + 1;
+            var product = (row % products) + firstProduct;
             csv.Append(firstTransactionId + row).Append(',')
                 .Append(status ?? NayaxTransactionStatusIds.Completed).Append(',')
                 .Append(MachineId).Append(',')
@@ -264,12 +294,20 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
                 .Append(",3.50,Credit Card,")
                 .Append("Fictional line ").Append(product)
                 .Append(",Machine A,")
-                .Append(FirstSale.AddMinutes(row).ToString("yyyy-MM-ddTHH:mm:ssZ"))
+                .Append(first.AddMinutes(row).ToString("yyyy-MM-ddTHH:mm:ssZ"))
                 .Append('\n');
         }
 
         return csv.ToString();
     }
+
+    /// <summary>
+    /// One file out of two, by dropping the second's header row - which is how a case gives its
+    /// first batch and its second batch different products, so that a row or a pending rebuild that
+    /// leaked out of a rolled-back batch is visible rather than hidden behind the first batch's own.
+    /// </summary>
+    public static string Concat(string first, string second) =>
+        first + second[(second.IndexOf('\n') + 1)..];
 
     /// <summary>The header row on its own, for the "nothing to import" case.</summary>
     public static string HeaderOnly() => Header + "\n";
@@ -311,7 +349,7 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     {
         await using var seed = fixture.Context(businessId);
 
-        for (var product = 1; product <= ProductCount; product++)
+        for (var product = 1; product <= fixture.Catalogue; product++)
         {
             seed.Products.Add(new Product
             {
@@ -392,6 +430,9 @@ internal sealed class ObservedSalesHistoryTransactions : INayaxSalesImportTransa
     /// <summary>How many have been committed.</summary>
     public int Committed { get; private set; }
 
+    /// <summary>How many discarded what they had staged instead, because the batch failed.</summary>
+    public int Discarded { get; private set; }
+
     /// <summary>How long each committed batch held the write lock, in batch order.</summary>
     public List<TimeSpan> Holds { get; } = [];
 
@@ -445,7 +486,118 @@ internal sealed class ObservedSalesHistoryTransactions : INayaxSalesImportTransa
             _owner.Commit(_batch, _started.Elapsed);
         }
 
+        public void DiscardStagedChanges()
+        {
+            _owner.Discarded++;
+            _inner.DiscardStagedChanges();
+        }
+
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// The real batch transaction with the <em>n</em>-th batch made to fail <strong>at its commit</strong>
+/// (issue #1304), which is the one failure that happens with everything the batch does already
+/// staged: its sales, its pending cost rebuilds and the progress it wrote onto the job row. Nothing
+/// of it reaches the database, because the commit the inner transaction would have made is never
+/// made.
+/// </summary>
+internal sealed class CommitFailingSalesHistoryTransactions : INayaxSalesImportTransactions
+{
+    private readonly INayaxSalesImportTransactions _inner;
+    private readonly int _failOnBatch;
+
+    public CommitFailingSalesHistoryTransactions(
+        INayaxSalesImportTransactions inner, int failOnBatch)
+    {
+        _inner = inner;
+        _failOnBatch = failOnBatch;
+    }
+
+    /// <summary>How many batch transactions have been begun.</summary>
+    public int Begun { get; private set; }
+
+    /// <summary>How many of them actually committed.</summary>
+    public int Committed { get; private set; }
+
+    /// <summary>How many of them discarded what they had staged instead.</summary>
+    public int Discarded { get; private set; }
+
+    public async Task<INayaxSalesImportTransaction> BeginAsync(CancellationToken cancellationToken)
+    {
+        Begun++;
+
+        return new Transaction(await _inner.BeginAsync(cancellationToken), this, Begun);
+    }
+
+    private sealed class Transaction : INayaxSalesImportTransaction
+    {
+        private readonly INayaxSalesImportTransaction _inner;
+        private readonly CommitFailingSalesHistoryTransactions _owner;
+        private readonly int _batch;
+
+        public Transaction(
+            INayaxSalesImportTransaction inner,
+            CommitFailingSalesHistoryTransactions owner,
+            int batch)
+        {
+            _inner = inner;
+            _owner = owner;
+            _batch = batch;
+        }
+
+        public async Task CommitAsync(CancellationToken cancellationToken)
+        {
+            if (_batch == _owner._failOnBatch)
+                throw new SqliteException("the database became unavailable at commit", 5);
+
+            await _inner.CommitAsync(cancellationToken);
+            _owner.Committed++;
+        }
+
+        public void DiscardStagedChanges()
+        {
+            _owner.Discarded++;
+            _inner.DiscardStagedChanges();
+        }
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// The real sale costing with the <em>n</em>-th sale it is asked about made to fail (issue #1304).
+/// It is the shape of a batch that dies <strong>after</strong> some of its rows are staged: the rows
+/// before the failure are added to the unit of work and costed, and the attempt then ends part-way
+/// through the batch, with the batch's transaction rolled back.
+/// </summary>
+internal sealed class FailingSaleCosting : ICostSale
+{
+    private readonly ICostSale _inner;
+    private readonly int _failOnSale;
+
+    public FailingSaleCosting(ICostSale inner, int failOnSale)
+    {
+        _inner = inner;
+        _failOnSale = failOnSale;
+    }
+
+    /// <summary>How many sales have been costed, the failed one included.</summary>
+    public int Costed { get; private set; }
+
+    public Task<SaleCostAssignment?> Handle(
+        CostableSale sale,
+        bool force = false,
+        SaleCostPrecedenceScope precedence = SaleCostPrecedenceScope.WithoutLatestPurchase,
+        CancellationToken cancellationToken = default)
+    {
+        Costed++;
+
+        if (Costed == _failOnSale)
+            throw new SqliteException("the database became unavailable mid-batch", 5);
+
+        return _inner.Handle(sale, force, precedence, cancellationToken);
     }
 }
 

@@ -175,6 +175,50 @@ public class AddNayaxSalesHistoryImportJobsMigrationTests
         Assert.NotEmpty(await ColumnsAsync(connection, "ReimbursementImportJobs"));
     }
 
+    /// <summary>
+    /// The migration carries its <strong>own</strong> historical target model, which is what the EF
+    /// tooling reconstructs a schema's history from - <c>dotnet ef migrations remove</c> restores the
+    /// snapshot from the previous migration's target model, and the application itself never reads
+    /// one at all.
+    ///
+    /// <para>So it has to be a model this migration states and not a model that is read from
+    /// somewhere a later change can move: a target model derived from the mutable
+    /// <c>AppDbContextModelSnapshot</c> would silently become whatever the schema looks like next
+    /// year, and this migration would then claim to target tables that did not exist when it ran.
+    /// Here the model is the literal one, so the test asserts both what the migration targets - the
+    /// table it creates, with its columns - and that it does not borrow the snapshot's: the two types
+    /// are unrelated, and the only model the snapshot could lend is one that already differs from
+    /// this one by every migration added after it.</para>
+    /// </summary>
+    [Fact]
+    public void The_migrations_target_model_is_its_own_and_states_the_new_table()
+    {
+        var migration = (Migration)Activator.CreateInstance(
+            typeof(AppDbContext).Assembly.GetType(
+                "Inventory.Infrastructure.Migrations.AddNayaxSalesHistoryImportJobs")!)!;
+
+        // The literal model the Designer declares, built with nothing but a model builder.
+        var target = migration.TargetModel;
+
+        var job = target.GetEntityTypes().Single(entity =>
+            entity.GetTableName() == "NayaxSalesHistoryImportJobs");
+
+        Assert.Contains("BusinessId", job.GetProperties().Select(property => property.Name));
+        Assert.Contains("RowsRead", job.GetProperties().Select(property => property.Name));
+        Assert.Contains("File", job.GetProperties().Select(property => property.Name));
+
+        // And it is the migration's own, not the mutable snapshot's: nothing in this migration's
+        // type derives from, or is derived from, the snapshot that a later migration rewrites.
+        var snapshot = typeof(AppDbContext).Assembly.GetType(
+            "Inventory.Infrastructure.Migrations.AppDbContextModelSnapshot")!;
+
+        Assert.False(snapshot.IsAssignableFrom(migration.GetType()));
+        Assert.DoesNotContain(
+            migration.GetType().GetNestedTypes(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic),
+            nested => snapshot.IsAssignableFrom(nested));
+    }
+
     private static async Task MigrateToAsync(AppDbContext db, string targetMigration) =>
         await db.GetService<IMigrator>().MigrateAsync(targetMigration);
 

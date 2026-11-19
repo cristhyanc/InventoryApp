@@ -161,6 +161,8 @@ public class NayaxSalesImportWriteLockHoldTests
                 _owner.Held = _started.Elapsed;
             }
 
+            public void DiscardStagedChanges() => _inner.DiscardStagedChanges();
+
             public ValueTask DisposeAsync() => _inner.DisposeAsync();
         }
     }

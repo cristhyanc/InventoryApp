@@ -121,6 +121,20 @@ public static class NayaxSalesHistoryPolicy
         + "row is the export's own column headings, including TransactionID.";
 
     /// <summary>
+    /// What a caller whose header row names the same column twice is told.
+    ///
+    /// <para>It is a refusal rather than a reading, because the two readers must not disagree about
+    /// what a file says: the uploaded import's workbook reader fails outright on a duplicated
+    /// heading, so a history that quietly took the first occurrence would apply different values to
+    /// the same sales than the same file uploaded the normal way - and a column named twice states
+    /// nothing about which of the two the rows below it belong to. Fixing the header row is the
+    /// operator's one-line change; guessing is nobody's.</para>
+    /// </summary>
+    public const string DuplicateColumnMessage =
+        "The uploaded file names the same column twice in its first row. Remove the repeated column "
+        + "heading and upload it again.";
+
+    /// <summary>
     /// What a caller who already has a history importing is told. Only one runs per business at a
     /// time: a second one would contend for the same write lock and the same sales rows for no gain.
     /// </summary>
