@@ -419,7 +419,8 @@ public sealed class ApplyMachineStockSync
             NayaxStockEventApplyDecision.NegativeDiscrepancy =>
                 new(state.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null),
 
-            // A product replacement (issue #1325): refused, never a refill, until #1326.
+            // A product replacement (issue #1325): refused here, because it is never a refill. Its
+            // own apply is ApplyMachineStockProductReplacement (issue #1326).
             NayaxStockEventApplyDecision.ProductReplacementNotApplicable =>
                 new(state.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null),
 

@@ -190,6 +190,9 @@ public class EndpointPlanRequirementTests
         // without the provider sees its machines as the local records they are. Applying or
         // resolving an already-imported restock event, and recording a count, are local writes.
         new("MachinesController.ApplySyncRestock", PlanRequirementKind.None), // POST api/Machines/{id:long}/sync-restock/apply
+        // Issue #1326: applying an already-imported product replacement writes local movements and
+        // makes no Nayax call at all.
+        new("MachinesController.ApplySyncRestockReplacement", PlanRequirementKind.None), // POST api/Machines/{id:long}/sync-restock/apply-replacement
         new("MachinesController.GetAll", PlanRequirementKind.ViaProviderGate), // GET api/Machines
         new("MachinesController.GetById", PlanRequirementKind.ViaProviderGate), // GET api/Machines/{id:long}
         new("MachinesController.GetLatestSales", PlanRequirementKind.ViaProviderGate), // GET api/Machines/{id:long}/latest-sales

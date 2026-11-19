@@ -1391,6 +1391,27 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("RawSourceMetadata")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("ReplacementIncomingProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ReplacementIncomingQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ReplacementOutgoingDisposition")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ReplacementOutgoingProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ReplacementOutgoingQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ReplacementOutgoingReturnStockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ReplacementOutgoingWriteOffStockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("StockAdjustmentId")
                         .HasColumnType("INTEGER");
 
