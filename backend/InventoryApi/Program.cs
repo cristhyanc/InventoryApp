@@ -394,6 +394,16 @@ builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
 builder.Services.AddSingleton<ISubscriptionEnforcementFlag>(
     new ConfiguredSubscriptionEnforcementFlag(builder.Configuration));
 
+// And whether approving a business application also grants that business open-ended Pro for the
+// public beta (issue #1258). Read once here for the reason the flag above is, and published as its
+// own narrow port because the two settings answer different questions and are switched on at
+// different times: the beta grants have to exist before enforcement starts. Off unless the setting
+// says otherwise - an absent, blank or unparseable value leaves it off, and false is what is in
+// source control - and switching it off again stops new grants only. A singleton, because it is one
+// startup decision rather than a per-request one.
+builder.Services.AddSingleton<IBetaProGrantOnApprovalFlag>(
+    new ConfiguredBetaProGrantOnApprovalFlag(builder.Configuration));
+
 // How long an issued price collector run stays open (issue #924). Read once here, because only the
 // composition root reads configuration, and published as the Application layer's narrow port so the
 // run that is stored and the expiry the work list publishes cannot disagree. A blank, unparseable or

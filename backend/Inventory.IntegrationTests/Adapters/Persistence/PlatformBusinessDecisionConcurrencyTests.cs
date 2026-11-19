@@ -1,12 +1,17 @@
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
+using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.PlatformAdmin;
+using InventoryApi.Tests.Application.PlatformPlans;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
@@ -42,10 +47,19 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
     private const string ApplicantOid = "22222222-2222-2222-2222-222222222222";
     private const string AdministratorOid = "99999999-9999-9999-9999-999999999999";
 
+    /// <summary>
+    /// The applicant of the second application, which is a different person: somebody belongs to one
+    /// business at a time, so two applications cannot share an applicant.
+    /// </summary>
+    private const string SecondApplicantOid = "33333333-3333-3333-3333-333333333333";
+
     private static readonly DateTime Now = MembershipWriteRaceHarness.SeededAt.AddHours(1);
 
     private readonly MembershipWriteRaceHarness _harness =
         MembershipWriteRaceHarness.Create(PendingBusinessId, TradingBusinessId);
+
+    /// <summary>Where the beta grant's one committed log event lands (issue #1258).</summary>
+    private readonly FakePlatformPlanGrantAudit _grantAudit = new();
 
     private readonly int _applicantMembershipId;
 
@@ -189,6 +203,224 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// The beta Pro grant of issue #1258 against a real database: the status change, the supplier
+    /// copies, the grant and its audit row are one transaction, so everything the approval wrote is
+    /// there once it commits - the grant owned by the approved business, Pro, from the decision
+    /// instant, with no end date and the beta source.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_writes_the_beta_pro_grant_in_the_approvals_own_transaction()
+    {
+        await ApproveAsync(
+            PendingBusinessId,
+            CancellationToken.None,
+            betaGrant: FakeBetaProGrantOnApprovalFlag.On());
+
+        var business = _harness.Businesses().Single(candidate => candidate.Id == PendingBusinessId);
+        Assert.Equal(BusinessStatus.Active, business.Status);
+
+        var grant = Assert.Single(Grants());
+        Assert.Equal(PendingBusinessId, grant.BusinessId);
+        Assert.Equal(SubscriptionPlan.Pro, grant.Plan);
+        Assert.Equal(ManualPlanGrantSource.Beta, grant.Source);
+        Assert.Equal(Now, grant.StartsAtUtc);
+        Assert.Null(grant.EndsAtUtc);
+        Assert.Equal(BetaProGrantPolicy.GrantReason, grant.Reason);
+        Assert.Equal(1, grant.Revision);
+
+        // The audit row committed with it, naming the administrator who approved the application.
+        var audit = Assert.Single(GrantAudits());
+        Assert.Equal(PendingBusinessId, audit.BusinessId);
+        Assert.Equal(PlatformPlanGrantChange.Created, audit.Change);
+        Assert.Null(audit.FromPlan);
+        Assert.Equal(SubscriptionPlan.Pro, audit.ToPlan);
+        Assert.Equal(BetaProGrantPolicy.GrantReason, audit.Reason);
+        Assert.Equal(AdministratorOid, audit.ActorObjectId);
+        Assert.Equal(Now, audit.OccurredAtUtc);
+
+        // And the one log event, after the commit.
+        Assert.Equal(PendingBusinessId, Assert.Single(_grantAudit.Entries).BusinessId);
+    }
+
+    /// <summary>
+    /// All or nothing, with the failure injected in the grant: the business is still waiting for a
+    /// decision, it holds no suppliers and no grant, and neither trail recorded anything - the state
+    /// a second attempt can be made from safely. A business on Pro that nobody approved, and an
+    /// approved business without the Pro it was publicly promised, are both states this refuses to
+    /// leave behind.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_beta_grant_rolls_the_whole_approval_back()
+    {
+        var audit = new FakePlatformBusinessDecisionAudit();
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAsync(
+                PendingBusinessId,
+                CancellationToken.None,
+                audit: audit,
+                betaGrant: FakeBetaProGrantOnApprovalFlag.On(),
+                grants: new FailingPlatformPlanGrantStore()));
+
+        Assert.Equal(FailingPlatformPlanGrantStore.Message, failure.Message);
+
+        var business = _harness.Businesses().Single(candidate => candidate.Id == PendingBusinessId);
+        Assert.Equal(BusinessStatus.Pending, business.Status);
+        Assert.Null(business.DecidedAtUtc);
+        Assert.Null(business.SupplierPresetsCopiedAtUtc);
+        Assert.Empty(_harness.Suppliers());
+        Assert.Empty(Grants());
+        Assert.Empty(GrantAudits());
+        Assert.Empty(audit.Entries);
+        Assert.Empty(_grantAudit.Entries);
+
+        // And the applicant is untouched, so the application can still be decided afterwards.
+        Assert.True(_harness.Memberships().Single(membership => membership.Id == _applicantMembershipId).IsActive);
+    }
+
+    /// <summary>
+    /// Switching the setting off stops new grants and <strong>ends none</strong>: a second business
+    /// approved after it was switched off is approved with no grant at all, and the grant the first
+    /// business was written while it was on is still there, unchanged in every column.
+    /// </summary>
+    [Fact]
+    public async Task Switching_the_setting_off_stops_new_grants_and_leaves_an_existing_one()
+    {
+        await ApproveAsync(
+            PendingBusinessId,
+            CancellationToken.None,
+            betaGrant: FakeBetaProGrantOnApprovalFlag.On());
+
+        var granted = Assert.Single(Grants());
+
+        // A second application, decided by the same administrator after the setting was switched off.
+        _harness.SetBusinessStatus(TradingBusinessId, BusinessStatus.Pending);
+        _harness.SeedMembership(TradingBusinessId, SecondApplicantOid);
+
+        var decision = await ApproveAsync(
+            TradingBusinessId,
+            CancellationToken.None,
+            betaGrant: FakeBetaProGrantOnApprovalFlag.Off());
+
+        Assert.Equal(BusinessStatus.Active, decision!.Status);
+
+        var remaining = Assert.Single(Grants());
+        Assert.Equal(granted.BusinessId, remaining.BusinessId);
+        Assert.Equal(granted.Plan, remaining.Plan);
+        Assert.Equal(granted.Source, remaining.Source);
+        Assert.Equal(granted.StartsAtUtc, remaining.StartsAtUtc);
+        Assert.Equal(granted.EndsAtUtc, remaining.EndsAtUtc);
+        Assert.Equal(granted.Revision, remaining.Revision);
+        Assert.Single(GrantAudits());
+    }
+
+    /// <summary>
+    /// A business that already holds a manual grant is approved with no second grant written and the
+    /// one it holds untouched - not its plan, its period, its reason or its revision. A Super Admin's
+    /// decision is never overwritten by an approval.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_leaves_a_grant_the_business_already_holds_exactly_as_it_was()
+    {
+        SeedComplimentaryGrant(PendingBusinessId);
+        var held = Assert.Single(Grants());
+
+        await ApproveAsync(
+            PendingBusinessId,
+            CancellationToken.None,
+            betaGrant: FakeBetaProGrantOnApprovalFlag.On());
+
+        Assert.Equal(
+            BusinessStatus.Active,
+            _harness.Businesses().Single(candidate => candidate.Id == PendingBusinessId).Status);
+
+        var after = Assert.Single(Grants());
+        Assert.Equal(held.Id, after.Id);
+        Assert.Equal(SubscriptionPlan.Starter, after.Plan);
+        Assert.Equal(ManualPlanGrantSource.Complimentary, after.Source);
+        Assert.Equal(held.StartsAtUtc, after.StartsAtUtc);
+        Assert.Equal(held.EndsAtUtc, after.EndsAtUtc);
+        Assert.Equal(held.Reason, after.Reason);
+        Assert.Equal(held.Revision, after.Revision);
+        Assert.Empty(GrantAudits());
+        Assert.Empty(_grantAudit.Entries);
+    }
+
+    /// <summary>
+    /// And a rejection grants nothing with the setting on: there is no business to put on a plan.
+    /// </summary>
+    [Fact]
+    public async Task A_rejection_writes_no_grant_while_the_setting_is_on()
+    {
+        await WithWriter(
+            writer => new RejectBusinessApplication(writer).Handle(
+                PendingBusinessId,
+                "Not enough detail.",
+                CancellationToken.None),
+            betaGrant: FakeBetaProGrantOnApprovalFlag.On());
+
+        Assert.Empty(Grants());
+        Assert.Empty(GrantAudits());
+        Assert.Empty(_grantAudit.Entries);
+    }
+
+    private List<BusinessPlanGrant> Grants()
+    {
+        using var db = TestAppDbContext.Unrestricted(_harness.Options);
+        return [.. db.BusinessPlanGrants.AsNoTracking().OrderBy(grant => grant.Id)];
+    }
+
+    private List<BusinessPlanGrantAudit> GrantAudits()
+    {
+        using var db = TestAppDbContext.Unrestricted(_harness.Options);
+        return [.. db.BusinessPlanGrantAudits.AsNoTracking().OrderBy(audit => audit.Id)];
+    }
+
+    /// <summary>
+    /// One complimentary grant on a business, as a Super Admin's own decision through #982's surface
+    /// would have left it. Written outside any boundary, because what is being tested is what an
+    /// approval does to a grant that is already there.
+    /// </summary>
+    private void SeedComplimentaryGrant(int businessId)
+    {
+        using var db = TestAppDbContext.Unrestricted(_harness.Options);
+        db.BusinessPlanGrants.Add(new BusinessPlanGrant
+        {
+            BusinessId = businessId,
+            Plan = SubscriptionPlan.Starter,
+            Source = ManualPlanGrantSource.Complimentary,
+            StartsAtUtc = Now.AddDays(-3),
+            EndsAtUtc = Now.AddDays(30),
+            Reason = "Pilot site",
+            GrantedAtUtc = Now.AddDays(-3),
+            Revision = 4,
+        });
+        db.SaveChanges();
+    }
+
+    /// <summary>
+    /// A plan-grant port that refuses every write, so what the database is left holding after a
+    /// failed grant is entirely the approval transaction's own answer (issue #1258). It reports the
+    /// business as having no grant, which is what makes the approval attempt the write at all.
+    /// </summary>
+    private sealed class FailingPlatformPlanGrantStore : IPlatformPlanGrantStore
+    {
+        public const string Message = "The beta plan grant write failed.";
+
+        public Task<PlatformPlanGrantTarget?> FindAsync(int businessId, CancellationToken cancellationToken) =>
+            Task.FromResult<PlatformPlanGrantTarget?>(
+                new PlatformPlanGrantTarget(businessId, "Coastal Vending", []));
+
+        public Task<IPlatformPlanGrantWriteTransaction> BeginWriteTransactionAsync(
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                "The approval's own transaction is the one a beta grant is written in.");
+
+        public Task SaveAsync(PlatformPlanGrantWrite write, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(Message));
+    }
+
+    /// <summary>
     /// The sequential half, and the one an operator meets in practice: deciding an application that
     /// has already been decided is refused and changes nothing - not the status, not the decision
     /// instant, and not the applicant's membership.
@@ -261,11 +493,15 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
         int businessId,
         CancellationToken cancellationToken,
         IBusinessSupplierProvisioningStore? provisioning = null,
-        FakePlatformBusinessDecisionAudit? audit = null) =>
+        FakePlatformBusinessDecisionAudit? audit = null,
+        FakeBetaProGrantOnApprovalFlag? betaGrant = null,
+        IPlatformPlanGrantStore? grants = null) =>
         WithWriter(
             writer => new ApproveBusinessApplication(writer).Handle(businessId, cancellationToken),
             provisioning,
-            audit);
+            audit,
+            betaGrant,
+            grants);
 
     private Task<PlatformBusinessDecision?> RejectAsync(
         int businessId,
@@ -282,7 +518,9 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
     private async Task<PlatformBusinessDecision?> WithWriter(
         Func<BusinessApplicationDecisionWriter, Task<PlatformBusinessDecision?>> decide,
         IBusinessSupplierProvisioningStore? provisioning = null,
-        FakePlatformBusinessDecisionAudit? audit = null)
+        FakePlatformBusinessDecisionAudit? audit = null,
+        FakeBetaProGrantOnApprovalFlag? betaGrant = null,
+        IPlatformPlanGrantStore? grants = null)
     {
         await using var db = TestAppDbContext.Denied(_harness.Options);
 
@@ -293,6 +531,13 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
             // same transaction, because the copies of issue #849 are part of what these races are
             // about; a test that needs the copy to fail passes its own.
             provisioning ?? new EfBusinessSupplierProvisioningStore(db),
+            // And the real plan grant adapter beside it, on that same context and therefore in that
+            // same transaction (issue #1258), with the setting off unless a test switches it on -
+            // which is the shipped state and what every test written before it is about.
+            new BetaProGrantOnApproval(
+                betaGrant ?? FakeBetaProGrantOnApprovalFlag.Off(),
+                grants ?? new EfPlatformPlanGrantStore(db),
+                _grantAudit),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
             audit ?? new FakePlatformBusinessDecisionAudit(),
             new FakeClock(Now)));

@@ -16,12 +16,18 @@ export type GrantablePlan = (typeof GRANTABLE_PLANS)[number];
  * own answer about the half-open period rather than a date comparison made here. `endsOnUtc` is the
  * last day the grant applies to and `endsAtUtc` the exclusive instant underneath it - both produced
  * by the one backend rule, so this client never converts between them.
+ *
+ * `source` says why the grant exists (issue #1258): `Complimentary` for a Super Admin's own
+ * decision, `Beta` for the grant an approval wrote while the public beta setting was on. It is the
+ * server's stored value, and a value this build does not recognise is reported as `null` rather than
+ * guessed at - exactly as the plan is.
  */
 export interface SuperAdminPlanGrant {
   readonly businessId: number;
   readonly name: string;
   readonly hasGrant: boolean;
   readonly plan: string | null;
+  readonly source: string | null;
   readonly startsAtUtc: string | null;
   readonly endsAtUtc: string | null;
   readonly endsOnUtc: string | null;

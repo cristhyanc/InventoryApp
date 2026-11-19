@@ -343,6 +343,7 @@ public class ManageBusinessPlanGrantTests
                 BusinessId,
                 new PlatformPlanGrantState(
                     SubscriptionPlan.Pro,
+                    ManualPlanGrantSource.Complimentary,
                     new EntitlementPeriod(DecidedAt.AddDays(-30), DecidedAt.AddDays(-1)),
                     "Granted for the pilot",
                     Revision: 2,
@@ -422,9 +423,13 @@ public class ManageBusinessPlanGrantTests
         return identity!;
     }
 
-    private static PlatformPlanGrantState Grant(SubscriptionPlan plan, int revision) =>
+    private static PlatformPlanGrantState Grant(
+        SubscriptionPlan plan,
+        int revision,
+        ManualPlanGrantSource source = ManualPlanGrantSource.Complimentary) =>
         new(
             plan,
+            source,
             new EntitlementPeriod(DecidedAt.AddDays(-10), null),
             "Granted for the pilot",
             revision,

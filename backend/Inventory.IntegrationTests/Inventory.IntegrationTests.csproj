@@ -86,6 +86,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" Link="Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\PlatformPlans\FakePlatformPlanGrantStore.cs" Link="Application\PlatformPlans\FakePlatformPlanGrantStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeBulkProductGstRuleAudit.cs" Link="Application\Products\FakeBulkProductGstRuleAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeProductCatalogStore.cs" Link="Application\Products\FakeProductCatalogStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />

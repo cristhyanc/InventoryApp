@@ -14,6 +14,7 @@ const grant: SuperAdminPlanGrant = {
   name: 'Snack Co',
   hasGrant: true,
   plan: 'Pro',
+  source: 'Complimentary',
   startsAtUtc: '2026-10-29T13:45:00Z',
   endsAtUtc: null,
   endsOnUtc: null,

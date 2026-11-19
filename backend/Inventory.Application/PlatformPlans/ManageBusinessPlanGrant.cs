@@ -12,8 +12,10 @@ namespace Inventory.Application.PlatformPlans;
 /// <param name="BusinessId">The business, from the stored row the read found.</param>
 /// <param name="Name">Its display name.</param>
 /// <param name="Grant">
-/// Its complimentary grant, or <see langword="null"/> when it holds none - which is a business with
-/// no manual grant, never a business on Free by decision.
+/// The grant this surface administers - a complimentary one, or the beta grant an approval wrote
+/// (issue #1258) - or <see langword="null"/> when it holds none, which is a business with no manual
+/// grant and never a business on Free by decision. It carries the grant's
+/// <see cref="PlatformPlanGrantState.Source"/>, so the plan view says which of the two it is.
 /// </param>
 /// <param name="Active">
 /// Whether that grant entitles anything right now, by the one half-open period rule
@@ -30,6 +32,12 @@ public sealed record BusinessPlanGrantView(
 /// The Super Admin's manual plan grant on one business (issue #982, child of #965, after #966): read
 /// it, create or change it, and end it. Three operations over one record, and the whole of what this
 /// surface may do.
+///
+/// <para>Since issue #1258 that one record may also be the <strong>beta Pro grant</strong> an
+/// approval wrote. It is administered here exactly as a complimentary grant is - read with its
+/// source, changed, and ended - and nothing about these three operations was added or relaxed for
+/// it: the grant an approval writes is written by <c>BetaProGrantOnApproval</c> through the same
+/// port, not by this use case.</para>
 ///
 /// <para><strong>What it writes, and what it cannot.</strong> One <c>BusinessPlanGrants</c> row of
 /// one business and one audit row beside it, through <see cref="IPlatformPlanGrantStore"/>. No
@@ -280,6 +288,10 @@ public sealed class ManageBusinessPlanGrant
                 // makes the id a subject rather than something a request chose.
                 current.BusinessId,
                 decision.Plan,
+                // The source a grant this surface creates is created with. A row that already exists
+                // keeps its own - so changing or ending the beta grant of issue #1258 does not
+                // relabel why the business was given the plan.
+                ManualPlanGrantSource.Complimentary,
                 decision.StartsAtUtc,
                 decision.EndsAtUtc,
                 decision.GrantReason,
@@ -297,6 +309,9 @@ public sealed class ManageBusinessPlanGrant
                 current,
                 new PlatformPlanGrantState(
                     decision.Plan,
+                    // The stored row's own source where there was one, so a change and an end report
+                    // the grant as the beta grant it is rather than as a complimentary decision.
+                    grant?.Source ?? ManualPlanGrantSource.Complimentary,
                     new EntitlementPeriod(decision.StartsAtUtc, decision.EndsAtUtc),
                     decision.GrantReason,
                     write.Revision,
@@ -319,7 +334,7 @@ public sealed class ManageBusinessPlanGrant
     }
 
     /// <summary>
-    /// The one complimentary grant the business holds, or <see langword="null"/> when it holds none.
+    /// The one administered grant the business holds, or <see langword="null"/> when it holds none.
     /// More than one is refused rather than chosen between: this surface creates one and only ever
     /// updates it, so two active grants are a state nothing here produced and nothing here will
     /// silently resolve.

@@ -28,8 +28,13 @@ public enum BillingSubscriptionStatus
 }
 
 /// <summary>
-/// Why a manual grant exists (issue #966). A manual grant is written by a Super Admin (#982) or by
-/// the grandfathering step, and by nothing else - never by a billing event.
+/// Why a manual grant exists (issue #966). A manual grant is written by a Super Admin (#982), by the
+/// grandfathering step, or - since issue #1258 - by the approval of a business application while the
+/// public beta setting is on, and by nothing else: never by a billing event.
+///
+/// <para>No value is <c>0</c>, exactly as <see cref="BillingSubscriptionStatus"/> and
+/// <see cref="Tenancy.BusinessStatus"/> declare none, so an unfilled column is a record that cannot
+/// be read rather than a source this code would name.</para>
 /// </summary>
 public enum ManualPlanGrantSource
 {
@@ -45,6 +50,20 @@ public enum ManualPlanGrantSource
     /// reason.
     /// </summary>
     Complimentary = 20,
+
+    /// <summary>
+    /// The open-ended Pro grant a business receives when its application is approved while
+    /// <c>Subscriptions:BetaProGrantOnApproval</c> is on (issue #1258): the public beta's promise
+    /// that "Pro access is free during our public beta", recorded per business instead of remembered
+    /// by a person.
+    ///
+    /// <para>It entitles exactly what <see cref="Complimentary"/> entitles -
+    /// <see cref="EffectiveEntitlementPolicy"/> reads a grant's plan and period and never its
+    /// source - and it is a value of its own only so that a reader, a Super Admin's plan view and the
+    /// audit trail can tell <em>why</em> the business holds Pro. A Super Admin reads, changes and
+    /// ends it through the same surface as a complimentary one (#982).</para>
+    /// </summary>
+    Beta = 30,
 }
 
 /// <summary>

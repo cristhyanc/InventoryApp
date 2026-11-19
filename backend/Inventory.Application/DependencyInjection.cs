@@ -137,6 +137,11 @@ public static class ApplicationServiceCollectionExtensions
         // tenancy scope (docs/architecture.md § Super Admin businesses API).
         services.AddScoped<ListPlatformBusinesses>();
         services.AddScoped<CountPendingBusinessApplications>();
+        // And the beta Pro grant an approval writes while the public beta setting is on (issue
+        // #1258). Scoped for exactly the reasons the decision writer is: it writes through the
+        // plan-grant store on the request's own AppDbContext, inside the same transaction the
+        // approval opened on that context, for the business that transaction read.
+        services.AddScoped<BetaProGrantOnApproval>();
         services.AddScoped<BusinessApplicationDecisionWriter>();
         services.AddScoped<ApproveBusinessApplication>();
         services.AddScoped<RejectBusinessApplication>();

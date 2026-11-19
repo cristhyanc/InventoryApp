@@ -157,6 +157,9 @@ public class SuperAdminPlanGrantsApiTests : IClassFixture<SuperAdminPlanGrantsAp
         Assert.Equal(_factory.OtherBusinessId, body.GetProperty("businessId").GetInt32());
         Assert.True(body.GetProperty("hasGrant").GetBoolean());
         Assert.Equal("Pro", body.GetProperty("plan").GetString());
+        // The source this surface creates a grant with, reported since issue #1258 so the plan view
+        // can tell a Super Admin's own decision from the beta grant an approval wrote.
+        Assert.Equal("Complimentary", body.GetProperty("source").GetString());
         Assert.Equal("Complimentary pilot", body.GetProperty("reason").GetString());
         Assert.Equal(1, body.GetProperty("revision").GetInt32());
         Assert.True(body.GetProperty("active").GetBoolean());

@@ -1,4 +1,5 @@
 using Inventory.Application.PlatformPlans;
+using Inventory.Application.Subscriptions;
 using Inventory.Domain.Subscriptions;
 
 namespace InventoryApi.Tests.Application.PlatformPlans;
@@ -15,11 +16,27 @@ namespace InventoryApi.Tests.Application.PlatformPlans;
 /// </summary>
 public sealed class FakePlatformPlanGrantStore : IPlatformPlanGrantStore
 {
+    /// <summary>How a write announces itself in a surrounding order of operations.</summary>
+    public const string Save = "save-plan-grant";
+
     private readonly Dictionary<int, string> _businesses = [];
     private readonly Dictionary<int, List<PlatformPlanGrantState>> _grants = [];
 
     /// <summary>Every write this store received, in order.</summary>
     public List<PlatformPlanGrantWrite> Writes { get; } = [];
+
+    /// <summary>
+    /// Where a write is announced, so a test can see it in the overall order - which is how "the
+    /// beta grant was written inside the approval's transaction, before the commit" is asserted
+    /// rather than assumed (issue #1258).
+    /// </summary>
+    public Action<string>? Recorder { get; set; }
+
+    /// <summary>
+    /// What a write throws instead of succeeding, or <see langword="null"/> when it succeeds. The
+    /// call is still recorded: a test needs to see that the caller tried before it failed.
+    /// </summary>
+    public Exception? FailWith { get; set; }
 
     /// <summary>Every transaction it opened, so a commit can be told from a rollback.</summary>
     public List<FakeTransaction> Transactions { get; } = [];
@@ -40,7 +57,10 @@ public sealed class FakePlatformPlanGrantStore : IPlatformPlanGrantStore
         return store;
     }
 
-    /// <summary>Puts a complimentary grant on a business, as a previous decision would have.</summary>
+    /// <summary>
+    /// Puts a grant this surface administers on a business, as a previous decision - or an approval's
+    /// beta grant (issue #1258) - would have.
+    /// </summary>
     public FakePlatformPlanGrantStore Holding(int businessId, PlatformPlanGrantState grant)
     {
         if (!_grants.TryGetValue(businessId, out var grants))
@@ -83,11 +103,21 @@ public sealed class FakePlatformPlanGrantStore : IPlatformPlanGrantStore
     {
         ArgumentNullException.ThrowIfNull(write);
 
+        Recorder?.Invoke(Save);
         Writes.Add(write);
+
+        if (FailWith is not null)
+        {
+            return Task.FromException(FailWith);
+        }
+
         _grants[write.BusinessId] =
         [
             new PlatformPlanGrantState(
                 write.Plan,
+                // The real adapter sets the source only when it creates the row, so a grant that
+                // already existed keeps its own (issue #1258).
+                GrantsOf(write.BusinessId) is [var existing, ..] ? existing.Source : write.Source,
                 new EntitlementPeriod(write.StartsAtUtc, write.EndsAtUtc),
                 write.GrantReason,
                 write.Revision,
@@ -127,4 +157,21 @@ public sealed class FakePlatformPlanGrantAudit : IPlatformPlanGrantAudit
     public List<PlatformPlanGrantAuditEntry> Entries { get; } = [];
 
     public void Record(PlatformPlanGrantAuditEntry entry) => Entries.Add(entry);
+}
+
+/// <summary>
+/// The <c>Subscriptions:BetaProGrantOnApproval</c> setting as a test decides it (issue #1258). The
+/// real flag reads configuration once at startup, which is the composition root's business; what a
+/// test needs is the answer.
+/// </summary>
+public sealed class FakeBetaProGrantOnApprovalFlag : IBetaProGrantOnApprovalFlag
+{
+    private FakeBetaProGrantOnApprovalFlag(bool isEnabled) => IsEnabled = isEnabled;
+
+    public bool IsEnabled { get; }
+
+    public static FakeBetaProGrantOnApprovalFlag On() => new(isEnabled: true);
+
+    /// <summary>The shipped state: the setting absent, blank, unparseable or explicitly false.</summary>
+    public static FakeBetaProGrantOnApprovalFlag Off() => new(isEnabled: false);
 }
