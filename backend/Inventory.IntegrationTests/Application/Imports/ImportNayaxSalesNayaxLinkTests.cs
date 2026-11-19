@@ -205,6 +205,7 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
         new(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild,
             new EfNayaxProductLinkStore(db));

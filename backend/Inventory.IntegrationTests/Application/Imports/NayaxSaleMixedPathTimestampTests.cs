@@ -270,6 +270,7 @@ public class NayaxSaleMixedPathTimestampTests
         return new ImportNayaxSales(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db, costRebuild),
             costRebuild,
             IdentityLinks());

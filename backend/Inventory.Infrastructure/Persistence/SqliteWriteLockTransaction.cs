@@ -14,9 +14,11 @@ namespace Inventory.Infrastructure.Persistence;
 /// <see cref="EfLatestNayaxSalesStore"/> (issue #1103, both of its save paths),
 /// <see cref="MachineStockRefillWriteTransaction"/> (issue #1127, one per product of a Sync Restock
 /// apply), <see cref="EfStockAdjustmentStore"/> and <see cref="EfInventoryCountAdjustmentStore"/>
-/// (issue #1241, one per manual adjustment and per Take Inventory apply) and
+/// (issue #1241, one per manual adjustment and per Take Inventory apply),
 /// <see cref="EfSaleCostingStore"/> (issue #1261, one per backfill save, around the staged sale costs
-/// and the pending rebuilds they make necessary) each open one.
+/// and the pending rebuilds they make necessary) and
+/// <see cref="EfNayaxSalesImportTransactions"/> (issue #1300, one per uploaded sales file, around the
+/// stored-sale lookup and the save of the file's sales) each open one.
 ///
 /// <para><strong>Why immediate.</strong> A deferred transaction - SQLite's default, and what
 /// <c>BeginTransactionAsync</c> opens - takes its write lock at the first <em>write</em>, which is
@@ -34,7 +36,8 @@ namespace Inventory.Infrastructure.Persistence;
 /// machine and no provider names it" true at the moment the row is removed. The two Nayax sales
 /// paths are the second such pair (issue #1103): the request-driven batch and the queue reader both
 /// read "is this transaction stored?" and then insert, so taking the same lock is what turns their
-/// race into the enrich path instead of a unique-index violation.</para>
+/// race into the enrich path instead of a unique-index violation. Issue #1300 made that a trio by
+/// bringing the uploaded sales file import inside the same lock, for exactly that reason.</para>
 ///
 /// <para>A non-SQLite relational provider falls back to its default transaction - still one
 /// transaction around the reads and the writes - and the EF InMemory provider some tests use has no

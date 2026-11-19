@@ -309,8 +309,8 @@ public class ImportNayaxSalesBlankValueTests
         await SeedStoredSaleAsync(connection);
 
         var reader = new Mock<INayaxSalesWorkbookReader>();
-        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>()))
-            .Returns([new NayaxSalesImportRow(
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(new NayaxSalesWorkbookReadResult([new NayaxSalesImportRow(
                 TransactionId,
                 MachineId,
                 null,
@@ -325,7 +325,7 @@ public class ImportNayaxSalesBlankValueTests
                 NayaxSalesGmtInput.Valid,
                 NayaxSalesCellInput.Valid,
                 NayaxSalesCellInput.Valid,
-                2)]);
+                2)], false));
 
         NayaxSalesImportResult upload;
         await using (var db = Context(connection))
@@ -487,6 +487,7 @@ public class ImportNayaxSalesBlankValueTests
         return new ImportNayaxSales(
             reader ?? new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild,
             InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself());

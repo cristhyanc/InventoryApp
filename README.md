@@ -1299,6 +1299,43 @@ first successful poll, and the Dashboard syncs on load in the meantime. The `200
 business-facing surface may read. See [docs/architecture.md § Dashboard sales live from the Nayax SQS
 queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106).
 
+## The Nayax sales file import, and how big a file may be (issue #1300)
+
+**Admin → Imports** takes a Nayax transaction export (`.xlsx`, `.xls` or `.csv`) and stores each row
+as a sale: a transaction the business already holds is updated, a new one is imported, and a row
+without a usable transaction, machine or time is reported as skipped rather than guessed at. If the
+file lists the same transaction on more than one row, those rows are applied in file order onto the
+one sale — the file's last word about it is what you end up holding — so a repeated transaction is
+never stored twice and a later row with empty cells keeps what the earlier one stated.
+
+**One file may carry up to 5,000 sales.** A file with more rows is refused with
+*"This file has more than 5,000 sales. For a longer history, export one file per quarter, or use the
+sales history import."* and **nothing from it is stored** — not even the rows inside the limit, because
+half an import is worse than none. An `.xlsx` whose sheet data would expand past **50 MB** is refused
+the same way, from the file's own compressed entry sizes, before the spreadsheet is opened at all.
+
+Both limits are there because a single upload used to decide how much memory the whole server had: a
+9.9 MB CSV of 114,250 rows cost about a gigabyte just to be read, and saving it held the database for
+minutes. **To import more than 5,000 sales, export a shorter period** — one file per quarter for a
+quiet fleet, one file per month for a busy one — and upload them one at a time. The longer-history
+import the message mentions is planned separately (issue #1304) and is not available yet.
+
+5,000 is the number the measured database lock below allows, rather than a guess: a file of 20,000
+rows held that lock for about fourteen seconds on a slower server, which is longer than any other
+work should ever be made to wait.
+
+**While the file is being saved, it holds the database's single write lock** — the same lock the Nayax
+SQS queue reader, the dashboard's sales refresh, a purchase and a stock adjustment take. That is
+deliberate: it is what makes a sale the queue delivered while your file was uploading an *update*
+instead of a failed import. The row limit is sized so a full file holds that lock for about three and
+a half seconds and never more than ten, so other work waits briefly rather than failing. Replaying
+the affected products' costs happens afterwards, outside the lock. See
+[docs/architecture.md § Limits on one uploaded sales file and the write lock it
+takes](docs/architecture.md#limits-on-one-uploaded-sales-file-and-the-write-lock-it-takes-issue-1300).
+
+The import needs `Imports.Run` (a Manager or an Owner) and the **Pro** plan, like the rest of the
+Nayax features.
+
 ## The Reimbursement Report import (issue #1149)
 
 Nayax emails the reimbursement report as a ZIP attachment. You can upload it **exactly as it

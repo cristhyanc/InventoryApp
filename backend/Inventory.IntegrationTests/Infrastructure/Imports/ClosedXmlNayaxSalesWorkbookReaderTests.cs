@@ -247,7 +247,8 @@ public class ClosedXmlNayaxSalesWorkbookReaderTests
         using var content = new MemoryStream(Encoding.UTF8.GetBytes("this is not a workbook"));
 
         var thrown = Assert.Throws<FileFormatException>(
-            () => new ClosedXmlNayaxSalesWorkbookReader().Read(content, "sales.xlsx"));
+            () => new ClosedXmlNayaxSalesWorkbookReader().Read(
+                content, "sales.xlsx", Inventory.Application.Imports.NayaxSalesFileLimits.None));
 
         // Not an InvalidOperationException, so the controller's 400 handling never claims it and a
         // corrupt upload is not answered as a validation message.
@@ -285,12 +286,16 @@ public class ClosedXmlNayaxSalesWorkbookReaderTests
         using var content = new MemoryStream();
         workbook.SaveAs(content);
         content.Position = 0;
-        return new ClosedXmlNayaxSalesWorkbookReader().Read(content, fileName);
+        return new ClosedXmlNayaxSalesWorkbookReader()
+            .Read(content, fileName, Inventory.Application.Imports.NayaxSalesFileLimits.None)
+            .Rows;
     }
 
     private static IReadOnlyList<Inventory.Application.Imports.NayaxSalesImportRow> ReadCsv(string content)
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
-        return new ClosedXmlNayaxSalesWorkbookReader().Read(stream, "sales.csv");
+        return new ClosedXmlNayaxSalesWorkbookReader()
+            .Read(stream, "sales.csv", Inventory.Application.Imports.NayaxSalesFileLimits.None)
+            .Rows;
     }
 }

@@ -176,6 +176,8 @@ public class NayaxSalesExportTimestampTests
     private static IReadOnlyList<NayaxSalesImportRow> ReadCsv(string content)
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
-        return new ClosedXmlNayaxSalesWorkbookReader().Read(stream, "sales.csv");
+        return new ClosedXmlNayaxSalesWorkbookReader()
+            .Read(stream, "sales.csv", NayaxSalesFileLimits.None)
+            .Rows;
     }
 }

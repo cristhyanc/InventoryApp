@@ -566,6 +566,7 @@ public class NayaxHistoricalCostTests
         new(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db),
             new Mock<IRebuildProductCost>().Object,
             IdentityLinks());
