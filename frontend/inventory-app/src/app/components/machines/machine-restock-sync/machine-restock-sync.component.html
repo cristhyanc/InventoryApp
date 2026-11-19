@@ -120,7 +120,8 @@
               </tr>
             </thead>
             <tbody>
-              <tr class="table-row" *ngFor="let event of preview.events" [ngClass]="isUnresolvedDuplicate(event) ? 'bg-md-warning/15' : ''">
+              <ng-container *ngFor="let event of preview.events">
+              <tr class="table-row" [ngClass]="isUnresolvedDuplicate(event) ? 'bg-md-warning/15' : ''">
                 <td class="table-cell">
                   <input
                     type="checkbox"
@@ -135,28 +136,12 @@
                 <td class="table-cell font-medium text-md-gray-800">
                   <ng-container *ngIf="event.productReplacement as replacement; else plainProduct">
                     <div data-testid="replacement-names">{{ replacement.outgoingProductName }} replaced by {{ replacement.incomingProductName }}</div>
-                    <div class="value-muted font-normal" data-testid="replacement-outgoing-suggestion">
-                      Out:
-                      <ng-container *ngIf="replacement.suggestedOutgoingProductName; else noOutgoing">{{ replacement.suggestedOutgoingProductName }}</ng-container>
-                      <ng-template #noOutgoing>no suggestion ({{ replacement.outgoingSuggestionReason }})</ng-template>
-                    </div>
-                    <div class="value-muted font-normal" data-testid="replacement-incoming-suggestion">
-                      In:
-                      <ng-container *ngIf="replacement.suggestedIncomingProductName; else noIncoming">{{ replacement.suggestedIncomingProductName }}<span *ngIf="replacement.incomingSuggestionSource === SuggestionSource.LiveSlot"> (from the machine)</span></ng-container>
-                      <ng-template #noIncoming>no suggestion ({{ replacement.incomingSuggestionReason }})</ng-template>
-                    </div>
                   </ng-container>
                   <ng-template #plainProduct>{{ event.matchedProductName || event.parsedProductName || '—' }}</ng-template>
                 </td>
+                <td class="table-cell">{{ event.parsedQuantity }}</td>
                 <td class="table-cell">
-                  <ng-container *ngIf="event.productReplacement as replacement; else plainQuantity">
-                    <span *ngIf="replacement.suggestedIncomingQuantity !== null; else noQuantity" data-testid="replacement-quantity">Suggested {{ replacement.suggestedIncomingQuantity }}</span>
-                    <ng-template #noQuantity><span class="value-muted" data-testid="replacement-quantity-reason">— {{ replacement.suggestedIncomingQuantityReason }}</span></ng-template>
-                  </ng-container>
-                  <ng-template #plainQuantity>{{ event.parsedQuantity }}</ng-template>
-                </td>
-                <td class="table-cell">
-                  <span *ngIf="isProductReplacement(event)" data-testid="replacement-badge" class="badge badge-info mb-1">Product replacement: mark as already recorded</span>
+                  <span *ngIf="isProductReplacement(event)" data-testid="replacement-badge" class="badge badge-info mb-1">Product replacement</span>
                   <span
                     *ngIf="event.isPossibleReplacementDoubleCount"
                     data-testid="replacement-double-count"
@@ -213,6 +198,127 @@
                   <ng-template #notDuplicate>—</ng-template>
                 </td>
               </tr>
+              <tr *ngIf="event.productReplacement as replacement" class="table-row" [attr.data-testid]="'replacement-row-' + event.id">
+                <td class="table-cell" colspan="7">
+                  <div class="flex flex-col gap-4 rounded-md-card bg-md-gray-100 p-3 sm:flex-row sm:flex-wrap sm:items-start">
+                    <div class="min-w-[220px] flex-1">
+                      <label [attr.for]="'replacement-incoming-product-' + event.id" class="field-label">
+                        Incoming product (Nayax reports “{{ replacement.incomingProductName }}”)
+                      </label>
+                      <app-purchase-product-picker
+                        [inputId]="'replacement-incoming-product-' + event.id"
+                        [testId]="'replacement-incoming-product-' + event.id"
+                        [ariaLabel]="'Incoming product for MDB ' + event.parsedMdb"
+                        [products]="products"
+                        [productId]="replacementDraft(event).incomingProductId"
+                        (productIdChange)="setReplacementIncomingProduct(event, $event)"
+                      ></app-purchase-product-picker>
+                      <p *ngIf="!replacement.suggestedIncomingProductId" class="value-muted mt-1 text-md-caption" data-testid="replacement-incoming-no-suggestion">
+                        No suggestion ({{ replacement.incomingSuggestionReason }}).
+                      </p>
+
+                      <label [attr.for]="'replacement-incoming-quantity-' + event.id" class="field-label mt-2 block">Quantity restocked</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        class="w-full"
+                        [attr.id]="'replacement-incoming-quantity-' + event.id"
+                        [attr.data-testid]="'replacement-incoming-quantity-' + event.id"
+                        [value]="replacementDraft(event).incomingQuantityText"
+                        (input)="setReplacementIncomingQuantity(event, $any($event.target).value)"
+                      />
+                      <p
+                        *ngIf="replacementDraft(event).incomingQuantityText.trim() === ''; else quantityHint"
+                        class="value-muted mt-1 text-md-caption"
+                        data-testid="replacement-incoming-quantity-reason"
+                      >No suggested quantity ({{ replacement.suggestedIncomingQuantityReason }}).</p>
+                      <ng-template #quantityHint>
+                        <p class="value-muted mt-1 text-md-caption" data-testid="replacement-incoming-quantity-hint">
+                          May be low if the machine has sold some since the replacement.
+                        </p>
+                      </ng-template>
+                      <p class="value-muted mt-1 text-md-caption" data-testid="replacement-incoming-storage">
+                        Available in storage: {{ replacementProductStock(replacementDraft(event).incomingProductId) ?? '—' }}
+                      </p>
+                      <span
+                        *ngIf="replacementIncomingInsufficient(event)"
+                        data-testid="replacement-incoming-insufficient"
+                        class="badge badge-danger mt-1"
+                      >Insufficient storage: needs {{ replacementIncomingQuantity(event) }}, has {{ replacementProductStock(replacementDraft(event).incomingProductId) }} (short {{ replacementIncomingShortfall(event) }})</span>
+                    </div>
+
+                    <div class="min-w-[220px] flex-1">
+                      <label [attr.for]="'replacement-outgoing-product-' + event.id" class="field-label">
+                        Outgoing product (Nayax reports “{{ replacement.outgoingProductName }}”)
+                      </label>
+                      <app-purchase-product-picker
+                        [inputId]="'replacement-outgoing-product-' + event.id"
+                        [testId]="'replacement-outgoing-product-' + event.id"
+                        [ariaLabel]="'Outgoing product for MDB ' + event.parsedMdb"
+                        [products]="products"
+                        [productId]="replacementDraft(event).outgoingProductId"
+                        (productIdChange)="setReplacementOutgoingProduct(event, $event)"
+                      ></app-purchase-product-picker>
+                      <p *ngIf="!replacement.suggestedOutgoingProductId" class="value-muted mt-1 text-md-caption" data-testid="replacement-outgoing-no-suggestion">
+                        No suggestion ({{ replacement.outgoingSuggestionReason }}).
+                      </p>
+
+                      <label [attr.for]="'replacement-disposition-' + event.id" class="field-label mt-2 block">What happened</label>
+                      <select
+                        [attr.id]="'replacement-disposition-' + event.id"
+                        [attr.data-testid]="'replacement-disposition-' + event.id"
+                        (change)="setReplacementOutgoingDisposition(event, $any($event.target).value)"
+                      >
+                        <option [value]="OutgoingDisposition.None" [selected]="replacementDraft(event).outgoingDisposition === OutgoingDisposition.None">None</option>
+                        <option [value]="OutgoingDisposition.ReturnedToStorage" [selected]="replacementDraft(event).outgoingDisposition === OutgoingDisposition.ReturnedToStorage">Returned to storage</option>
+                        <option [value]="OutgoingDisposition.Damaged" [selected]="replacementDraft(event).outgoingDisposition === OutgoingDisposition.Damaged">Damaged</option>
+                        <option [value]="OutgoingDisposition.Expired" [selected]="replacementDraft(event).outgoingDisposition === OutgoingDisposition.Expired">Expired</option>
+                      </select>
+
+                      <label [attr.for]="'replacement-outgoing-quantity-' + event.id" class="field-label mt-2 block">Quantity removed</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="w-full"
+                        [attr.id]="'replacement-outgoing-quantity-' + event.id"
+                        [attr.data-testid]="'replacement-outgoing-quantity-' + event.id"
+                        [value]="replacementDraft(event).outgoingQuantityText"
+                        [disabled]="replacementDraft(event).outgoingDisposition === OutgoingDisposition.None"
+                        (input)="setReplacementOutgoingQuantity(event, $any($event.target).value)"
+                      />
+                    </div>
+
+                    <div class="flex min-w-[160px] flex-col items-start gap-2">
+                      <div
+                        *ngIf="replacementDraft(event).error"
+                        role="alert"
+                        data-testid="replacement-apply-error"
+                        class="alert alert-danger"
+                      >{{ replacementDraft(event).error }}</div>
+                      <button
+                        type="button"
+                        data-testid="replacement-apply-button"
+                        class="btn btn-primary btn-sm"
+                        [disabled]="!isReplacementReadyToApply(event) || sessionActive || (applyingReplacementEventId$ | async) === event.id"
+                        (click)="openReplacementConfirmation(event)"
+                      >{{ (applyingReplacementEventId$ | async) === event.id ? 'Applying…' : 'Apply replacement' }}</button>
+                    </div>
+                  </div>
+
+                  <app-confirmation-dialog
+                    *ngIf="replacementDraft(event).confirming"
+                    title="Confirm product replacement"
+                    [message]="replacementConfirmationMessage(event)"
+                    confirmLabel="Apply"
+                    cancelLabel="Cancel"
+                    (confirmed)="applyReplacement(event)"
+                    (canceled)="cancelReplacementConfirmation(event)"
+                  ></app-confirmation-dialog>
+                </td>
+              </tr>
+              </ng-container>
             </tbody>
           </table>
         </div>

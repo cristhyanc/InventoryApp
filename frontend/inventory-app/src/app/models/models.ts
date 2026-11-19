@@ -1187,6 +1187,34 @@ export interface NayaxStockEventApplyResult {
   stockAdjustmentId: number | null;
 }
 
+/**
+ * What the operator says happened to the units that came out of the slot when a Nayax product
+ * replacement (Event 510) was applied (issue #1327). `ReturnedToStorage`, `Damaged` and `Expired`
+ * all return those units to storage first; the two disposals then write the established write-off
+ * beside it. Matches `Inventory.Domain.Nayax.NayaxReplacementOutgoingDisposition`.
+ */
+export enum NayaxReplacementOutgoingDisposition {
+  None = 0,
+  ReturnedToStorage = 1,
+  Damaged = 2,
+  Expired = 3
+}
+
+/**
+ * An operator's confirmed Nayax product replacement (issue #1327), for
+ * `POST /machines/{id}/sync-restock/apply-replacement`. `incomingQuantity` is whole and may be `0`;
+ * `outgoingProductId`/`outgoingQuantity` are required for every `outgoingDisposition` but `None`,
+ * and must be absent for that one.
+ */
+export interface NayaxApplyProductReplacementRequest {
+  eventId: number;
+  incomingProductId: number;
+  incomingQuantity: number;
+  outgoingDisposition: NayaxReplacementOutgoingDisposition;
+  outgoingProductId: number | null;
+  outgoingQuantity: number | null;
+}
+
 export interface NayaxMachineStockApplyResponse {
   results: NayaxStockEventApplyResult[];
 }

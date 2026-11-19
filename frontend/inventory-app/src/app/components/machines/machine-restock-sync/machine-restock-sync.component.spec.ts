@@ -5,6 +5,7 @@ import { Observable, Subject, of, throwError } from 'rxjs';
 import { SimpleChange } from '@angular/core';
 import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
+import { ProductService } from '../../../services/product.service';
 import { ToastService } from '../../../services/toast.service';
 import {
   currentDateInTimeZone,
@@ -20,19 +21,44 @@ function supportSessionStub(active: Observable<boolean> = of(false)): SupportSes
   return { active$: active } as unknown as SupportSessionService;
 }
 import {
+  NayaxApplyProductReplacementRequest,
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
   NayaxMachineAlertEventCodes,
   NayaxMachineStockApplyResponse,
   NayaxProductReplacementPreview,
+  NayaxReplacementOutgoingDisposition,
   NayaxReplacementSuggestionSource,
   NayaxMachineStockSyncPreview,
   NayaxStockEventApplyOutcome,
   NayaxStockEventApplyResult,
   NayaxStockEventMatchStatus,
   NayaxStockEventPreview,
-  NayaxStockEventProcessingStatus
+  NayaxStockEventProcessingStatus,
+  Product
 } from '../../../models/models';
+
+/** A business's active product (issue #1327), as the product-change row's autocompletes offer it. */
+function product(overrides: Partial<Product> = {}): Product {
+  return {
+    id: 300,
+    name: 'Red Bull Red Edition 250mL',
+    averageUnitCost: 1,
+    machinePrice: null,
+    commissionValue: null,
+    quantityInStock: 12,
+    maxStockInMachine: 0,
+    machineReplenishmentNeed: 0,
+    onOrderQuantity: 0,
+    lowStockThreshold: 0,
+    restockTo: 0,
+    needToOrder: 0,
+    mdbCode: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides
+  } as Product;
+}
 
 /**
  * The zone these tests run as: the business the application already has. It was a constant in
@@ -166,8 +192,9 @@ function createHarness(
   // expectations were written for.
   const businessTimeZone = new BusinessTimeZoneService();
   businessTimeZone.publish(BUSINESS_TIME_ZONE);
+  const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
   const component = new MachineRestockSyncComponent(
-    machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub(sessionActive));
+    machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub(sessionActive), productService);
   component.machineId = 7;
 
   const harness: Harness = {
@@ -501,9 +528,10 @@ describe('MachineRestockSyncComponent sync', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const machineService = { syncRestock } as unknown as MachineService;
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
+    const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
     // Deliberately unresolved: GET /api/business/current has not answered yet.
     const component = new MachineRestockSyncComponent(
-      machineService, toast as unknown as ToastService, new BusinessTimeZoneService(), supportSessionStub());
+      machineService, toast as unknown as ToastService, new BusinessTimeZoneService(), supportSessionStub(), productService);
     component.machineId = 7;
 
     component.syncRestock();
@@ -519,8 +547,9 @@ describe('MachineRestockSyncComponent sync', () => {
     const machineService = { syncRestock } as unknown as MachineService;
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     const businessTimeZone = new BusinessTimeZoneService();
+    const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
     const component = new MachineRestockSyncComponent(
-      machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub());
+      machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub(), productService);
     component.machineId = 7;
     component.syncRestock();
 
@@ -943,7 +972,10 @@ describe('MachineRestockSyncComponent dialog', () => {
       of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult)),
     resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
     nayaxStatus: NayaxConnectionStatusName = 'Ready',
-    sessionActive: Observable<boolean> = of(false)
+    sessionActive: Observable<boolean> = of(false),
+    applySyncRestockReplacement: jest.Mock = jest.fn(() =>
+      of({ eventId: 9, outcome: NayaxStockEventApplyOutcome.Applied, message: 'Applied.', stockAdjustmentId: 90 } as NayaxStockEventApplyResult)),
+    products: Product[] = []
   ) {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     await TestBed.configureTestingModule({
@@ -952,12 +984,16 @@ describe('MachineRestockSyncComponent dialog', () => {
         provideRouter([]),
         {
           provide: MachineService,
-          useValue: { syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually }
+          useValue: {
+            syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually,
+            applySyncRestockReplacement
+          }
         },
         { provide: ToastService, useValue: toast },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) }
+        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) },
+        { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } }
       ]
     }).compileComponents();
 
@@ -1023,6 +1059,7 @@ describe('MachineRestockSyncComponent dialog', () => {
 
     return {
       fixture, host, toast, syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually,
+      applySyncRestockReplacement,
       dialog, button, requireElement, requireDialog, requireButton, requireAttribute, textOf,
       click, pressEscape, openDialog,
       applied: () => appliedCount
@@ -1322,7 +1359,7 @@ describe('MachineRestockSyncComponent dialog', () => {
   });
 
   describe('product replacements (issue #1325)', () => {
-    it('shows both Nayax names, the suggestions and the suggested quantity, and is never ready to apply', async () => {
+    it('shows both Nayax names and is never ready to apply through the ordinary Apply path', async () => {
       const replacement = replacementEvent();
       const { fixture, host, requireElement, openDialog } = await render(jest.fn(() => of(preview([replacement]))));
 
@@ -1330,40 +1367,11 @@ describe('MachineRestockSyncComponent dialog', () => {
 
       expect(requireElement('[data-testid="replacement-names"]').textContent)
         .toContain('V Energy 250ML replaced by Redbull Red Edition');
-      expect(requireElement('[data-testid="replacement-outgoing-suggestion"]').textContent).toContain('V Energy 250ML');
-      expect(requireElement('[data-testid="replacement-incoming-suggestion"]').textContent)
-        .toContain('Red Bull Red Edition 250mL (from the machine)');
-      expect(requireElement('[data-testid="replacement-quantity"]').textContent).toContain('Suggested 7');
-      expect(requireElement('[data-testid="replacement-badge"]').textContent).toContain('mark as already recorded');
+      expect(requireElement('[data-testid="replacement-badge"]').textContent).toContain('Product replacement');
       // A parsed replacement has no review reason of its own, so no empty "Needs review:" badge.
       expect(host.textContent).not.toContain('Needs review:');
-      // No quantity or reason inputs: the only resolution is "already recorded".
-      expect(host.querySelectorAll('tbody input:not([type="checkbox"]), tbody select')).toHaveLength(0);
       expect(fixture.componentInstance.isReadyToApply(replacement)).toBe(false);
       expect(fixture.componentInstance.isEligibleForManualResolution(replacement)).toBe(true);
-    });
-
-    it('shows each empty suggestion with its reason', async () => {
-      const replacement = replacementEvent({}, {
-        suggestedOutgoingProductId: null,
-        suggestedOutgoingProductName: null,
-        outgoingSuggestionSource: NayaxReplacementSuggestionSource.None,
-        outgoingSuggestionReason: "More than one active product is named 'V Energy 250ML'.",
-        suggestedIncomingProductId: null,
-        suggestedIncomingProductName: null,
-        incomingSuggestionSource: NayaxReplacementSuggestionSource.None,
-        incomingSuggestionReason: "No active product is named 'Redbull Red Edition'.",
-        suggestedIncomingQuantity: null,
-        suggestedIncomingQuantityReason: "MDB 58 now reports 'Mother 500mL', not 'Redbull Red Edition'."
-      });
-      const { host, requireElement, openDialog } = await render(jest.fn(() => of(preview([replacement]))));
-
-      openDialog();
-
-      expect(requireElement('[data-testid="replacement-outgoing-suggestion"]').textContent).toContain('More than one active product');
-      expect(requireElement('[data-testid="replacement-incoming-suggestion"]').textContent).toContain('No active product');
-      expect(requireElement('[data-testid="replacement-quantity-reason"]').textContent).toContain("now reports 'Mother 500mL'");
-      expect(host.querySelector('[data-testid="replacement-quantity"]')).toBeNull();
     });
 
     it('shows an unparsed replacement as needs review with its reason', async () => {
@@ -1418,6 +1426,211 @@ describe('MachineRestockSyncComponent dialog', () => {
 
       click(requireButton('Already recorded manually'));
       expect(resolveSyncRestockManually).toHaveBeenCalledWith(7, [9]);
+    });
+  });
+
+  describe('product-change row apply (issue #1327)', () => {
+    const INCOMING = product({ id: 300, name: 'Red Bull Red Edition 250mL', quantityInStock: 12 });
+    const OUTGOING = product({ id: 301, name: 'V Energy 250ML', quantityInStock: 5 });
+
+    const incomingInput = (host: HTMLElement) =>
+      host.querySelector<HTMLInputElement>('[data-testid="replacement-incoming-product-9"]')!;
+    const outgoingInput = (host: HTMLElement) =>
+      host.querySelector<HTMLInputElement>('[data-testid="replacement-outgoing-product-9"]')!;
+    const incomingQuantityInput = (host: HTMLElement) =>
+      host.querySelector<HTMLInputElement>('[data-testid="replacement-incoming-quantity-9"]')!;
+    const outgoingQuantityInput = (host: HTMLElement) =>
+      host.querySelector<HTMLInputElement>('[data-testid="replacement-outgoing-quantity-9"]')!;
+    const dispositionSelect = (host: HTMLElement) =>
+      host.querySelector<HTMLSelectElement>('[data-testid="replacement-disposition-9"]')!;
+    const applyButton = (host: HTMLElement) =>
+      host.querySelector<HTMLButtonElement>('[data-testid="replacement-apply-button"]')!;
+
+    it("prefills both autocompletes and the quantity restocked from #1325's suggestion", async () => {
+      const replacement = replacementEvent();
+      const { host, requireElement, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), undefined, undefined, undefined, 'Ready', of(false), undefined,
+        [INCOMING, OUTGOING]
+      );
+
+      openDialog();
+
+      expect(incomingInput(host).value).toBe('Red Bull Red Edition 250mL');
+      expect(outgoingInput(host).value).toBe('V Energy 250ML');
+      expect(incomingQuantityInput(host).value).toBe('7');
+      expect(requireElement('[data-testid="replacement-incoming-storage"]').textContent).toContain('12');
+      expect(requireElement('[data-testid="replacement-incoming-quantity-hint"]').textContent)
+        .toContain('May be low if the machine has sold some since the replacement.');
+      expect(host.querySelector('[data-testid="replacement-incoming-quantity-reason"]')).toBeNull();
+      // "None" is the default outgoing disposition, and Quantity removed starts disabled.
+      expect(dispositionSelect(host).value).toBe(String(NayaxReplacementOutgoingDisposition.None));
+      expect(outgoingQuantityInput(host).disabled).toBe(true);
+    });
+
+    it('shows each empty suggestion as an empty autocomplete with its reason', async () => {
+      const replacement = replacementEvent({}, {
+        suggestedOutgoingProductId: null,
+        suggestedOutgoingProductName: null,
+        outgoingSuggestionSource: NayaxReplacementSuggestionSource.None,
+        outgoingSuggestionReason: "More than one active product is named 'V Energy 250ML'.",
+        suggestedIncomingProductId: null,
+        suggestedIncomingProductName: null,
+        incomingSuggestionSource: NayaxReplacementSuggestionSource.None,
+        incomingSuggestionReason: "No active product is named 'Redbull Red Edition'.",
+        suggestedIncomingQuantity: null,
+        suggestedIncomingQuantityReason: "MDB 58 now reports 'Mother 500mL', not 'Redbull Red Edition'."
+      });
+      const { host, requireElement, openDialog } = await render(jest.fn(() => of(preview([replacement]))));
+
+      openDialog();
+
+      expect(incomingInput(host).value).toBe('');
+      expect(outgoingInput(host).value).toBe('');
+      expect(incomingQuantityInput(host).value).toBe('');
+      expect(requireElement('[data-testid="replacement-incoming-no-suggestion"]').textContent)
+        .toContain('No active product is named');
+      expect(requireElement('[data-testid="replacement-outgoing-no-suggestion"]').textContent)
+        .toContain('More than one active product');
+      expect(requireElement('[data-testid="replacement-incoming-quantity-reason"]').textContent)
+        .toContain("now reports 'Mother 500mL'");
+      expect(host.querySelector('[data-testid="replacement-incoming-quantity-hint"]')).toBeNull();
+    });
+
+    it('disables Quantity removed while None is selected, and clears a typed quantity when None is chosen again', async () => {
+      const replacement = replacementEvent();
+      const { fixture, host, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), undefined, undefined, undefined, 'Ready', of(false), undefined,
+        [INCOMING, OUTGOING]
+      );
+      openDialog();
+
+      expect(outgoingQuantityInput(host).disabled).toBe(true);
+
+      dispositionSelect(host).value = String(NayaxReplacementOutgoingDisposition.ReturnedToStorage);
+      dispositionSelect(host).dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      expect(outgoingQuantityInput(host).disabled).toBe(false);
+
+      outgoingQuantityInput(host).value = '3';
+      outgoingQuantityInput(host).dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      expect(outgoingQuantityInput(host).value).toBe('3');
+
+      dispositionSelect(host).value = String(NayaxReplacementOutgoingDisposition.None);
+      dispositionSelect(host).dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      expect(outgoingQuantityInput(host).disabled).toBe(true);
+      expect(outgoingQuantityInput(host).value).toBe('');
+    });
+
+    it('shows the insufficient-storage warning once the entered quantity exceeds what storage holds', async () => {
+      const replacement = replacementEvent({}, { suggestedIncomingQuantity: 20 });
+      const { requireElement, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), undefined, undefined, undefined, 'Ready', of(false), undefined,
+        [INCOMING, OUTGOING]
+      );
+      openDialog();
+
+      expect(requireElement('[data-testid="replacement-incoming-insufficient"]').textContent)
+        .toContain('Insufficient storage: needs 20, has 12 (short 8)');
+    });
+
+    it('enables Apply only once the incoming product is chosen and every input is valid', async () => {
+      const replacement = replacementEvent({}, {
+        suggestedIncomingProductId: null,
+        suggestedIncomingProductName: null,
+        suggestedOutgoingProductId: null,
+        suggestedOutgoingProductName: null
+      });
+      const { fixture, host, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), undefined, undefined, undefined, 'Ready', of(false), undefined,
+        [INCOMING, OUTGOING]
+      );
+      openDialog();
+
+      // No incoming product chosen yet (the suggestion was empty): Apply is disabled.
+      expect(applyButton(host).disabled).toBe(true);
+
+      fixture.componentInstance.setReplacementIncomingProduct(replacement, 300);
+      fixture.detectChanges();
+      // A suggested quantity of 7 still stands, so the row is now valid.
+      expect(applyButton(host).disabled).toBe(false);
+
+      dispositionSelect(host).value = String(NayaxReplacementOutgoingDisposition.Damaged);
+      dispositionSelect(host).dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      // Damaged requires an outgoing product and a quantity of at least one; neither is set yet.
+      expect(applyButton(host).disabled).toBe(true);
+
+      fixture.componentInstance.setReplacementOutgoingProduct(replacement, 301);
+      outgoingQuantityInput(host).value = '2';
+      outgoingQuantityInput(host).dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      expect(applyButton(host).disabled).toBe(false);
+    });
+
+    it('shows a short confirmation of what will be written, then applies and re-syncs on confirm', async () => {
+      const replacement = replacementEvent();
+      const syncRestock = jest.fn()
+        .mockReturnValueOnce(of(preview([replacement])))
+        .mockReturnValueOnce(of(preview([], 'No new Nayax stock-adjustment alerts to review.')));
+      const applySyncRestockReplacement = jest.fn(() =>
+        of({ eventId: 9, outcome: NayaxStockEventApplyOutcome.Applied, message: 'Applied.', stockAdjustmentId: 90 } as NayaxStockEventApplyResult));
+      const { fixture, host, requireElement, click, openDialog, applied } = await render(
+        syncRestock, undefined, undefined, undefined, 'Ready', of(false), applySyncRestockReplacement,
+        [INCOMING, OUTGOING]
+      );
+      openDialog();
+
+      dispositionSelect(host).value = String(NayaxReplacementOutgoingDisposition.ReturnedToStorage);
+      dispositionSelect(host).dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      outgoingQuantityInput(host).value = '4';
+      outgoingQuantityInput(host).dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+
+      click(applyButton(host));
+
+      const confirmation = requireElement('[role="alertdialog"]');
+      expect(confirmation.textContent).toContain('Record 7 unit(s) of Red Bull Red Edition 250mL loaded into the machine.');
+      expect(confirmation.textContent).toContain('4 unit(s) of V Energy 250ML will be returned to storage.');
+
+      click(requireElement<HTMLButtonElement>('[role="alertdialog"] button.btn-danger'));
+
+      const expectedRequest: NayaxApplyProductReplacementRequest = {
+        eventId: 9,
+        incomingProductId: 300,
+        incomingQuantity: 7,
+        outgoingDisposition: NayaxReplacementOutgoingDisposition.ReturnedToStorage,
+        outgoingProductId: 301,
+        outgoingQuantity: 4
+      };
+      expect(applySyncRestockReplacement).toHaveBeenCalledWith(7, expectedRequest);
+      expect(syncRestock).toHaveBeenCalledTimes(2);
+      expect(applied()).toBe(1);
+    });
+
+    it("shows the server's refusal on the row without closing the dialog", async () => {
+      const replacement = replacementEvent();
+      const applySyncRestockReplacement = jest.fn(() =>
+        of({
+          eventId: 9, outcome: NayaxStockEventApplyOutcome.InsufficientStock,
+          message: '7 was entered as loaded but only 3 is available in storage.', stockAdjustmentId: null
+        } as NayaxStockEventApplyResult));
+      const { host, requireDialog, requireElement, click, openDialog } = await render(
+        jest.fn(() => of(preview([replacement]))), undefined, undefined, undefined, 'Ready', of(false), applySyncRestockReplacement,
+        [INCOMING, OUTGOING]
+      );
+      openDialog();
+
+      click(applyButton(host));
+      click(requireElement<HTMLButtonElement>('[role="alertdialog"] button.btn-danger'));
+
+      expect(applySyncRestockReplacement).toHaveBeenCalled();
+      expect(requireElement('[data-testid="replacement-apply-error"]').textContent)
+        .toContain('7 was entered as loaded but only 3 is available in storage.');
+      // The refusal is shown on the row; the dialog itself stays open.
+      expect(requireDialog()).not.toBeNull();
     });
   });
 

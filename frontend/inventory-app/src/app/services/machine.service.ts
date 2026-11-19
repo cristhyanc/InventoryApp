@@ -5,6 +5,7 @@ import {
   Machine,
   MachineLatestSales,
   MachineRestockSyncReminderResponse,
+  NayaxApplyProductReplacementRequest,
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
   NayaxMachineStockSyncPreview,
@@ -87,6 +88,18 @@ export class MachineService {
 
   applySyncRestock(id: number, eventIds: number[]): Observable<NayaxMachineStockApplyResponse> {
     return this.http.post<NayaxMachineStockApplyResponse>(`${this.baseUrl}/${id}/sync-restock/apply`, { eventIds });
+  }
+
+  /**
+   * Applies one confirmed Nayax product replacement (issue #1327): the product loaded into the
+   * slot and how many units of it, and what happened to the units taken out.
+   */
+  applySyncRestockReplacement(
+    id: number, request: NayaxApplyProductReplacementRequest
+  ): Observable<NayaxStockEventApplyResult> {
+    return this.http.post<NayaxStockEventApplyResult>(
+      `${this.baseUrl}/${id}/sync-restock/apply-replacement`, request
+    );
   }
 
   resolveSyncRestockDuplicate(

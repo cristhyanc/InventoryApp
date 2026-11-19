@@ -19058,12 +19058,13 @@ below (issue #1326). Its editing UI is #1327.
   - *Stock History presence* (`EfProductInventoryHistoryQueries`) reads `MatchedProductId`, which a
     replacement never has, so it adds no product history; the platform diagnostics surface still
     excludes the whole table.
-- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time,
-  both Nayax names, the suggestions and their reasons, the suggested quantity and any double-count
-  flag. It has no quantity or reason inputs, is never pre-selected or counted as applicable, and
-  can only be marked **Already recorded manually**; **Apply selected** is disabled while a
-  replacement is selected. The dialog that offers the apply below is issue #1327; until it ships,
-  that apply is reachable through its API endpoint only, and the dialog is unchanged.
+- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time and
+  both Nayax names. It is never pre-selected or counted as applicable through the ordinary Apply
+  path, and the bulk **Apply selected** stays disabled while a replacement is selected; it can still
+  be marked **Already recorded manually**, exactly as before. Since issue #1327 the row also offers
+  its own **Apply replacement** action, built from the suggestions above - see
+  [Reviewing and applying a product replacement in the dialog](#reviewing-and-applying-a-product-replacement-in-the-dialog-issue-1327)
+  below.
 
 #### Applying a confirmed product replacement (issue #1326)
 
@@ -19177,6 +19178,50 @@ than a replacement; and the established `409` `ResolutionConflict` for an event 
 as recorded manually, because the operator decided that replacement needs no movement at all. It
 keeps `MachinesController`'s `Inventory.Operate` capability and declares no plan requirement, since
 it writes local movements and makes no Nayax call.
+
+#### Reviewing and applying a product replacement in the dialog (issue #1327)
+
+Issue #1326 gave a confirmed replacement one API endpoint and no screen; this issue is the screen -
+the frontend-only `MachineRestockSyncComponent` row that collects the operator's confirmation and
+calls it. **No backend changes** - the policy, the endpoint and the written movements are exactly
+#1326's.
+
+- **Both Nayax names, each with its own autocomplete.** The row shows the outgoing and incoming
+  names exactly as Nayax reported them, and beside each one the same searchable product combobox
+  used elsewhere in the application (`PurchaseProductPickerComponent`, issue #1029) - current
+  business, active products only (`ProductService.getAll()`, reloaded whenever the dialog opens).
+  Each box is prefilled with #1325's suggestion for that side when there is one
+  (`suggestedIncomingProductId`/`suggestedOutgoingProductId`) and starts empty, with the
+  suggestion's own reason shown, when there is none.
+- **Quantity restocked**, a whole-number input beside the incoming product, prefilled with #1325's
+  suggested quantity or left blank with its reason shown. A fixed hint - *"May be low if the machine
+  has sold some since the replacement"* - is shown instead whenever the field holds a value, because
+  that suggestion is PAR-derived and can read low by what sold since the replacement (see
+  [Product replacements](#product-replacements-event-510-issue-1325) above). The row also shows the
+  chosen incoming product's storage quantity and, once the entered amount would exceed it, the same
+  *"Insufficient storage: needs N, has M (short D)"* wording the ordinary 501 row already uses - a
+  client-side preview of `NayaxProductReplacementWritePolicy`'s own rule, never its authority.
+- **Quantity removed and What happened, beside the outgoing product.** A dropdown of `None`
+  (default), `Returned to storage`, `Damaged` and `Expired` - the same four choices
+  `NayaxReplacementOutgoingDisposition` names - and a whole-number quantity input that is disabled,
+  and cleared, whenever `None` is selected, mirroring the policy's own "absent for `None`" rule.
+- **The possible-double-count flag from #1325 stays on the row**, unchanged by this issue.
+- **Apply replacement is enabled only once the draft could actually be sent**: an incoming product
+  is chosen, the incoming quantity is a whole number, and - only when the outgoing disposition is
+  not `None` - an outgoing product is chosen and the outgoing quantity is a whole number of at least
+  one. This mirrors `NayaxProductReplacementWritePolicy.Refusal` client-side so the button is
+  disabled before a request is even built; the backend remains the sole authority once one is sent.
+  Clicking it opens the application's existing `ConfirmationDialogComponent` with a one- or
+  two-sentence summary of exactly what will be written (for example *"Record 7 unit(s) of Red Bull
+  Red Edition 250mL loaded into the machine. 4 unit(s) of V Energy 250ML will be returned to
+  storage."*), confirming calls
+  `POST /api/machines/{id}/sync-restock/apply-replacement` with that draft, and the dialog re-syncs
+  afterwards exactly as every other apply does - so an applied replacement drops out of the working
+  list. A refusal - `InsufficientStock`, the `Error` of a failed write, or the request-shaped `400` -
+  is shown on the row itself, in the server's own words, and the Sync Restock dialog stays open so
+  the operator can correct it and try again.
+- **Already recorded manually stays available** beside this new action, exactly as #1325 left it:
+  a replacement the operator already entered by hand still needs no movement.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 
