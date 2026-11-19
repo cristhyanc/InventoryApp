@@ -11320,6 +11320,9 @@ synchronized and an age would be a false statement.
 - Direct profit also subtracts Nayax fees including GST, site commission, and directly attributable operating expenses.
 - Whole-business net profit also includes shared costs such as receipt delivery/package costs and unallocated operating expenses.
 - A machine-filtered view must not claim whole-business net profit when shared overhead has no allocation rule.
+- **Machine profitability reports one row per machine, keyed by the provider's machine number alone** (issue #1263). `EfMachineProfitabilityReportFactsProvider` groups the period's completed sales by `NayaxSales.MachineID` and nothing else, so each machine's processing fees, site commission and directly attributed operating expenses are looked up once, for the one row that machine has. Grouping by `{ MachineID, MachineName }` - the stored sale's name, which is whatever the provider called the machine when that sale was ingested - made a machine renamed mid-period two rows and charged **each** of them the machine's whole fees, commission and expenses, so a $6 expense was reported as $12 and the report's totals exceeded Bookkeeping's for the same range. A machine with expenses and no completed sale in the period still has no row, which issue #1263 deliberately left unchanged.
+  - *The row's display name is resolved separately from the grouping.* It is this business's own machine record's name (`Machines.Name`, resolved from the sale's provider number through the one lookup `EfMachineLinkQueries`), because that is the name the operator chose; for a provider number this business has recorded no machine for, it is the name the **latest** sale carried - latest by sale instant, and between two equally recent names the one on the higher `TransactionID`, so the name never depends on the order rows came back in - and a machine that nothing names is still one row, called `Machine {number}` as before. A sale that carries no name names nothing, so an older sale's name is preferred to no name at all.
+  - *The totals reconcile with Bookkeeping.* For the same range, the sum of the machine rows' sales, fees, commission and machine-attributed operating expenses equals Bookkeeping's figures, excluding the two kinds of money Bookkeeping holds and this report has no row for: an expense attributed to a machine with no sales in the period, and a whole-business expense. `MachineProfitabilityBookkeepingTotalsTests` is that comparison.
 
 All report, dashboard, transaction-detail, CSV, and XLSX paths must call the same authoritative calculations.
 
@@ -15967,7 +15970,10 @@ business's `SalesProvider` is Nayax, in the same statement. A number recorded on
 to nothing, never to the machine whose local id happens to be that number.
 `Inventory.Infrastructure.Persistence.EfNayaxMachineLinkStore` is the adapter the use cases hold and
 `Inventory.Infrastructure.Data.EfMachineLinkQueries` is the read itself, which the two reporting
-fact providers call directly — one translation, not one per caller.
+fact providers call directly — one translation, not one per caller. Since issue #1263 that one read
+also carries the machine's `Name`, for the caller that has to *display* the machine rather than only
+write against it (machine profitability's row name, see [Profit levels](#profit-levels)); it is the
+same statement and the same gate, in two shapes.
 
 **The API and the form.** `GET api/machines` adds `localMachineId` as an appended, nullable field;
 it carries no financial figure, so it survives the `Dashboard.ViewFinancials` redaction with the rest

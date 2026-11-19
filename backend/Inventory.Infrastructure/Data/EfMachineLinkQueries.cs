@@ -4,6 +4,13 @@ using Microsoft.EntityFrameworkCore;
 namespace Inventory.Infrastructure.Data;
 
 /// <summary>
+/// One of this business's own machines, as the Nayax-number lookup below resolves it: the local key
+/// an adapter has to write against, and the name the operator gave it, which is the one name this
+/// business chose for the machine (issue #1263).
+/// </summary>
+internal readonly record struct LocalMachineLink(long Id, string Name);
+
+/// <summary>
 /// The one EF read that turns a Nayax machine number into this business's own machine id, and back
 /// (issue #780, parent #329 child G2a). It sits beside the <see cref="AppDbContext"/> whose entities
 /// it is written against, the same place <see cref="EfSalesProviderQueries"/> and
@@ -30,6 +37,18 @@ internal static class EfMachineLinkQueries
     /// by the number. A number recorded on no machine is absent, never mapped to itself.
     /// </summary>
     public static async Task<Dictionary<long, long>> LocalMachineIdsByNayaxIdAsync(
+        AppDbContext db, IReadOnlyCollection<long> nayaxMachineIds, CancellationToken cancellationToken) =>
+        (await LocalMachinesByNayaxIdAsync(db, nayaxMachineIds, cancellationToken).ConfigureAwait(false))
+            .ToDictionary(link => link.Key, link => link.Value.Id);
+
+    /// <summary>
+    /// The same lookup as <see cref="LocalMachineIdsByNayaxIdAsync"/>, carrying the machine's name
+    /// as well, for a caller that has to <em>display</em> the machine rather than only write against
+    /// it (issue #1263: machine profitability's rows are keyed by the provider's number and named by
+    /// this business's own record). One statement, so "which machine is this number" still has a
+    /// single answer.
+    /// </summary>
+    public static async Task<Dictionary<long, LocalMachineLink>> LocalMachinesByNayaxIdAsync(
         AppDbContext db, IReadOnlyCollection<long> nayaxMachineIds, CancellationToken cancellationToken)
     {
         if (nayaxMachineIds.Count == 0)
@@ -44,21 +63,21 @@ internal static class EfMachineLinkQueries
         var machines = await EfSalesProviderQueries
             .MachinesIdentifiedBy(db, ExternalProvider.Nayax)
             .Where(machine => externalIds.Contains(machine.ExternalMachineId!))
-            .Select(machine => new { ExternalMachineId = machine.ExternalMachineId!, machine.Id })
+            .Select(machine => new { ExternalMachineId = machine.ExternalMachineId!, machine.Id, machine.Name })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var localMachineIdByNayaxId = new Dictionary<long, long>(machines.Count);
+        var localMachineByNayaxId = new Dictionary<long, LocalMachineLink>(machines.Count);
         foreach (var machine in machines)
         {
             // A stored id this application could not have written is not a Nayax machine number, so
             // it resolves to nothing rather than to a nearby number; the filtered unique index on
             // (BusinessId, ExternalMachineId) is what makes the remaining keys distinct.
             if (NayaxExternalId.TryParse(machine.ExternalMachineId, out var nayaxMachineId))
-                localMachineIdByNayaxId[nayaxMachineId] = machine.Id;
+                localMachineByNayaxId[nayaxMachineId] = new LocalMachineLink(machine.Id, machine.Name);
         }
 
-        return localMachineIdByNayaxId;
+        return localMachineByNayaxId;
     }
 
     /// <summary>
