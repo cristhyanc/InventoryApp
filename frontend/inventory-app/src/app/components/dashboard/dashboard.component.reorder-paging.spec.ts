@@ -21,6 +21,8 @@ import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
+import { CatalogueReviewAttentionService } from '../../services/catalogue-review-attention.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import {
   PURCHASE_COST_MAX_IDS_PER_REQUEST,
@@ -215,6 +217,9 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: SiteService, useValue: { getAll: () => of([]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
+      // Issue #1352's alert owns its own gates; stubbed here with nothing waiting.
+      { provide: CatalogueReviewAttentionService, useValue: { read: () => of({ unimportedProductCount: 0, examples: [] }) } },
+      { provide: ProviderAvailabilityService, useValue: { featureOffered: () => of(true) } },
       { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
@@ -649,7 +654,10 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
         { provide: SiteService, useValue: { getAll: () => of([]) } },
         { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
         { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
-        { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
+        // Issue #1352's alert owns its own gates; stubbed here with nothing waiting.
+      { provide: CatalogueReviewAttentionService, useValue: { read: () => of({ unimportedProductCount: 0, examples: [] }) } },
+      { provide: ProviderAvailabilityService, useValue: { featureOffered: () => of(true) } },
+      { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
         {

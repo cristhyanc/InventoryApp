@@ -533,6 +533,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<StartCatalogueReview>();
         services.AddScoped<ApplyCatalogueReview>();
         services.AddScoped<ResolveLinkedProviderSales>();
+        // The Dashboard's read of the provider products that are selling and have never been
+        // imported (issue #1352). It makes no Nayax call: the evidence is the business's own stored
+        // sales, so it is scoped like every other read here.
+        services.AddScoped<GetUnimportedProviderProductAttention>();
         services.AddScoped<ImportNayaxSales>();
         // The per-file steps of the reimbursement report import (issue #1149): hash dedupe, the
         // atomic write, and the settlement coverage a committed file proves.

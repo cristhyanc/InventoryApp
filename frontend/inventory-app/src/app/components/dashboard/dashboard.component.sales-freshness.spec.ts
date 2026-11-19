@@ -8,6 +8,8 @@ import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
+import { CatalogueReviewAttentionService } from '../../services/catalogue-review-attention.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
@@ -155,6 +157,9 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       { provide: MachineService, useValue: { getAll: () => of([MACHINE]) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
+      // Issue #1352's alert owns its own gates; stubbed here with nothing waiting.
+      { provide: CatalogueReviewAttentionService, useValue: { read: () => of({ unimportedProductCount: 0, examples: [] }) } },
+      { provide: ProviderAvailabilityService, useValue: { featureOffered: () => of(true) } },
       { provide: SiteService, useValue: { getAll: () => of([SITE]) } },
       {
         provide: NayaxSalesSyncService,

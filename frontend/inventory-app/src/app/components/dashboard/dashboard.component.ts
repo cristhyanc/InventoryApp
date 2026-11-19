@@ -49,6 +49,7 @@ import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business
 import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
 import { NayaxSaleReviewAlertComponent } from './nayax-sale-review-alert/nayax-sale-review-alert.component';
 import { InventoryCostAttentionAlertComponent } from './inventory-cost-attention-alert/inventory-cost-attention-alert.component';
+import { UnimportedNayaxProductAlertComponent } from './unimported-nayax-product-alert/unimported-nayax-product-alert.component';
 import { SiteMachinePerformanceComponent } from './site-machine-performance/site-machine-performance.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -134,6 +135,7 @@ export const CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';
     MachineRestockSyncReminderComponent,
     NayaxSaleReviewAlertComponent,
     InventoryCostAttentionAlertComponent,
+    UnimportedNayaxProductAlertComponent,
     BusinessDateTimePipe,
     CheapestSuppliersComponent,
     CheapestSupplierCellComponent,
@@ -155,6 +157,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private readonly nayaxSaleReviewAlert?: NayaxSaleReviewAlertComponent;
   @ViewChild(InventoryCostAttentionAlertComponent, { static: true })
   private readonly inventoryCostAttentionAlert?: InventoryCostAttentionAlertComponent;
+
+  /**
+   * The unimported-Nayax-product alert (issue #1352). Always mounted and read statically like the
+   * alerts above, and it owns its own capability, provider and support-session gates, so whether it
+   * currently has anything to say is the one thing this page asks it.
+   */
+  @ViewChild(UnimportedNayaxProductAlertComponent, { static: true })
+  private readonly unimportedNayaxProductAlert?: UnimportedNayaxProductAlertComponent;
 
   /**
    * Said beside the inventory card's unit count (issue #972): the card's value is every unit the
@@ -987,7 +997,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.attentionAlerts.length
       + (this.isRestockSyncReminderShown ? 1 : 0)
       + (this.nayaxSaleReviewAlert?.isShown ? 1 : 0)
-      + (this.inventoryCostAttentionAlert?.isShown ? 1 : 0);
+      + (this.inventoryCostAttentionAlert?.isShown ? 1 : 0)
+      + (this.unimportedNayaxProductAlert?.isShown ? 1 : 0);
   }
 
   get attentionCountLabel(): string {

@@ -1742,6 +1742,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
+| Dashboard → Needs attention, "Nayax products are selling but aren't in your products" (issue #1352) | `GET api/catalogue-review/attention` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, and `POST api/site-commissions/agreements/{agreementId}/end` since issue #1254) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
@@ -10392,6 +10393,21 @@ renders it as five parts:
    since #1011 that link also carries `syncRestock=open`, so it lands on the machine with its Sync
    Restock dialog already open. The only actions are the existing Pick List and Needs Ordering
    routes.
+
+   Three feature alerts have since joined the same grid, each a component that owns its own read,
+   its own gates and its own wording, and each counted once by `attentionCount` while it is shown:
+   `NayaxSaleReviewAlertComponent` (#1105), `InventoryCostAttentionAlertComponent` (see
+   [Products needing cost attention](#products-needing-cost-attention)) and
+   `UnimportedNayaxProductAlertComponent` (#1352). The last of these says, for example, "3 Nayax
+   products are selling but aren't in your products: Monster Original, Coke Zero 600ml and 1 more",
+   links to **Import products** (`/products/import`), and is seen by a Manager and an Owner alone -
+   it reads `GET api/catalogue-review/attention`, which requires `Imports.Run`, so an Operator is
+   refused by the endpoint and is never shown the tile. It asks nothing at all - no request is made -
+   while that capability is not affirmatively granted, while the business has no Nayax connection
+   (`providerRecords` on the shared provider-availability signal), or during a support session, which
+   grants `Imports.Run` but cannot run the import. A failed read shows nothing, the same rule the
+   other two alerts follow. See
+   [Nayax products selling without a local product](#nayax-products-selling-without-a-local-product-issue-1352).
 3. **Site and machine performance**, one card composed from `SiteMachinePerformanceComponent` and
    described in [its own section](#site-and-machine-performance-issue-987) below. It replaced the
    separate **Site performance** and **Machine performance** cards this issue shipped, and the
@@ -17909,6 +17925,16 @@ timestamp repair are behind. All three are `POST`, including the one that previe
 provider's live catalogue and records the review the apply is then authorised by, and a cached `GET`
 would hand a caller a review id for a catalogue it never read.
 
+A fourth route sits under the same prefix on its own controller,
+`InventoryApi.Controllers.CatalogueReviewAttentionController`: `GET api/catalogue-review/attention`
+(`Imports.Run`, no plan gate), the Dashboard's read of what the import has left to do. It is declared
+separately rather than added to the controller above, whose three deliberately reviewed `POST`
+surfaces over the catalogue and over historical sale attribution are pinned to exactly three by
+`CatalogueReviewApiTests` — this one reads stored rows, writes nothing and decides nothing, which is
+the same reason the Super Admin plan-grant and SQS-sender surfaces are their own controllers under the
+businesses prefix. See
+[Nayax products selling without a local product](#nayax-products-selling-without-a-local-product-issue-1352).
+
 **What the review reports.** `Inventory.Application.CatalogueReview.StartCatalogueReview` reads the
 operator's products and groups through the existing `INayaxLynxClient` port, as one concurrent
 fan-out of two independent calls — the shape the direct import used — and reconciles them against the
@@ -18054,6 +18080,61 @@ neither is historical financial data and neither may be a reason a product canno
 table is tenant-owned in the ordinary way, so two businesses may review and link the same provider
 ids and neither can read, apply or resolve anything of the other's
 (`EfCatalogueReviewStoreTenancyTests`).
+
+#### Nayax products selling without a local product (issue #1352)
+
+Until this issue nothing told anyone that the Nayax catalogue held products the business had never
+imported: the only way to find out was to open Import products, which reads Nayax live. That matters
+because a sale of an unimported product is stored with **no local product** — `NayaxSales.ProductId`
+null with `ProviderProductIdIsRaw` true — so the machine really did dispense a unit and nothing in the
+inventory or the costing knows about it: the sale takes no stock and carries no cost.
+
+`GET api/catalogue-review/attention` (`CatalogueReviewAttentionController`, `Imports.Run`, no plan
+gate) answers `{ unimportedProductCount, examples: [ { nayaxProductId, productName } ] }` with at most
+three examples, most recently sold first. It carries no amount, price, cost or quantity. It is read
+through `Inventory.Application.CatalogueReview.GetUnimportedProviderProductAttention` and the
+`IUnimportedProviderProductReader` port (`EfUnimportedProviderProductReader`); both tables are
+tenant-owned, so the central query filters keep it to the caller's business and the adapter carries no
+business predicate of its own.
+
+**What qualifies, and what clears it.** The sale filter is the catalogue review's own unresolved-sale
+filter (`EfCatalogueReviewStore.UnresolvedSaleCountsAsync`): `ProductId` null, `Provider` Nayax,
+`ProviderProductIdIsRaw` true and `NayaxProductId` present. A provenance-unknown row is excluded for
+the reason it is excluded there — its stored number may be a raw provider id or the local product id
+the old synchronization wrote, so it is evidence about nothing. A raw sale that already carries a local
+`ProductId` is **not** counted even when its `NayaxProductId` is one no product holds: that sale has a
+product. The count is of **distinct** `NayaxProductId` values for which no product of the business —
+retired products included, because a retired row still carries the provider's id — holds that id as its
+`ExternalProductId`, compared as the opaque `ExternalId` text through
+`Inventory.Domain.Providers.NayaxExternalId` and never as a local key (issue #735). So what clears the
+alert is a **product**: the link or create Import products performs. Attributing the old sales to that
+product stays the Owner's separate, audited step, and a business that never takes it is still answered
+zero, because there is nothing left to import.
+
+**The window is thirty business calendar dates including today**, so an old one-off sale of a product
+the business never intends to stock does not nag for ever.
+`Inventory.Domain.Providers.UnimportedProviderProductAttentionPolicy` holds the rule (`WindowDays`,
+`MaxExamples`, `FirstBusinessDate`) and the use case turns its date into an instant through
+`IBusinessCalendar` — the business's own configured zone, `Australia/Sydney` for this business — from
+one reading of `IClock`, with "now" as the upper bound. It is a count of dates rather than of hours, so
+a daylight-saving change inside the window cannot move its first day: with today 20 October 2026 the
+window starts at `20 September 14:00Z` (AEST, UTC+10) and not at `21 September 03:00Z`. See
+[Time](#time).
+
+**What proves it.** `UnimportedProviderProductAttentionPolicyTests` (unit) pins the thirty-date span
+and the three examples; `GetUnimportedProviderProductAttentionTests` (unit) that the use case asks for
+that window, reads the clock once and publishes the store's answer unchanged;
+`UnimportedProviderProductAttentionTests` (relational, two businesses, real Sydney calendar) every
+qualifying condition one disqualified sale at a time, the distinct count, the latest sale's name, the
+linked and the retired product each clearing the count with the sales still unresolved, both date
+boundaries with and without a daylight-saving crossing, the three examples' order, and that another
+business's sales and products are invisible; and `CatalogueReviewAttentionApiTests` the published
+surface over real HTTP — an Operator refused, a Manager and an Owner answered the same figures, no
+amount anywhere in the body, and an anonymous request refused.
+
+**On the Dashboard** it is `UnimportedNayaxProductAlertComponent` in the Needs attention panel (see
+[Restockroo dashboard and authenticated navigation](#restockroo-dashboard-and-authenticated-navigation-issue-972)),
+which also records the three conditions under which it makes no request at all.
 
 ### The dedicated Import products page (issue #888)
 
