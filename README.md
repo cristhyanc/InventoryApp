@@ -3504,6 +3504,44 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
   Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
   reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
 
+## Reviewing a product replacement in Sync Restock
+
+Most Sync Restock rows are a refill Nayax counted, and **Apply** is all they need. A row badged
+**Product replacement** is different: Nayax told you a slot's product changed and reported two
+product *names* and no quantity, so nothing can be applied until you say what actually happened.
+The row opens its own short form under itself for exactly that.
+
+- **Confirm or correct both products.** The row shows the outgoing and incoming names exactly as
+  Nayax reported them, and beside each one a product search box over your own active products. Each
+  box is already filled in with the product the sync suggested, and you can change it; when there
+  was no suggestion the box is empty and says why. The incoming product is always required — it is
+  what the slot now holds — even when you load nothing.
+- **Quantity restocked** is how many units you put in, and it comes prefilled with what Nayax
+  currently shows in the slot. **Treat that number as a floor, not the truth**: the machine may have
+  sold some since the replacement, so the form says it may be low, and you should correct it to what
+  you actually loaded. When there was no suggestion the field is blank with its reason. Underneath it
+  the form shows how many of the chosen product your storage holds, and warns you — *"Insufficient
+  storage: needs 7, has 4 (short 3)"* — before you try to load more than that.
+- **Quantity removed** and **What happened** cover the units you took out. **None** is the default
+  and records nothing for them, and the quantity stays disabled while it is selected. **Returned to
+  storage** puts them back in storage; **Damaged** and **Expired** write them off. Choose one of
+  those three and the quantity becomes editable and has to be at least one.
+- **A possible double count is flagged on the row**, as before, when a refill you had already
+  recorded by hand looks like the same event.
+- **Apply replacement asks you to confirm first.** The button stays disabled until the form could
+  actually be sent, then shows a one- or two-sentence summary of exactly what will be written — for
+  example *"Record 7 unit(s) of Red Bull Red Edition 250mL loaded into the machine. 4 unit(s) of V
+  Energy 250ML will be returned to storage."* — and writes nothing until you confirm it. The dialog
+  re-syncs afterwards, so an applied replacement drops off the list. If the server refuses it (not
+  enough storage, for instance) the reason appears on the row in the server's own words and the
+  dialog stays open, so you can fix the numbers and try again.
+- **Already recorded manually is still there**, beside the new action: if you already entered these
+  movements by hand, that is still the right answer and nothing is written.
+
+See [docs/architecture.md § Reviewing and applying a product
+replacement](docs/architecture.md#reviewing-and-applying-a-product-replacement-in-the-dialog-issue-1327)
+for the full walkthrough, the validation rules and the movements each choice writes.
+
 ## Nayax sales to review
 
 Issue #1105. Sales that arrive from Nayax's queue are checked every hour against the business's own
