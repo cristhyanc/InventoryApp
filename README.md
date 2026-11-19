@@ -514,8 +514,7 @@ refreshing it never asks for a sign-in or reads any business, account or Nayax d
 - The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
   compare supplier prices and plan your next refill in one place." Directly under it sits the public
   beta notice - "Pro access is free during our public beta. No credit card required." - and, directly
-  under that, the export notice: "Data exports are not part of the free beta. Downloading your data
-  as CSV or Excel will need a paid plan once paid plans launch." No price, plan card or beta end date
+  under that, the export notice: "CSV and Excel exports are included during the free beta. They will need a paid plan once paid plans launch." No price, plan card or beta end date
   appears anywhere on the page (see [Pricing on the landing page](#pricing-on-the-landing-page-issue-971)
   below).
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
