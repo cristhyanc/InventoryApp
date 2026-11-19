@@ -296,6 +296,29 @@ internal static class EfReportingSharedQueries
     }
 
     /// <summary>
+    /// Whether one imported payout's own declared settlement period lies <em>wholly inside</em> a
+    /// requested reporting range - the single rule that decides which payouts a range may count
+    /// (issue #1253). Both the payout's bounds and the range are compared as date-only values, the
+    /// way <see cref="EfReconciliationReportFactsProvider"/> has always matched a period, and a
+    /// payout that declares no period at all lies inside nothing.
+    ///
+    /// <para>It lives here, beside <see cref="ImportedSummaryAsync"/>, because bookkeeping and
+    /// reconciliation must never disagree about which payouts belong to a range: both call this one
+    /// predicate instead of re-expressing the comparison, so the boundary convention cannot be
+    /// changed in one report and not the other (AGENTS.md § Architecture rules: one authoritative
+    /// calculation feeds all presentations). Reconciliation's own per-period matching - its
+    /// device/payment/fee navigation graph and card-gross fallback cascade - stays local to that
+    /// adapter; only this date comparison is shared.</para>
+    /// </summary>
+    /// <param name="periodStart">The first date the payout settles, or <c>null</c> when it declares none.</param>
+    /// <param name="periodEnd">The last date it settles, inclusive, or <c>null</c> for the same reason.</param>
+    /// <param name="from">The first requested date.</param>
+    /// <param name="endExclusive">The day after the last requested date, as every caller computes it.</param>
+    public static bool IsPeriodWhollyInside(DateTime? periodStart, DateTime? periodEnd, DateTime from, DateTime endExclusive) =>
+        periodStart.HasValue && periodEnd.HasValue &&
+        periodStart.Value.Date >= from.Date && periodEnd.Value.Date < endExclusive;
+
+    /// <summary>
     /// The period's imported settlement facts, read through the tenant query filters for the
     /// requested date range and machine scope.
     ///
@@ -387,10 +410,9 @@ internal static class EfReportingSharedQueries
             Period = new ImportedReimbursementPeriodDto(
                 x.PeriodStart?.Date ?? default, x.PeriodEnd?.Date ?? default, x.Total),
             // Wholly inside the requested range, on the period the settlement itself declares
-            // (issue #1253). Both bounds are date-only values and are compared as such, the way
-            // the reconciliation provider has always matched a period.
-            IsFullyCovered = x.PeriodStart.HasValue && x.PeriodEnd.HasValue &&
-                x.PeriodStart.Value.Date >= from.Date && x.PeriodEnd.Value.Date < endExclusive,
+            // (issue #1253), through the one shared predicate the reconciliation provider matches
+            // its own periods with.
+            IsFullyCovered = IsPeriodWhollyInside(x.PeriodStart, x.PeriodEnd, from, endExclusive),
             FeesExGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSum ?? 0m),
             FeesIncludingGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSumWithVat ?? f.TotalSum ?? 0m),
             Gst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f =>
@@ -436,7 +458,8 @@ internal static class EfReportingSharedQueries
                 fullyCovered.Any(x => x.HasImportedTotal) ? fullyCovered.Sum(x => x.NetSettlement) : null,
                 Periods(fullyCovered), Periods(rows.Where(x => !x.IsFullyCovered)),
                 rows.Count != 0, rows.Any(x => x.HasGst), rows.Count != 0,
-                rows.Select(x => x.PayoutDate).FirstOrDefault(), importedCardTransactionCount);
+                // Never empty here: the early return above left when no reimbursement row overlapped.
+                rows.Select(x => x.PayoutDate).First(), importedCardTransactionCount);
 
         var matchingDevices = rows.SelectMany(x => x.Devices)
             .Where(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value)

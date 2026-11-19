@@ -72,10 +72,21 @@ public static class DashboardReimbursementPolicy
         var actual = inputs.ActualReimbursement;
         decimal? difference = actual.HasValue ? actual.Value - expected : null;
         var isWithinTolerance = difference.HasValue && ReconciliationStatusPolicy.IsReconciled(difference.Value, Tolerance);
-        var status = actual.HasValue
-            ? isWithinTolerance ? ReconciledStatus : NeedsReviewStatus
-            : inputs.HasPartlyCoveredPayout ? RangeCutsPayoutPeriodStatus : PendingStatus;
+        var status = Status(actual.HasValue, isWithinTolerance, inputs.HasPartlyCoveredPayout);
 
         return new DashboardReimbursementResult(expected, actual, difference, isWithinTolerance, status);
+    }
+
+    /// <summary>
+    /// The one status rule, as the three questions it answers in order: was there an actual
+    /// reimbursement to compare, did it agree, and - when there was none - did the range cut a
+    /// payout period or does no payout relate to these dates at all.
+    /// </summary>
+    private static string Status(bool hasActual, bool isWithinTolerance, bool hasPartlyCoveredPayout)
+    {
+        if (hasActual)
+            return isWithinTolerance ? ReconciledStatus : NeedsReviewStatus;
+
+        return hasPartlyCoveredPayout ? RangeCutsPayoutPeriodStatus : PendingStatus;
     }
 }
