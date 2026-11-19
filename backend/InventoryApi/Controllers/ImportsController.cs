@@ -38,9 +38,10 @@ namespace InventoryApi.Controllers;
 /// <para><strong>A long sales history is a second, background import</strong> (issue #1304).
 /// <c>POST api/imports/nayax-sales-history</c> accepts a CSV of up to 250,000 rows, stores it and
 /// answers at once with a job id; the background worker streams the rows and commits them in batches
-/// of 2,000, each in its own short write-locked transaction. It carries the same capability and the
-/// same plan requirement as the normal sales file upload, applies the same per-row rules, and leaves
-/// that upload's own 5,000-row ceiling exactly as it is.</para>
+/// of <see cref="NayaxSalesHistoryPolicy.BatchRows"/>, each in its own short write-locked
+/// transaction. It carries the same capability and the same plan requirement as the normal sales
+/// file upload, applies the same per-row rules, and leaves that upload's own 5,000-row ceiling
+/// exactly as it is.</para>
 ///
 /// <para><strong>A reimbursement report is uploaded here and nowhere else</strong> (issue #1237).
 /// <c>POST api/imports/pending-xml</c> imported whatever XML somebody with server access had left in
@@ -115,7 +116,8 @@ public sealed class ImportsController : ControllerBase
     /// format, the file's shape and the 250,000-row ceiling, counted by a streamed read - so a bad
     /// file is a <c>400</c> the operator sees in seconds, and an accepted one is stored as a queued
     /// job. The reply is <c>202</c> with the job id, and the background worker does the importing: it
-    /// streams the rows and commits them 2,000 at a time, each batch in its own short transaction.</para>
+    /// streams the rows and commits them <see cref="NayaxSalesHistoryPolicy.BatchRows"/> at a time,
+    /// each batch in its own short transaction.</para>
     ///
     /// <para><strong>The normal upload above is unchanged.</strong> It keeps its own formats, its
     /// 5,000-row ceiling and its synchronous counts exactly as issue #1300 delivered them. This is a

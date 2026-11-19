@@ -42,7 +42,7 @@ public class NayaxSalesHistoryImportJobTests
         Assert.Equal(0, result.Progress.Skipped);
         Assert.Equal(0, result.Progress.Invalid);
 
-        // Two batches of 2,000 and one of 5: the batch size is the policy's, whatever the file holds.
+        // One full batch and one of 5: the batch size is the policy's, whatever the file holds.
         Assert.Equal(2, transactions.Committed);
         Assert.Equal(transactions.Begun, transactions.Committed);
 
@@ -159,8 +159,8 @@ public class NayaxSalesHistoryImportJobTests
 
         await using (var db = fixture.Context())
         {
-            // The second batch's transaction never opens, so the first batch's 2,000 rows are
-            // committed and nothing of the second is.
+            // The second batch's transaction never opens, so the first batch's rows are committed
+            // and nothing of the second is.
             var failing = new FailingSalesHistoryTransactions(
                 new EfNayaxSalesImportTransactions(db), failOnBatch: 2);
 

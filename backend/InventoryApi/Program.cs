@@ -579,9 +579,9 @@ builder.Services.AddHostedService<ReimbursementImportJobWorker>();
 // operators upload. It first looks for work about forty-five seconds after startup - a little after
 // the reimbursement worker, so a restart is not two imports competing for the one write lock - and
 // then takes the oldest unfinished job, one at a time, each in its own service scope resolved to that
-// job's own business. It streams the file and commits 2,000 rows at a time, releasing the write lock
-// between batches, so a user save or the Nayax queue reader's own save goes through while a year of
-// history is importing.
+// job's own business. It streams the file and commits NayaxSalesHistoryPolicy.BatchRows rows at a
+// time - the one place that number lives - releasing the write lock between batches, so a user save
+// or the Nayax queue reader's own save goes through while a year of history is importing.
 //
 // It is in-process for the reasons the three workers above are - one writer on one SQLite file, no
 // second identity or configuration surface - and App Service Always On is the same human

@@ -142,8 +142,9 @@ public class StreamingNayaxSalesHistoryCsvReaderTests
     /// <para>What is measured is the <em>reader</em>, deliberately, and not the import: the bytes of
     /// the uploaded file are held once (bounded by
     /// <see cref="NayaxSalesHistoryPolicy.MaxUploadBytes"/>, not by the row count) and each batch of
-    /// 2,000 rows is held by the import while it applies it. What this case rules out is the thing
-    /// the uploaded import does and this one must not: materialising the file's rows.</para>
+    /// <see cref="NayaxSalesHistoryPolicy.BatchRows"/> rows is held by the import while it applies
+    /// it. What this case rules out is the thing the uploaded import does and this one must not:
+    /// materialising the file's rows.</para>
     /// </summary>
     [Fact]
     public void Reading_two_hundred_thousand_rows_does_not_grow_with_the_rows()

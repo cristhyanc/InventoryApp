@@ -20,12 +20,13 @@ namespace InventoryApi.Tests.Application.Imports;
 /// of the uploaded import's ceiling is safe at all.</para>
 ///
 /// <para><strong>Why the file in this case is not 250,000 rows.</strong> The hold being measured is
-/// per batch and a batch is 2,000 rows whatever the file holds, so three batches measure the same
-/// thing as a hundred and twenty-five of them - and this repository stops any test that runs past 90
-/// seconds (AGENTS.md § Commands), which a quarter of a million rows of real costing would. The
-/// measured per-batch figures are written to the test output, which is where the pull request's
-/// numbers come from, and the total for a full-length history is stated there as what it is: the
-/// per-batch figure multiplied by the batches, not a measured end-to-end run.</para>
+/// per batch and a batch is <see cref="NayaxSalesHistoryPolicy.BatchRows"/> rows whatever the file
+/// holds, so twelve batches measure the same thing as five hundred of them - and this repository
+/// stops any test that runs past 90 seconds (AGENTS.md § Commands), which a quarter of a million
+/// rows of real costing would. The measured per-batch figures are written to the test output, which
+/// is where the pull request's numbers come from, and the total for a full-length history is stated
+/// there as what it is: the per-batch figure multiplied by the batches, not a measured end-to-end
+/// run.</para>
 ///
 /// <para>What is measured is the interval between a batch's transaction being opened and committed,
 /// from outside the use case, over a real SQLite <strong>file</strong> and the production wiring -

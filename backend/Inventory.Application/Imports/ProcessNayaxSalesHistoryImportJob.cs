@@ -156,7 +156,8 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         // Read once for the whole attempt, outside every batch's transaction: the catalogue a row's
         // product name is matched against, and the sales whose two candidate products disagreed when
         // issue #758 resolved the existing history. Neither changes while one job runs, and reading
-        // them per batch would be 125 reads of the whole catalogue for a file at the row ceiling.
+        // them per batch would be one read of the whole catalogue every
+        // NayaxSalesHistoryPolicy.BatchRows rows - hundreds of them for a file at the row ceiling.
         var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
         var conflicting = (await _store.GetConflictingTransactionIdsAsync(cancellationToken)).ToHashSet();
 
