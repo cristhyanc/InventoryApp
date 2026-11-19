@@ -644,7 +644,9 @@ public class MoneyReportSydneyBusinessDayTests
         Assert.Equal(11m, monday.StructuredOperatingExpenses);
         Assert.Equal(4m, monday.DeliveryCosts);
         Assert.Equal(2m, monday.PackageCosts);
-        Assert.Equal(0m, sunday.ActualReimbursement);
+        // No payout relates to Sunday at all, so that day has no actual reimbursement rather than
+        // one of zero (issue #1253).
+        Assert.Null(sunday.ActualReimbursement);
         Assert.Equal(22m, sunday.StructuredOperatingExpenses);
         Assert.Equal(0m, sunday.DeliveryCosts);
     }

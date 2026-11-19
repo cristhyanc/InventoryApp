@@ -32,6 +32,11 @@ public sealed record BookkeepingReportFacts(
     decimal UncostedSalesAmount,
     decimal ReceiptDeliveryCost,
     decimal ReceiptPackageCost,
+    // The actual reimbursement for the range and whether there is one at all. Since issue #1253
+    // these count only the imported payouts whose own declared sales period lies *wholly inside*
+    // the requested range: a payout the range merely overlaps settles days outside it, so its whole
+    // total is not this range's money. ImportedHasNetSettlement is false - "Not available" - when no
+    // such payout states a total, which is never the same statement as a settlement of zero.
     bool ImportedHasNetSettlement,
     decimal ImportedNetSettlement,
     bool ImportedContainsRows,
@@ -72,6 +77,20 @@ public sealed record BookkeepingReportFacts(
     /// contradicted by the business's own Nayax <c>lastSales</c>, or excluded by the Owner.
     /// </summary>
     public int ExcludedByReviewTransactionCount { get; init; }
+
+    /// <summary>
+    /// The imported payouts whose declared period lies wholly inside the requested range - the ones
+    /// <see cref="ImportedNetSettlement"/> is the total of - with the period dates each settles
+    /// (issue #1253), so the report can label the actual reimbursement with what it is made of.
+    /// </summary>
+    public IReadOnlyList<ImportedReimbursementPeriodDto> ImportedFullyCoveredPeriods { get; init; } = [];
+
+    /// <summary>
+    /// The imported payouts the requested range only <em>partly</em> overlaps. They are reported on
+    /// their own so a reader can see which payout period the range cut, and they are part of no
+    /// total: neither the actual reimbursement nor the net settlement includes them.
+    /// </summary>
+    public IReadOnlyList<ImportedReimbursementPeriodDto> ImportedPartlyCoveredPeriods { get; init; } = [];
 
     /// <summary>
     /// The coverage evidence this period rests on (issue #730), in the one carrier every other

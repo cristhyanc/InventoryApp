@@ -14,7 +14,10 @@ public record DashboardReportDto(
     int UnmappedProductCount,
     ReportingDataQualityDto DataQuality,
     decimal NayaxFees = 0m,
-    decimal NetReimbursement = 0m,
+    // The imported reimbursement for the requested range, republished from the bookkeeping report
+    // that decides it. Nullable since issue #1253: a range with no payout lying wholly inside it has
+    // no actual reimbursement at all, which is "Not available" and never a zero.
+    decimal? NetReimbursement = 0m,
     decimal SiteCommission = 0m,
     decimal? NetProfit = null,
     decimal? NetMarginPercent = null,
@@ -39,8 +42,8 @@ public record DashboardReportDto(
     public decimal? GrossMarginPercent { get; init; } = GrossProfit.HasValue && Sales != 0m ? GrossProfit / Sales * 100m : null;
     public decimal NayaxFeesIncludingGst { get; init; } = 0m;
     public decimal ExpectedReimbursement { get; init; } = 0m;
-    public decimal ActualReimbursement { get; init; } = NetReimbursement;
-    public decimal ReimbursementDifference { get; init; } = 0m;
+    public decimal? ActualReimbursement { get; init; } = NetReimbursement;
+    public decimal? ReimbursementDifference { get; init; } = 0m;
     public bool IsReconciled { get; init; }
     public string ReconciliationStatus { get; init; } = "Pending";
     public decimal ReconciliationTolerance { get; init; } = 0.01m;

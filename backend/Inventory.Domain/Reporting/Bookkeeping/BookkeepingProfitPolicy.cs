@@ -27,7 +27,8 @@ public readonly record struct BookkeepingProfitResult(
     decimal? DirectMarginPercent,
     decimal? NetProfit,
     decimal? NetMarginPercent,
-    decimal NetSettlement);
+    decimal NetSettlement,
+    bool IsNetSettlementEstimated);
 
 /// <summary>
 /// Direct profit applies when a machine filter is active; net (whole-business) profit applies
@@ -57,9 +58,15 @@ public static class BookkeepingProfitPolicy
             ? grossProfit!.Value - inputs.FeesIncludingGst - inputs.SiteCommission - inputs.ReceiptCosts - inputs.OperatingExpensesTotal
             : null;
 
-        var netSettlement = inputs.ImportedHasNetSettlement
-            ? inputs.ImportedNetSettlement
-            : inputs.CardSales - inputs.FeesIncludingGst;
+        // The imported net settlement when a payout the range covers in full recorded one, and
+        // otherwise this period's own card sales less its fees. The fallback is an *estimate*, and
+        // since issue #1253 it is reported as one: it is calculated from the figures this report
+        // holds, not a settlement anybody paid, and an estimate presented as a fact is the reason
+        // that issue exists (AGENTS.md § Reimbursements and reconciliation).
+        var isNetSettlementEstimated = !inputs.ImportedHasNetSettlement;
+        var netSettlement = isNetSettlementEstimated
+            ? inputs.CardSales - inputs.FeesIncludingGst
+            : inputs.ImportedNetSettlement;
 
         decimal? directMarginPercent = directProfit.HasValue
             ? ReportingCalculations.MarginPercent(inputs.Sales,
@@ -72,6 +79,6 @@ public static class BookkeepingProfitPolicy
             : null;
 
         return new BookkeepingProfitResult(grossProfit, isProfitComplete, directProfit, directMarginPercent,
-            netProfit, netMarginPercent, netSettlement);
+            netProfit, netMarginPercent, netSettlement, isNetSettlementEstimated);
     }
 }

@@ -129,8 +129,12 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             UncostedSalesAmount: uncosted.Sum(x => x.SettlementValue),
             ReceiptDeliveryCost: receiptDelivery,
             ReceiptPackageCost: receiptPackage,
-            ImportedHasNetSettlement: imported.HasNetSettlement,
-            ImportedNetSettlement: imported.NetSettlement,
+            // The actual reimbursement and the net settlement count only the payouts whose own
+            // declared period lies wholly inside the requested range (issue #1253): a week's payout
+            // is not a day's money, and a range that cuts a payout period reports what it cut
+            // instead of adding the whole total in.
+            ImportedHasNetSettlement: imported.FullyCoveredNetSettlement.HasValue,
+            ImportedNetSettlement: imported.FullyCoveredNetSettlement ?? 0m,
             ImportedContainsRows: imported.ContainsRows,
             ImportedContainsGstClassification: imported.ContainsGstClassification,
             ImportedMachineFilterMatched: imported.MachineFilterMatched,
@@ -150,6 +154,8 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             MissingStatusTransactionCount: statuses.Count(x => x is null))
         {
             Coverage = coverage,
+            ImportedFullyCoveredPeriods = imported.FullyCoveredPeriods,
+            ImportedPartlyCoveredPeriods = imported.PartlyCoveredPeriods,
             ExcludedByReviewTransactionCount = statusRows.Count(x =>
                 NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };

@@ -63,7 +63,15 @@ public class ReportingContractJsonSerializationTests
                 // the signed difference between them and the status/tolerance they were decided
                 // with. `netSettlement` above keeps its own name, type and meaning.
                 "expectedReimbursement", "actualReimbursement", "reimbursementDifference",
-                "isReconciled", "reconciliationStatus", "reconciliationTolerance",
+                "isReconciled", "reconciliationStatus",
+                "reconciliationTolerance",
+                // Added by issue #1253, additively: the payout periods the actual reimbursement is
+                // made of, the payouts the requested range only partly overlaps (part of no total),
+                // and whether `netSettlement` above is this report's own estimate. In the same
+                // release `actualReimbursement` and `reimbursementDifference` became nullable, so a
+                // range with no payout wholly inside it reports `null` - "Not available" - instead
+                // of a zero no settlement ever paid.
+                "reimbursementPeriods", "partlyCoveredReimbursements", "isNetSettlementEstimated",
                 "partialCostOfGoods", "isCogsComplete", "uncostedTransactionCount",
                 "uncostedSalesAmount", "structuredOperatingExpenses", "operatingExpenseGst",
                 "operatingExpensesByCategory", "directProfit", "directMarginPercent", "nayaxProcessingFees",

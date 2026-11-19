@@ -295,6 +295,28 @@ internal static class EfReportingSharedQueries
         return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
     }
 
+    /// <summary>
+    /// The period's imported settlement facts, read through the tenant query filters for the
+    /// requested date range and machine scope.
+    ///
+    /// <para>Two different questions are answered from the same rows since issue #1253. A payout
+    /// whose declared sales period lies <em>wholly inside</em> the requested range settles only days
+    /// the range asked about, so its total is this range's
+    /// <see cref="ImportedSummary.FullyCoveredNetSettlement"/>.
+    /// A payout the range only <em>partly</em> overlaps settles days outside it as well: its whole
+    /// total is not this range's money, it is reported on its own in
+    /// <see cref="ImportedSummary.PartlyCoveredPeriods"/> with its own period dates, and it is added
+    /// to no total (AGENTS.md § Reimbursements and reconciliation). The wholly-inside rule is the
+    /// one <see cref="EfReconciliationReportFactsProvider"/> already matched its periods with, so
+    /// the two reports now agree about which payouts belong to a range.</para>
+    ///
+    /// <para><see cref="ImportedSummary.Settlement"/>, <see cref="ImportedSummary.NetSettlement"/>,
+    /// the fee figures and <see cref="ImportedSummary.ContainsRows"/> are deliberately unchanged and
+    /// still cover every <em>overlapping</em> row: the fees are prorated per day by their own policy
+    /// and the daily report's totals are issue #1262's question, not this one's, while overlapping
+    /// settlement data still makes this period's fee figures unverified rather than missing
+    /// (issue #731).</para>
+    /// </summary>
     public static async Task<ImportedSummary> ImportedSummaryAsync(AppDbContext db, DateTime from, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)
     {
         var reimbursements = db.ImportedReimbursements.AsNoTracking()
@@ -304,11 +326,13 @@ internal static class EfReportingSharedQueries
             {
                 Id = x.Id,
                 Total = x.Total,
-                PayoutDate = x.ReimbursementPayoutDate
+                PayoutDate = x.ReimbursementPayoutDate,
+                PeriodStart = x.ReimbursementStartDate,
+                PeriodEnd = x.ReimbursementEndDate
             })
             .ToListAsync(cancellationToken);
         if (reimbursementRows.Count == 0)
-            return new ImportedSummary(0m, 0m, 0m, 0m, 0m, false, false, false, false);
+            return new ImportedSummary(0m, 0m, 0m, 0m, 0m, null, [], [], false, false, false);
 
         var reimbursementIds = reimbursementRows.Select(x => x.Id).ToList();
         var feeRows = await db.ImportedFees.AsNoTracking()
@@ -360,6 +384,13 @@ internal static class EfReportingSharedQueries
             NetSettlement = x.Total ?? 0m,
             HasImportedTotal = x.Total.HasValue,
             PayoutDate = x.PayoutDate,
+            Period = new ImportedReimbursementPeriodDto(
+                x.PeriodStart?.Date ?? default, x.PeriodEnd?.Date ?? default, x.Total),
+            // Wholly inside the requested range, on the period the settlement itself declares
+            // (issue #1253). Both bounds are date-only values and are compared as such, the way
+            // the reconciliation provider has always matched a period.
+            IsFullyCovered = x.PeriodStart.HasValue && x.PeriodEnd.HasValue &&
+                x.PeriodStart.Value.Date >= from.Date && x.PeriodEnd.Value.Date < endExclusive,
             FeesExGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSum ?? 0m),
             FeesIncludingGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSumWithVat ?? f.TotalSum ?? 0m),
             Gst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f =>
@@ -387,11 +418,25 @@ internal static class EfReportingSharedQueries
             .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
             .Sum(p => p.Count);
 
+        // The payouts this range may count, and the payouts it only cuts (issue #1253). Ordered by
+        // the period they settle so both lists read as a timeline wherever they are published.
+        static List<ImportedReimbursementPeriodDto> Periods(IEnumerable<ImportedReportRow> source) =>
+            source.OrderBy(x => x.Period.PeriodStart).ThenBy(x => x.Period.PeriodEnd)
+                .Select(x => x.Period).ToList();
+        var fullyCovered = rows.Where(x => x.IsFullyCovered).ToList();
+
         if (!machineId.HasValue)
             return new ImportedSummary(rows.Sum(x => x.Settlement), rows.Sum(x => x.FeesExGst),
                 rows.Sum(x => x.FeesIncludingGst), rows.Sum(x => x.Gst),
                 rows.Sum(x => x.NetSettlement),
-                rows.Count != 0, rows.Any(x => x.HasGst), rows.Any(x => x.HasImportedTotal), rows.Count != 0, rows.Select(x => x.PayoutDate).FirstOrDefault(), importedCardTransactionCount);
+                // The actual reimbursement: the wholly-inside payouts' own totals, and *nothing*
+                // when none of them states one. A total nobody imported is not a settlement of
+                // zero (AGENTS.md § Nayax processing fees and GST: missing provider data is not a
+                // zero), so the report says "Not available" rather than comparing against 0.
+                fullyCovered.Any(x => x.HasImportedTotal) ? fullyCovered.Sum(x => x.NetSettlement) : null,
+                Periods(fullyCovered), Periods(rows.Where(x => !x.IsFullyCovered)),
+                rows.Count != 0, rows.Any(x => x.HasGst), rows.Count != 0,
+                rows.Select(x => x.PayoutDate).FirstOrDefault(), importedCardTransactionCount);
 
         var matchingDevices = rows.SelectMany(x => x.Devices)
             .Where(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value)
@@ -405,10 +450,16 @@ internal static class EfReportingSharedQueries
             .Sum(d => d.Payments.Count != 0
                 ? d.Payments.Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card).Sum(p => p.Amount)
                 : d.Gross);
+        // The machine-filtered report answers the same two questions over the payouts that have a
+        // device row for the selected machine: only those lying wholly inside the range are its
+        // actual reimbursement, and the ones the range cuts are listed beside it (issue #1253).
+        var matchingFullyCovered = matchingRows.Where(x => x.IsFullyCovered).ToList();
         return new ImportedSummary(matchingSettlement, 0m,
             0m, 0m,
             matchingRows.Sum(x => x.NetSettlement),
-            rows.Count != 0, matchingRows.Any(x => x.HasGst), matchingRows.Any(x => x.HasImportedTotal), matchingDevices.Count != 0,
+            matchingFullyCovered.Any(x => x.HasImportedTotal) ? matchingFullyCovered.Sum(x => x.NetSettlement) : null,
+            Periods(matchingFullyCovered), Periods(matchingRows.Where(x => !x.IsFullyCovered)),
+            rows.Count != 0, matchingRows.Any(x => x.HasGst), matchingDevices.Count != 0,
             matchingRows.Select(x => x.PayoutDate).FirstOrDefault(),
             matchingDevices.SelectMany(d => d.Payments)
                 .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
@@ -436,15 +487,28 @@ internal static class EfReportingSharedQueries
         bool UsesMultipleRates,
         IReadOnlyList<string> Warnings);
 
+    /// <summary>
+    /// The imported settlement facts for one requested range and machine scope.
+    ///
+    /// <para><c>FullyCoveredNetSettlement</c> is the net total of the payouts whose declared period
+    /// lies wholly inside the requested range - the range's <em>actual</em> reimbursement - or
+    /// <c>null</c> when no such payout states one at all, which is "Not available" rather than a
+    /// settlement of zero (issue #1253). <c>FullyCoveredPeriods</c> is those payouts with the period
+    /// dates they settle, and <c>PartlyCoveredPeriods</c> the payouts the range only overlaps, with
+    /// their own dates and totals: they are reported so a reader can see what the range cut, and
+    /// they are part of no amount here.</para>
+    /// </summary>
     internal readonly record struct ImportedSummary(
         decimal Settlement,
         decimal FeesExGst,
         decimal FeesIncludingGst,
         decimal GstOnFees,
         decimal NetSettlement,
+        decimal? FullyCoveredNetSettlement,
+        IReadOnlyList<ImportedReimbursementPeriodDto> FullyCoveredPeriods,
+        IReadOnlyList<ImportedReimbursementPeriodDto> PartlyCoveredPeriods,
         bool ContainsRows,
         bool ContainsGstClassification,
-        bool HasNetSettlement,
         bool MachineFilterMatched,
         DateTime? PayoutDate = null,
         int CardTransactionCount = 0,
@@ -455,6 +519,8 @@ internal static class EfReportingSharedQueries
         public int Id { get; set; }
         public decimal? Total { get; set; }
         public DateTime? PayoutDate { get; set; }
+        public DateTime? PeriodStart { get; set; }
+        public DateTime? PeriodEnd { get; set; }
     }
 
     private sealed class ImportedFeeRow
@@ -497,6 +563,8 @@ internal static class EfReportingSharedQueries
         public decimal FeesIncludingGst { get; set; }
         public decimal Gst { get; set; }
         public DateTime? PayoutDate { get; set; }
+        public ImportedReimbursementPeriodDto Period { get; set; } = new(default, default, null);
+        public bool IsFullyCovered { get; set; }
         public bool HasNet { get; set; }
         public bool HasGst { get; set; }
         public List<ImportedReportDevice> Devices { get; set; } = new();

@@ -486,15 +486,121 @@ public class EfBookkeepingReportFactsProviderTests
         Assert.Equal(0m, facts.ImportedNetSettlement);
     }
 
-    private static ImportedFile ImportedFileWith(DateTime from, DateTime to, decimal total)
+    /// <summary>
+    /// Issue #1253: a payout the requested range only <em>overlaps</em> settles days outside that
+    /// range, so its whole total is not this range's actual reimbursement. The issue's own fixture:
+    /// one payout for 1-7 September 2026 of 680.75, asked about 7 September alone. Nothing lies
+    /// wholly inside that day, so there is no actual reimbursement at all - and the partly covered
+    /// payout is reported separately with its own period dates and total instead of being summed
+    /// into a figure the day never earned (AGENTS.md § Reimbursements and reconciliation: "Do not
+    /// force an overlapping or partial reimbursement into a different requested reporting period").
+    /// </summary>
+    [Fact]
+    public async Task A_payout_the_range_only_overlaps_is_listed_separately_and_is_no_part_of_the_actual()
     {
-        var file = new ImportedFile { FileName = "settlement.xml", FileHash = $"{from:yyyyMM}-{total}", ImportedAt = DateTime.UtcNow };
-        file.Reimbursements.Add(new ImportedReimbursement
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2026, 9, 7), new DateTime(2026, 9, 7), null, CancellationToken.None);
+
+        Assert.False(facts.ImportedHasNetSettlement);
+        Assert.Equal(0m, facts.ImportedNetSettlement);
+        // The settlement data itself still overlaps these dates, so the fee figures stay unverified
+        // rather than missing: that answer is unchanged and is a different question (issue #731).
+        Assert.True(facts.ImportedContainsRows);
+        Assert.Empty(facts.ImportedFullyCoveredPeriods);
+        var partlyCovered = Assert.Single(facts.ImportedPartlyCoveredPeriods);
+        Assert.Equal(new DateTime(2026, 9, 1), partlyCovered.PeriodStart);
+        Assert.Equal(new DateTime(2026, 9, 7), partlyCovered.PeriodEnd);
+        Assert.Equal(680.75m, partlyCovered.Total);
+    }
+
+    /// <summary>
+    /// Issue #1253, the calendar-month case: September 2026 holds one payout it covers in full and
+    /// one that straddles the month end. Only the first is the month's actual reimbursement; the
+    /// straddling payout is reported with its own dates and is part of no total, so a month report
+    /// cannot claim money October settles.
+    /// </summary>
+    [Fact]
+    public async Task A_calendar_month_counts_only_the_payout_it_covers_and_lists_the_one_straddling_its_end()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m));
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 28), new DateTime(2026, 10, 4), 600m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 30), null, CancellationToken.None);
+
+        Assert.True(facts.ImportedHasNetSettlement);
+        Assert.Equal(680.75m, facts.ImportedNetSettlement);
+        Assert.Equal(new DateTime(2026, 9, 1), Assert.Single(facts.ImportedFullyCoveredPeriods).PeriodStart);
+        var straddling = Assert.Single(facts.ImportedPartlyCoveredPeriods);
+        Assert.Equal(new DateTime(2026, 9, 28), straddling.PeriodStart);
+        Assert.Equal(new DateTime(2026, 10, 4), straddling.PeriodEnd);
+        Assert.Equal(600m, straddling.Total);
+    }
+
+    /// <summary>
+    /// The machine-filtered branch of the same query answers the same two questions over the payouts
+    /// that have a device row for the selected machine (issue #1253): the month-end straddler is no
+    /// part of its actual reimbursement either.
+    /// </summary>
+    [Fact]
+    public async Task The_machine_filtered_branch_applies_the_same_wholly_inside_rule()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m, machineNumber: "10"));
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 28), new DateTime(2026, 10, 4), 600m, machineNumber: "10"));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 30), 10, CancellationToken.None);
+
+        Assert.True(facts.ImportedMachineFilterMatched);
+        Assert.True(facts.ImportedHasNetSettlement);
+        Assert.Equal(680.75m, facts.ImportedNetSettlement);
+        Assert.Equal(new DateTime(2026, 9, 28), Assert.Single(facts.ImportedPartlyCoveredPeriods).PeriodStart);
+    }
+
+    /// <summary>
+    /// The same payout asked about the period it actually covers is wholly inside the range, so it
+    /// is the range's actual reimbursement exactly as before, labelled with its own period dates.
+    /// </summary>
+    [Fact]
+    public async Task A_payout_wholly_inside_the_range_is_the_actual_reimbursement_and_carries_its_period()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), null, CancellationToken.None);
+
+        Assert.True(facts.ImportedHasNetSettlement);
+        Assert.Equal(680.75m, facts.ImportedNetSettlement);
+    }
+
+    private static ImportedFile ImportedFileWith(DateTime from, DateTime to, decimal total, string? machineNumber = null)
+    {
+        var file = new ImportedFile { FileName = "settlement.xml", FileHash = $"{from:yyyyMMdd}-{total}", ImportedAt = DateTime.UtcNow };
+        var reimbursement = new ImportedReimbursement
         {
             ReimbursementStartDate = from,
             ReimbursementEndDate = to,
             Total = total
-        });
+        };
+        // The device row is what a machine-filtered report matches a payout on, by the provider's
+        // own machine number.
+        if (machineNumber is not null)
+            reimbursement.Devices.Add(new ImportedReimbursementDevice { MachineNumber = machineNumber });
+        file.Reimbursements.Add(reimbursement);
         return file;
     }
 

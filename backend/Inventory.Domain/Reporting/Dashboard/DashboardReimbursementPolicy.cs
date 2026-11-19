@@ -5,39 +5,77 @@ namespace Inventory.Domain.Reporting.Dashboard;
 /// and reconciliation status. All amounts are already-aggregated facts for the reporting
 /// period/machine scope; this type carries no query or persistence behavior.
 /// </summary>
+/// <param name="CardSales">The period's completed card sales.</param>
+/// <param name="FeesIncludingGst">Its Nayax processing fees including GST.</param>
+/// <param name="ActualReimbursement">
+/// The net total of the imported payouts whose own period lies <em>wholly inside</em> the requested
+/// range, or <c>null</c> when no payout does (issue #1253). <c>null</c> is "Not available": the
+/// range has nothing to compare against, which is never the same statement as a settlement of zero.
+/// </param>
+/// <param name="HasPartlyCoveredPayout">
+/// Whether an imported payout overlaps the requested range without lying inside it - the case where
+/// the range cuts a payout period. Such a payout is reported on its own and is part of no amount
+/// here, so it can explain an absent actual reimbursement but can never change one.
+/// </param>
 public readonly record struct DashboardReimbursementInputs(
     decimal CardSales,
     decimal FeesIncludingGst,
-    decimal ActualReimbursement,
-    bool ImportedContainsRows);
+    decimal? ActualReimbursement,
+    bool HasPartlyCoveredPayout = false);
 
 public readonly record struct DashboardReimbursementResult(
     decimal ExpectedReimbursement,
-    decimal ActualReimbursement,
-    decimal Difference,
+    decimal? ActualReimbursement,
+    decimal? Difference,
     bool IsReconciled,
     string Status);
 
 /// <summary>
 /// Deterministic dashboard-specific reconciliation derivation. Expected reimbursement is card sales
-/// less Nayax fees including GST; actual reimbursement is the imported net settlement for the
-/// period. Reuses the shared <see cref="ReconciliationStatusPolicy"/> tolerance check the
-/// daily/reconciliation slices call, but keeps its own status vocabulary
-/// ("Pending"/"Reconciled"/"Needs Review"): unlike those reports, the dashboard summary has no
-/// separate "Warning" state, so it is not the same status rule and stays local to this feature.
+/// less Nayax fees including GST; actual reimbursement is the imported net settlement of the payouts
+/// the requested range covers in full. Reuses the shared <see cref="ReconciliationStatusPolicy"/>
+/// tolerance check the daily/reconciliation slices call, but keeps its own status vocabulary: unlike
+/// those reports, the dashboard summary has no separate "Warning" state, so it is not the same
+/// status rule and stays local to this feature.
+///
+/// <para>Since issue #1253 the comparison is made only where there is something to compare. A range
+/// with no wholly-inside payout has no actual reimbursement at all, so no difference is computed and
+/// no <see cref="NeedsReviewStatus"/> is published - a week's payout counted as a single day's money
+/// produced exactly that false alarm. When such a range only cuts a payout period, the status says
+/// so (<see cref="RangeCutsPayoutPeriodStatus"/>) instead of the bare
+/// <see cref="PendingStatus"/>, which still means no settlement has been imported for these dates at
+/// all.</para>
 /// </summary>
 public static class DashboardReimbursementPolicy
 {
     public const decimal Tolerance = 0.01m;
 
+    /// <summary>No imported payout relates to the requested range at all.</summary>
+    public const string PendingStatus = "Pending";
+
+    /// <summary>The compared range and its payouts agree within <see cref="Tolerance"/>.</summary>
+    public const string ReconciledStatus = "Reconciled";
+
+    /// <summary>They were compared and disagree by more than the tolerance.</summary>
+    public const string NeedsReviewStatus = "Needs Review";
+
+    /// <summary>
+    /// Nothing was compared because every imported payout for these dates settles days outside the
+    /// requested range: the range cuts a payout period. Reported instead of a difference, so a
+    /// reader is told why there is no actual reimbursement rather than shown a false one.
+    /// </summary>
+    public const string RangeCutsPayoutPeriodStatus = "Range cuts a payout period";
+
     public static DashboardReimbursementResult Calculate(DashboardReimbursementInputs inputs)
     {
         var expected = inputs.CardSales - inputs.FeesIncludingGst;
-        var difference = inputs.ActualReimbursement - expected;
-        var isWithinTolerance = ReconciliationStatusPolicy.IsReconciled(difference, Tolerance);
-        var isReconciled = inputs.ImportedContainsRows && isWithinTolerance;
-        var status = !inputs.ImportedContainsRows ? "Pending" : isWithinTolerance ? "Reconciled" : "Needs Review";
+        var actual = inputs.ActualReimbursement;
+        decimal? difference = actual.HasValue ? actual.Value - expected : null;
+        var isWithinTolerance = difference.HasValue && ReconciliationStatusPolicy.IsReconciled(difference.Value, Tolerance);
+        var status = actual.HasValue
+            ? isWithinTolerance ? ReconciledStatus : NeedsReviewStatus
+            : inputs.HasPartlyCoveredPayout ? RangeCutsPayoutPeriodStatus : PendingStatus;
 
-        return new DashboardReimbursementResult(expected, inputs.ActualReimbursement, difference, isReconciled, status);
+        return new DashboardReimbursementResult(expected, actual, difference, isWithinTolerance, status);
     }
 }

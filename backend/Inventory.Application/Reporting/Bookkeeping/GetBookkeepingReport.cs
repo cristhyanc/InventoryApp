@@ -61,11 +61,16 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
         // feature, but a deterministic rule over already-aggregated facts, so this report reuses it
         // rather than writing a second tolerance or status rule. The dependency direction is
         // unchanged: the dashboard composes this report, and this report does not know it exists.
+        //
+        // Since issue #1253 only a payout whose own period lies wholly inside the requested range
+        // is an actual reimbursement for it, so the actual is absent rather than zero for a range
+        // that merely cuts a payout period - and the policy then reports what happened instead of a
+        // difference nobody can act on.
         var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
             CardSales: facts.CardSales,
             FeesIncludingGst: facts.ProcessingFees.TotalFeeIncGst,
-            ActualReimbursement: facts.ImportedNetSettlement,
-            ImportedContainsRows: facts.ImportedContainsRows));
+            ActualReimbursement: facts.ImportedHasNetSettlement ? facts.ImportedNetSettlement : null,
+            HasPartlyCoveredPayout: facts.ImportedPartlyCoveredPeriods.Count > 0));
 
         var qualityNotes = new List<string>();
         if (facts.MissingStatusTransactionCount > 0)
@@ -153,6 +158,15 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             IsReconciled = reimbursement.IsReconciled,
             ReconciliationStatus = reimbursement.Status,
             ReconciliationTolerance = DashboardReimbursementPolicy.Tolerance,
+            // What the actual reimbursement is made of, and what the range cut (issue #1253). The
+            // periods are published rather than described so the presentation can label the figure
+            // with the dates it settles, and the partly covered payouts are listed beside it
+            // without being part of any total here.
+            ReimbursementPeriods = facts.ImportedFullyCoveredPeriods,
+            PartlyCoveredReimbursements = facts.ImportedPartlyCoveredPeriods,
+            // Whether the net settlement above is this report's own estimate - card sales less fees -
+            // because no payout covering these dates in full recorded one.
+            IsNetSettlementEstimated = profit.IsNetSettlementEstimated,
             PartialCostOfGoods = facts.PartialCostOfGoods,
             IsCogsComplete = facts.IsCogsComplete,
             UncostedTransactionCount = facts.UncostedTransactionCount,
