@@ -107,6 +107,11 @@ public static class InfrastructureServiceCollectionExtensions
         // it holds no state between reads.
         services.AddSingleton<INayaxSalesWorkbookReader, ClosedXmlNayaxSalesWorkbookReader>();
 
+        // The streaming sales history CSV reader (issue #1304). A singleton for the same reason as
+        // the workbook reader above: it is handed a stream and keeps nothing between reads - which
+        // is the whole point of it, since what it must not do is hold a history's rows.
+        services.AddSingleton<INayaxSalesHistoryCsvReader, StreamingNayaxSalesHistoryCsvReader>();
+
         // The non-EF adapters that issue #306 moved out of InventoryApi. All three need no
         // AppDbContext, no host path and no configuration, so they belong here rather than in the
         // API composition root or behind their own extension method.
@@ -485,6 +490,15 @@ public static class InfrastructureServiceCollectionExtensions
         // it is given bytes and answers what they contain, touches no database and no filesystem,
         // and its limits are the Domain's constants.
         services.AddSingleton<IReimbursementArchiveReader, ZipReimbursementArchiveReader>();
+        // The uploaded sales history import of issue #1304. The job store is scoped because it runs
+        // on one context - the caller's own request scope for the upload and the status read, and the
+        // worker's per-business scope for the import, where its progress write lands inside the
+        // batch's own transaction; the queue is scoped to the deliberately business-less scope the
+        // worker opens for its one reviewed cross-business statement; and the pending-rebuild store
+        // is scoped because it stages onto the same context the batch's sales are staged onto.
+        services.AddScoped<INayaxSalesHistoryImportJobStore, EfNayaxSalesHistoryImportJobStore>();
+        services.AddScoped<INayaxSalesHistoryImportJobQueue, EfNayaxSalesHistoryImportJobQueue>();
+        services.AddScoped<IPendingInventoryCostRebuildStore, EfPendingInventoryCostRebuildStore>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence
         // adapter since issue #739. Scoped like every other adapter here: both
         // operations read and write one caller's resolved business through the request's own

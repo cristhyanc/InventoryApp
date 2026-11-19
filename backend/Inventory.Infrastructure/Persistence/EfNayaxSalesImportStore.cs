@@ -150,6 +150,19 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => _db.SaveChangesAsync(cancellationToken);
 
+    /// <summary>
+    /// Detaches every <see cref="NayaxSales"/> row this context is tracking (issue #1304), so that a
+    /// long batched import's context stays the size of one batch rather than of the history it has
+    /// already committed. The uploaded import never calls it; the sales history import calls it after
+    /// each batch is committed, when there is nothing staged to lose. Nothing else tracked is
+    /// touched.
+    /// </summary>
+    public void ForgetTrackedSales()
+    {
+        foreach (var tracked in _db.ChangeTracker.Entries<NayaxSales>().ToList())
+            tracked.State = EntityState.Detached;
+    }
+
     private static NayaxSales AsEntity(CostableSale sale) =>
         (sale as NayaxCostableSale
             ?? throw new ArgumentException("The sale was not loaded from a NayaxSales row.", nameof(sale)))

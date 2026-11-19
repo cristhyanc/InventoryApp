@@ -32,6 +32,7 @@ using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Adapters.Products;
 using InventoryApi.Adapters.ReimbursementImport;
+using InventoryApi.Adapters.SalesHistoryImport;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
@@ -573,6 +574,25 @@ builder.Services.AddSingleton<IReimbursementImportJobLog, LoggingReimbursementIm
 builder.Services.AddSingleton<IReimbursementImportJobScopes, ServiceScopeReimbursementImportJobScopes>();
 builder.Services.AddSingleton<ReimbursementImportJobRunner>();
 builder.Services.AddHostedService<ReimbursementImportJobWorker>();
+
+// The fifth hosted background service (issue #1304): importing the long Nayax sales histories
+// operators upload. It first looks for work about forty-five seconds after startup - a little after
+// the reimbursement worker, so a restart is not two imports competing for the one write lock - and
+// then takes the oldest unfinished job, one at a time, each in its own service scope resolved to that
+// job's own business. It streams the file and commits 2,000 rows at a time, releasing the write lock
+// between batches, so a user save or the Nayax queue reader's own save goes through while a year of
+// history is importing.
+//
+// It is in-process for the reasons the three workers above are - one writer on one SQLite file, no
+// second identity or configuration surface - and App Service Always On is the same human
+// prerequisite: without it a queued job waits until the next request wakes the app. It has no setting
+// to switch it on; an environment where nobody has uploaded a history finds nothing to do and writes
+// nothing.
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobSchedule, SystemNayaxSalesHistoryImportJobSchedule>();
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobLog, LoggingNayaxSalesHistoryImportJobLog>();
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobScopes, ServiceScopeNayaxSalesHistoryImportJobScopes>();
+builder.Services.AddSingleton<NayaxSalesHistoryImportJobRunner>();
+builder.Services.AddHostedService<NayaxSalesHistoryImportJobWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

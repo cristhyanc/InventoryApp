@@ -1104,7 +1104,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758), `grandfather-business-plans` (issue #966), `reconcile-attachment-storage` (issue #968) and the database backup commands, plus the startup report that says whether plan enforcement can take effect (issue #966).
-- The four hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). All four are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+- The five hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). `Adapters/SalesHistoryImport/NayaxSalesHistoryImportJobWorker` (issue #1304) is the fifth, running `NayaxSalesHistoryImportJobRunner`'s loop over the uploaded Nayax sales histories, with `ServiceScopeNayaxSalesHistoryImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Importing a long sales history in the background](#importing-a-long-sales-history-in-the-background-issue-1304). All five are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -14648,9 +14648,11 @@ what this implements.
   drift from what is enforced, and `ImportNayaxSales` raises it as the same
   `InvalidOperationException` the unsupported-format rule raises, which `ImportsController` already
   answers that status with. **Nothing is read, looked up, costed or written**: the refusal happens
-  before the catalogue read. The longer-history import the sentence names is issue #1304 and is not
-  built yet; until it is, uploading a shorter period at a time — a quarter for a quiet fleet, a month
-  for a busy one, now that the ceiling is 5,000 rows — is the whole of the answer.
+  before the catalogue read. The longer-history import the sentence names is
+  [Importing a long sales history in the
+  background](#importing-a-long-sales-history-in-the-background-issue-1304) (issue #1304), which is
+  built: a CSV of up to 250,000 rows, accepted at once and imported in batches. Uploading a shorter
+  period at a time remains a perfectly good answer for a file a little over the ceiling.
 - **The limits are the *import's*, not the reader's.** `INayaxSalesWorkbookReader.Read` takes a
   `NayaxSalesFileLimits`, and the sale timestamp repair preview (issue #472) passes
   `NayaxSalesFileLimits.None`: it reads an export for its authorization instants alone and writes
@@ -14835,6 +14837,125 @@ child 3 of #149), moved unchanged in behaviour from the removed
   `SaleCostingController` calls the backfill use cases directly with unchanged routes,
   request/response shapes and status codes. The pass-through `GetAverageUnitCostAtAsync` is
   `IRebuildProductCost.GetAverageUnitCostAtAsync`.
+
+#### Importing a long sales history in the background (issue #1304)
+
+**A new business brings in one to three years of Nayax sales, and the uploaded import above takes
+5,000 rows in one request.** The repository owner's decision of 14 November 2026 is that a long
+history is a *background job in small batches*: the upload stores the file and answers at once with a
+job id, and a worker streams the rows and commits them a few hundred at a time, each batch in its own
+short write-locked transaction. It is the [Reimbursement Report ZIP upload and background
+import](#reimbursement-report-zip-upload-and-background-import-issue-1149)'s shape, applied to rows
+instead of files.
+
+- **The row rules are the uploaded import's, through the same code.**
+  `Inventory.Application.Imports.NayaxSalesRowApplier` holds the per-row pass that was
+  `ImportNayaxSales`'s body: the identity facts a row must carry, the unreadable-cell refusal, the
+  instant precedence of issue #380, the blank-cell keep rules of issue #1298, the product resolution
+  of issues #745 and #758, the conflicting-sale exception, the costing through `ICostSale`, the sale
+  carried through to a later row naming the same transaction (issue #1300) and the record of which
+  products a stock-consuming sale affected. **Both imports construct it over the same two
+  dependencies** - their own `INayaxSalesImportStore` and `ICostSale` - so "the history import applies
+  the same row rules" is true by construction rather than by two copies agreeing, and
+  `ImportNayaxSales`'s own constructor and behaviour are unchanged (its 200-odd existing tests pass
+  untouched, which is the evidence for that).
+- **The limits are their own Domain policy.** `Inventory.Domain.Imports.NayaxSalesHistoryPolicy`
+  holds `MaxRows` (250,000 data rows), `MaxUploadBytes` (50 MB), `BatchRows` (500),
+  `MaxWriteLockHoldSeconds` (the uploaded import's own 10-second budget, because it is the same lock),
+  `MaxAttempts` (3) and every refusal sentence. `NayaxSalesFilePolicy` is untouched: the synchronous
+  upload keeps its 5,000-row ceiling exactly as issue #1300 delivered it, and the two imports share
+  their row rules rather than their limits.
+- **The upload refuses, stores nothing, and never imports.** `UploadNayaxSalesHistory` checks the
+  bytes (empty, over the byte limit), the format (`.csv` only - a compressed workbook cannot be read a
+  row at a time without expanding it, which is the cost this import exists to avoid) and the file's
+  shape, then stores it as a `Queued` job. **One history runs per business at a time**:
+  `EfNayaxSalesHistoryImportJobStore.CreateAsync` asks "is one unfinished?" and inserts inside one
+  `BEGIN IMMEDIATE` transaction, because read outside the write that depends on it two uploads a
+  second apart would both start.
+- **The shape check is one streamed read.** `INayaxSalesHistoryCsvReader.Check` reads the header -
+  refusing a file with no header row or no `TransactionID` column, which could only import as
+  250,000 skipped rows - and counts the data rows, stopping at the first row past the ceiling, so a
+  file ten times the limit costs no more to refuse than one row over it. It allocates nothing per
+  row.
+- **`StreamingNayaxSalesHistoryCsvReader` is the second reader, and it exists for one reason.**
+  `INayaxSalesWorkbookReader` answers with every row at once and builds a worksheet of cells to read
+  a CSV at all - about a gigabyte for a 114,250-row export, which is what issue #1300's ceiling
+  bounds. This one yields one `NayaxSalesImportRow` at a time and holds nothing it has yielded, so
+  the read's cost stops growing with the length of the history (measured: 200,000 rows streamed with
+  the managed heap no larger afterwards than before). **Every cell is read by the same conversions**:
+  `NayaxSalesCells` holds the header matching, the CSV quoting rules and all of the value readings,
+  and `ClosedXmlNayaxSalesWorkbookReader` asks it for every text cell - which is every cell of a CSV -
+  keeping only the two readings a worksheet has (a date-typed cell and a numeric cell). A parity test
+  reads the same awkward CSV through both and asserts the row sequences are equal.
+- **The job row is tenant-owned and is its own table.** `NayaxSalesHistoryImportJob` carries the
+  business key, its index, the central query filter and the ownership stamp like any other
+  tenant-owned row; the uploaded CSV lives on it until the job is final and is deleted then, exactly
+  where and how the reimbursement import keeps its archive. It is **not** a type column on
+  `ReimbursementImportJobs`: the two jobs share a shape and nothing else - a reimbursement job's unit
+  of work is a file and it records one outcome row per file, a history's is a batch of rows and what
+  it records is a running count and the row to resume from - so one table would mean every column of
+  each being nullable for the other, and migrating a feature this issue puts out of scope.
+- **A batch is the unit of work, and it is one transaction.** `ProcessNayaxSalesHistoryImportJob`
+  claims the job (counting the attempt and moving it to `Processing` in one write), reads the
+  catalogue and the conflicting transaction ids once for the attempt, and then for each batch of
+  `BatchRows` rows opens the shared `INayaxSalesImportTransactions` lock and inside it: reads the
+  stored sales of the transactions that batch names, applies the shared row rules, stages one pending
+  inventory-cost rebuild per product the batch affected, and writes the job's progress. Nothing else
+  is inside it. So there is no moment at which sales are committed without the record of how far the
+  job got, or progress recorded for sales that were not committed.
+- **Between batches the lock is released**, which is the whole point: a purchase, a stock adjustment
+  or the [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103)'s own save commits while a year
+  of history is importing instead of waiting behind it and failing on the 30-second busy timeout.
+  `NayaxSalesHistoryConcurrencyTests` forces both orderings over a real SQLite file with two
+  connections: a save made between two batches succeeds, and a save attempted while a batch holds the
+  lock waits for that batch and then succeeds.
+- **The batch size is a measured number, not the suggested one.** The issue suggested 2,000 rows a
+  batch; at that size a synthetic history measured 3.4 s, 5.6 s and 9.3 s for its first three batches
+  on this repository's CI runners - growing, and already at the edge of the budget. It grows because
+  each row's cost replays that product's own ledger up to the sale's instant (`CostSale`, the same
+  rule every other sales writer applies), and that replay reads the product's stored stock-consuming
+  sales before it: the cost of row *n* of a product grows with the sales of that product already
+  stored. `BatchRows` is therefore **500**, which measures 1.0 s to 3.1 s over twelve batches of a
+  6,000-row history on four products - a quarter of the budget at the fast end of that growth.
+  `NayaxSalesHistoryWriteLockHoldTests` asserts every batch is inside
+  `MaxWriteLockHoldSeconds` and writes the figures to the test output. The quadratic per-row costing
+  itself is pre-existing and unchanged; what it means for a 250,000-row history is a job of minutes
+  (extrapolated, not measured end to end - a quarter of a million rows of real costing does not fit
+  this repository's 90-second per-test ceiling).
+- **The replays are recorded once per product, not once per batch.** Each batch stages its own
+  affected products through the shared `PendingInventoryCostRebuildRecorder` - behind the new narrow
+  `IPendingInventoryCostRebuildStore` port, because this is the first writer that stores sales through
+  one adapter and needs the pending row beside them - and that recorder keeps **one** row per
+  `(business, product)` whose instant only ever moves earlier. So a product eighty batches touched
+  ends with one pending row at the earliest instant of all of them. The replay itself is the existing
+  drain's (see [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)); replaying inside
+  the job would mean replaying a product's whole history once per batch, which is the opposite of
+  what the batching is for.
+- **It is safe to stop and run again.** A sale is matched by its transaction id, so a row applied
+  twice updates the sale it created rather than storing a second one - which is what makes a resumed
+  attempt, a re-run and a re-upload of the same file all end in the same state. The resume is cheap as
+  well as safe: the claim carries the committed row count and the streamed read passes over exactly
+  those rows. An attempt that fails is queued again with a safe reason (the exception's *type* name,
+  never its message, which can quote a statement's parameter values - and those are a business's
+  sales); after `MaxAttempts` the job is `Failed`, keeps every batch it committed, and says so.
+- **The worker is the fifth hosted background service**, and is
+  `ReimbursementImportJobRunner`'s shape exactly: `NayaxSalesHistoryImportJobRunner` takes the oldest
+  unfinished job across every business, one at a time, each in a service scope resolved to that one
+  business (`ServiceScopeNayaxSalesHistoryImportJobScopes`), with its first pass 45 seconds after
+  startup - a little after the reimbursement worker's, so a restart is not two imports competing for
+  the one write lock - and 15 seconds between idle passes. One job's trouble never stops another's,
+  and only cancellation ends the loop. `EfNayaxSalesHistoryImportJobQueue` is the one cross-business
+  statement this feature makes: one read-only statement projecting a job key and a business key, in a
+  scope that has deliberately resolved no business, for the reason the reimbursement queue's has
+  (AGENTS.md § Tenant ownership and data isolation).
+- **The HTTP surface is two routes on `ImportsController`**: `POST api/imports/nayax-sales-history`
+  (multipart, `202 Accepted` with the job id, `400` with one readable sentence for every refusal) and
+  `GET api/imports/nayax-sales-history/jobs` (the caller's own business's latest ten with their
+  progress). Both carry the controller's `Imports.Run` capability and
+  `[RequirePlan(PlanFeature.SalesFileImport)]` - the same access as the synchronous upload, because it
+  is the same import done in the background - and the status read is plan-gated too, so a locked
+  business is not offered a list the backend would refuse. The Imports page composes
+  `SalesHistoryImportComponent` behind the same inline plan lock as the sales card.
 
 ### Reimbursement import and reconciliation
 

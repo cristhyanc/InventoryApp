@@ -127,4 +127,19 @@ public interface INayaxSalesImportStore
 
     /// <summary>Persists everything staged so far.</summary>
     Task SaveChangesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Forgets the sales this import has loaded or staged, so that a long import's working set does
+    /// not grow with the rows it has already committed (issue #1304).
+    ///
+    /// <para>The uploaded import never calls it: it applies one file inside one transaction and the
+    /// context is the request's own, which ends with the request. The sales history import calls it
+    /// after each batch is committed - 250,000 sales tracked in one context would cost memory per
+    /// row and make every later save slower than the one before it, which is precisely what reading
+    /// and committing in batches exists to avoid.</para>
+    ///
+    /// <para>It is only ever called with nothing staged: the batch's sales are saved and committed
+    /// first, so there is no unsaved change for it to discard. It affects the sales alone.</para>
+    /// </summary>
+    void ForgetTrackedSales();
 }

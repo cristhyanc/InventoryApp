@@ -547,6 +547,11 @@ public static class ApplicationServiceCollectionExtensions
         // sales, so it is scoped like every other read here.
         services.AddScoped<GetUnimportedProviderProductAttention>();
         services.AddScoped<ImportNayaxSales>();
+        // The uploaded sales history of issue #1304: the upload, the status read, and the one job the
+        // background worker runs in a scope resolved to that job's own business.
+        services.AddScoped<UploadNayaxSalesHistory>();
+        services.AddScoped<ListNayaxSalesHistoryImportJobs>();
+        services.AddScoped<ProcessNayaxSalesHistoryImportJob>();
         // The per-file steps of the reimbursement report import (issue #1149): hash dedupe, the
         // atomic write, and the settlement coverage a committed file proves.
         services.AddScoped<ImportReimbursementXmlFile>();

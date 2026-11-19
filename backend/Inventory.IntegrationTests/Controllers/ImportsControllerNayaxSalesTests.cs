@@ -167,6 +167,14 @@ public class ImportsControllerNayaxSalesTests
                 Mock.Of<ICostSale>(),
                 Mock.Of<IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
+            // The sales history upload and its status read (issue #1304) take no part in these
+            // cases, which are about the normal upload's own responses.
+            new UploadNayaxSalesHistory(
+                Mock.Of<INayaxSalesHistoryCsvReader>(),
+                Mock.Of<INayaxSalesHistoryImportJobStore>(),
+                Mock.Of<IAuthenticatedActorAccessor>(),
+                Mock.Of<IClock>()),
+            new ListNayaxSalesHistoryImportJobs(Mock.Of<INayaxSalesHistoryImportJobStore>()),
             new UploadReimbursementReportArchive(
                 Mock.Of<IReimbursementArchiveReader>(),
                 Mock.Of<IReimbursementImportJobStore>(),
