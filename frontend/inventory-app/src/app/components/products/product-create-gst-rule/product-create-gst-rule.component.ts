@@ -4,6 +4,7 @@ import { ProductService } from '../../../services/product.service';
 import { GstClassification } from '../../../models/models';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { ProductGstRuleComponent } from '../product-gst-rule/product-gst-rule.component';
+import { apiErrorMessage } from '../../shared/api-error-message';
 
 /**
  * The GST rule of a product being created (issue #829): choosing it, storing it on the product's own
@@ -140,12 +141,14 @@ export class ProductCreateGstRuleComponent implements OnDestroy {
         this.saving = false;
         this.persisted.emit();
       },
-      error: () => {
+      error: (error: unknown) => {
         this.saving = false;
-        this.error =
+        this.error = apiErrorMessage(
+          error,
           'The product was created, but its GST rule was not saved. Press Retry GST rule to try again; ' +
-          'it saves the rule only and never creates a second product. Other changes on the form ' +
-          'are not saved again - edit the product from the Products list instead.';
+            'it saves the rule only and never creates a second product. Other changes on the form ' +
+            'are not saved again - edit the product from the Products list instead.'
+        );
         this.failed.emit();
       }
     });

@@ -364,6 +364,17 @@ describe('MachineRestockSyncComponent resolveSelectedAsAlreadyRecorded (issue #2
     expect(harness.component.selectedEventIds.size).toBe(1);
     expect(harness.toast.error).toHaveBeenCalledWith('Failed to resolve the selected events as already recorded manually.');
   });
+
+  it('shows the server detail when the request is refused with one (issue #1281)', () => {
+    const resolveSyncRestockManually = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 409, error: 'A sync is already in progress for this machine.' })));
+    const harness = createHarness(jest.fn(() => of(preview([]))), jest.fn(), jest.fn(), resolveSyncRestockManually);
+    harness.component.toggleEventSelection(1, true);
+
+    harness.component.resolveSelectedAsAlreadyRecorded();
+
+    expect(harness.toast.error).toHaveBeenCalledWith('A sync is already in progress for this machine.');
+  });
 });
 
 describe('MachineRestockSyncComponent resolveDuplicate', () => {
@@ -448,6 +459,19 @@ describe('MachineRestockSyncComponent resolveDuplicate', () => {
     expect(syncRestock).toHaveBeenCalledTimes(1);
     expect(harness.component.resolvingEventId$.value).toBeNull();
     expect(harness.applied).toBe(0);
+  });
+
+  // Issue #1281: a non-409 refusal (never the already-resolved race #1248's 409 branch claims)
+  // carries the server's own refusal sentence as a plain string body, shown instead of the fixed
+  // fallback - the same `apiErrorMessage` contract every other action here now follows.
+  it('shows the server detail for a non-conflict refusal that carries one', () => {
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 400, error: 'This event is not eligible for resolution.' })));
+    const harness = createHarness(jest.fn(() => of(preview([]))), jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(harness.toast.error).toHaveBeenCalledWith('This event is not eligible for resolution.');
   });
 });
 
@@ -957,6 +981,19 @@ describe('MachineRestockSyncComponent apply', () => {
     expect(harness.component.selectedEventIds.size).toBe(1);
     expect(harness.applied).toBe(0);
     expect(harness.toast.error).toHaveBeenCalledWith('Failed to apply the selected Nayax stock-adjustment events.');
+  });
+
+  it('shows the server detail when the apply request is refused with one (issue #1281)', () => {
+    const harness = createHarness(
+      jest.fn(() => of(preview([]))),
+      jest.fn(() => throwError(() => new HttpErrorResponse({ status: 409, error: 'A sync is already in progress for this machine.' })))
+    );
+    harness.component.toggleEventSelection(1, true);
+
+    harness.component.applySelectedEvents();
+
+    expect(harness.toast.error).toHaveBeenCalledWith('A sync is already in progress for this machine.');
+    expect(harness.component.applyError$.value).toBe('A sync is already in progress for this machine.');
   });
 });
 

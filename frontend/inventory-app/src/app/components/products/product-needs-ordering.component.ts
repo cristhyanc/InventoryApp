@@ -12,6 +12,7 @@ import { Product, Category, ReorderMode, Supplier } from '../../models/models';
 // supplier selector (issue #787, A1 of #786). What left is the product-supplier filter and column.
 import { NayaxUnavailability, storageOnlyReorderLabel } from '../../provider/nayax-availability';
 import { ListLoadState } from '../shared/list-load-state';
+import { apiErrorMessage } from '../shared/api-error-message';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import { SortDirection, SortValue, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
@@ -598,9 +599,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         this.toastService.success('Supplier order created.');
         this.applyFilters();
       },
-      error: () => {
+      error: (error: unknown) => {
         this.savingOrder = false;
-        this.toastService.error('Failed to create supplier order.');
+        this.toastService.error(apiErrorMessage(error, 'Failed to create supplier order.'));
       }
     });
   }
