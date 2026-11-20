@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Router, provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
@@ -670,6 +671,50 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       fixture.detectChanges();
       expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana']);
       expect(create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * A failed create supplier order request (issue #1281): the server's own refusal sentence is
+   * shown through `apiErrorMessage` when the response carries one, and the page's fixed text
+   * stays the fallback for a failure that carries none (a network error, an unexpected 500).
+   */
+  describe('Create supplier order error handling (issue #1281)', () => {
+    it('shows the server detail when the create request is refused with one', async () => {
+      const create = jest.fn(() =>
+        throwError(() => new HttpErrorResponse({ status: 409, error: 'This supplier is inactive.' }))
+      );
+      const { fixture } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      const toast = TestBed.inject(ToastService);
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      component.orderForm.supplierId = 3;
+
+      component.saveOrder();
+
+      expect(toast.error).toHaveBeenCalledWith('This supplier is inactive.');
+      expect(component.savingOrder).toBe(false);
+    });
+
+    it('falls back to the fixed message when the failure carries no server detail', async () => {
+      const create = jest.fn(() => throwError(() => new Error('boom')));
+      const { fixture } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      const toast = TestBed.inject(ToastService);
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      component.orderForm.supplierId = 3;
+
+      component.saveOrder();
+
+      expect(toast.error).toHaveBeenCalledWith('Failed to create supplier order.');
     });
   });
 

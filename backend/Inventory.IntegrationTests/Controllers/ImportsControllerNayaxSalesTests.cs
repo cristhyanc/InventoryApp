@@ -36,13 +36,14 @@ public class ImportsControllerNayaxSalesTests
     public async Task The_action_returns_the_use_cases_counts_as_200_OK()
     {
         var reader = new Mock<INayaxSalesWorkbookReader>();
-        reader.Setup(x => x.Read(It.IsAny<Stream>(), "sales.csv"))
-            .Returns([Row(1001), Row(1002)]);
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), "sales.csv", It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(new NayaxSalesWorkbookReadResult([Row(1001), Row(1002)], false));
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        store.Setup(x => x.FindByTransactionIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((StoredImportedSale?)null);
+        store.Setup(x => x.FindByTransactionIdsAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, StoredImportedSale>());
         store.Setup(x => x.Add(It.IsAny<ImportedNayaxSale>()))
             .Returns((ImportedNayaxSale sale) => new CostableSale
             {
@@ -102,6 +103,27 @@ public class ImportsControllerNayaxSalesTests
     }
 
     /// <summary>
+    /// Issue #1300's refusal reaches the caller the same way: a file beyond the import's row or
+    /// expansion limits is a <c>400</c> carrying the sentence that tells an operator what to do with
+    /// it, and the use case never reaches the store - the file is refused before anything is looked
+    /// up, so a strict store mock proves nothing was read or written.
+    /// </summary>
+    [Fact]
+    public async Task A_file_beyond_the_import_limits_is_refused_as_400_with_its_message()
+    {
+        var reader = new Mock<INayaxSalesWorkbookReader>();
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), "sales.csv", It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(NayaxSalesWorkbookReadResult.BeyondLimits);
+
+        var result = await Controller(reader.Object, new Mock<INayaxSalesImportStore>(MockBehavior.Strict).Object)
+            .ImportNayaxSales(Upload("sales.csv"), CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(
+            Inventory.Domain.Imports.NayaxSalesFilePolicy.TooLargeMessage, badRequest.Value);
+    }
+
+    /// <summary>
     /// The three original count keys are unchanged, and issue #1298 added the two facts an operator
     /// could not otherwise see beside them: how many rows kept a stored value because the file's
     /// cell was blank or its column was missing, and which rows carried a value nobody could read.
@@ -141,9 +163,18 @@ public class ImportsControllerNayaxSalesTests
             new ImportNayaxSales(
                 reader,
                 store,
+                new InventoryApi.Tests.Application.Imports.FakeNayaxSalesImportTransactions(),
                 Mock.Of<ICostSale>(),
                 Mock.Of<IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
+            // The sales history upload and its status read (issue #1304) take no part in these
+            // cases, which are about the normal upload's own responses.
+            new UploadNayaxSalesHistory(
+                Mock.Of<INayaxSalesHistoryCsvReader>(),
+                Mock.Of<INayaxSalesHistoryImportJobStore>(),
+                Mock.Of<IAuthenticatedActorAccessor>(),
+                Mock.Of<IClock>()),
+            new ListNayaxSalesHistoryImportJobs(Mock.Of<INayaxSalesHistoryImportJobStore>()),
             new UploadReimbursementReportArchive(
                 Mock.Of<IReimbursementArchiveReader>(),
                 Mock.Of<IReimbursementImportJobStore>(),

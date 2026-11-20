@@ -64,6 +64,7 @@ public class ImportNayaxSalesCoverageTests
     private static ImportNayaxSales UseCase(AppDbContext db) =>
         new(new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db),
             Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
             InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself());

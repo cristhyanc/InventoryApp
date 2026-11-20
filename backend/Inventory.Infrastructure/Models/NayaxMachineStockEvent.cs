@@ -75,8 +75,50 @@ public class NayaxMachineStockEvent : IBusinessOwned
     public NayaxStockEventProcessingStatus ProcessingStatus { get; set; } = NayaxStockEventProcessingStatus.Unprocessed;
     public DateTime? ProcessedAt { get; set; }
 
-    /// <summary>The movement this event's application created, once <see cref="ProcessingStatus"/> is Applied.</summary>
+    /// <summary>
+    /// The movement this event's application created, once <see cref="ProcessingStatus"/> is Applied.
+    /// For an applied product replacement (issue #1326) it is the <em>incoming</em> refill, and it is
+    /// null when nothing was loaded; the outgoing movements are the two columns below.
+    /// </summary>
     public int? StockAdjustmentId { get; set; }
+
+    /// <summary>
+    /// The product the operator confirmed was loaded into the slot, for an applied product
+    /// replacement (issue #1326); null on every other row, including a pending replacement. It is
+    /// the record of what was applied, deliberately not a match:
+    /// <see cref="MatchedProductId"/>/<see cref="MatchStatus"/> are left exactly as the import left
+    /// them, because which product a slot holds keeps being read live from Nayax.
+    /// </summary>
+    public long? ReplacementIncomingProductId { get; set; }
+
+    /// <summary>How many units of it were loaded; <c>0</c> is a replacement that loaded nothing.</summary>
+    public int? ReplacementIncomingQuantity { get; set; }
+
+    /// <summary>
+    /// What the operator said happened to the units taken out (issue #1326). Null on every row but
+    /// an applied replacement; <c>None</c> records that nothing at all was recorded for them.
+    /// </summary>
+    public NayaxReplacementOutgoingDisposition? ReplacementOutgoingDisposition { get; set; }
+
+    /// <summary>
+    /// The product taken out, and how many units of it, for every disposition but <c>None</c>
+    /// (issue #1326).
+    /// </summary>
+    public long? ReplacementOutgoingProductId { get; set; }
+
+    public int? ReplacementOutgoingQuantity { get; set; }
+
+    /// <summary>
+    /// The <c>MachineRefill</c> movement that returned the outgoing units to storage, for every
+    /// disposition but <c>None</c> (issue #1326).
+    /// </summary>
+    public int? ReplacementOutgoingReturnStockAdjustmentId { get; set; }
+
+    /// <summary>
+    /// The <c>Damaged</c>/<c>Expired</c> write-off of exactly those returned units, for a disposal
+    /// only (issue #1326).
+    /// </summary>
+    public int? ReplacementOutgoingWriteOffStockAdjustmentId { get; set; }
 
     /// <summary>
     /// The operator's explicit resolution of a flagged possible duplicate (issue #196), distinct

@@ -35,7 +35,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 | Persistence | EF Core 10, SQLite, code-first migrations |
 | Frontend | Angular 19 standalone components, TypeScript, RxJS, Tailwind CSS |
 | Authentication | Microsoft Entra ID, `Microsoft.Identity.Web` (API), MSAL (`@azure/msal-angular`/`@azure/msal-browser`, SPA) |
-| Tests | xUnit, Moq, EF Core InMemory and SQLite |
+| Tests | xUnit, Moq, EF Core InMemory and SQLite; Jest and node:test on the frontend/automation side; Playwright for the browser-level end-to-end suite (opt-in) |
 | Integrations | Nayax Lynx API and imported reimbursement/workbook data |
 | Observability | Azure Monitor OpenTelemetry (`Azure.Monitor.OpenTelemetry.AspNetCore`) to Application Insights, enabled by configuration |
 | Hosting | Azure App Service and Azure Static Web Apps |
@@ -61,7 +61,10 @@ See [docs/architecture.md](docs/architecture.md) for the current system, target 
 
 ```text
 Inventory App/
-├── backend/InventoryApi/          ASP.NET Core API, EF migrations, and solution
+├── backend/InventoryApi/          ASP.NET Core API, HTTP boundary and composition root
+├── backend/Inventory.Domain/      Deterministic domain rules
+├── backend/Inventory.Application/ Use cases and ports
+├── backend/Inventory.Infrastructure/ Adapters and EF Core migrations (backend/Inventory.Infrastructure/Migrations)
 ├── backend/Inventory.UnitTests/   Pure Domain/Application backend tests
 ├── backend/Inventory.IntegrationTests/ Database, API, adapter and architecture backend tests
 ├── frontend/inventory-app/        Angular application
@@ -81,7 +84,7 @@ Inventory App/
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- [Node.js 20 or later](https://nodejs.org/) and npm
+- [Node.js 20.11+ or 22](https://nodejs.org/) and npm
 
 A global Angular CLI installation is not required; the npm scripts use the repository's locked CLI version.
 
@@ -514,8 +517,7 @@ refreshing it never asks for a sign-in or reads any business, account or Nayax d
 - The hero reads "Know what to buy. Pack what you need.", with the lead "Manage vending stock,
   compare supplier prices and plan your next refill in one place." Directly under it sits the public
   beta notice - "Pro access is free during our public beta. No credit card required." - and, directly
-  under that, the export notice: "Data exports are not part of the free beta. Downloading your data
-  as CSV or Excel will need a paid plan once paid plans launch." No price, plan card or beta end date
+  under that, the export notice: "CSV and Excel exports are included during the free beta. They will need a paid plan once paid plans launch." No price, plan card or beta end date
   appears anywhere on the page (see [Pricing on the landing page](#pricing-on-the-landing-page-issue-971)
   below).
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
@@ -580,11 +582,18 @@ changed, and every "Unavailable" still means unavailable, never zero.
   Business-owned inventory at cost. The inventory card says separately that its storage-unit count
   excludes stock in machines.
 - **Needs attention** collects what is waiting for you: empty selections, machines needing refill,
-  products needing ordering and the [restock sync reminder](#machine-restock-sync-reminder)
-  ("Recorded refills haven't been synced yet."). Its count is the number of alerts actually shown,
-  and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
-  and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
-  reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
+  products needing ordering, the [restock sync reminder](#machine-restock-sync-reminder)
+  ("Recorded refills haven't been synced yet.") and **"3 Nayax products are selling but aren't in
+  your products"** - machines are selling Nayax products you have never imported, so those sales take
+  no stock and carry no cost until you bring the products in. That alert names the most recently sold
+  few of them, links straight to **Import products**, and disappears once they are linked or created
+  there. An **Owner** and a **Manager** see it; it counts only products sold in the last 30 days, so
+  an old one-off sale of something you do not stock does not nag for ever, and it is not shown at all
+  if Nayax is not connected or during a support session. Its count is the number of alerts actually
+  shown, and the panel is hidden when there is none. It is two columns on a wide screen and one on a
+  phone, and it offers only the two existing actions, **Open pick list** and **View needs ordering**.
+  The reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending
+  date.
 - **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
   how many machines it has, its stock level in words as well as in colour, its low and empty
   selections and its sales - and an expand button under the site's name reveals that site's machines,
@@ -790,7 +799,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Issue #977 is the same enforcement over the supplier price comparisons and the daily collection behind them; the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Issue #977 is the same enforcement over the supplier price comparisons and the daily collection behind them; see [The menu without an included plan](#the-menu-without-an-included-plan) for the frontend's own locks (#979). With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -817,7 +826,7 @@ The split is the same one the application already makes for a business with no u
 
 - **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
-- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), **up to 100 scans per month** (issue #1164), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan, with no limit.
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import and the [sales history import](#the-sales-history-import-issue-1304) under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), **up to 100 scans per month** (issue #1164), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan, with no limit.
 
 A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
 
@@ -843,7 +852,7 @@ Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nay
 **What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
 
 - **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
-- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report and agreements); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
+- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report and agreements); the Nayax sales file import and the sales history import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
 
 A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
 
@@ -858,7 +867,7 @@ A report and its own download always need the same plan. A refused save or impor
 Two records per business, and **neither ever changes the other**:
 
 - a **billing subscription**, written only by verified billing events (issue #969), and
-- **manual grants**, written only by a Super Admin (issue #982) or by the grandfathering step below.
+- **manual grants**, written only by a Super Admin (issue #982), by the grandfathering step below, or — while the public beta setting is on — by the approval of a business application (issue #1258, below).
 
 From those, one rule decides what the business may use:
 
@@ -871,6 +880,15 @@ From those, one rule decides what the business may use:
 `GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states), when that record ends, and `entitlement.connectedMachines` with the machine allowance, the last recorded count and how old it is (`null` while nothing is enforced; see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
 
 Beside it, `entitlement.attachmentStorage` carries the business's attachment storage: how much it is using, its plan's allowance, and whether that is `Normal`, `Warning` (80% and over) or `Full`. It is `null` while nothing is enforced, because then there is no allowance and nothing is counted.
+
+#### Pro is free during the public beta (issue #1258)
+
+The landing page and Terms of Use §3 promise that **Pro access is free during our public beta**, and that promise is recorded per business rather than remembered by a person. While `Subscriptions__BetaProGrantOnApproval` is on, [approving a business application](#super-admin-businesses-api) also writes that business one **manual Pro grant**, in the same transaction as the approval: it starts at the approval instant, has **no end date**, records the source `Beta` and the reason "Public beta introductory Pro access", and appears on the Super Admin's Plan dialog like any other grant. Either the approval and the grant both commit or neither does, so an approved business is never left without the Pro it was promised.
+
+- **It is off in source control**, and nothing changes in a deployment until a human sets that App Service setting (see [Configuration and secrets](#configuration-and-secrets)). While it is off, approval behaves exactly as it did before.
+- **Only an approval grants it.** A rejection, a deactivation and a reactivation write no grant, and a business that already holds a manual grant is left exactly as it is — no second grant, and the one it holds unchanged.
+- **Switching the setting off stops new grants only.** Every grant already written stays until a Super Admin ends it through the Plan dialog, which is also how a single business is taken off beta Pro.
+- **It entitles exactly what a complimentary Pro grant entitles**, the CSV and Excel exports of the reports Pro includes among them, and its members simply read `Pro` from `GET /api/me/access` once enforcement is on. Ending the beta for everybody, notifying businesses and billing are separate work (issue #969).
 
 ### Attachment storage
 
@@ -911,7 +929,7 @@ The application stores almost no personal data. It holds a vending business's ow
 - **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
 - **An invite's note is free text an Owner typed** (issue #531), so it may well name the person being invited. It is stored on the invite row, shown back to that business's own Owners on the invite list, and nothing else: it decides nothing, nothing looks an invite up by it, and it is deliberately absent from the invite audit event. An invite stores no name and no email address of the person it is for — only the role it grants and the Entra pair of the Owner who created it.
 - **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
-- **A scanned receipt is sent to Anthropic to be read, and this application stores none of it** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **Nothing is stored by this application as a result**: not the file, not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it and forgotten. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. A scan that ended as unavailable also records why (issue #1236): the status the reading service answered, its own error type and message — its message capped at 200 characters on one line, and withheld entirely when it can be seen to quote what the request carried (a product or supplier name of the business, of any length, a piece of the file, part of the key, or a distinctive piece of the instructions sent with it) — and the request id. That message is the one piece of free text any scan log holds; it is the service's own words rather than the receipt's, and what the check cannot recognise — an excerpt too short to tell apart from the service's own wording — is recorded in [docs/architecture.md § Receipt scanning](docs/architecture.md#receipt-scanning-issue-975) rather than claimed away. The error body itself is never logged, because an error body can quote the request back. Since issue #1164 the business's own [monthly scan count](#100-scans-a-month-issue-1164) is stored too, and it is a count in the same sense — a business, a month and a number, with no column that could hold a file name, a supplier, a product, an amount or any part of a draft. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)), and no other feature sends anything to Anthropic. **Businesses must be told this before the feature is launched**, which belongs with the terms and privacy text the Scan receipt screen (issue #1166) is released behind.
+- **A scanned receipt is sent to Anthropic to be read, and the scan request itself stores only the business's monthly scan count** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **The scan request itself stores nothing of the receipt**: not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it. If the member goes on to save the purchase, the **Add Purchase page attaches that same file to the create request, and it is stored as the purchase's document — exactly as any uploaded receipt would be — unless the member removes it first**; cancelling or never saving leaves nothing stored. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. A scan that ended as unavailable also records why (issue #1236): the status the reading service answered, its own error type and message — its message capped at 200 characters on one line, and withheld entirely when it can be seen to quote what the request carried (a product or supplier name of the business, of any length, a piece of the file, part of the key, or a distinctive piece of the instructions sent with it) — and the request id. That message is the one piece of free text any scan log holds; it is the service's own words rather than the receipt's, and what the check cannot recognise — an excerpt too short to tell apart from the service's own wording — is recorded in [docs/architecture.md § Receipt scanning](docs/architecture.md#receipt-scanning-issue-975) rather than claimed away. The error body itself is never logged, because an error body can quote the request back. Since issue #1164 the business's own [monthly scan count](#100-scans-a-month-issue-1164) is stored too, and it is a count in the same sense — a business, a month and a number, with no column that could hold a file name, a supplier, a product, an amount or any part of a draft. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)). **Receipt scanning is not the only feature that sends anything to Anthropic**: the [scheduled price collector](#the-scheduled-price-collector-issue-924) also sends shared-catalogue product names and search text to Anthropic as part of its nightly supplier-price search. The published **Privacy Policy** §5, "AI and supplier-price collection" (`/privacy-policy`), is the authority for what each feature sends and stores.
 - **A platform administrator may be granted a time-limited, audited, read-only look at a business's data** (issues #550 and #551). A [support session](#super-admin-support-sessions) records which business, which administrator, why they needed to look, and when the session ran and ended; it lasts 60 minutes, only one may be open at a time, and the record cannot be edited or deleted by the surface that creates it. A request made inside one reads that business and can change nothing — not a row, not a document — and never uses the business's Nayax credentials; it cannot see the members page at all, so members' names and email addresses stay private. Every such request is audited with the endpoint it reached, never with what it read. **Businesses must be told this is possible**, which v1 does in the terms and privacy text; notifying a business's Owners in the app is a documented follow-up. The reason the administrator typed is stored and logged on purpose: it is what makes such access reviewable afterwards.
 
 See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.
@@ -934,6 +952,7 @@ NayaxSqs__AccessKeyId
 NayaxSqs__SecretAccessKey
 NayaxSqs__VisibilityTimeoutSeconds
 ReceiptScanning__ApiKey
+ReceiptScanning__BaseUrl
 ReceiptScanning__Model
 ReceiptScanning__TimeoutSeconds
 ReceiptScanning__MaxImageBytes
@@ -949,6 +968,7 @@ PriceCollector__ClientId
 PriceCollector__RunExpiryHours
 SelfServiceOnboarding__Enabled
 Subscriptions__EnforcementEnabled
+Subscriptions__BetaProGrantOnApproval
 Cors__AdditionalAllowedOrigins__0
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
@@ -963,19 +983,21 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 
 `NayaxSqs__*` are the six settings of the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) below. `NayaxSqs__SecretAccessKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. The other five are not secrets but are still **absent from `appsettings.json`, which is the shipped state**: with no `NayaxSqs__QueueUrl` the reader is not started at all, the API starts and runs exactly as it did before, and one information line says the reader is off. A queue URL **with** a missing region, key id or secret fails at startup with the setting named, because a deployment that asked for the reader and silently imported nothing would be worse than one that refused to start. `NayaxSqs__VisibilityTimeoutSeconds` must match the queue's own visibility timeout (120 seconds); blank or out of range falls back to that default. All six are read once at startup, so filling them in takes effect on the next restart.
 
-`ReceiptScanning__*` are the settings of [receipt scanning](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163). `ReceiptScanning__ApiKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. It is **absent from `appsettings.json`, which is the shipped state**: with no key, `POST /api/purchases/scan` answers `503 "Receipt scanning is not available"`, nothing leaves the process, and the rest of the API is untouched — so **deploying without the key is safe**. A key configured beside a broken setting beside it — a blank model, a timeout of zero, a limit of zero, a non-https base URL — fails at startup with the setting named. The other five are not secrets: `ReceiptScanning__Model` defaults to the model decided on issue #1163 on 10 November 2026 after a test on 8 real receipts, `ReceiptScanning__TimeoutSeconds` to 60 (there is **no automatic retry** — a retried scan is a second payment), and `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` to the reader's documented image, PDF and page limits; they are settings rather than constants because a vendor's limits change, and the endpoint's own 8,000,000-byte upload cap applies first in any case (raising that one is a code change, not a setting). All are read once at startup, so filling them in takes effect on the next restart. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** (the launch gate recorded on #1163, which [100 scans a month](#100-scans-a-month-issue-1164) satisfies); until plan enforcement is on, scanning is refused for every business whatever the key says, because it is the one plan feature that [fails closed](#how-a-plan-is-enforced). **The cap itself is not a setting**: it is compiled in, for the reason the storage allowances are, so no configuration change can raise or remove it.
+`ReceiptScanning__*` are the settings of [receipt scanning](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163). `ReceiptScanning__ApiKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. It is **absent from `appsettings.json`, which is the shipped state**: with no key, `POST /api/purchases/scan` answers `503 "Receipt scanning is not available"`, nothing leaves the process, and the rest of the API is untouched — so **deploying without the key is safe**. A key configured beside a broken setting beside it — a blank model, a timeout of zero, a limit of zero, a non-https base URL — fails at startup with the setting named. The other six are not secrets: `ReceiptScanning__BaseUrl` defaults to the reader's documented base address (`https://api.anthropic.com/`) and is overridable only so a test host can point the typed client at itself, `ReceiptScanning__Model` defaults to the model decided on issue #1163 on 10 November 2026 after a test on 8 real receipts, `ReceiptScanning__TimeoutSeconds` to 60 (there is **no automatic retry** — a retried scan is a second payment), and `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` default to the reader's documented image, PDF and page limits — 5 MB, 32 MB and 100 pages respectively; they are settings rather than constants because a vendor's limits change, and the endpoint's own 8,000,000-byte upload cap applies first in any case (raising that one is a code change, not a setting). All are read once at startup, so filling them in takes effect on the next restart. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** (the launch gate recorded on #1163, which [100 scans a month](#100-scans-a-month-issue-1164) satisfies); until plan enforcement is on, scanning is refused for every business whatever the key says, because it is the one plan feature that [fails closed](#how-a-plan-is-enforced). **The cap itself is not a setting**: it is compiled in, for the reason the storage allowances are, so no configuration change can raise or remove it.
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
 `PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the two platform-admin APIs below — [diagnostics](#platform-diagnostics-api) and [businesses](#super-admin-businesses-api). Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
 
-`ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` name the one Microsoft Entra External ID tenant whose tokens the API also trusts (issue #710) — see [Customer identity: a second trusted issuer](#customer-identity-a-second-trusted-issuer-issue-710). None of the three is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. All three empty is the shipped, fail-closed state: the second bearer scheme is not registered, every token from that authority is rejected, and workforce sign-in is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. The values are read once at startup, so filling them in takes effect on the next restart.
+`ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` name the one Microsoft Entra External ID tenant whose tokens the API also trusts (issue #710) — see [Customer identity: a second trusted issuer](#customer-identity-a-second-trusted-issuer-issue-710). None of the three is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. All three empty is the shipped, fail-closed state: the second bearer scheme is not registered, every token from that authority is rejected, and workforce sign-in is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. The values are read once at startup, so filling them in takes effect on the next restart. `ExternalId__Scopes` sits beside them, defaulted to `access_as_user`; it is recorded for discoverability only, because the scope every controller actually requires is enforced by `[RequiredScope("access_as_user")]`, not read from this setting.
 
 `PriceCollector__TenantId` and `PriceCollector__ClientId` name the one scheduled price collector whose app-only token the API trusts (issue #924) — see [The scheduled price collector](#the-scheduled-price-collector-issue-924) below. Neither is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. Both empty is the shipped, fail-closed state: the collector bearer scheme accepts nothing, the collector policy denies everybody, and `GET /api/price-collector/work` answers `401` to every request while every other endpoint is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. `PriceCollector__RunExpiryHours` is how long an issued run stays open unless the collector reports back; blank, unparseable or outside 1–168 means the owner's default of **6 hours**, logged when it falls back, and it is never read as "no expiry". All three are read once at startup, so filling them in takes effect on the next restart.
 
 `SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
 
 `Subscriptions__EnforcementEnabled` switches [business plan enforcement](#business-plans-free-starter-and-pro) on (issue #966). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off every business is unrestricted and behaves exactly as it did before plans existed, and `GET /api/me/access` reports `entitlement.enforced: false` with no plan at all. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on is a human decision with two gates in front of it: the [`grandfather-business-plans`](#grandfathering-existing-businesses-onto-pro) command must have completed first — otherwise the API logs a startup error and keeps treating every business as unrestricted — and the paid plans themselves are switched on only when the whole rollout is released together (issue #965's launch gate).
+
+`Subscriptions__BetaProGrantOnApproval` makes [approving a business application](#super-admin-businesses-api) also grant that business open-ended Pro for the public beta (issue #1258) — see [Pro is free during the public beta](#pro-is-free-during-the-public-beta-issue-1258). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off an approval writes no grant at all and behaves exactly as it did before. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. It is a **separate** setting from `Subscriptions__EnforcementEnabled` and is deliberately switched on **first**: the beta businesses have to hold their grant before anything is enforced, or enforcement would put every one of them on Free. Switching it off again stops new grants only — every grant already written stays until a Super Admin ends it on that business's Plan dialog.
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
@@ -1292,6 +1314,114 @@ first successful poll, and the Dashboard syncs on load in the meantime. The `200
 business-facing surface may read. See [docs/architecture.md § Dashboard sales live from the Nayax SQS
 queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106).
 
+## The Nayax sales file import, and how big a file may be (issue #1300)
+
+**Admin → Imports** takes a Nayax transaction export (`.xlsx`, `.xls` or `.csv`) and stores each row
+as a sale: a transaction the business already holds is updated, a new one is imported, and a row
+without a usable transaction, machine or time is reported as skipped rather than guessed at. If the
+file lists the same transaction on more than one row, those rows are applied in file order onto the
+one sale — the file's last word about it is what you end up holding — so a repeated transaction is
+never stored twice and a later row with empty cells keeps what the earlier one stated.
+
+**One file may carry up to 5,000 sales.** A file with more rows is refused with
+*"This file has more than 5,000 sales. For a longer history, export one file per quarter, or use the
+sales history import."* and **nothing from it is stored** — not even the rows inside the limit, because
+half an import is worse than none. An `.xlsx` whose sheet data would expand past **50 MB** is refused
+the same way, from the file's own compressed entry sizes, before the spreadsheet is opened at all.
+
+Both limits are there because a single upload used to decide how much memory the whole server had: a
+9.9 MB CSV of 114,250 rows cost about a gigabyte just to be read, and saving it held the database for
+minutes. **To import more than 5,000 sales, use the [sales history
+import](#the-sales-history-import-issue-1304) on the same page** — it takes a CSV of up to 250,000
+rows and imports it in the background — or export a shorter period and upload the files one at a
+time.
+
+5,000 is the number the measured database lock below allows, rather than a guess: a file of 20,000
+rows held that lock for about fourteen seconds on a slower server, which is longer than any other
+work should ever be made to wait.
+
+**While the file is being saved, it holds the database's single write lock** — the same lock the Nayax
+SQS queue reader, the dashboard's sales refresh, a purchase and a stock adjustment take. That is
+deliberate: it is what makes a sale the queue delivered while your file was uploading an *update*
+instead of a failed import. The row limit is sized so a full file holds that lock for about three and
+a half seconds and never more than ten, so other work waits briefly rather than failing. Replaying
+the affected products' costs happens afterwards, outside the lock. See
+[docs/architecture.md § Limits on one uploaded sales file and the write lock it
+takes](docs/architecture.md#limits-on-one-uploaded-sales-file-and-the-write-lock-it-takes-issue-1300).
+
+The import needs `Imports.Run` (a Manager or an Owner) and the **Pro** plan, like the rest of the
+Nayax features.
+
+## The sales history import (issue #1304)
+
+A new business usually has one to three years of Nayax sales to bring in, and the upload above takes
+5,000 rows at a time. **Admin → Imports** therefore has a second card, **Import a sales history**,
+that takes the whole thing: a **CSV of up to 250,000 rows**, up to **50 MB**. The upload is checked
+and accepted in seconds — it answers with a job, not with counts — and the importing happens in the
+background.
+
+**It applies exactly the same row rules as the upload above.** The same transaction identity, the
+same instant precedence, the same "a blank cell changes nothing" rule, the same product matching and
+the same historical costing: the two imports share that code rather than describing it twice, so a
+row cannot mean one thing in a quarterly file and another in a history. What differs is only how the
+file is read and saved.
+
+**CSV only.** A spreadsheet cannot be read a row at a time without expanding the whole thing in
+memory, which is the cost this import exists to avoid, so an `.xlsx` is refused with *"A sales history
+must be a .csv file. Export the history from Nayax Core as CSV."* Export the history from Nayax Core
+as CSV and upload that.
+
+**What a refusal looks like.** A file is refused — with nothing at all stored — when it is empty,
+larger than 50 MB, not a CSV, not a readable Nayax sales export (no column headings, or no
+`TransactionID` column), carries no rows under its headings, or carries more than 250,000 of them.
+Each refusal is one readable sentence shown beside the file you chose.
+
+**One history imports at a time per business.** A second upload while one is still running is refused
+with *"A sales history import is already running for this business. Wait for it to finish, then upload
+the next file."* Two of them would contend for the same database write lock and the same sales rows
+for no gain.
+
+**How it runs, and why other work keeps working.** The job reads the file one row at a time — it never
+holds the file's rows in memory — and commits them in **batches of 500**, each batch in its own short
+database transaction. Between batches the database's single write lock is released, so a purchase, a
+stock adjustment or the Nayax SQS queue reader's own save goes through while a year of history is
+importing instead of waiting behind it. A batch holds that lock for under a second early in a
+history and longer as the history grows, because each row's cost is worked out from its own
+product's history up to that sale. Measured on a full 250,000-row history over a 200-product
+catalogue, every one of the 500 batches stayed inside the ten-second goal (the longest 2.3 s) and the
+whole import took about 9 minutes. **A history that concentrates a quarter of a million rows on a
+handful of products is the case that can leave it**: on four products (62,500 sales each), the last
+batches reached 9 to 11 seconds and 4 of 500 passed ten. Nothing is lost when that happens — the batch
+still commits and the next writer still waits rather than failing — but another save can wait a
+little longer than the ten seconds this application aims for. A long history is in any case a job of
+many minutes rather than one request nothing else can write around.
+
+**You can follow it, leave the page, and come back.** The card lists this business's recent history
+uploads, newest first, with the state (**Queued**, **Importing**, **Completed** or **Failed**), how
+far it has got (*"1,500 of 6,000 rows"*) and what the rows turned into (imported, updated, skipped,
+could not be read, kept stored values). While something is running the list refreshes itself every
+five seconds and stops once nothing is.
+
+**Stopping it is safe, and so is uploading the same file again.** Every count is written in the same
+transaction as the sales it describes, so *"1,500 of 6,000 rows"* means exactly 1,500 rows are
+imported. A job interrupted by a restart or a database failure resumes from the row after the last
+committed batch, and a job that stops for good keeps what it imported and says why. Because a sale is
+matched by its transaction id, re-uploading the same file — or a file that overlaps one you already
+imported — updates those sales instead of storing them twice.
+
+**Rebuilding the products' costs happens afterwards, not per batch.** Each batch records which
+products need their inventory cost replayed, once per product and from that product's earliest
+affected sale; the replay itself runs in the application's existing cost-rebuild pass rather than
+inside the import, because replaying a product's whole history once per batch is exactly what the
+batching is for.
+
+**There is nothing to configure**, and **Always On** is the one prerequisite, for the same reason the
+[Reimbursement Report import](#the-reimbursement-report-import-issue-1149) has it: without it an
+idled process imports nothing and a queued upload waits for somebody's next request.
+
+It needs `Imports.Run` (a Manager or an Owner) and the **Pro** plan — the same access as the sales
+file upload above, because it is the same import.
+
 ## The Reimbursement Report import (issue #1149)
 
 Nayax emails the reimbursement report as a ZIP attachment. You can upload it **exactly as it
@@ -1439,7 +1569,8 @@ The Super Admin's other responsibility is the one the diagnostics API above deli
 GET  /api/super-admin/businesses                        every business, pending applications first
 GET  /api/super-admin/businesses/pending-count          { "pendingCount": 1 }
 POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + the enabled supplier
-                                                        presets copied into the business
+                                                        presets copied into the business, + the beta
+                                                        Pro grant while that setting is on
 POST /api/super-admin/businesses/{businessId}/reject    { "reason": "..." } (optional) -> Rejected
 POST /api/super-admin/businesses/{businessId}/deactivate   Active -> Deactivated, + invites cancelled
 POST /api/super-admin/businesses/{businessId}/reactivate    Deactivated -> Active, needs an active Owner
@@ -1459,10 +1590,11 @@ GET  /api/super-admin/businesses/{businessId}/purchase-scan-usage  scans used th
 - **Freeing somebody from a business that is off.** A person belongs to one business at a time, so a membership in a deactivated business would otherwise stop them joining anywhere else — and that business has no reachable Owner to release them. While a business is `Deactivated` (and only then) the Super Admin can **list its members** — membership id, display name, role and whether it is active, and nothing else — and **release** one, which marks that membership inactive and frees the person to accept an invite or apply for a business of their own. The usual "a business must keep an active Owner" rule deliberately does not apply here; the reactivation refusal above is what it is replaced by. Both endpoints answer `409` for a business in any other status: a trading business's members are its own Owner's to manage.
 - **Recording which AWS user sends a business's Nayax sales (issue #1101).** The last two routes above are the Super Admin's **Nayax SQS sender identity**. Nayax can deliver every transaction to one shared Amazon SQS queue, and a business's messages are told apart by the AWS IAM user that sent them — so before that queue can be read safely the application needs a trusted mapping from an IAM user id (what SQS reports as `SenderId`, for example `AIDAEXAMPLEUSERID123`) to exactly one business. **Only a Super Admin may set it**: a business that could choose its own sender id could claim another business's sales, so this record is on no business-facing screen at all, to read or to write. One business holds at most one sender, and **one sender id belongs to at most one business in the whole application** — enforced by the database, so a duplicate is `409` with a message that names no other business. The id must be 16 to 128 letters and digits; `isEnabled` can only be on while an id is recorded; only an `Active` business may be changed. Every write carries the row's current `expectedRevision`, which the `GET` reports and which is `null` for the first one; anything else is `409` with "reload it and try again", so two Super Admin tabs cannot overwrite each other. **Remove deletes nothing**: it clears the id, turns the mapping off and records the change, so the history survives and the id becomes free for another business — and every create, change, switch and removal appends an audit row in the same transaction. The sender id is an **identifier, not a secret**: an AWS access key or secret is never entered, stored or logged anywhere in this application. Nothing reads the queue yet (issue #1103). See [docs/architecture.md § Nayax SQS sender identity](docs/architecture.md#nayax-sqs-sender-identity-issue-1101).
 - **Seeing how many receipt scans a business has used this month (issue #1164).** The last route above reports that business's count for **its own** calendar month, how many are left and the cap — nothing else, and nothing about any receipt. It exists so the platform owner can see whether a business is near the [100-scan monthly cap](#100-scans-a-month-issue-1164) and can recognise a support request about "it says I have used all my scans" for what it is. **It is read-only, and there is no route that is not**: a counter cannot be reset and extra scans cannot be granted, by anybody, which is the "buying extra scans is out of scope" decision made structurally rather than by policy. The month is resolved in the time zone stored on that business, so the figure is the month the business is actually in rather than the month the administrator is in. A business that has never scanned reads `0` rather than `404`; an unknown business id is `404`. See [docs/architecture.md § The monthly scan cap](docs/architecture.md#the-monthly-scan-cap-issue-1164).
-- **Giving a business a plan without billing it (issue #982).** The three `plan-grant` routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site or a complimentary plan. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
-- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else. The Nayax SQS sender identity (issue #1101) is a third such store, over that business's sender row and the append-only record of each decision about it, with no way to look a sender id *up* across businesses — that lookup is the queue reader's and arrives with it. The receipt-scan count (issue #1164) is a fourth, and the narrowest: one method that returns one business's count for one month, and **no write at all**.
+- **Approving also puts the business on Pro during the public beta (issue #1258).** While `Subscriptions__BetaProGrantOnApproval` is on, the approve route above writes one open-ended **Pro** grant for the business it approves, with the source `Beta` and a fixed reason, in the **same transaction** as the status change and the supplier copies: if either write fails, neither is committed. It is the one case in which this surface writes a business's plan at all, and nothing else about a plan is reachable from it — no plan or end date a request chooses, no other business, no billing record, and no grant on a rejection, a deactivation or a reactivation. A business that already holds a manual grant is left exactly as it is. The grant then belongs to the `plan-grant` routes below: that is where it is read, with its source, and where a Super Admin ends it. See [Pro is free during the public beta](#pro-is-free-during-the-public-beta-issue-1258).
+- **Giving a business a plan without billing it (issue #982).** The three `plan-grant` routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site, a complimentary plan — or the beta grant an approval wrote, which these routes administer in exactly the same way and report with its `source`. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
+- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets and — while the beta setting is on — its beta Pro grant, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else. The Nayax SQS sender identity (issue #1101) is a third such store, over that business's sender row and the append-only record of each decision about it, with no way to look a sender id *up* across businesses — that lookup is the queue reader's and arrives with it. The receipt-scan count (issue #1164) is a fourth, and the narrowest: one method that returns one business's count for one month, and **no write at all**.
 - **Only a pending application may be decided.** An already-trading, already-refused or deactivated business is `409`; an unknown id is `404`. Approving also requires that the applicant's membership in the application is still active and that they hold no active membership in any other business — a person belongs to one business at a time — so an approval after they joined somewhere else is `409` and changes nothing. Two decisions arriving at once resolve to one recorded decision and one `409`: the business is re-read inside the write transaction that decides it.
-- **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and neither has an audit table. A **plan grant is the one platform action that does** (issue #982): each committed grant, change or end writes an append-only row — the actor, the business, the transition, the end instant, the revision, the reason as typed and the instant — in the **same transaction as the grant**, so a granted plan and the record of who gave it commit together or not at all, and nothing can later rewrite that row. The log event emitted beside it carries no reason text and no name at all. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
+- **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and neither has an audit table. A **plan grant is the one platform action that does** (issue #982): each committed grant, change or end writes an append-only row — the actor, the business, the transition, the end instant, the revision, the recorded reason and the instant — in the **same transaction as the grant**, so a granted plan and the record of who gave it commit together or not at all, and nothing can later rewrite that row. The beta grant an approval writes (issue #1258) is recorded in that same trail, with the approving administrator as the actor. The log event emitted beside it carries no reason text and no name at all. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
 - **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **Nayax SQS sender** (issue #1101), offered for an `Active` business, opens its own card, which reads that business's recorded sender through the route above and shows the sender ID (or "None"), On/Off and the last message received in Sydney time (or "Never") - and, since issue #1106, that business's last successful reconciliation plus the queue reader's own last successful poll, consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can be explained from the same card (an unread depth reads "Unknown", never `0`) - with **Set**/**Change**, **Turn off** and **Remove** — each sending the revision the card was loaded with, Remove behind a confirmation that says plainly the ID becomes free for another business - the confirmation every path that would remove the ID reaches, including submitting a cleared field over a recorded sender - and a `409` reloading the card and saying it changed elsewhere. The card also says how to find the ID: in AWS CloudShell, `aws iam get-user --user-name <user> --query User.UserId`. The table itself shows no sender, for the reason it shows no plan. **Receipt scans** (issue #1164), offered for an `Active` business, opens its own card too, which reads that business's count for its own current month through the route above and shows the month, "N of 100" used and how many are left - with a note that the month is the business's own and not the administrator's, and, once the allowance is gone, what scanning now answers that business. It has **one** button, **Close**: there is no action on it at all, because a counter cannot be reset and extra scans cannot be granted. The table itself shows no count, for the reason it shows no plan and no sender. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
 ### Each business's Nayax connection status
@@ -2207,16 +2339,17 @@ powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 | - | ---- | -------------- | -------- |
 | 1 | Test agent eval runner | `node --test scripts/run-agent-evals.test.mjs` | yes |
 | 2 | Run agent eval corpus | `node scripts/run-agent-evals.mjs` against `evals/agent/cases/` (see `evals/agent/README.md`) | yes |
-| 3 | Restore backend | NuGet restore for `backend/InventoryApi/InventoryApi.slnx` | yes |
-| 4 | Verify C# formatting | `dotnet format --verify-no-changes` against the root `.editorconfig` | yes |
-| 5 | Build backend | Release build with .NET analyzers, code-style enforcement and warnings-as-errors | yes |
-| 6 | Test backend with coverage | xUnit suite plus Coverlet line/branch coverage | yes |
-| 7 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
-| 8 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
-| 9 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
-| 10 | Test frontend | `npm run test` (Jest, via `jest-preset-angular`) | yes |
-| 11 | Build frontend | Angular production build | yes |
-| 12 | Audit frontend dependencies | `npm audit` | no, report only |
+| 3 | Check documentation links and anchors | `node scripts/check-doc-links.mjs` resolves every relative link and heading anchor in README, AGENTS, CLAUDE, CONTRIBUTING, SECURITY and `docs/**/*.md` | yes |
+| 4 | Restore backend | NuGet restore for `backend/InventoryApi/InventoryApi.slnx` | yes |
+| 5 | Verify C# formatting | `dotnet format --verify-no-changes` against the root `.editorconfig` | yes |
+| 6 | Build backend | Release build with .NET analyzers, code-style enforcement and warnings-as-errors | yes |
+| 7 | Test backend with coverage | xUnit suite plus Coverlet line/branch coverage | yes |
+| 8 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
+| 9 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
+| 10 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
+| 11 | Test frontend | `npm run test` (Jest, via `jest-preset-angular`) | yes |
+| 12 | Build frontend | Angular production build | yes |
+| 13 | Audit frontend dependencies | `npm audit` | no, report only |
 
 ### Backend code quality
 
@@ -3446,6 +3579,44 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
   Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
   reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
 
+## Reviewing a product replacement in Sync Restock
+
+Most Sync Restock rows are a refill Nayax counted, and **Apply** is all they need. A row badged
+**Product replacement** is different: Nayax told you a slot's product changed and reported two
+product *names* and no quantity, so nothing can be applied until you say what actually happened.
+The row opens its own short form under itself for exactly that.
+
+- **Confirm or correct both products.** The row shows the outgoing and incoming names exactly as
+  Nayax reported them, and beside each one a product search box over your own active products. Each
+  box is already filled in with the product the sync suggested, and you can change it; when there
+  was no suggestion the box is empty and says why. The incoming product is always required — it is
+  what the slot now holds — even when you load nothing.
+- **Quantity restocked** is how many units you put in, and it comes prefilled with what Nayax
+  currently shows in the slot. **Treat that number as a floor, not the truth**: the machine may have
+  sold some since the replacement, so the form says it may be low, and you should correct it to what
+  you actually loaded. When there was no suggestion the field is blank with its reason. Underneath it
+  the form shows how many of the chosen product your storage holds, and warns you — *"Insufficient
+  storage: needs 7, has 4 (short 3)"* — before you try to load more than that.
+- **Quantity removed** and **What happened** cover the units you took out. **None** is the default
+  and records nothing for them, and the quantity stays disabled while it is selected. **Returned to
+  storage** puts them back in storage; **Damaged** and **Expired** write them off. Choose one of
+  those three and the quantity becomes editable and has to be at least one.
+- **A possible double count is flagged on the row**, as before, when a refill you had already
+  recorded by hand looks like the same event.
+- **Apply replacement asks you to confirm first.** The button stays disabled until the form could
+  actually be sent, then shows a one- or two-sentence summary of exactly what will be written — for
+  example *"Record 7 unit(s) of Red Bull Red Edition 250mL loaded into the machine. 4 unit(s) of V
+  Energy 250ML will be returned to storage."* — and writes nothing until you confirm it. The dialog
+  re-syncs afterwards, so an applied replacement drops off the list. If the server refuses it (not
+  enough storage, for instance) the reason appears on the row in the server's own words and the
+  dialog stays open, so you can fix the numbers and try again.
+- **Already recorded manually is still there**, beside the new action: if you already entered these
+  movements by hand, that is still the right answer and nothing is written.
+
+See [docs/architecture.md § Reviewing and applying a product
+replacement](docs/architecture.md#reviewing-and-applying-a-product-replacement-in-the-dialog-issue-1327)
+for the full walkthrough, the validation rules and the movements each choice writes.
+
 ## Nayax sales to review
 
 Issue #1105. Sales that arrive from Nayax's queue are checked every hour against the business's own
@@ -3603,7 +3774,7 @@ with every tool **shown**.
 - **A Super Admin never loses the tool**, and switching it back on restores it only to the people
   whose role already allowed it: it is a visibility switch, not a permission. Historical GST
   Classification still needs the same access it always did (an Owner's, see
-  [Who can see and do what](#who-can-see-and-do-what)), the page still works exactly as described
+  [Who can see and do what](#roles-and-capabilities)), the page still works exactly as described
   above, and its address still opens if you go to it directly. Hiding the option hides the way in; it
   does not restrict, change or disable the classification itself.
 - **Only a Super Admin can change it.** The server enforces that, so an ordinary member cannot switch

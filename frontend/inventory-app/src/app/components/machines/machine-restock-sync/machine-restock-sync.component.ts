@@ -14,6 +14,7 @@ import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { BehaviorSubject, Subscription } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
+import { ProductService } from '../../../services/product.service';
 import { ToastService } from '../../../services/toast.service';
 import {
   currentDateInTimeZone,
@@ -23,18 +24,40 @@ import {
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import { NayaxStatusBannerComponent } from '../../shared/nayax-status-banner/nayax-status-banner.component';
+import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { apiErrorMessage } from '../../shared/api-error-message';
+import { PurchaseProductPickerComponent } from '../../purchases/purchase-form/purchase-product-picker.component';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
+  NayaxApplyProductReplacementRequest,
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
   NayaxMachineAlertEventCodes,
   NayaxMachineStockSyncPreview,
-  NayaxReplacementSuggestionSource,
+  NayaxReplacementOutgoingDisposition,
   NayaxStockEventApplyOutcome,
   NayaxStockEventApplyResult,
   NayaxStockEventMatchStatus,
-  NayaxStockEventPreview
+  NayaxStockEventPreview,
+  Product
 } from '../../../models/models';
+
+/**
+ * One operator's in-progress answers for one product-change row (issue #1327), kept only in this
+ * component while the dialog is open. Prefilled from #1325's suggestions, never persisted and never
+ * read by anything else: Apply builds the request from this draft at the moment it is confirmed.
+ */
+interface ReplacementDraft {
+  incomingProductId: number;
+  incomingQuantityText: string;
+  outgoingProductId: number;
+  outgoingDisposition: NayaxReplacementOutgoingDisposition;
+  outgoingQuantityText: string;
+  /** Whether the short confirmation of what will be written is currently shown for this row. */
+  confirming: boolean;
+  /** The server's refusal of this row's last Apply attempt, if any. */
+  error: string | null;
+}
 
 /**
  * Machine-level Sync Restock action (issue #183). It owns the whole Nayax stock-adjustment
@@ -56,7 +79,13 @@ import {
 @Component({
   selector: 'app-machine-restock-sync',
   standalone: true,
-  imports: [CommonModule, BusinessDateTimePipe, NayaxStatusBannerComponent],
+  imports: [
+    CommonModule,
+    BusinessDateTimePipe,
+    NayaxStatusBannerComponent,
+    ConfirmationDialogComponent,
+    PurchaseProductPickerComponent
+  ],
   templateUrl: './machine-restock-sync.component.html',
   styles: [
     `
@@ -233,6 +262,25 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   resolvingManyEvents$ = new BehaviorSubject(false);
   selectedEventIds = new Set<number>();
 
+  /** Which product-change row's Apply is in flight (issue #1327); at most one at a time. */
+  applyingReplacementEventId$ = new BehaviorSubject<number | null>(null);
+
+  /**
+   * The business's active products (issue #1327), for the product-change row's two autocompletes -
+   * the same catalogue `ProductService.getAll()` answers everywhere else, current business, active
+   * only. Reloaded whenever the dialog opens, so the quantities shown stay close to storage as it
+   * now stands.
+   */
+  products: Product[] = [];
+  private productsSubscription?: Subscription;
+
+  /**
+   * One draft per product-change row, keyed by event id, created lazily and prefilled from #1325's
+   * suggestion the first time a row is read (issue #1327). Cleared with the rest of the dialog's
+   * state on close.
+   */
+  private readonly replacementDrafts = new Map<number, ReplacementDraft>();
+
   /**
    * The Sync Restock From date filter (issue #206), as a `yyyy-MM-dd` local-date input value. It
    * is empty until the dialog is opened, because its default is a date in the business's own
@@ -251,7 +299,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   readonly MatchStatus = NayaxStockEventMatchStatus;
   readonly DuplicateResolution = NayaxDuplicateResolution;
   readonly DuplicateResolutionChoice = NayaxDuplicateResolutionChoice;
-  readonly SuggestionSource = NayaxReplacementSuggestionSource;
+  readonly OutgoingDisposition = NayaxReplacementOutgoingDisposition;
 
   @ViewChild('syncTrigger') private syncTrigger?: ElementRef<HTMLButtonElement>;
 
@@ -265,7 +313,8 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
     private readonly machineService: MachineService,
     private readonly toastService: ToastService,
     private readonly businessTimeZone: BusinessTimeZoneService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    private readonly productService: ProductService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => {
       this.sessionActive = active;
@@ -293,6 +342,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
     this.timeZoneSubscription.unsubscribe();
+    this.productsSubscription?.unsubscribe();
     this.supersedePreviewRequest();
   }
 
@@ -424,14 +474,16 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
     this.syncTrigger?.nativeElement.focus();
   }
 
-  /** Closes the dialog and drops its preview, errors and selection. */
+  /** Closes the dialog and drops its preview, errors, selection and product-change drafts. */
   private resetDialog(): void {
     this.modalOpen$.next(false);
     this.syncPreview$.next(null);
     this.syncError$.next(null);
     this.applyError$.next(null);
     this.resolvingEventId$.next(null);
+    this.applyingReplacementEventId$.next(null);
     this.selectedEventIds.clear();
+    this.replacementDrafts.clear();
   }
 
   /**
@@ -450,7 +502,20 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
     this.fromDate$.next(defaultFromDate);
     this.showReconciled$.next(false);
     this.modalOpen$.next(true);
+    this.loadProducts();
     this.refreshPreview();
+  }
+
+  /**
+   * (Re)loads the business's active products for the product-change row's autocompletes (issue
+   * #1327), so the storage quantities shown are close to current rather than whatever stood when
+   * the dialog was last opened.
+   */
+  private loadProducts(): void {
+    this.productsSubscription?.unsubscribe();
+    this.productsSubscription = this.productService.getAll().subscribe((products) => {
+      this.products = products;
+    });
   }
 
   /** The From date filter changed (issue #206): fetches a preview bounded by the new date. */
@@ -596,10 +661,11 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
           this.restockApplied.emit();
         }
       },
-      error: () => {
+      error: (error: unknown) => {
         this.applying$.next(false);
-        this.applyError$.next('Failed to apply the selected Nayax stock-adjustment events.');
-        this.toastService.error('Failed to apply the selected Nayax stock-adjustment events.');
+        const message = apiErrorMessage(error, 'Failed to apply the selected Nayax stock-adjustment events.');
+        this.applyError$.next(message);
+        this.toastService.error(message);
       }
     });
   }
@@ -646,7 +712,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
           ? (failure.error as NayaxStockEventApplyResult | null)?.message
           : null;
 
-        const message = conflict ?? 'Failed to resolve the possible duplicate.';
+        const message = conflict ?? apiErrorMessage(failure, 'Failed to resolve the possible duplicate.');
         this.applyError$.next(message);
         if (conflict) {
           this.toastService.warning(message);
@@ -686,13 +752,233 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
         this.selectedEventIds.clear();
         this.refreshPreview();
       },
-      error: () => {
+      error: (error: unknown) => {
         this.resolvingManyEvents$.next(false);
-        this.applyError$.next('Failed to resolve the selected events as already recorded manually.');
-        this.toastService.error('Failed to resolve the selected events as already recorded manually.');
+        const message = apiErrorMessage(error, 'Failed to resolve the selected events as already recorded manually.');
+        this.applyError$.next(message);
+        this.toastService.error(message);
       }
     });
   }
+
+  /**
+   * This row's in-progress answers (issue #1327), created and prefilled from #1325's suggestion the
+   * first time the row is read, then kept exactly as the operator left it across refreshes until
+   * the dialog closes or the replacement is applied.
+   */
+  replacementDraft(event: NayaxStockEventPreview): ReplacementDraft {
+    let draft = this.replacementDrafts.get(event.id);
+    if (!draft) {
+      draft = this.initialReplacementDraft(event);
+      this.replacementDrafts.set(event.id, draft);
+    }
+    return draft;
+  }
+
+  private initialReplacementDraft(event: NayaxStockEventPreview): ReplacementDraft {
+    const suggestion = event.productReplacement;
+    return {
+      incomingProductId: suggestion?.suggestedIncomingProductId ?? 0,
+      incomingQuantityText: suggestion?.suggestedIncomingQuantity != null ? String(suggestion.suggestedIncomingQuantity) : '',
+      outgoingProductId: suggestion?.suggestedOutgoingProductId ?? 0,
+      outgoingDisposition: NayaxReplacementOutgoingDisposition.None,
+      outgoingQuantityText: '',
+      confirming: false,
+      error: null
+    };
+  }
+
+  setReplacementIncomingProduct(event: NayaxStockEventPreview, productId: number): void {
+    this.replacementDraft(event).incomingProductId = productId;
+  }
+
+  setReplacementIncomingQuantity(event: NayaxStockEventPreview, value: string): void {
+    this.replacementDraft(event).incomingQuantityText = value;
+  }
+
+  setReplacementOutgoingProduct(event: NayaxStockEventPreview, productId: number): void {
+    this.replacementDraft(event).outgoingProductId = productId;
+  }
+
+  /**
+   * The outgoing disposition changed: "None" means nothing is recorded for the outgoing product
+   * (issue #1326's own rule), so any quantity already typed is dropped rather than silently applied
+   * once a different disposition is chosen back.
+   */
+  setReplacementOutgoingDisposition(event: NayaxStockEventPreview, rawValue: string): void {
+    const draft = this.replacementDraft(event);
+    draft.outgoingDisposition = Number(rawValue) as NayaxReplacementOutgoingDisposition;
+    if (draft.outgoingDisposition === NayaxReplacementOutgoingDisposition.None) {
+      draft.outgoingQuantityText = '';
+    }
+  }
+
+  setReplacementOutgoingQuantity(event: NayaxStockEventPreview, value: string): void {
+    this.replacementDraft(event).outgoingQuantityText = value;
+  }
+
+  /** The product this row's draft currently names for incoming/outgoing, or `undefined`. */
+  replacementProduct(productId: number): Product | undefined {
+    return this.products.find((product) => product.id === productId);
+  }
+
+  replacementProductStock(productId: number): number | null {
+    return this.replacementProduct(productId)?.quantityInStock ?? null;
+  }
+
+  replacementIncomingQuantity(event: NayaxStockEventPreview): number | null {
+    return parseWholeNumber(this.replacementDraft(event).incomingQuantityText);
+  }
+
+  replacementOutgoingQuantity(event: NayaxStockEventPreview): number | null {
+    return parseWholeNumber(this.replacementDraft(event).outgoingQuantityText);
+  }
+
+  /**
+   * Whether the incoming quantity this row would apply exceeds what storage holds for the chosen
+   * incoming product (issue #1327) - the same rule `NayaxProductReplacementWritePolicy` enforces
+   * server-side, shown here only so the operator sees it before trying to Apply.
+   */
+  replacementIncomingInsufficient(event: NayaxStockEventPreview): boolean {
+    const quantity = this.replacementIncomingQuantity(event);
+    const available = this.replacementProductStock(this.replacementDraft(event).incomingProductId);
+    return quantity !== null && available !== null && quantity > available;
+  }
+
+  replacementIncomingShortfall(event: NayaxStockEventPreview): number | null {
+    const quantity = this.replacementIncomingQuantity(event);
+    const available = this.replacementProductStock(this.replacementDraft(event).incomingProductId);
+    return quantity !== null && available !== null ? quantity - available : null;
+  }
+
+  /**
+   * What is wrong with this row's draft, or `null` when Apply may be offered (issue #1327). Mirrors
+   * `NayaxProductReplacementWritePolicy.Refusal` client-side so Apply is disabled before a request
+   * is even sent; the backend remains the sole authority once it is.
+   */
+  replacementValidationError(event: NayaxStockEventPreview): string | null {
+    const draft = this.replacementDraft(event);
+    if (!draft.incomingProductId) {
+      return 'Choose the product that was loaded into the machine.';
+    }
+    if (this.replacementIncomingQuantity(event) === null) {
+      return 'Enter the quantity restocked as a whole number.';
+    }
+    if (draft.outgoingDisposition === NayaxReplacementOutgoingDisposition.None) {
+      return null;
+    }
+    if (!draft.outgoingProductId) {
+      return 'Choose the product that was taken out of the machine.';
+    }
+    const outgoingQuantity = this.replacementOutgoingQuantity(event);
+    return outgoingQuantity === null || outgoingQuantity < 1
+      ? 'Enter the quantity removed as a whole number of at least one.'
+      : null;
+  }
+
+  isReplacementReadyToApply(event: NayaxStockEventPreview): boolean {
+    return this.replacementValidationError(event) === null;
+  }
+
+  replacementOutgoingDispositionLabel(disposition: NayaxReplacementOutgoingDisposition): string {
+    switch (disposition) {
+      case NayaxReplacementOutgoingDisposition.ReturnedToStorage:
+        return 'returned to storage';
+      case NayaxReplacementOutgoingDisposition.Damaged:
+        return 'written off as damaged';
+      case NayaxReplacementOutgoingDisposition.Expired:
+        return 'written off as expired';
+      default:
+        return 'left unrecorded';
+    }
+  }
+
+  /** The short confirmation of what Apply will write for this row (issue #1327). */
+  replacementConfirmationMessage(event: NayaxStockEventPreview): string {
+    const draft = this.replacementDraft(event);
+    const incomingName = this.replacementProduct(draft.incomingProductId)?.name ?? 'the chosen product';
+    const sentences = [`Record ${this.replacementIncomingQuantity(event) ?? 0} unit(s) of ${incomingName} loaded into the machine.`];
+    if (draft.outgoingDisposition !== NayaxReplacementOutgoingDisposition.None) {
+      const outgoingName = this.replacementProduct(draft.outgoingProductId)?.name ?? 'the chosen product';
+      const label = this.replacementOutgoingDispositionLabel(draft.outgoingDisposition);
+      sentences.push(`${this.replacementOutgoingQuantity(event) ?? 0} unit(s) of ${outgoingName} will be ${label}.`);
+    }
+    return sentences.join(' ');
+  }
+
+  /** Opens the row's short confirmation once Apply is clicked, only when the draft is actually valid. */
+  openReplacementConfirmation(event: NayaxStockEventPreview): void {
+    if (!this.isReplacementReadyToApply(event) || this.sessionActive) {
+      return;
+    }
+    this.replacementDraft(event).confirming = true;
+  }
+
+  cancelReplacementConfirmation(event: NayaxStockEventPreview): void {
+    this.replacementDraft(event).confirming = false;
+  }
+
+  /**
+   * Applies this row's confirmed product replacement (issue #1327) through #1326's endpoint, exactly
+   * as the operator confirmed it, and re-syncs like every other apply so the row drops out once it
+   * succeeds. A refusal is shown on the row rather than closing the dialog, so the operator can fix
+   * it and try again.
+   */
+  applyReplacement(event: NayaxStockEventPreview): void {
+    const machineId = this.machineId;
+    const draft = this.replacementDraft(event);
+    draft.confirming = false;
+    if (!machineId || this.sessionActive || !this.isReplacementReadyToApply(event)) {
+      return;
+    }
+
+    draft.error = null;
+    const none = draft.outgoingDisposition === NayaxReplacementOutgoingDisposition.None;
+    const request: NayaxApplyProductReplacementRequest = {
+      eventId: event.id,
+      incomingProductId: draft.incomingProductId,
+      incomingQuantity: this.replacementIncomingQuantity(event) ?? 0,
+      outgoingDisposition: draft.outgoingDisposition,
+      outgoingProductId: none ? null : draft.outgoingProductId,
+      outgoingQuantity: none ? null : this.replacementOutgoingQuantity(event)
+    };
+
+    this.applyingReplacementEventId$.next(event.id);
+    this.machineService.applySyncRestockReplacement(machineId, request).subscribe({
+      next: (result) => {
+        this.applyingReplacementEventId$.next(null);
+        if (result.outcome === NayaxStockEventApplyOutcome.Applied) {
+          this.toastService.success('Applied the product replacement.');
+          this.replacementDrafts.delete(event.id);
+          this.refreshPreview();
+          this.restockApplied.emit();
+        } else {
+          draft.error = result.message;
+          this.toastService.warning(result.message);
+        }
+      },
+      error: (failure: unknown) => {
+        this.applyingReplacementEventId$.next(null);
+        // 400/409: the request itself, or the event's own state, refused the write and nothing was
+        // applied - the server's own sentence says why, shown on the row rather than the dialog.
+        const refusal = failure instanceof HttpErrorResponse
+          ? (failure.error as NayaxStockEventApplyResult | null)?.message
+          : null;
+        draft.error = refusal ?? 'Failed to apply the product replacement.';
+        this.toastService.error(draft.error);
+      }
+    });
+  }
+}
+
+/**
+ * A whole, non-negative count typed into a product-change row's quantity field (issue #1327), or
+ * `null` for anything else - blank, a fraction, a negative sign, or any other text a plain number
+ * input still lets through.
+ */
+function parseWholeNumber(text: string): number | null {
+  const trimmed = text.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
 }
 
 /** Whether a value is a real calendar date written as `yyyy-MM-dd` (so not `2026-02-30`). */

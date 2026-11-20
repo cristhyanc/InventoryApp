@@ -25,8 +25,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// grant rows, and <c>BusinessOwnershipEnforcer</c> refuses every tenant-owned write. This adapter
 /// therefore does two things explicitly, and nothing more. Its two statements over
 /// <c>BusinessPlanGrants</c> use <c>IgnoreQueryFilters</c>, each pinned to the single business id the
-/// decision named <em>and</em> to <see cref="ManualPlanGrantSource.Complimentary"/>, projecting the
-/// grant's plan, period, reason, revision and instant - this is the fourth reviewed
+/// decision named <em>and</em> to the two sources this surface administers -
+/// <see cref="ManualPlanGrantSource.Complimentary"/> and, since issue #1258,
+/// <see cref="ManualPlanGrantSource.Beta"/> - projecting the grant's plan, source, period, reason,
+/// revision and instant - this is the fourth reviewed
 /// <c>IgnoreQueryFilters</c> path in a request (AGENTS.md § There are exactly four reviewed
 /// IgnoreQueryFilters paths), and the alternatives were the ones issue #544 already rejected: an
 /// unscoped context in a request path would hand one adapter every tenant-owned table at once, and
@@ -43,9 +45,15 @@ namespace Inventory.Infrastructure.Persistence;
 /// that was rolled back.</para>
 ///
 /// <para><strong>The grandfathered grant is never touched.</strong> Every statement here filters on
-/// the complimentary source, so the row issue #966's command wrote - its plan, its start, its end and
+/// the administered sources, so the row issue #966's command wrote - its plan, its start, its end and
 /// its revision - is not read by this surface, not compared against, and not writable through it.
-/// Ending a complimentary grant records an end instant on it; nothing here deletes a row.</para>
+/// Ending an administered grant records an end instant on it; nothing here deletes a row.</para>
+///
+/// <para><strong>The beta grant of issue #1258 is written through this same adapter and by nothing
+/// else.</strong> The approval of a business application calls <see cref="SaveAsync"/> inside its own
+/// write transaction, so the grant and its audit row join the approval's commit; the row is created
+/// with the source the write carries, and an existing row keeps the source it was created with. The
+/// lease, the statements and the tables are unchanged by that caller.</para>
 /// </summary>
 public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
 {
@@ -74,13 +82,14 @@ public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
             return null;
         }
 
-        var grants = await ComplimentaryGrants()
+        var grants = await AdministeredGrants()
             .AsNoTracking()
             .Where(grant => grant.BusinessId == businessId)
             .OrderBy(grant => grant.Id)
             .Select(grant => new
             {
                 grant.Plan,
+                grant.Source,
                 grant.StartsAtUtc,
                 grant.EndsAtUtc,
                 grant.Reason,
@@ -98,6 +107,7 @@ public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
                 // entitled to is EffectiveEntitlementPolicy's decision, and which one may be granted
                 // is ManualPlanGrantPolicy's. An adapter decides neither.
                 grant.Plan,
+                grant.Source,
                 new EntitlementPeriod(grant.StartsAtUtc, grant.EndsAtUtc),
                 grant.Reason,
                 grant.Revision,
@@ -118,7 +128,7 @@ public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
         // Tracked, because the update below is made on this very row and goes through SaveChanges -
         // where BusinessOwnershipEnforcer and every other central enforcer runs. A set-based
         // ExecuteUpdate would write straight past all of them.
-        var grant = await ComplimentaryGrants()
+        var grant = await AdministeredGrants()
             .Where(candidate => candidate.BusinessId == write.BusinessId)
             .OrderBy(candidate => candidate.Id)
             .FirstOrDefaultAsync(cancellationToken)
@@ -129,7 +139,12 @@ public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
             _db.BusinessPlanGrants.Add(new BusinessPlanGrant
             {
                 Plan = write.Plan,
-                Source = ManualPlanGrantSource.Complimentary,
+
+                // The source the decision was made for: a Super Admin's complimentary grant, or the
+                // beta grant an approval wrote (issue #1258). It is set here and nowhere else -
+                // the update below leaves an existing row's source alone - so why a business holds
+                // the plan is recorded once, when the grant is created.
+                Source = write.Source,
                 StartsAtUtc = write.StartsAtUtc,
                 EndsAtUtc = write.EndsAtUtc,
                 Reason = write.GrantReason,
@@ -173,17 +188,21 @@ public sealed class EfPlatformPlanGrantStore : IPlatformPlanGrantStore
     }
 
     /// <summary>
-    /// The business's complimentary grants, and the one place the filter bypass is written.
+    /// The business's grants <strong>this surface administers</strong>, and the one place the filter
+    /// bypass is written.
     ///
-    /// <para>Both callers read through here, so "pinned to the complimentary source, and the
-    /// business id supplied beside it" is one statement rather than two that could drift. The
-    /// grandfathered grant is excluded by the source predicate, which is what makes it unreadable
-    /// and unwritable through this surface.</para>
+    /// <para>Both callers read through here, so "pinned to the administered sources, and the
+    /// business id supplied beside it" is one statement rather than two that could drift. Those
+    /// sources are the complimentary grant of issue #982 and the beta grant of issue #1258 - which is
+    /// written through this very adapter and which a Super Admin has to be able to see and end on the
+    /// plan view. The <em>grandfathered</em> grant is still excluded by the predicate, which is what
+    /// keeps it unreadable and unwritable through this surface.</para>
     /// </summary>
-    private IQueryable<BusinessPlanGrant> ComplimentaryGrants() =>
+    private IQueryable<BusinessPlanGrant> AdministeredGrants() =>
         _db.BusinessPlanGrants
             .IgnoreQueryFilters()
-            .Where(grant => grant.Source == ManualPlanGrantSource.Complimentary);
+            .Where(grant => grant.Source == ManualPlanGrantSource.Complimentary
+                || grant.Source == ManualPlanGrantSource.Beta);
 
     /// <summary>
     /// The caller's transaction, over the shared <see cref="SqliteWriteLockTransaction"/> every write

@@ -85,7 +85,7 @@ describe('LandingPageComponent (issue #954)', () => {
       const exportNotice = byTestId(host, 'landing-export-notice')!;
       expect(text(betaNotice)).toBe('Pro access is free during our public beta. No credit card required.');
       expect(text(exportNotice)).toBe(
-        'Data exports are not part of the free beta. Downloading your data as CSV or Excel will need a paid plan once paid plans launch.'
+        'CSV and Excel exports are included during the free beta. They will need a paid plan once paid plans launch.'
       );
       expect(betaNotice.nextElementSibling).toBe(exportNotice);
     });

@@ -200,6 +200,73 @@ public class MachineStockSyncCommitFailureTests
         Assert.NotNull(retried.StockAdjustmentId);
     }
 
+    /// <summary>
+    /// A confirmed product replacement whose commit fails (issue #1326). It writes three movements
+    /// rather than one, so there is more to lose: the incoming refill, the outgoing units' return
+    /// and the write-off must all be discarded together, and the event must be left pending so the
+    /// operator can simply apply it again.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_commit_of_a_product_replacement_leaves_the_event_pending_with_no_movement()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
+
+        SeedCostedProduct(db, Coke, "Coke 375mL", 10);
+        SeedCostedProduct(db, Water, "Nu Pure Spring Water 600mL", 10);
+        SeedReplacementEvent(db, 1);
+        await db.SaveChangesAsync();
+
+        var eventId = (await EventIdsAsync(db)).Single();
+        var store = FailsCommitFor.Product(Coke, Store(db));
+        var log = new RecordingMachineStockSyncLog();
+
+        var result = await new ApplyMachineStockProductReplacement(store, log).Handle(
+            Machine,
+            new NayaxApplyProductReplacementRequestDto(
+                eventId, Coke, 4, NayaxReplacementOutgoingDisposition.Damaged, Water, 3),
+            CancellationToken.None);
+
+        Assert.True(store.FailedACommit, "The replacement's commit was never attempted, so nothing was proved.");
+        Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Outcome);
+        Assert.Equal(FailedMessage, result.Message);
+        Assert.Null(result.StockAdjustmentId);
+
+        var logged = Assert.Single(log.Failures);
+        Assert.Equal(eventId, logged.EventId);
+        Assert.Null(logged.Reason);
+
+        await using (var verify = TestAppDbContext.For(options, SellerBusinessId))
+        {
+            Assert.Empty(await verify.StockAdjustments
+                .Where(x => x.Source == StockAdjustmentSource.Nayax)
+                .ToListAsync());
+            Assert.Equal(10, (await verify.Products.FindAsync(Coke))!.QuantityInStock);
+            Assert.Equal(10, (await verify.Products.FindAsync(Water))!.QuantityInStock);
+            Assert.Equal(10, (await verify.Products.FindAsync(Water))!.CostingQuantity);
+
+            var stored = await verify.NayaxMachineStockEvents.SingleAsync();
+            Assert.Equal(NayaxStockEventProcessingStatus.Unprocessed, stored.ProcessingStatus);
+            Assert.Null(stored.ReplacementIncomingProductId);
+            Assert.Null(stored.ReplacementOutgoingDisposition);
+        }
+
+        // Nothing is settled, so the operator can apply the same replacement again.
+        var retried = await new ApplyMachineStockProductReplacement(Store(db), new RecordingMachineStockSyncLog())
+            .Handle(
+                Machine,
+                new NayaxApplyProductReplacementRequestDto(
+                    eventId, Coke, 4, NayaxReplacementOutgoingDisposition.Damaged, Water, 3),
+                CancellationToken.None);
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, retried.Outcome);
+
+        await using var reread = TestAppDbContext.For(options, SellerBusinessId);
+        Assert.Equal(6, (await reread.Products.FindAsync(Coke))!.QuantityInStock);
+        Assert.Equal(10, (await reread.Products.FindAsync(Water))!.QuantityInStock);
+        Assert.Equal(7, (await reread.Products.FindAsync(Water))!.CostingQuantity);
+    }
+
     private static EfMachineStockEventStore Store(AppDbContext db) =>
         new(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
 
@@ -232,6 +299,27 @@ public class MachineStockSyncCommitFailureTests
             ParsedQuantity = quantity,
             MatchedProductId = productId,
             MatchStatus = NayaxStockEventMatchStatus.Matched,
+        });
+
+    /// <summary>
+    /// An imported 510 product replacement (issue #1325), as its own apply (issue #1326) finds it:
+    /// no match and no quantity, because the operator supplies both.
+    /// </summary>
+    private static void SeedReplacementEvent(AppDbContext db, long nayaxEventLogId) =>
+        db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
+        {
+            NayaxEventLogId = nayaxEventLogId,
+            MachineId = MachineId,
+            EventCode = NayaxMachineAlertEventCodes.MachineProductChanged,
+            EventDateTimeGmt = EventTime,
+            EventDateTimeVmc = EventTime.AddHours(10),
+            RawEventData =
+                "[operator] 'has replaced product Nu Pure Spring Water 600mL with product Coke 375mL "
+                    + "| Product MDB: 7",
+            ParsedMdb = 7,
+            ParsedProductName = "Coke 375mL",
+            ParsedOutgoingProductName = "Nu Pure Spring Water 600mL",
+            MatchStatus = NayaxStockEventMatchStatus.NeedsReview,
         });
 
     /// <summary>A product whose stored stock agrees with its history: one costed opening restock.</summary>
@@ -317,6 +405,7 @@ public class MachineStockSyncCommitFailureTests
         private readonly IMachineStockEventStore _inner;
         private readonly CancellationTokenSource? _cancelling;
         private long? _lastAppliedProductId;
+        private long? _lastAppliedReplacementProductId;
 
         private FailsCommitFor(long failingProductId, IMachineStockEventStore inner, CancellationTokenSource? cancelling)
         {
@@ -335,6 +424,7 @@ public class MachineStockSyncCommitFailureTests
             CancellationToken cancellationToken)
         {
             _lastAppliedProductId = null;
+            _lastAppliedReplacementProductId = null;
             return new Transaction(this, await _inner.BeginRefillWriteTransactionAsync(cancellationToken));
         }
 
@@ -393,6 +483,25 @@ public class MachineStockSyncCommitFailureTests
         public Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken) =>
             _inner.FindStorageProductAsync(productId, cancellationToken);
 
+        public Task<NayaxStockSyncProduct?> FindActiveStorageProductAsync(
+            long productId, CancellationToken cancellationToken) =>
+            _inner.FindActiveStorageProductAsync(productId, cancellationToken);
+
+        /// <summary>
+        /// A product replacement (issue #1326) fails its commit on the same terms: the incoming
+        /// product is the one the test names, exactly as a refill batch's product is.
+        /// </summary>
+        public Task<MachineReplacementApplication> ApplyProductReplacementAsync(
+            MachineIdentity machine,
+            MachineStockReplacementWrite replacement,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(replacement);
+
+            _lastAppliedReplacementProductId = replacement.Choice.IncomingProductId;
+            return _inner.ApplyProductReplacementAsync(machine, replacement, cancellationToken);
+        }
+
         public Task<bool> ReconcileAsManualDuplicateAsync(
             int eventId, long nayaxMachineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken) =>
             _inner.ReconcileAsManualDuplicateAsync(eventId, nayaxMachineId, matchedManualStockAdjustmentId, cancellationToken);
@@ -402,8 +511,11 @@ public class MachineStockSyncCommitFailureTests
         {
             public Task CommitAsync(CancellationToken cancellationToken)
             {
-                if (owner._lastAppliedProductId != owner._failingProductId)
+                if (owner._lastAppliedProductId != owner._failingProductId
+                    && owner._lastAppliedReplacementProductId != owner._failingProductId)
+                {
                     return inner.CommitAsync(cancellationToken);
+                }
 
                 owner.FailedACommit = true;
                 if (owner._cancelling is { } cancelling)

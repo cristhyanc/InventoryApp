@@ -486,7 +486,17 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/catalogue-review", "POST", Capability.ImportsRun)]
     [InlineData("api/catalogue-review/apply", "POST", Capability.ImportsRun)]
     [InlineData("api/catalogue-review/unresolved-sales/apply", "POST", Capability.DataRepair)]
+    // Issue #1352's Dashboard read of what the import has left to do. Its only action is "open
+    // Import products", so it carries the capability that opens it: being told the import has work
+    // waiting is of no use to a role that may not run the import.
+    [InlineData("api/catalogue-review/attention", "GET", Capability.ImportsRun)]
     [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
+    // Issue #1304's uploaded Nayax sales history: uploading one is running the import, and the read
+    // that reports what the background job made of it is readable by exactly the members who may run
+    // it - the same capability as the normal sales file upload above, which is what the issue asks
+    // for.
+    [InlineData("api/imports/nayax-sales-history", "POST", Capability.ImportsRun)]
+    [InlineData("api/imports/nayax-sales-history/jobs", "GET", Capability.ImportsRun)]
     // Issue #1149's uploaded Nayax reimbursement report ZIP: uploading one is running the import, and
     // the two reads that report what became of one are readable by exactly the members who may run it.
     [InlineData("api/imports/reimbursement-report", "POST", Capability.ImportsRun)]

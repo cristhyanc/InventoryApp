@@ -302,6 +302,21 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         return product is null ? null : new NayaxStockSyncProduct(product.Id, product.Name, product.QuantityInStock);
     }
 
+    public async Task<NayaxStockSyncProduct?> FindActiveStorageProductAsync(
+        long productId, CancellationToken cancellationToken)
+    {
+        // Tenant-filtered like every other read here, and additionally IsActive: a retired product,
+        // another business's product and one that no longer exists all answer null, which is the
+        // single refusal the replacement apply publishes for all three (issue #1326).
+        var product = await _db.Products
+            .AsNoTracking()
+            .Where(p => p.Id == productId && p.IsActive)
+            .Select(p => new { p.Id, p.Name, p.QuantityInStock })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return product is null ? null : new NayaxStockSyncProduct(product.Id, product.Name, product.QuantityInStock);
+    }
+
     public async Task<IMachineStockRefillWriteTransaction> BeginRefillWriteTransactionAsync(
         CancellationToken cancellationToken) =>
         await MachineStockRefillWriteTransaction.BeginAsync(_db, cancellationToken).ConfigureAwait(false);
@@ -406,6 +421,142 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                     exception.GetType().Name,
                     exception is InventoryCostDataQualityException refusal ? refusal.Message : null));
         }
+    }
+
+    public async Task<MachineReplacementApplication> ApplyProductReplacementAsync(
+        MachineIdentity machine,
+        MachineStockReplacementWrite replacement,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(replacement);
+
+        var nayaxMachineId = machine.RequiredNayaxMachineId;
+        var choice = replacement.Choice;
+        var plan = NayaxProductReplacementWritePolicy.Movements(choice);
+
+        try
+        {
+            // The event row first, before a single movement is staged, so a request naming an event
+            // this machine does not have has staged nothing at all when it is refused.
+            var entity = await _db.NayaxMachineStockEvents.FirstOrDefaultAsync(
+                e => e.Id == replacement.EventId && e.MachineId == nayaxMachineId, cancellationToken);
+            if (entity is null)
+                return new MachineReplacementApplication(
+                    false, null, new MachineRefillFailure(MachineRefillFailure.EventNotFound, null));
+
+            var note = $"Nayax Sync Restock product replacement (EventLogID {replacement.NayaxEventLogId})";
+
+            // The units loaded, written exactly as a Sync Restock refill is: a negative storage
+            // change through the one authoritative movement use case, costing-neutral, carrying the
+            // event's own EventDateTimeGMT as the machine ledger's instant (issue #1243) while the
+            // movement itself keeps the apply instant for the cost replay and Stock History.
+            var incoming = plan.WritesIncomingRefill
+                ? await _recordMovement.RecordAsync(
+                    new InventoryMovement(
+                        choice.IncomingProductId,
+                        -choice.IncomingQuantity,
+                        DomainStock.StockAdjustmentReason.MachineRefill,
+                        $"{note} - loaded into the machine",
+                        MachineId: machine.LocalMachineId,
+                        Source: DomainStock.StockAdjustmentSource.Nayax,
+                        MachineLedgerEffectiveAt: entity.EventDateTimeGmt),
+                    cancellationToken)
+                : null;
+
+            // The units taken out come back to storage first - they are in the machine, so they are
+            // in storage before anything can be written off them - as the same MachineRefill reason
+            // with a positive storage change, which the machine ledger reads as its ReturnToStorage
+            // movement and which is just as costing-neutral as a refill.
+            var returned = plan.WritesOutgoingReturn
+                ? await _recordMovement.RecordAsync(
+                    new InventoryMovement(
+                        choice.OutgoingProductId!.Value,
+                        choice.OutgoingQuantity!.Value,
+                        DomainStock.StockAdjustmentReason.MachineRefill,
+                        $"{note} - taken out of the machine",
+                        MachineId: machine.LocalMachineId,
+                        Source: DomainStock.StockAdjustmentSource.Nayax,
+                        MachineLedgerEffectiveAt: entity.EventDateTimeGmt),
+                    cancellationToken)
+                : null;
+
+            // And only then the established write-off of exactly those units, so storage ends where
+            // it started and the loss is costed once by the cost replay. It carries no machine-ledger
+            // instant: it is not a refill, and the machine ledger reads only refills.
+            var writtenOff = plan.WriteOffReason is { } writeOffReason
+                ? await _recordMovement.RecordAsync(
+                    new InventoryMovement(
+                        choice.OutgoingProductId!.Value,
+                        -choice.OutgoingQuantity!.Value,
+                        writeOffReason,
+                        $"{note} - {writeOffReason.ToString().ToLowerInvariant()} on removal from the machine",
+                        MachineId: machine.LocalMachineId,
+                        Source: DomainStock.StockAdjustmentSource.Nayax),
+                    cancellationToken)
+                : null;
+
+            // Saved once for the whole replacement, which is what gives every staged movement its id.
+            await _db.SaveChangesAsync(cancellationToken);
+
+            entity.ProcessingStatus = NayaxStockEventProcessingStatus.Applied;
+            entity.ProcessedAt = DateTime.UtcNow;
+            entity.StockAdjustmentId = incoming?.Id;
+            entity.ReplacementIncomingProductId = choice.IncomingProductId;
+            entity.ReplacementIncomingQuantity = choice.IncomingQuantity;
+            entity.ReplacementOutgoingDisposition = choice.OutgoingDisposition;
+            entity.ReplacementOutgoingProductId = choice.OutgoingProductId;
+            entity.ReplacementOutgoingQuantity = choice.OutgoingQuantity;
+            entity.ReplacementOutgoingReturnStockAdjustmentId = returned?.Id;
+            entity.ReplacementOutgoingWriteOffStockAdjustmentId = writtenOff?.Id;
+
+            // Once per product whose stock actually moved, and never for a product that did not: a
+            // rebuild replays that product's whole movement and sale history, and the two sides of
+            // one replacement are legitimately the same product.
+            foreach (var productId in MovedProducts(choice, plan))
+            {
+                await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
+            }
+
+            await _db.SaveChangesAsync(cancellationToken);
+
+            return new MachineReplacementApplication(
+                true,
+                new AppliedProductReplacement(incoming?.Id, returned?.Id, writtenOff?.Id));
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The caller owns the transaction, so its disposal is what discards these writes; what
+            // is left here is the unit of work, which must not carry the failed replacement any
+            // further. Why it failed is reported in exactly the shape a refill's failure is
+            // (issue #1240): a type name, plus the one message written for an operator.
+            _db.ChangeTracker.Clear();
+
+            return new MachineReplacementApplication(
+                false,
+                null,
+                new MachineRefillFailure(
+                    exception.GetType().Name,
+                    exception is InventoryCostDataQualityException refusal ? refusal.Message : null));
+        }
+    }
+
+    /// <summary>
+    /// The distinct products one replacement moved stock for, in a stable order. The incoming and
+    /// the outgoing product may legitimately be the same one, and it is then rebuilt once.
+    /// </summary>
+    private static IEnumerable<long> MovedProducts(
+        NayaxProductReplacementChoice choice, NayaxReplacementMovementPlan plan)
+    {
+        var moved = new List<long>(2);
+
+        if (plan.WritesIncomingRefill)
+            moved.Add(choice.IncomingProductId);
+
+        if (plan.WritesOutgoingReturn && !moved.Contains(choice.OutgoingProductId!.Value))
+            moved.Add(choice.OutgoingProductId.Value);
+
+        return moved;
     }
 
     public async Task<bool> ReconcileAsManualDuplicateAsync(

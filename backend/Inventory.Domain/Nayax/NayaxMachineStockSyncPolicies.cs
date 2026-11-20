@@ -218,8 +218,10 @@ public enum NayaxStockEventApplyDecision
     ReconciledDuplicate,
 
     /// <summary>
-    /// A Nayax product replacement (Event 510, issue #1325). It is never applied as a refill: until
-    /// applying a replacement exists (#1326) the only resolution is "already recorded manually".
+    /// A Nayax product replacement (Event 510, issue #1325). It is never applied as a refill: its
+    /// two resolutions are "already recorded manually" and the replacement apply of issue #1326,
+    /// which takes the operator's own products and quantities
+    /// (<see cref="NayaxProductReplacementWritePolicy"/>).
     /// </summary>
     ProductReplacementNotApplicable
 }
@@ -266,10 +268,16 @@ public readonly record struct NayaxStockEventApplyRuling(NayaxStockEventApplyDec
 /// </summary>
 public static class NayaxMachineStockApplyPolicy
 {
-    /// <summary>Why a product replacement (Event 510) is refused by every apply path (issue #1325).</summary>
+    /// <summary>
+    /// Why a product replacement (Event 510) is refused by every <em>refill</em> apply path
+    /// (issue #1325). Since issue #1326 a replacement has its own apply - the operator says what was
+    /// loaded and what happened to the units taken out - so the sentence points at that action
+    /// rather than saying a replacement cannot be applied at all. This path still refuses it: a 510
+    /// event carries two product names and no quantity, and nothing here could invent either.
+    /// </summary>
     public const string ProductReplacementMessage =
-        "A product replacement is not a refill and cannot be applied yet. Mark it as already recorded "
-        + "once the change is recorded.";
+        "A product replacement is not a refill. Record what was loaded and what happened to the "
+        + "units taken out, or mark it as already recorded.";
 
     public static NayaxStockEventApplyRuling Decide(
         NayaxStockEventProcessingStatus processingStatus,

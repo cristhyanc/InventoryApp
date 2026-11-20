@@ -4,7 +4,7 @@
 
 InventoryApp is a modular full-stack application for operating a vending-machine business. It manages products, suppliers, purchasing documents, physical stock, supplier orders, machine replenishment, Nayax sales/imports, historical cost, fees, commissions, expenses, reconciliation, and management/accounting reports.
 
-This document describes the repository at the `main` baseline inspected on 17 September 2026 and the intended incremental architecture. It is a guide for maintainers and coding agents; existing tests remain the executable specification.
+This document describes the repository at the `main` baseline, maintained to stay accurate with every pull request, and the intended incremental architecture. It is a guide for maintainers and coding agents; existing tests remain the executable specification.
 
 ## Runtime stack
 
@@ -34,7 +34,7 @@ not verifiable from source.
 across process restarts and reboots, and shared across every instance if the plan ever scales to
 more than one: `/home` (Windows: `d:\home`), mounted from the platform's own storage rather than
 the ephemeral per-instance disk. A normal zip/package deployment through `azure/webapps-deploy@v2`
-(`.github/workflows/vm-manager.yml`) extracts the published output under `/home/site/wwwroot`, so
+(`.github/workflows/deploy-production-release.yml`) extracts the published output under `/home/site/wwwroot`, so
 the default relative `inventory.db` path resolves inside that persistent directory today, and the
 file survives ordinary app restarts.
 
@@ -899,9 +899,9 @@ InventoryApp/
 │   │   ├── Swagger/                 OpenAPI configuration and the published-schema compatibility boundary
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
-│   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the Imports use cases (ImportReimbursementXmlFile, ImportNayaxSales) with their reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), ReimbursementXmlParser, ZipReimbursementArchiveReader and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
+│   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy, among every other feature's deterministic domain rules — the backend migration is complete (issue #154)
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the Imports use cases (ImportReimbursementXmlFile, ImportNayaxSales) with their reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar, among every other feature's use cases and ports
+│   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), ReimbursementXmlParser, ZipReimbursementArchiveReader and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups), among every other feature's adapters
 │   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
 │   │   ├── Models/                  EF entities and enums
@@ -911,11 +911,21 @@ InventoryApp/
 │   └── Inventory.IntegrationTests/  Database, API, adapter, migration, bootstrap and architecture tests (issue #311)
 ├── frontend/inventory-app/
 │   ├── src/app/
+│   │   ├── access/              Account-state, capability and plan-lock guards/services, onboarding and invite pages
+│   │   ├── architecture/        Jest-only architecture guards (page-composition boundary, role-capabilities contract)
+│   │   ├── auth/                Entra redirect callback and the browser authentication providers
 │   │   ├── components/          Feature pages and shared UI
+│   │   ├── design-system/       The design-system showcase and widget-gallery routes
+│   │   ├── features/reports/    Report-specific models, grouped by report
+│   │   ├── formatting/          Shared pipes and formatting helpers (dates, plurals, business time zone)
+│   │   ├── interceptors/        HTTP interceptors not owned by a more specific slice (for example loading state)
 │   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu, shared breadcrumbs (breadcrumbs/)
 │   │   ├── models/              Shared TypeScript contracts
+│   │   ├── provider/            Nayax-connection availability and the provider-locked guard/page
+│   │   ├── public/              Public layout, the landing page (landing/) and the Privacy Policy/Terms of Use pages (legal/)
+│   │   ├── role-preview/        Previewing the app as a role
 │   │   ├── services/            API clients and UI services
-│   │   ├── auth/                Entra redirect callback and the browser authentication providers
+│   │   ├── support-session/     Super Admin support sessions
 │   │   ├── app.config.ts        Angular providers and startup
 │   │   └── app.routes.ts        Application routes
 │   ├── src/assets/config.json       Runtime API configuration
@@ -1009,7 +1019,7 @@ Contains stable business language and deterministic rules:
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
 - The GST accounting-aid derivation and the BAS labels over it (`Reporting.Gst.GstAccountingAidPolicy`, which owns the one credit total and the one net-GST subtraction, and `Reporting.Gst.BasGstSummaryPolicy`, which names them G1/1A/1B and decides the payable/credit/nil answer — or that there is no such answer, for a net amount nothing measured — and whether the estimate is incomplete; see [Bookkeeping GST and BAS summary](#bookkeeping-gst-and-bas-summary-issue-1318)).
-- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735) and [Report availability model](#report-availability-model-issue-730)).
+- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-760-and-735) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -1104,7 +1114,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758), `grandfather-business-plans` (issue #966), `reconcile-attachment-storage` (issue #968) and the database backup commands, plus the startup report that says whether plan enforcement can take effect (issue #966).
-- The four hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). All four are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+- The five hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). `Adapters/SalesHistoryImport/NayaxSalesHistoryImportJobWorker` (issue #1304) is the fifth, running `NayaxSalesHistoryImportJobRunner`'s loop over the uploaded Nayax sales histories, with `ServiceScopeNayaxSalesHistoryImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Importing a long sales history in the background](#importing-a-long-sales-history-in-the-background-issue-1304). All five are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1623,7 +1633,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Two tenant-owned tables reference a platform table, and each is a reviewed decision of its own (issues #934 and #923).** `Suppliers.SupplierPresetId` is nullable and points at `SupplierPresets.Id`: a supplier a business received from the master records which suggestion it came from, so its name and website stop drifting and a later price comparison can follow it back ([Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849)). It changes nothing about either classification. The `Supplier` is still tenant-owned, still filtered, still stamped; the `SupplierPreset` is still about no business and still carries no business key; the copying still goes one way, and nothing reads a business's rows from the platform side. The key is **`Restrict`** and has no navigation property in either direction: the platform cannot delete a row a business depends on (a preset is disabled, never deleted), nothing is cascaded or nulled into a business's data, and no `Include` can pull a platform entity into a tenant-owned object graph. At most one supplier per business may carry a given preset, which is a filtered unique index on `(BusinessId, SupplierPresetId)` — led by `BusinessId`, because two businesses legitimately hold a copy of the same preset, and filtered to the linked rows, because "no preset" is the normal case. The second is issue #923's `ProductPriceTracking.MasterProductId`, nullable and pointing at `MasterProducts.Id` with **`Restrict`**: a business's mapping records which shared master product its own product is, so the platform cannot delete a master product a business is tracking, and a mapping still waiting for a match carries no link at all ([Supplier price catalogue](#supplier-price-catalogue-issue-923)). It changes neither classification either: the mapping is still tenant-owned, filtered and stamped, and the master product still names no business. `BusinessOwnershipCoverageTests` accepts these two keys **by name**, asserts they are the only ones of their kind, asserts that no platform table points the other way (a shared row depending on one business's data would be the real boundary break), and pins the index — so a third tenant-to-platform key is a decision somebody has to make there rather than an implementation detail.
 
-**The one-time seed, and why it is a migration (issue #848).** The four shipped presets — Coles, Woolworths, Big W, Costco — are inserted by `AddSupplierPresets` with a single `InsertData`, and by nothing else. EF Core's `HasData` and a startup seeding step both re-apply themselves, and **Production applies migrations at startup** (see [Database and migrations](#database-and-migrations)), so either one would quietly undo a Super Admin's edit, or switch a deliberately disabled preset back on, at the next deployment. A one-off `InsertData` runs exactly once, when that migration is applied; `AddSupplierPresetsMigrationTests` proves it by editing and disabling a seeded row, migrating and starting again, and finding the edit intact and no row re-inserted or re-enabled. Name uniqueness ignoring case is the database's rule too, not a query's: a stored normalised name (`Name.Trim().ToUpperInvariant()`) under a unique index, with a pre-check that turns the ordinary case into a clear `409` and the index's own violation translated into the same `409`, so two creates of one name leave one row and one conflict rather than a `500`. The normalisation is invariant rather than culture-dependent, and stored rather than computed by a collation, because SQLite's `NOCASE` folds ASCII only.
+**The one-time seed, and why it is a migration (issue #848).** The four shipped presets — Coles, Woolworths, Big W, Costco — are inserted by `AddSupplierPresets` with a single `InsertData`, and by nothing else. EF Core's `HasData` and a startup seeding step both re-apply themselves, and **Production applies migrations at startup** (see [Database and migrations](../AGENTS.md#database-and-migrations)), so either one would quietly undo a Super Admin's edit, or switch a deliberately disabled preset back on, at the next deployment. A one-off `InsertData` runs exactly once, when that migration is applied; `AddSupplierPresetsMigrationTests` proves it by editing and disabling a seeded row, migrating and starting again, and finding the edit intact and no row re-inserted or re-enabled. Name uniqueness ignoring case is the database's rule too, not a query's: a stored normalised name (`Name.Trim().ToUpperInvariant()`) under a unique index, with a pre-check that turns the ordinary case into a clear `409` and the index's own violation translated into the same `409`, so two creates of one name leave one row and one conflict rather than a `500`. The normalisation is invariant rather than culture-dependent, and stored rather than computed by a collation, because SQLite's `NOCASE` folds ASCII only.
 
 **"Not tenant-owned" never means "not owned".** Each of the four exempt tables that is not the `Business` itself carries a `BusinessId`, and the boundary for it is that column named in **every** statement over it, by the adapter rather than by the central filter: `EfBusinessMemberStore` and `EfMemberProfileWriteStore` for memberships, `EfMemberInviteStore` and `EfMemberInviteRedemptionStore` for invites, `EfSupportSessionStore` for support sessions. The id is only ever one tenancy resolution produced from the authenticated actor's membership, or — for the redemption alone — the one the invite row itself reports, or — for a support session — the business row the session's own write transaction read; it never comes from a route, query, body or header. (A support session additionally carries the Entra `(tid, oid)` pair it was granted to, and every "my session" statement names that pair, which is the authenticated actor and never a request value.) That is deliberately *not* the per-controller `Where` clause this section warns against: those adapters have no central mechanism to defer to, and each keeps its statements behind one private helper so the owner cannot be omitted on one method.
 
@@ -1643,7 +1653,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **The second reviewed write, and the one that names no business (issue #941).** A match decided for a waiting *key* — the folded search name and unit label several businesses' products share, which is what makes one product one search — has to reach the mappings that carry it, and the collector that reported it is a member of nothing. `AppDbContext.BeginPriceCatalogueMatching()` opens a lease; while it is open `BusinessOwnershipEnforcer` accepts **updates to `Status`, `MasterProductId`, `MatchSource` and `UpdatedAtUtc` of `ProductPriceTracking` rows and nothing else**. It is narrower than the denied-scope rule in the directions the fact allows: **one entity type**, **one state** (an update — never an insert and never a delete, so the collector can neither start nor withdraw a business's request to be priced), **four columns**, which do not include the business key, the product, the waiting key or the captured search text, and **one save**. It names no business, because the mappings that carry one key may belong to any number of them; what bounds it is *what may be written* rather than whose row it is, and the enforcer asserts the modified columns as a **set** rather than a lower bound, so a mapping can neither be moved between businesses nor re-pointed at another product through it. Relationship enforcement still runs. The method is `internal`, its only caller is `EfPriceCollectorMatchStore`, it may be taken only while the scope is `Denied`, and never beside a provisioning lease. Nothing becomes readable by it either: the mappings are read by that adapter's one reviewed `IgnoreQueryFilters` statement below. See [Collector product matching](#collector-product-matching-issue-941).
 
-**The third reviewed write is the Super Admin's manual plan grant (issue #982, the owner-approved amendment of 29 October 2026), on exactly the same terms.** `AppDbContext.BeginPlanGrantWrite(businessId)` opens a lease under which `BusinessOwnershipEnforcer` accepts **one business's `BusinessPlanGrant` row and the `BusinessPlanGrantAudit` row beside it, and nothing else**: two entity types rather than one, because the grant and the record of who gave it must commit together; an insert or an update of the grant and an insert of the audit row, never a delete, because a grant that was given is ended rather than unsaid and an audit trail that could be rewritten is not one; one business, whose id is the key of the row the decision's own write transaction read; and one save. The method is `internal`, its only caller is `EfPlatformPlanGrantStore`, a lease may be taken only while the scope is `Denied`, and only one may be open at a time, never beside a provisioning or matching lease. Nothing becomes *readable* through it either — the filters do not consult the lease, which is why that adapter's read is the explicit, business-pinned `IgnoreQueryFilters` statement described below rather than something the lease quietly permits. See [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
+**The third reviewed write is the Super Admin's manual plan grant (issue #982, the owner-approved amendment of 29 October 2026), on exactly the same terms.** `AppDbContext.BeginPlanGrantWrite(businessId)` opens a lease under which `BusinessOwnershipEnforcer` accepts **one business's `BusinessPlanGrant` row and the `BusinessPlanGrantAudit` row beside it, and nothing else**: two entity types rather than one, because the grant and the record of who gave it must commit together; an insert or an update of the grant and an insert of the audit row, never a delete, because a grant that was given is ended rather than unsaid and an audit trail that could be rewritten is not one; one business, whose id is the key of the row the decision's own write transaction read; and one save. The method is `internal`, its only caller is `EfPlatformPlanGrantStore`, a lease may be taken only while the scope is `Denied`, and only one may be open at a time, never beside a provisioning or matching lease. Issue #1258 added a second caller of that **adapter** and no second lease: the beta Pro grant an approval writes takes and closes this same lease inside the approval's own transaction, after the provisioning lease has closed, for the business that transaction read. Nothing becomes *readable* through it either — the filters do not consult the lease, which is why that adapter's read is the explicit, business-pinned `IgnoreQueryFilters` statement described below rather than something the lease quietly permits. See [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
 
 **The fourth reviewed write is the Super Admin's review of the shared price catalogue (issue #928), and it is the second one's rule for the other decider.** `AppDbContext.BeginPriceCatalogueReview()` opens a lease under which `BusinessOwnershipEnforcer` accepts **updates to `Status`, `MasterProductId`, `MatchSource` and `UpdatedAtUtc` of `ProductPriceTracking` rows and nothing else** — the same written-out column set the matching window uses, asserted as a *set* rather than a lower bound, so the ownership key, the product, the waiting key and the captured search text are all outside it. One entity type, one state (an update: this surface can no more create or withdraw a business's request to be priced than a matcher can), four columns, one save. It names no business, because a match and an undo of one are decided for a waiting *key* and the mappings that carry it may belong to any number of businesses; what bounds it is *what may be written*. Issue #1051's undo of a match a business made itself is that same window and not a fifth one: the same four columns of the same entity type, decided for a `(waiting key, master product)` pair. The method is `internal`, its only caller is `EfPriceCatalogueReviewStore`, a lease may be taken only while the scope is `Denied`, and never beside another lease. It is a **separate window** from the matching one rather than a second caller of it, deliberately: each lease in that context names the one adapter that may take it, so "who may write a mapping's match columns?" has two answers with two issues behind them instead of one answer that has quietly grown a caller. A **fifth** denied-scope write exception, a lease taken anywhere else, or a wider entity set in any of the four is a boundary change needing its own reviewed issue. See [Super Admin review of the supplier price catalogue](#super-admin-review-of-the-supplier-price-catalogue-issue-928).
 
@@ -1651,7 +1661,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 The second is the collector work list (issue #924): `EfPriceCatalogueWorkListStore` reads `ProductPriceTracking` across businesses, projecting the waiting key, the search name, the unit label and the master product id — **a product description, and nothing that says whose product it is**. It is the exception issue #923 left for #924 to review, and it is narrowed in the same four directions the first one is: one table, one projection, read-only, and reachable from exactly one endpoint, which no person can call at all. See [Collector work list](#collector-work-list-issue-924).
 
-The third is the collector's automatic match (issue #941): `EfPriceCollectorMatchStore` reads the `ProductPriceTracking` rows whose stored waiting key is one the run was issued work for, because a key the central filters hide is a key whose mappings a match could not reach. It is the same table, the same authorization and the same kind of content — a waiting key, the search name and unit label it folds from, and the mapping's own match state — and it is the one of the three that is not read-only, because those rows are loaded in order to have four of their columns written through `SaveChanges`, where the enforcer judges the write. What *leaves* the adapter is less than what it reads: no business id, no product id, no mapping id, and **no count of the mappings a match moved**, which would be a count of the businesses tracking the product. See [Collector product matching](#collector-product-matching-issue-941). The fourth is the Super Admin's manual plan grant (issue #982, the owner-approved amendment of 29 October 2026): `EfPlatformPlanGrantStore` reads `BusinessPlanGrants` for the **one** business a platform decision names — the statement is pinned to that business id *and* to the complimentary grant source, projecting the plan, the period, the reason, the revision and the instant — because a grant is tenant-owned and the request carries a denied scope, so the central filter matches none of its rows. It is narrowed the same way the first two reads are: one table, one business per statement, one projection, and reachable from exactly one controller that no business role, support session or member can call. The grandfathered grant of issue #966 is excluded by the source predicate, so it is not readable through this path either. See [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
+The third is the collector's automatic match (issue #941): `EfPriceCollectorMatchStore` reads the `ProductPriceTracking` rows whose stored waiting key is one the run was issued work for, because a key the central filters hide is a key whose mappings a match could not reach. It is the same table, the same authorization and the same kind of content — a waiting key, the search name and unit label it folds from, and the mapping's own match state — and it is the one of the three that is not read-only, because those rows are loaded in order to have four of their columns written through `SaveChanges`, where the enforcer judges the write. What *leaves* the adapter is less than what it reads: no business id, no product id, no mapping id, and **no count of the mappings a match moved**, which would be a count of the businesses tracking the product. See [Collector product matching](#collector-product-matching-issue-941). The fourth is the Super Admin's manual plan grant (issue #982, the owner-approved amendment of 29 October 2026): `EfPlatformPlanGrantStore` reads `BusinessPlanGrants` for the **one** business a platform decision names — the statement is pinned to that business id *and* to the grant sources that surface administers — the complimentary one and, since issue #1258, the beta one — projecting the plan, the source, the period, the reason, the revision and the instant — because a grant is tenant-owned and the request carries a denied scope, so the central filter matches none of its rows. It is narrowed the same way the first two reads are: one table, one business per statement, one projection, and reachable only from that controller and from the approve route that writes the beta grant through the same adapter — none of which a business role, a support session or a member can call. The grandfathered grant of issue #966 is excluded by the source predicate, so it is not readable through this path either. See [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
 
 The fifth is the collector work list's **plan read** (issue #977), and it is in the same adapter as the second: before those two mapping statements run, `EfPriceCatalogueWorkListStore` reads `BusinessPlanGrants` and `BusinessBillingSubscriptions` across businesses — projecting the ownership key, the plan and the half-open period, and **nothing else about either record**: no reason text, no revision, no decision instant, no billing identifier — asks the Domain's single entitlement rule which businesses include the observed supplier prices, and restricts the two mapping statements to those businesses. Its *only* effect is to narrow the second path. It is read-only, makes no raw SQL statement, takes no unscoped context, is made only while plan enforcement is on and the grandfathering step has completed, and is reachable from the same one class-5 endpoint no person can call; nothing it reads is published — a business id, and a count of businesses, still cannot leave that adapter — and nothing is written or removed by a business ceasing to be eligible. The reason the read lives behind the port rather than in front of it is that whatever decided eligibility *outside* the adapter would have to hand it a set of business ids, which is exactly what this boundary exists to keep out of the work list. See [Plan enforcement on supplier price data](#plan-enforcement-on-supplier-price-data-issue-977).
 
@@ -1659,7 +1669,7 @@ The sixth is the Super Admin's review of the shared price catalogue (issue #928)
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfCatalogueReviewStoreTenancyTests` proves two businesses importing the same ids (`EfNayaxProductCatalogImportStoreTenancyTests` pinned the same thing for the direct import, until issue #739 replaced it), see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfCatalogueReviewStoreTenancyTests` proves two businesses importing the same ids (`EfNayaxProductCatalogImportStoreTenancyTests` pinned the same thing for the direct import, until issue #739 replaced it), see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-760-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1742,6 +1752,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
+| Dashboard → Needs attention, "Nayax products are selling but aren't in your products" (issue #1352) | `GET api/catalogue-review/attention` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, and `POST api/site-commissions/agreements/{agreementId}/end` since issue #1254) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
@@ -2273,7 +2284,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 Until this slice the platform administrator could only *look* (the read-only diagnostics API above), and nobody could decide a business application at all: issue #541 creates a `Pending` business and leaves it waiting. Issue #544, one slice of #509 under #328, is the first write-capable platform-admin path — the Super Admin sees every business and approves or refuses an application — and the whole design is about keeping "write-capable" from meaning "unrestricted".
 
-**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets. The business's *plan* is **not** on this surface and `IPlatformBusinessDirectoryStore` was not widened to write one: the manual plan grant a Super Admin may decide (issue #982) is its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982). The business's *Nayax SQS sender identity* is not on this surface either, and that store was not widened for it: which AWS IAM user sends that business's Nayax sales (issue #1101) is its own controller, its own narrow port and its own reviewed write and read, described in [Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
+**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets and, while `Subscriptions:BetaProGrantOnApproval` is on, its **beta Pro grant** (issue #1258, the owner's decision of 13 November 2026, and the one case in which this surface writes a business's plan at all: the grant is written through issue #982's own port and lease inside the approval's transaction, for the approved business alone, and a rejection, a deactivation and a reactivation write none). Nothing else about a plan is reachable from here: `IPlatformBusinessDirectoryStore` was **not** widened to write one, no request names a plan or an end date, and the manual plan grant a Super Admin may decide (issue #982) is still its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982) — which is also where the beta grant is read, changed and ended. The business's *Nayax SQS sender identity* is not on this surface either, and that store was not widened for it: which AWS IAM user sends that business's Nayax sales (issue #1101) is its own controller, its own narrow port and its own reviewed write and read, described in [Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
 
 **Who, and how it is enforced. Exactly the diagnostics surface's answer, reused rather than re-invented.** `SuperAdminBusinessesController` carries `[Authorize]`, `[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and `PlatformDiagnosticsEndpointAttribute`. That is class 2 of the four [endpoint authorization classes](#capability-authorization-issue-525) — **not** a fifth class and **not** a second marker, which is the point: a platform surface that writes must not also be a new mechanism to review. Authority is the separately configured Entra `(tid, oid)` pair, held outside the database, and both values empty — the shipped state — means nobody reaches this controller at all. An Owner holds the strongest business role there is and is refused here exactly as any other member is, because this controller declares no capability any role could satisfy. Both policies are enforced, and both attributes are needed: the named policy *replaces* the default one rather than adding to it, so a controller with only `[Authorize(Policy = …)]` would leave the delegated scope undemanded — platform authority is an additional requirement on a delegated API call, never a replacement for one.
 
@@ -2283,8 +2294,9 @@ Until this slice the platform administrator could only *look* (the read-only dia
 GET  /api/super-admin/businesses                        every business, pending applications first
 GET  /api/super-admin/businesses/pending-count          { pendingCount }
 POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + DecidedAtUtc,
-                                                        and the enabled supplier presets copied in
-                                                        (issue #849)
+                                                        the enabled supplier presets copied in
+                                                        (issue #849), and the beta Pro grant while
+                                                        that setting is on (issue #1258)
 POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + reason, + DecidedAtUtc,
                                                         and the applicant's membership released
 ```
@@ -2324,7 +2336,7 @@ neither is reachable through `IPlatformBusinessDirectoryStore`. See
 
 **Audit: one structured log event per committed decision, and no table.** `LoggingPlatformBusinessDecisionAudit` writes one `ILogger` `Information` event carrying the deciding administrator's `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the request/correlation id. It never carries the business name, the contact address, the ABN, the applicant's identity or the rejection reason's *text* — `PlatformBusinessDecisionAuditEntry` has no field for any of them, so even a sink that printed the whole entry could not emit one. A refused decision is not audited, because nothing happened. There is deliberately no audit table and no migration, for the reasons the diagnostics audit has none; **the log destination and retention period are platform configuration a human must verify**, exactly as for that one.
 
-**No schema change in this slice.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns #544 writes; nothing is added, and there is no migration in it. Issue #849 later added one nullable column to `Businesses` and one more thing an approval writes — see [Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849).
+**No schema change in this slice.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns #544 writes; nothing is added, and there is no migration in it. Issue #849 later added one nullable column to `Businesses` and one more thing an approval writes — see [Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849) — and issue #1258 added a third thing it writes with **no** schema change at all: the beta Pro grant, which is a row in issue #966's existing `BusinessPlanGrants` table with a new enum value in a column that has no check constraint (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)).
 
 **What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessDecisionPolicyTests` covers the decidable statuses, the reason bounds and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessApplicationDecisionTests` runs both decisions over the real `MembershipWriteGuard`: the exclusion that makes an approval possible, the refusals for an applicant who joined elsewhere or cannot be identified, the status and applicant changing while the write lock is awaited, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half over two businesses and a denied scope: the cross-business list, the active-member counts, the Nayax flag and the stored connection status beside the proof that the ordinary read of that table still sees nothing, the tenant-owned read and write still refused, and a membership of another business that cannot be released by a decision on this one. `PlatformBusinessDecisionConcurrencyTests` is the race. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessesApiTests` is the HTTP boundary: every endpoint refused for an Owner, a Manager, the applicant, a stranger, an anonymous caller and a caller without the delegated scope; the administrator still refused by every business endpoint; the applicant reaching their own business only once it is approved; the response carrying exactly the twelve declared properties - the recorded state included, and `null` for a business with none - and neither a product name, an operator id, an encryption key id nor a token ciphertext; and the unconfigured host refusing everyone. `BusinessScopeCompositionTests` pins the store's registration and dependencies, and `EndpointAuthorizationClassificationTests` pins all thirteen platform-admin endpoints — the two diagnostics ones, these eight, and the three support-session ones of #550 — as class 2 with no capability.
 
@@ -2522,7 +2534,7 @@ The contact details and the GST defaults are deliberately editable: they are the
 
 **The backfill consults a name exactly once, and links rather than creates.** `AddSupplierPresetLink` adds the two columns, links the suppliers businesses already have, and only then adds the unique index. #849's rule that supplier names are never consulted is unchanged **for the copying**; this is the one deliberate exception the owner decided on, and it is narrower in every direction: it runs once, it reads a name only to decide a *link*, and it creates, renames, hides and deletes nothing. A supplier is linked when its trimmed, upper-cased name equals a preset's `NormalisedName` **and** no other supplier of the same business normalises to that value. Two rows that both match one preset — `Coles` and ` COLES ` in one business — are therefore **both left unlinked**, because the migration cannot know which one the business actually buys from and the index would make a guess permanent; another business's single `Coles` is linked as normal, since the rule is per business exactly as the index is. A name matching no preset is left unlinked. Enabled and disabled presets are matched alike: the link says where a row came from, not whether the suggestion is still offered.
 
-**Which is what makes the index safe to add in the same migration.** The unique index comes *after* the backfill, over data the backfill has already made acceptable to it, so the upgrade cannot fail on an existing database and no row ever has to be deleted, unlinked or merged to make an index fit — which matters because **Production applies migrations at startup and fails closed** ([Database and migrations](#database-and-migrations)). The comparison is SQLite's `UPPER(TRIM(Name))`, which agrees with .NET's `Trim().ToUpperInvariant()` on every name either side holds today and differs only outside ASCII; where they would disagree the row simply does not match and is left unlinked, which is the fail-closed direction. Re-implementing invariant upper-casing in SQL would have been a second normalising rule free to drift from the one the presets are indexed by.
+**Which is what makes the index safe to add in the same migration.** The unique index comes *after* the backfill, over data the backfill has already made acceptable to it, so the upgrade cannot fail on an existing database and no row ever has to be deleted, unlinked or merged to make an index fit — which matters because **Production applies migrations at startup and fails closed** ([Database and migrations](../AGENTS.md#database-and-migrations)). The comparison is SQLite's `UPPER(TRIM(Name))`, which agrees with .NET's `Trim().ToUpperInvariant()` on every name either side holds today and differs only outside ASCII; where they would disagree the row simply does not match and is left unlinked, which is the fail-closed direction. Re-implementing invariant upper-casing in SQL would have been a second normalising rule free to drift from the one the presets are indexed by.
 
 **What proves it.** `SupplierPresetLinkPolicyTests` (unit) is the policy itself, including that an unlinked supplier is refused nothing, that re-submitting the stored name and website is allowed, that the website is refused when set, changed *and* cleared, and that the four refusal sentences are four different sentences. `SupplierUseCaseTests` and `SuppliersControllerTests` are the use cases and the HTTP boundary: the refusals and which field each is reported against, the contact details and the GST defaults still saving, the hide and unhide, the default list leaving the hidden suppliers out, and the link state published on both the list and the detail. `EfSupplierStoreTests` is the relational half — a refused update writing nothing at all, the selectable list, the restricted key refusing to delete a preset a business holds a copy of, and the filtered unique index allowing one copy per business and any number of unlinked rows. `EfBusinessSupplierProvisioningStoreTests` proves the copies carry their preset and arrive visible, and that a master edited afterwards keeps the link. `AddSupplierPresetLinkMigrationTests` is the upgrade, seeded on purpose with the same-name duplicates: the exact single match linked, no match and both duplicates left unlinked, another business's single match linked, no other column changed, and the index and key created on that very database. `SupportSessionRequestApiTests` covers the read-only refusal, `BusinessOwnershipCoverageTests` the one tenant-to-platform key and the index, and the Suppliers page's own specs the lock state, the locked inputs, the switch and the refusal sentences.
 
@@ -2970,7 +2982,7 @@ preview is still given the figures.
 
 **The GST answer is carried over, and the old table is left alone.** `AddPlatformMenuVisibility` is additive: it creates the table and copies exactly one value, a stored `PlatformOptionVisibility.HistoricalGstClassificationVisible = 0`, as the single row `admin.historical-gst-classification` = off, keeping the old row's own `UpdatedAtUtc` rather than inventing one. A stored `1`, and no row at all, carry over **nothing** — a missing row means On, so both keep every destination offered, which is exactly the visibility they have today. `PlatformOptionVisibility` and its own migration are **left in place and are no longer written**; dropping them, the legacy field and the legacy `PUT` is a later issue, after a release.
 
-**Who may list and change it.** Only the platform administrator. `GET /api/super-admin/menu-visibility` answers every catalogue key with its **group**, its label and its current state, stored or defaulted — grouped and in menu order, Reports first (#1153) — and `PUT /api/super-admin/menu-visibility/{key}` with `{ "visible": bool }` switches exactly that one destination and answers with the stored state; an undeclared key is `404` with nothing stored, and a body that omits `visible` is `400` (it is a `bool`, so a missing value would otherwise be indistinguishable from an explicit `false`). Both sit behind `PlatformAdminPolicy` and the `PlatformDiagnosticsEndpointAttribute` marker — class 2 of the [endpoint authorization classes](#capability-authorization), the same as the diagnostics, Super Admin businesses, support-session and supplier-preset surfaces — and keep `[Authorize]` and the `access_as_user` scope. The authority is the configured Entra `(tid, oid)` pair and nothing else: an Owner is refused exactly as any other member is, a member who presents an `X-Support-Session` id is still an ordinary member, and the shipped state (no administrator configured) means nobody can reach either endpoint at all. A role preview is refused by `RolePreviewMiddleware`, like every other write. The request carries a **denied** `BusinessScope`, so nothing tenant-owned is reachable; the write passes `BusinessOwnershipEnforcer` because the entity is not `IBusinessOwned`, not because anything was relaxed. Each committed change emits one structured `ILogger` audit event with the acting administrator's `(tid, oid)`, the key, the resulting state and the instant — and nothing about a business, a member or anybody's data, because the setting is about none of them. A refused write, and a write for an undeclared key, are not audited, because nothing happened. **The legacy `PUT /api/super-admin/option-visibility` still works** and writes that same `admin.historical-gst-classification` row through the same use case and the same audit, because the API deploys before the frontend; it adds no second way to store anything.
+**Who may list and change it.** Only the platform administrator. `GET /api/super-admin/menu-visibility` answers every catalogue key with its **group**, its label and its current state, stored or defaulted — grouped and in menu order, Reports first (#1153) — and `PUT /api/super-admin/menu-visibility/{key}` with `{ "visible": bool }` switches exactly that one destination and answers with the stored state; an undeclared key is `404` with nothing stored, and a body that omits `visible` is `400` (it is a `bool`, so a missing value would otherwise be indistinguishable from an explicit `false`). Both sit behind `PlatformAdminPolicy` and the `PlatformDiagnosticsEndpointAttribute` marker — class 2 of the [endpoint authorization classes](#capability-authorization-issue-525), the same as the diagnostics, Super Admin businesses, support-session and supplier-preset surfaces — and keep `[Authorize]` and the `access_as_user` scope. The authority is the configured Entra `(tid, oid)` pair and nothing else: an Owner is refused exactly as any other member is, a member who presents an `X-Support-Session` id is still an ordinary member, and the shipped state (no administrator configured) means nobody can reach either endpoint at all. A role preview is refused by `RolePreviewMiddleware`, like every other write. The request carries a **denied** `BusinessScope`, so nothing tenant-owned is reachable; the write passes `BusinessOwnershipEnforcer` because the entity is not `IBusinessOwned`, not because anything was relaxed. Each committed change emits one structured `ILogger` audit event with the acting administrator's `(tid, oid)`, the key, the resulting state and the instant — and nothing about a business, a member or anybody's data, because the setting is about none of them. A refused write, and a write for an undeclared key, are not audited, because nothing happened. **The legacy `PUT /api/super-admin/option-visibility` still works** and writes that same `admin.historical-gst-classification` row through the same use case and the same audit, because the API deploys before the frontend; it adds no second way to store anything.
 
 **Who may read it, and the one boundary decision in this feature.** Every signed-in caller, through `GET /api/me/access`, which reports `menuVisibility.switchedOffKeys` — the keys that are switched off, empty when none is — beside the capability set. That is the **one documented exception** to "only the platform-admin surface reaches a platform table", widened by #1148 from one boolean to that list: a destination the application has switched off has to stop being offered to the people it was switched off for, and the shell builds one menu from one read. It is as narrow as the exception can be — the switched-off keys and nothing else, no label, no instant, no caller-supplied input, read through the two-method `IMenuVisibilityStore` — and it publishes nothing about any business, any member or the supplier presets beside it. The catalogue's labels stay on the Super Admin surface: a member has no use for the name of a destination they are not being offered. The invariant is recorded in AGENTS.md § Tenant ownership and data isolation; a second platform-table read from a member-facing endpoint is a boundary change needing its own reviewed issue.
 
@@ -3012,6 +3024,15 @@ An **expired** period, a **cancelled** subscription, a **missing** record and a 
 **Enforcement cannot start early, and the API says so.** While the setting is on and no completion marker exists, the policy treats every business as unrestricted *and* `SubscriptionEnforcementStartup` logs a startup **error** naming the missing `grandfather-business-plans` command and saying that nothing is enforced. It reports rather than refuses to start: the rule already fails safe, so what is missing in that state is visibility, and an API that stopped serving a working business over a plan rollout that has not begun would be the wrong trade.
 
 **The grandfathering step is human-run, idempotent and restartable.** `grandfather-business-plans` (`InventoryApi/Bootstrap/BusinessPlanGrandfatheringCommand`, with the data half in `BusinessPlanGrandfatherer`) is the sixth human-invoked command, on the terms the others follow: a dry run writes **nothing at all** — not a grant, not the cutoff — `--apply` must be typed explicitly, and the command line takes no cutoff, plan, date or business, because one that could name a business would be a way to grant Pro to one that was not entitled to it. Its first apply records a **fixed cutoff** from the clock in the one-row `SubscriptionGrandfatherings` table; every later run reads that instant back and grants by it, and nothing in the adapter can move it. Eligibility is `GrandfatheringEligibilityPolicy`'s, from four stored facts: created before the cutoff, status `Active` or `Deactivated` at it, and **not decided at or after it** — that last clause is what makes "a pending application approved later starts on Free" survive a rerun, because by then its status is `Active` and its creation predates the cutoff. Each grant is one transaction that inserts only if that business holds no grandfathered grant, with the filtered unique index underneath it; the **completion marker is written last**, so an interrupted run leaves some businesses granted, the cutoff fixed and *nothing enforced*, and running it again finishes the rest by the same cutoff. A run after completion changes nothing and reports that. It grants and never revokes: there is no path that deletes, ends or rewrites a grant, so an end date an owner sets later survives a rerun untouched, and it writes no business's status and no subscription. It is deliberately **not** an unrestricted context (AGENTS.md § Tenant ownership and data isolation): `Businesses` and the grandfathering row carry no tenant query filter, so a **denied** scope reads both, and every grant is written through a context scoped to the one business it belongs to.
+
+**Pro is free during the public beta, and that promise is a grant per business rather than a person's memory (issue #1258, the owner's decisions of 13 and 14 November 2026).** The landing page and Terms of Use §3 promise "Pro access is free during our public beta", and a business approved after the grandfathering cutoff holds no grant at all — so once enforcement is switched on it would resolve to Free. While `Subscriptions:BetaProGrantOnApproval` is on, the approval of a business application therefore also writes that business one **manual Pro grant**: start = the approval instant, **no end date**, source `ManualPlanGrantSource.Beta` (a new declared value, `30`, and not `0`) and the fixed reason "Public beta introductory Pro access". `Inventory.Domain.Subscriptions.BetaProGrantPolicy` is the one rule — what is granted, and whether an approval grants at all — and the write itself is `Inventory.Application.PlatformPlans.BetaProGrantOnApproval`, through issue #982's own port, lease and audit row, inside the approval's transaction (see [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982) and [Super Admin businesses API](#super-admin-businesses-api-issue-544)). Four properties are the whole of it, and each is tested:
+
+- **The source changes no entitlement.** `EffectiveEntitlementPolicy` reads a grant's plan and period and never its source, so a `Beta` grant entitles exactly what a `Complimentary` one entitles — including the CSV and Excel exports of the reports Pro includes, which is the intended consequence — and `GET /api/me/access` reports `plan: Pro`, `source: ManualGrant` exactly as it does for any other grant. No new published field, no new state and no new rule.
+- **No migration.** The source column stores the enum's number with no check constraint, and the only index over it is the one filtered to the *grandfathered* source (`"Source" = 10`), which a new value cannot collide with. Adding the value is therefore a migration-free enum addition; `AddBusinessSubscriptionsMigrationTests` and the model test that pins that filter to the declared source still hold.
+- **The setting is a startup decision and off by default.** `ConfiguredBetaProGrantOnApprovalFlag` reads it once and publishes `IBetaProGrantOnApprovalFlag`; absent, blank and unparseable are off, `false` is what source control carries, and it is a separate flag from enforcement because the grants have to exist *before* enforcement starts.
+- **Switching it off stops new grants and ends none.** A grant already written stays until a Super Admin ends it through #982's surface, which is also how one business is taken off beta Pro. Ending the beta for everybody, bulk-ending grants, notices and billing are not this slice's and are not implied by it (#969).
+
+Only an **approval** grants: a rejection, a deactivation and a reactivation never reach the writer at all, a business that already holds a manual grant is left exactly as it is — no second grant, and not one column of the existing one changed — and a failure of either write rolls the whole approval back, so an approved business is never left without the Pro it was promised and a business that is still waiting never holds the grant.
 
 **The answer is published by extending `GET /api/me/access`, and by nothing else.** `GetEffectiveEntitlement` is a scoped use case that takes no identifier; `CurrentAccess.Entitlement` carries it and `MeAccessResponse.entitlement` publishes `enforced`, `plan` (the published name, or an explicit `null` while nothing is enforced), `source`, `endsAtUtc`, `attachmentStorage` (since issue #968) and `connectedMachines` (since issue #978). There is **no separate read endpoint and no caller-supplied business id**: the business is the one the request already resolved, so inside a [support session](#support-sessions-in-the-request-pipeline-issue-551) the plan reported is the **viewed** business's own — that falls out of the resolution rather than being coded for — and a [role preview](#super-admin-role-preview-in-the-angular-app-issue-721) narrows role capabilities only and cannot reach the plan at all. It is computed per request with **no server cache**, so a grant that ends or a subscription that is cancelled applies on the next request; and while nothing is enforced the use case reads nothing about the business at all, so a deployment that has switched nothing on makes no extra query. The response carries no price — that is the catalogue's, published separately by `GET /api/me/plan-catalogue` and shown by the Plan page (see [The Plan page](#the-plan-page-issue-970)). It does carry one storage figure, added by issue #968: `entitlement.attachmentStorage`, which is this business's attachment usage, its plan's allowance and the warning state those two produce, and is an explicit `null` while nothing is enforced (see [Attachment storage quotas](#attachment-storage-quotas-issue-968)). That is reported here rather than from an endpoint of its own for the reason the plan itself is: a page that warns at 80% and explains a refused upload at 100% must read the figures and the plan in one answer. It also carries the **connected-machine allowance and count** since issue #978, because what a business is billed for above its allowance depends on a figure only the server can date; see [Counting connected machines](#counting-connected-machines-issue-978), and note that an allowance there is an amount to bill against and never a limit. `Plan` is `null` rather than `Pro` or `Free` while nothing is enforced: "unrestricted" is not a plan anybody is on, and reporting `Free` would lock a business nothing is enforcing anything for. **It is not a capability and implies none**: the capability set is identical whatever the plan says, and the frontend reads it as `MemberAccess.entitlement` (`access/entitlement.ts`) on exactly the triggers the capability set is re-read on, with an absent field read as "not known", which withholds nothing.
 
@@ -3133,10 +3154,11 @@ openings and has exactly two:
 
 - **One `IgnoreQueryFilters` path**, the **fourth** in the application (see [the reviewed paths
   above](#tenant-ownership-issue-64), now four). `EfPlatformPlanGrantStore` reads
-  `BusinessPlanGrants` through one `IQueryable` pinned to the single business id the route named
-  *and* to `ManualPlanGrantSource.Complimentary`, projecting the plan, the period, the reason, the
-  revision and the instant. The grandfathered grant is excluded by that predicate, so it is not
-  readable, not comparable against and not writable here. The alternatives are the ones issue #544
+  `BusinessPlanGrants` through one `IQueryable` pinned to the single business id the decision named
+  *and* to the sources this surface administers — `ManualPlanGrantSource.Complimentary` and, since
+  issue #1258, `ManualPlanGrantSource.Beta` — projecting the plan, the source, the period, the
+  reason, the revision and the instant. The grandfathered grant is still excluded by that predicate,
+  so it is not readable, not comparable against and not writable here. The alternatives are the ones issue #544
   already rejected: an unscoped context in a request path hands one adapter every tenant-owned table
   at once, and resolving each business into the request scope makes a platform decision impersonate a
   tenant.
@@ -3157,6 +3179,24 @@ What the business's own members then read is unchanged by all of this: the grant
 tenant-owned row, `IManualPlanGrantStore` reads it through the central filters, and
 `GET /api/me/access` reports the effective plan exactly as #966 defines it.
 
+**This port has a second caller since issue #1258, and the surface above gained no route for it.**
+While `Subscriptions:BetaProGrantOnApproval` is on, the approval of a business application writes the
+approved business's **beta Pro grant** through this same `IPlatformPlanGrantStore.SaveAsync` — one
+grant row with source `Beta`, the audit row beside it in the same `SaveChanges`, the same write
+lease, the same business-pinned statements — inside the *approval's* own `BEGIN IMMEDIATE`
+transaction rather than one this port opened, so the status change, the supplier copies and the grant
+commit together or not at all (see [Pro is free during the public
+beta](#business-subscriptions-and-plan-entitlements-issue-966) and [Super Admin businesses
+API](#super-admin-businesses-api-issue-544)). Three things keep that from widening this surface.
+`PlatformPlanGrantWrite.Source` is the source a row is **created** with and the only thing that
+differs; an existing row keeps the source it was created with, so changing or ending a beta grant
+through the three routes above records the decision without relabelling why the business was given
+the plan. The grant is then administered here exactly as a complimentary one is — read with its
+source, changed, ended, revision-checked — which is why the adapter's statements read both sources
+and why `SuperAdminPlanGrantResponse` publishes `source` (an undeclared stored value as `null`, the
+same restraint the plan gets). And the writer refuses to touch a business that already holds a grant,
+so an approval can neither add a second row nor overwrite a Super Admin's decision.
+
 **Tests.** `Inventory.UnitTests/Domain/Subscriptions/ManualPlanGrantPolicyTests` is the rule table —
 the grantable plans, Free and an undeclared value refused, the reason, and the end-date conversion at
 the day boundary and one tick either side; `PlanCatalogueTests` covers the name parsing, including
@@ -3172,6 +3212,13 @@ refused, a member's and a support session's scope unable to open one at all, and
 members reading what the platform wrote through the ordinary path.
 `AddPlanGrantRevisionAndAuditMigrationTests` is the upgrade: the audit table arrives empty and the
 grant that already existed keeps everything and gains revision `0`.
+The beta grant of issue #1258 has its own rows in those same files —
+`BetaProGrantPolicyTests` for the rule, `BusinessApplicationDecisionTests` for what an approval
+writes, logs, refuses and leaves alone, `EfPlatformPlanGrantStoreTests` for a beta row written,
+read with its source and ended without being relabelled,
+`PlatformBusinessDecisionConcurrencyTests` for the one-transaction write, the rollback and the
+setting switched off, and `SuperAdminBusinessApprovalPlanGrantApiTests` for the whole of it over
+HTTP, including the new Owner reading `Pro` from `GET /api/me/access`.
 `Controllers/SuperAdminPlanGrantsApiTests` is the published contract over HTTP: every business role,
 an anonymous caller, the administrator without the delegated scope, a member presenting a session id
 and the administrator in a role preview each refused on all three endpoints with nothing written; the
@@ -3271,7 +3318,7 @@ Why the eligibility is decided *behind* the work-list port rather than in front 
 
 **Errors map to one outcome each, and each is a different thing to tell the operator.** Switched off is `503` with "Receipt scanning is not available" — the shipped state, with no outbound call at all; a refused file is `400` with the reason (a HEIC photograph gets "Convert the photo to JPEG and try again", which is the one refusal somebody can act on); an answer with nothing usable in it is `422`; a timeout is `504`; an unusable reader is `502`; and a business that has used its whole month's allowance is `429` (issue #1164, below). The timeout is the configured one, applied by the `HttpClient`, and there is **no resilience handler on this client, deliberately** — unlike the Nayax client — because a retried scan is a second payment. An upstream error body is never echoed: a vendor error can quote the request, and the request held a receipt. Since issue #1236 the vendor's own error type and capped message do reach the **log**, and nothing else from the body does, and nothing from it reaches the operator at all — see the two paragraphs on the unavailable scan's warning below.
 
-**The log line is the privacy rule, structurally.** `IReceiptScanLog.Completed` takes a business id, an outcome, a duration, a page count and two token counts, and has no parameter that could carry receipt text, a file name, a product name, a supplier name or any part of the draft — the same reason `INayaxSqsReaderLog` has the shape it has ([The Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103)). Every attempt is logged, refusals included, so a scan is countable; the absence of a token count is what says nothing was spent.
+**The log line is the privacy rule, structurally.** `IReceiptScanLog.Completed` takes a business id, an outcome, a duration, a page count and two token counts, and has no parameter that could carry receipt text, a file name, a product name, a supplier name or any part of the draft — the same reason `INayaxSqsReaderLog` has the shape it has ([Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103)). Every attempt is logged, refusals included, so a scan is countable; the absence of a token count is what says nothing was spent.
 
 **An unavailable scan says why, in one warning beside that line** (issue #1236). Two production failures of 11 and 12 November 2026 — a `400 invalid_request_error` "Extra inputs are not permitted" and a `400` "Schema is too complex" — each had to be reproduced against the API by hand, because the one line a scan wrote said only `ended as Unavailable`. So `IReceiptScanLog` gained a second method, `Unavailable(businessId, failure)`, which `ScanReceipt` calls in the same `finally` immediately after `Completed` and **only** for that outcome and only when the adapter knows something: every other outcome, the successful line included, is byte for byte what it was. What it records is `Inventory.Domain.ReceiptScanning.ReceiptReaderFailure`, and the whole of what that type can hold is the upstream HTTP status, the provider's own `error.type`, the provider's own `error.message` and the response's `request-id` — or, when nothing was answered, which local failure it was (`NetworkError`, `UnreadableAnswer`, `NoTextBlock`), with **no status**, because a status nobody answered would be a reading of a failure that did not happen. `LoggingReceiptScanLog` writes it as a warning whose fields are structured names, beginning `Receipt scan for business {BusinessId}` so the one search finds both of a scan's lines.
 
@@ -3367,7 +3414,7 @@ transaction as the credential, and refuses the save when the business already se
 different provider — a business has one sales provider, and switching it is a separate design (#761).
 That belongs to this one port rather than to each of its callers, so no path can store credentials
 without recording the provider they belong to. See
-[Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735).
+[Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-760-and-735).
 
 **Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
 encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
@@ -7529,7 +7576,7 @@ status gate will use and therefore locks on `NeedsAttention` too.
 
 The site commission report keeps the live fleet read it has always declared: a site is known only
 from that read's `CustomerID`, so with no usable provider it has no sites to report on and the API
-itself answers `isAvailable: false` (see [Site commissions](#site-commissions) in AGENTS.md and issue
+itself answers `isAvailable: false` (see [Site commissions](../AGENTS.md#site-commissions) in AGENTS.md and issue
 #731). Issue #868 moved its menu entry back into the `Reports` group, after `Products` and before
 `GST`, and changed neither its capability (`SiteCommissions.Manage`), its feature (`machineFleet`)
 nor its route guards. Its breadcrumb still names
@@ -7954,7 +8001,7 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route the sidebar does not offer still resolves by direct URL, and since issue #528 a route the member's capability set does not allow resolves to the "access not allowed" page instead of the page itself (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) — the guard is presentation, and the API authorizes every request behind the page regardless). Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent. **A new authenticated route declares the capability its page needs**, alongside `MsalGuard`; `app.routes.spec.ts` fails the build if one does not, and the two documented exceptions are the only ones.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback and a handful of access/onboarding routes that stay eagerly imported — `/sign-in`, `/welcome`, `/application-pending`, `/application-rejected`, `/access-unavailable`, `/apply` (the business application form) and the two `/invite` fallback routes (`/invite/:token` and the no-pending-invite case), which share `InviteLinkReopenComponent` — because each is the landing route for an in-progress sign-in, invite or account-state flow, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route the sidebar does not offer still resolves by direct URL, and since issue #528 a route the member's capability set does not allow resolves to the "access not allowed" page instead of the page itself (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) — the guard is presentation, and the API authorizes every request behind the page regardless). Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent. **A new authenticated route declares the capability its page needs**, alongside `MsalGuard`; `app.routes.spec.ts` fails the build if one does not, and the two documented exceptions are the only ones.
 
 **Scroll on navigation (issue #1048).** `app.config.ts` registers `provideRouter(routes, withInMemoryScrolling({ scrollPositionRestoration: 'disabled', anchorScrolling: 'disabled' }))`, which keeps the router emitting its deferred `Scroll` event after every navigation without running Angular's own built-in restoration - that built-in behaviour resets to the top on *every* forward navigation, including a same-path one, which does not meet the rule below. `layout/scroll-on-navigation.service.ts` (`ScrollOnNavigationService`, started once from `app.config.ts` with `provideEnvironmentInitializer`) is the one place that owns what a `Scroll` event does: a navigation to a new primary route path (the URL without its query string or fragment) scrolls the window to the top; Browser Back/Forward restores the scroll position that history entry had; a navigation with a fragment scrolls to that element instead of the top (the landing page's own `scrollToSection` is unrelated - it is a same-page `scrollIntoView`, not a navigation); and a navigation that keeps the same primary path - a query-param-only update, a `replaceUrl`, re-clicking the current page's menu item, or the role-preview / support-session `onSameUrlNavigation: 'reload'` back to `/` - leaves the window exactly where it was. No page component carries any scroll code of its own, and inner scroll containers (the sidebar, the `max-h-[70vh]` table areas) are untouched - this rule is about the window only.
 
@@ -8643,15 +8690,26 @@ Bookkeeping reports the sales volume behind its own total and the average sale o
 
 Bookkeeping compares the reimbursement its own card sales and Nayax fees say to expect against the reimbursement an imported Nayax settlement actually recorded, so an operator reconciling a month no longer has to open the Reporting Dashboard for that comparison. As with issue #804, the comparison is not new and is not duplicated: it **moved** into the report that already reads both sides of it.
 
-**One policy, reused rather than restated.** `Inventory.Domain.Reporting.Dashboard.DashboardReimbursementPolicy` is unchanged and is still the only place this comparison is decided: expected reimbursement is card sales less Nayax fees including GST, the difference is actual less expected (signed), the tolerance is `$0.01`, and the status vocabulary stays `Pending`/`Reconciled`/`Needs Review` — `Pending` exactly when no imported reimbursement row covers the period, and a `Pending` period is never reconciled. `GetBookkeepingReport` calls that policy with the facts it already has (`CardSales`, `ProcessingFees.TotalFeeIncGst`, `ImportedNetSettlement`, `ImportedContainsRows`), so no second tolerance, rounding, sign or status rule exists anywhere. The policy keeps its name, which names the feature that introduced it, not the only report allowed to use it.
+**One policy, reused rather than restated.** `Inventory.Domain.Reporting.Dashboard.DashboardReimbursementPolicy` is still the only place this comparison is decided: expected reimbursement is card sales less Nayax fees including GST, the difference is actual less expected (signed), and the tolerance is `$0.01`. `GetBookkeepingReport` calls that policy with the facts it already has (`CardSales`, `ProcessingFees.TotalFeeIncGst`, the actual reimbursement for the range and whether a payout the range cuts exists), so no second tolerance, rounding, sign or status rule exists anywhere. Issue #1253 added one status to that vocabulary and nothing else about the comparison moved; the four it publishes are described in the bullets below. The policy keeps its name, which names the feature that introduced it, not the only report allowed to use it.
 
 **No new port, and one fewer duplicate read.** `BookkeepingReportFacts` already carried the period's imported-settlement summary for its fees and net settlement, read through `EfReportingSharedQueries.ImportedSummaryAsync` for the requested business, date range and machine scope — the identical call `EfDashboardReportFactsProvider` was making for the same period. `DashboardReportFacts.ImportedContainsRows`/`ImportedNetSettlement` and that call are therefore **gone**; the dashboard adapter still computes the distinct machine and product counts and the commission completeness no other report needs. `GetDashboardReport` republishes `bookkeeping.ExpectedReimbursement`/`ActualReimbursement`/`ReimbursementDifference`/`IsReconciled`/`ReconciliationStatus`/`ReconciliationTolerance` (and `NetReimbursement` from the same actual), exactly as it already republishes the transaction count — so the two pages cannot report different figures or a different status for one period, and the dependency direction is unchanged: the dashboard composes bookkeeping, and bookkeeping does not know the dashboard exists.
 
-**`netSettlement` is untouched and still means what it meant.** It prefers the period's imported net settlement and falls back to card sales less fees, which is a different question from "what did we expect, and what arrived": a period whose import disagrees reports `netSettlement` as the imported amount *and* `expectedReimbursement` as the calculated one. The report shows them in two separate cards — "Nayax Card Settlement" and "Nayax Reimbursement Reconciliation" — and the export keeps `NetSettlement` as its own column beside the new ones.
+**`netSettlement` still means what it meant.** It prefers the period's imported net settlement and falls back to card sales less fees — which issue #1253 labels as an estimate when it is the fallback, without changing either amount — and that is a different question from "what did we expect, and what arrived": a period whose import disagrees reports `netSettlement` as the imported amount *and* `expectedReimbursement` as the calculated one. The report shows them in two separate cards — "Nayax Card Settlement" and "Nayax Reimbursement Reconciliation" — and the export keeps `NetSettlement` as its own column beside the new ones.
 
-**Availability governs it the same way as everything else** (issue #730's model, unchanged). The imported actual reimbursement is settlement-sourced and carries `ProviderAvailability.Fees`; the calculated expectation and the difference depend on both families and carry `Combined`, decided once on the server by `LeastComplete`. `GetBookkeepingReport.FeeFigures` names the actual reimbursement and the reconciliation so the availability note is accurate, the Angular report renders the amounts through `moneyOrState`, and the export writes them through `AvailabilityExportCells.Amount`. **A valid imported zero stays distinguishable from an absent import in all three surfaces**: a `Complete` period whose settlement really paid nothing shows `$0.00` with a compared status, a period with no imported row at all shows `Pending` (the one case where the UI shows a word instead of an amount, and the difference shows `—`), and a period nothing accounted for shows its state instead of the zero.
+**Availability governs it the same way as everything else** (issue #730's model, unchanged). The imported actual reimbursement is settlement-sourced and carries `ProviderAvailability.Fees`; the calculated expectation and the difference depend on both families and carry `Combined`, decided once on the server by `LeastComplete`. `GetBookkeepingReport.FeeFigures` names the actual reimbursement and the reconciliation so the availability note is accurate, the Angular report renders the amounts through `moneyOrState`, and the export writes them through `AvailabilityExportCells.Amount`. **A valid imported zero stays distinguishable from an absent actual in all three surfaces**: a `Complete` period whose settlement really paid nothing shows `$0.00` with a compared status, a range with no payout lying wholly inside it shows `Not available` with the difference as `—` (an empty cell in the export, from a `null` in the response — the one case where the figure is not an amount at all), and a period nothing accounted for shows its state instead of the zero.
 
-**API and export contract (additive).** `GET api/reports/bookkeeping` gains `expectedReimbursement`, `actualReimbursement`, `reimbursementDifference`, `isReconciled`, `reconciliationStatus` and `reconciliationTolerance`; every existing property keeps its name, type and meaning. The bookkeeping CSV/XLSX row gains `ExpectedReimbursement`, `ActualReimbursement`, `ReimbursementDifference`, `ReconciliationStatus`, `IsReconciled` and `ReconciliationTolerance` immediately after `NetSettlement`, from the same `BookkeepingReportDto` the API returns; the status column is what tells a reader of a downloaded file that a zero actual was a period with no import rather than a settlement that paid nothing. The dashboard report, its export and the settlement matching rules are unchanged in output, and no schema, migration or stored data changed.
+**Only a payout the range covers in full is counted, and an estimate says it is one** (issue #1253, the repository owner's decision of 14 November 2026). `EfReportingSharedQueries.ImportedSummaryAsync` used to add the whole `Total` of every imported reimbursement the requested range *overlapped*, so bookkeeping for 7 September, with one payout settling 1-7 September of 680.75, reported an actual reimbursement of 680.75 against an expected 97.25 and flagged "Needs Review" — a week's payout counted as one day's money, while the fees for the same days were prorated. The rule is now the one `EfReconciliationReportFactsProvider` has always matched a period with, applied in both the account-level and the machine-filtered branch of that shared query:
+
+- A payout whose own declared settlement period lies **wholly inside** the requested range is this range's **actual reimbursement**, and the periods those payouts settle travel with the figure (`reimbursementPeriods`) so the screen can label it with the dates it is made of.
+- A payout the range only **partly** overlaps is returned on its own in `partlyCoveredReimbursements`, with its period dates and total, and is part of **no** amount in the response — not the actual reimbursement, not `netSettlement`, not the difference. Bookkeeping shows those payouts as "Payouts partly outside this range".
+- When no payout lies wholly inside the range there is no actual reimbursement at all: `actualReimbursement` and `reimbursementDifference` are **`null`** — shown as "Not available", exported as an **empty** cell — and never `0`, which a settlement that really paid nothing still is in a `Complete` period. `netSettlement` keeps its established fallback to card sales less fees and is now **labelled**: `isNetSettlementEstimated` is `true`, the screen says "Estimated" beside it, and the export's `NetSettlementSource` column reads `Estimated` rather than `Imported`.
+- The **status** is therefore decided only from payouts the range covers in full. `DashboardReimbursementPolicy` publishes `Reconciled`/`Needs Review` only when there is an actual to compare, the new `Range cuts a payout period` when every payout for these dates settles days outside the range, and the unchanged `Pending` when no payout relates to the range at all. A range holding both a wholly-inside and a partly covered payout compares the first and lists the second.
+
+Expected reimbursement is untouched — still card sales less fees including GST, on its own line, for the range as asked. So are the *fee* figures, `ImportedSummary.Settlement`/`NetSettlement` (the daily report's own period totals, which issue #1262 covers) and settlement coverage: an overlapping settlement still makes this period's fee figures unverified rather than missing (issue #731), because whether data exists for these dates and whether a payout belongs to them are different questions. Splitting a payout across days, the Daily row status, the Reconciliation totals and the fee proration rules were all explicitly out of this issue's scope.
+
+**API and export contract.** `GET api/reports/bookkeeping` gains `expectedReimbursement`, `actualReimbursement`, `reimbursementDifference`, `isReconciled`, `reconciliationStatus` and `reconciliationTolerance`; every existing property keeps its name, type and meaning. The bookkeeping CSV/XLSX row gains `ExpectedReimbursement`, `ActualReimbursement`, `ReimbursementDifference`, `ReconciliationStatus`, `IsReconciled` and `ReconciliationTolerance` immediately after `NetSettlement`, from the same `BookkeepingReportDto` the API returns; the status column is what tells a reader of a downloaded file whether the two sides were compared at all. In issue #805 the dashboard report, its export and the settlement matching rules were unchanged in output, and no schema, migration or stored data changed.
+
+Issue #1253 then made `actualReimbursement` and `reimbursementDifference` **nullable**, on this response and on `GET api/reports/dashboard` (whose `netReimbursement` is the same republished figure), and added `reimbursementPeriods`, `partlyCoveredReimbursements` and `isNetSettlementEstimated`. The bookkeeping export row gained `NetSettlementSource` immediately after `NetSettlement` and `ReimbursementPeriods`/`PartlyCoveredPayouts` immediately after `ReconciliationTolerance`. Past ranges report different actual reimbursement figures after that release, which is the point of it; no schema, migration or stored data changed there either.
 
 ### Retired Reporting Dashboard redirect (issue #806)
 
@@ -10392,6 +10450,21 @@ renders it as five parts:
    since #1011 that link also carries `syncRestock=open`, so it lands on the machine with its Sync
    Restock dialog already open. The only actions are the existing Pick List and Needs Ordering
    routes.
+
+   Three feature alerts have since joined the same grid, each a component that owns its own read,
+   its own gates and its own wording, and each counted once by `attentionCount` while it is shown:
+   `NayaxSaleReviewAlertComponent` (#1105), `InventoryCostAttentionAlertComponent` (see
+   [Products needing cost attention](#products-needing-cost-attention)) and
+   `UnimportedNayaxProductAlertComponent` (#1352). The last of these says, for example, "3 Nayax
+   products are selling but aren't in your products: Monster Original, Coke Zero 600ml and 1 more",
+   links to **Import products** (`/products/import`), and is seen by a Manager and an Owner alone -
+   it reads `GET api/catalogue-review/attention`, which requires `Imports.Run`, so an Operator is
+   refused by the endpoint and is never shown the tile. It asks nothing at all - no request is made -
+   while that capability is not affirmatively granted, while the business has no Nayax connection
+   (`providerRecords` on the shared provider-availability signal), or during a support session, which
+   grants `Imports.Run` but cannot run the import. A failed read shows nothing, the same rule the
+   other two alerts follow. See
+   [Nayax products selling without a local product](#nayax-products-selling-without-a-local-product-issue-1352).
 3. **Site and machine performance**, one card composed from `SiteMachinePerformanceComponent` and
    described in [its own section](#site-and-machine-performance-issue-987) below. It replaced the
    separate **Site performance** and **Machine performance** cards this issue shipped, and the
@@ -11268,6 +11341,9 @@ synchronized and an age would be a false statement.
 - Direct profit also subtracts Nayax fees including GST, site commission, and directly attributable operating expenses.
 - Whole-business net profit also includes shared costs such as receipt delivery/package costs and unallocated operating expenses.
 - A machine-filtered view must not claim whole-business net profit when shared overhead has no allocation rule.
+- **Machine profitability reports one row per machine, keyed by the provider's machine number alone** (issue #1263). `EfMachineProfitabilityReportFactsProvider` groups the period's completed sales by `NayaxSales.MachineID` and nothing else, so each machine's processing fees, site commission and directly attributed operating expenses are looked up once, for the one row that machine has. Grouping by `{ MachineID, MachineName }` - the stored sale's name, which is whatever the provider called the machine when that sale was ingested - made a machine renamed mid-period two rows and charged **each** of them the machine's whole fees, commission and expenses, so a $6 expense was reported as $12 and the report's totals exceeded Bookkeeping's for the same range. A machine with expenses and no completed sale in the period still has no row, which issue #1263 deliberately left unchanged.
+  - *The row's display name is resolved separately from the grouping.* It is this business's own machine record's name (`Machines.Name`, resolved from the sale's provider number through the one lookup `EfMachineLinkQueries`), because that is the name the operator chose; for a provider number this business has recorded no machine for, it is the name the **latest** sale carried - latest by sale instant, and between two equally recent names the one on the higher `TransactionID`, so the name never depends on the order rows came back in - and a machine that nothing names is still one row, called `Machine {number}` as before. A sale that carries no name names nothing, so an older sale's name is preferred to no name at all.
+  - *The totals reconcile with Bookkeeping.* For the same range, the sum of the machine rows' sales, fees, commission and machine-attributed operating expenses equals Bookkeeping's figures, excluding the two kinds of money Bookkeeping holds and this report has no row for: an expense attributed to a machine with no sales in the period, and a whole-business expense. `MachineProfitabilityBookkeepingTotalsTests` is that comparison.
 
 All report, dashboard, transaction-detail, CSV, and XLSX paths must call the same authoritative calculations.
 
@@ -14445,7 +14521,11 @@ sync](#home-dashboard-coordinated-sitesmachines-sales-sync-issue-187)); and, sin
 [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103) takes each transaction off the shared
 queue within seconds of the vend. The last two save through the same port and the same write-locked
 transaction, so the deduplication, the status rules and the cost-replay bookkeeping are one
-implementation rather than two that can disagree. The one thing a queued message decides for itself is
+implementation rather than two that can disagree. Since issue #1300 the upload takes the **same
+`BEGIN IMMEDIATE` lock** as both of them — through its own narrow port rather than that shared store —
+so all three paths' "is this transaction stored?" and their writes are serialised against each other;
+see [Limits on one uploaded sales file and the write lock it
+takes](#limits-on-one-uploaded-sales-file-and-the-write-lock-it-takes-issue-1300). The one thing a queued message decides for itself is
 its **status**: it states its own `Transaction Status ID` and the store saves exactly that, while the
 settlement-value rule stays for the payload that states none.
 
@@ -14523,7 +14603,11 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   existing-transaction lookup is the same tenant-filtered `NayaxSales` query as before, with no
   business predicate of its own, so a remote `TransactionID` two businesses both hold is an insert
   for the importing business rather than an update of somebody else's sale; ownership of a new row is
-  stamped centrally on save.
+  stamped centrally on save. Since issue #1300 that lookup is **one pass over the file's transaction
+  identifiers in fixed-size batches** (500 per statement) rather than one query per row, and it is
+  made **inside the import's write-locked transaction** — see [Limits on one uploaded sales file and
+  the write lock it takes](#limits-on-one-uploaded-sales-file-and-the-write-lock-it-takes-issue-1300)
+  below.
 - **Costing and the replay** use the Application contracts: `ICostSale` (issue #297) decides each
   sale's historical cost and provenance, and `IRebuildProductCost.RebuildAsync` (issue #296) replays
   an affected product's cost from the earliest completed sale that touched it, but only for a product
@@ -14549,7 +14633,97 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   catches, rather than the `DomainValidationException` the centralized mapping would want: that would
   change the response body from a bare JSON string to `ProblemDetails`, which is the separate later
   change [Domain and application error mapping](#domain-and-application-error-mapping) already
-  records for this action.
+  records for this action. Since issue #1300 it answers that same `400` with a third message, for a
+  file beyond the import's limits — see below.
+
+##### Limits on one uploaded sales file and the write lock it takes (issue #1300)
+
+**One upload used to decide how much memory the whole server had, and how long every other write
+waited.** The import read the entire workbook into memory first — a 9.9 MB CSV of 114,250 rows
+allocated about 1 GB just to be read — looked each row up with its own query, and saved everything in
+one `SaveChanges` inside the request: 4,000 new rows took 30 seconds and 8,000 took 124. It also took
+no write lock, so a transaction the [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103)
+stored between a row's lookup and the save failed the whole upload on the unique index over
+`(BusinessId, TransactionID)` with a `500`. The repository owner's decision of 14 November 2026 is
+what this implements.
+
+- **Two limits, in one Domain policy.** `Inventory.Domain.Imports.NayaxSalesFilePolicy` holds both
+  numbers, the refusal sentence and the write-lock budget, for the reason
+  `ReimbursementArchivePolicy` holds its own: a limit written where the bytes happen to be read is a
+  limit the next reader forgets. **`MaxRows` is 5,000** data rows, excluding the header — the
+  measured ceiling rather than the 20,000 the owner's decision first named, for the reason the
+  measured-lock-hold bullet below sets out. An
+  **XLSX's sheet data may expand to `MaxUncompressedSheetBytes`, 50 MB uncompressed** — the worksheet
+  parts and the shared string table, summed from the package's own ZIP entry sizes. The two are
+  independent because an XLSX's row count is not knowable until it has been loaded, and loading it is
+  exactly the cost the limit refuses.
+- **Both are enforced while the bytes are being read**, by `ClosedXmlNayaxSalesWorkbookReader`,
+  because by the time a use case could count anything the memory is already spent. A CSV is abandoned
+  at the first line past the limit, so the rows beyond it are never converted to cells; an XLSX's
+  entry sizes are read **before** `XLWorkbook` opens the package, which is the last point at which
+  the expansion can still be refused. The reader answers
+  `NayaxSalesWorkbookReadResult.BeyondLimits` with no rows; it does not raise the refusal itself,
+  because what an operator is told is the use case's rule. An upload that is not a readable archive
+  is deliberately **not** caught by the size guard: that stays ClosedXML's own failure and the
+  generic `500` it has always produced, rather than becoming a "too large" message.
+- **The refusal is `400 Bad Request` with one sentence**: *"This file has more than 5,000 sales. For
+  a longer history, export one file per quarter, or use the sales history import."* It is
+  `NayaxSalesFilePolicy.TooLargeMessage`, built from the row-limit constant so the number cannot
+  drift from what is enforced, and `ImportNayaxSales` raises it as the same
+  `InvalidOperationException` the unsupported-format rule raises, which `ImportsController` already
+  answers that status with. **Nothing is read, looked up, costed or written**: the refusal happens
+  before the catalogue read. The longer-history import the sentence names is
+  [Importing a long sales history in the
+  background](#importing-a-long-sales-history-in-the-background-issue-1304) (issue #1304), which is
+  built: a CSV of up to 250,000 rows, accepted at once and imported in batches. Uploading a shorter
+  period at a time remains a perfectly good answer for a file a little over the ceiling.
+- **The limits are the *import's*, not the reader's.** `INayaxSalesWorkbookReader.Read` takes a
+  `NayaxSalesFileLimits`, and the sale timestamp repair preview (issue #472) passes
+  `NayaxSalesFileLimits.None`: it reads an export for its authorization instants alone and writes
+  nothing, so capping it is a decision of its own rather than a side effect of this one.
+- **The stored sales of the whole file are read once**, through
+  `INayaxSalesImportStore.FindByTransactionIdsAsync`, in fixed-size batches of 500 identifiers
+  instead of one query per row — 10 statements for a file at the row limit instead of 5,000.
+- **That one read is the pass's starting state, not its only one.** A file may name the same
+  transaction more than once, so every row that inserts or updates a sale writes that sale back into
+  the state the pass carries, and a later row for the same transaction merges against what the
+  earlier row left. Without that the one read would be a snapshot taken before any row ran: a second
+  row with a blank amount or payment-method cell would restore the value the first row had just
+  written — undoing it, against [what a blank cell or a missing column does to a stored
+  sale](#what-a-blank-cell-or-a-missing-column-does-to-a-stored-sale-issue-1298) — and a second row naming a
+  transaction the file itself introduced would stage a second insert of it, which the unique index
+  over `(BusinessId, TransactionID)` refuses. The per-row lookup this batching replaced could not get
+  that wrong, because it read the row again, already updated; the import now tracks the row it wrote
+  instead of re-reading it, so this stays one read. The file's **last** word about a transaction is
+  what the business holds, the sale exists once, and a row the import applies nowhere (no
+  trustworthy instant, an unreadable value, a new sale with no amount) leaves the transaction exactly
+  as it was. `NayaxSalesImportRepeatedTransactionTests` pins all of it over real SQLite.
+- **The find-and-save runs inside the shared `BEGIN IMMEDIATE` transaction**, through the narrow
+  `INayaxSalesImportTransactions` port and `EfNayaxSalesImportTransactions`, which opens the same
+  `SqliteWriteLockTransaction` the two `EfLatestNayaxSalesStore` save paths open (issue #1103). The
+  stored-row lookup happens **inside** it, so the state the save is decided on is the state it
+  commits against: a transaction the queue reader stored while the file was being read is found and
+  **updated**, and a queue save attempted while the import holds the lock waits and then takes its
+  own enrich path. Either ordering ends with one sale row and no `500`.
+- **The cost replay stays outside the lock.** After the commit, the affected products' inventory cost
+  is replayed and the replayed costs are saved, in the same order and with the same failure behaviour
+  as before — a replay takes as long as the products' histories, and that is not a wait every other
+  writer may be made to serve. It is the reason
+  `EfLatestNayaxSalesStore.RebuildInventoryCostsAsync` drains its pending rebuilds outside the lock
+  too.
+- **The row limit is sized by a measured lock hold, not a guess, and the measurement is what brought
+  it down to 5,000.** `MaxWriteLockHoldSeconds` is 10, because every other write gives up after
+  SQLite's 30-second busy timeout. `NayaxSalesImportWriteLockHoldTests` imports a synthetic file of
+  `MaxRows` rows over a real SQLite file with the production wiring and asserts the measured hold is
+  inside that budget, for a fresh import and for a re-upload where every row updates an already
+  costed sale. At the owner's first figure of 20,000 rows that assertion failed on the slower CI
+  runners — **13.8 s** measured here and **14.6 s** on the merge-validation runner, against **5.8 s**
+  on a fast one — so the row limit came down, which is what the owner's decision of 14 November 2026
+  provides for ("lower the row limit if needed"). The hold is linear in the rows at roughly 0.7 ms a
+  row on a slow runner, and at 5,000 rows it measures **3.5 s** for a fresh import and **0.3 s** for a
+  re-upload: about a third of the budget, so the ceiling holds on a runner slower still rather than
+  only on a good day. The budget itself does not go up, and the refusal sentence follows the
+  constant.
 
 ##### What a blank cell or a missing column does to a stored sale (issue #1298)
 
@@ -14687,6 +14861,159 @@ child 3 of #149), moved unchanged in behaviour from the removed
   `SaleCostingController` calls the backfill use cases directly with unchanged routes,
   request/response shapes and status codes. The pass-through `GetAverageUnitCostAtAsync` is
   `IRebuildProductCost.GetAverageUnitCostAtAsync`.
+
+#### Importing a long sales history in the background (issue #1304)
+
+**A new business brings in one to three years of Nayax sales, and the uploaded import above takes
+5,000 rows in one request.** The repository owner's decision of 14 November 2026 is that a long
+history is a *background job in small batches*: the upload stores the file and answers at once with a
+job id, and a worker streams the rows and commits them a few hundred at a time, each batch in its own
+short write-locked transaction. It is the [Reimbursement Report ZIP upload and background
+import](#reimbursement-report-zip-upload-and-background-import-issue-1149)'s shape, applied to rows
+instead of files.
+
+- **The row rules are the uploaded import's, through the same code.**
+  `Inventory.Application.Imports.NayaxSalesRowApplier` holds the per-row pass that was
+  `ImportNayaxSales`'s body: the identity facts a row must carry, the unreadable-cell refusal, the
+  instant precedence of issue #380, the blank-cell keep rules of issue #1298, the product resolution
+  of issues #745 and #758, the conflicting-sale exception, the costing through `ICostSale`, the sale
+  carried through to a later row naming the same transaction (issue #1300) and the record of which
+  products a stock-consuming sale affected. **Both imports construct it over the same two
+  dependencies** - their own `INayaxSalesImportStore` and `ICostSale` - so "the history import applies
+  the same row rules" is true by construction rather than by two copies agreeing, and
+  `ImportNayaxSales`'s own constructor and behaviour are unchanged (its 200-odd existing tests pass
+  untouched, which is the evidence for that).
+- **The limits are their own Domain policy.** `Inventory.Domain.Imports.NayaxSalesHistoryPolicy`
+  holds `MaxRows` (250,000 data rows), `MaxUploadBytes` (50 MB), `BatchRows` (500),
+  `MaxWriteLockHoldSeconds` (the uploaded import's own 10-second budget, because it is the same lock),
+  `MaxAttempts` (3) and every refusal sentence. `NayaxSalesFilePolicy` is untouched: the synchronous
+  upload keeps its 5,000-row ceiling exactly as issue #1300 delivered it, and the two imports share
+  their row rules rather than their limits.
+- **The upload refuses, stores nothing, and never imports.** `UploadNayaxSalesHistory` checks the
+  bytes (empty, over the byte limit), the format (`.csv` only - a compressed workbook cannot be read a
+  row at a time without expanding it, which is the cost this import exists to avoid) and the file's
+  shape, then stores it as a `Queued` job. **One history runs per business at a time**:
+  `EfNayaxSalesHistoryImportJobStore.CreateAsync` asks "is one unfinished?" and inserts inside one
+  `BEGIN IMMEDIATE` transaction, because read outside the write that depends on it two uploads a
+  second apart would both start.
+- **The shape check is one streamed read.** `INayaxSalesHistoryCsvReader.Check` reads the header -
+  refusing a file with no header row or no `TransactionID` column, which could only import as
+  250,000 skipped rows - and counts the data rows, stopping at the first row past the ceiling, so a
+  file ten times the limit costs no more to refuse than one row over it. It allocates nothing per
+  row.
+- **`StreamingNayaxSalesHistoryCsvReader` is the second reader, and it exists for one reason.**
+  `INayaxSalesWorkbookReader` answers with every row at once and builds a worksheet of cells to read
+  a CSV at all - about a gigabyte for a 114,250-row export, which is what issue #1300's ceiling
+  bounds. This one yields one `NayaxSalesImportRow` at a time and holds nothing it has yielded, so
+  the read's cost stops growing with the length of the history (measured: 200,000 rows streamed with
+  the managed heap no larger afterwards than before). **Every cell is read by the same conversions**:
+  `NayaxSalesCells` holds the header matching, the CSV quoting rules and all of the value readings,
+  and `ClosedXmlNayaxSalesWorkbookReader` asks it for every text cell - which is every cell of a CSV -
+  keeping only the two readings a worksheet has (a date-typed cell and a numeric cell). A parity test
+  reads the same awkward CSV through both and asserts the row sequences are equal.
+- **The job row is tenant-owned and is its own table.** `NayaxSalesHistoryImportJob` carries the
+  business key, its index, the central query filter and the ownership stamp like any other
+  tenant-owned row; the uploaded CSV lives on it until the job is final and is deleted then, exactly
+  where and how the reimbursement import keeps its archive. It is **not** a type column on
+  `ReimbursementImportJobs`: the two jobs share a shape and nothing else - a reimbursement job's unit
+  of work is a file and it records one outcome row per file, a history's is a batch of rows and what
+  it records is a running count and the row to resume from - so one table would mean every column of
+  each being nullable for the other, and migrating a feature this issue puts out of scope.
+- **A batch is the unit of work, and it is one transaction.** `ProcessNayaxSalesHistoryImportJob`
+  claims the job (counting the attempt and moving it to `Processing` in one write), reads the
+  catalogue and the conflicting transaction ids once for the attempt, and then for each batch of
+  `BatchRows` rows opens the shared `INayaxSalesImportTransactions` lock and inside it: reads the
+  stored sales of the transactions that batch names, applies the shared row rules, stages one pending
+  inventory-cost rebuild per product the batch affected, and writes the job's progress. Nothing else
+  is inside it. So there is no moment at which sales are committed without the record of how far the
+  job got, or progress recorded for sales that were not committed.
+- **Between batches the lock is released**, which is the whole point: a purchase, a stock adjustment
+  or the [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103)'s own save commits while a year
+  of history is importing instead of waiting behind it and failing on the 30-second busy timeout.
+  `NayaxSalesHistoryConcurrencyTests` forces both orderings over a real SQLite file with two
+  connections: a save made between two batches succeeds, and a save attempted while a batch holds the
+  lock waits for that batch and then succeeds.
+- **The batch size is a measured number, not the suggested one.** The issue suggested 2,000 rows a
+  batch; at that size a synthetic history measured 3.4 s, 5.6 s and 9.3 s for its first three batches
+  on this repository's CI runners - growing, and already at the edge of the budget. It grows because
+  each row's cost replays that product's own ledger up to the sale's instant (`CostSale`, the same
+  rule every other sales writer applies), so the cost of row *n* of a product grows with the sales of
+  that product already stored. `BatchRows` is therefore **500**.
+  `NayaxSalesHistoryWriteLockHoldTests` asserts every batch of a 6,000-row history is inside
+  `MaxWriteLockHoldSeconds` and writes the figures to the test output.
+- **A batch reads each product's ledger once, not once per row.** `ProcessNayaxSalesHistoryImportJob`
+  costs each batch through `INayaxSalesHistoryBatchCosting.ForOneBatch()`: the ordinary `CostSale`
+  over the ordinary `RebuildProductCost`, whose ledger reads go through a
+  `SnapshotInventoryCostLedgerReads` made for that batch and thrown away with it. The snapshot loads a
+  product's whole read-only ledger the first time a row of the batch asks for it, and answers each
+  row's as-of read by filtering that one read in memory with exactly the database read's predicates
+  (movements and repairs effective, stock-consuming sales authorised, at or before the instant); a
+  read before the product's transition baseline is passed to the database unchanged. This changes no
+  cost: a batch's row pass saves nothing until it ends, so every as-of read inside it sees the same
+  rows either way, and the replay orders its events by its own total key, so the order they were read
+  in cannot matter. `SnapshotInventoryCostLedgerReadsTests` pins the equivalence on SQLite, read for
+  read and cost for cost, at every event instant, one tick either side, sub-second instants and across
+  a baseline. The synchronous upload is unchanged and still reads per row.
+- **One product's sales are read through an index.** The central business filter is translated as
+  `(@unrestricted OR BusinessId = @business)`, and SQLite does not use the composite
+  `(BusinessId, ProductId)` index on `NayaxSales` under that `OR`, so every read of one product's
+  stock-consuming sales - every sale-time cost replay and inventory-cost rebuild, in every writer -
+  scanned the whole sales table. That made each history batch slower than the last as the table grew
+  even when no product's own history was long. The additive migration
+  `20261120080832_AddNayaxSalesProductIdIndex` adds `IX_NayaxSales_ProductId`, the shape
+  `StockAdjustments` and `InventoryCostRepairs` already have; `AddNayaxSalesProductIdIndexMigrationTests`
+  covers the upgrade over stored sales, the rollback, and the query plan under the business filter.
+- **What the hold depends on is the sales stored *per product*.** `NayaxSalesHistoryFullSizeBenchmark`
+  is the opt-in measurement (`INVENTORY_NAYAX_HISTORY_BENCHMARK=1`, outside repository validation
+  because it runs for minutes to tens of minutes). With both changes above, on a cloud runner on
+  20 November 2026:
+
+  | Rows | Products | Sales a product | Longest batch | Batches over 10 s | Whole import |
+  | --- | --- | --- | --- | --- | --- |
+  | 20,000 | 4 | 5,000 | 0.8 s | 0 of 40 | 17 s |
+  | **250,000** | **200** | **1,250** | **2.3 s** | **0 of 500** | **8.7 min** |
+  | 250,000 | 4 | 62,500 | 11.1 s | 4 of 500 | 40.2 min |
+
+  Before them the same runs measured 12.6 s (20,000 rows over 4 products) and 7.5 s with a 30.7-minute
+  total (250,000 over 200). A full-size history spread over a real catalogue is therefore well inside
+  `MaxWriteLockHoldSeconds`. A quarter of a million rows concentrated on four products still passes
+  it near the end (batches of 8.5 s to 11.1 s once each product holds about 52,000 sales), because the
+  replay itself still runs once per row over the product's whole history; bounding that needs an
+  incremental sale-time replay, which changes costing internals and is outside issue #1304.
+- **The replays are recorded once per product, not once per batch.** Each batch stages its own
+  affected products through the shared `PendingInventoryCostRebuildRecorder` - behind the new narrow
+  `IPendingInventoryCostRebuildStore` port, because this is the first writer that stores sales through
+  one adapter and needs the pending row beside them - and that recorder keeps **one** row per
+  `(business, product)` whose instant only ever moves earlier. So a product eighty batches touched
+  ends with one pending row at the earliest instant of all of them. The replay itself is the existing
+  drain's (see [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)); replaying inside
+  the job would mean replaying a product's whole history once per batch, which is the opposite of
+  what the batching is for.
+- **It is safe to stop and run again.** A sale is matched by its transaction id, so a row applied
+  twice updates the sale it created rather than storing a second one - which is what makes a resumed
+  attempt, a re-run and a re-upload of the same file all end in the same state. The resume is cheap as
+  well as safe: the claim carries the committed row count and the streamed read passes over exactly
+  those rows. An attempt that fails is queued again with a safe reason (the exception's *type* name,
+  never its message, which can quote a statement's parameter values - and those are a business's
+  sales); after `MaxAttempts` the job is `Failed`, keeps every batch it committed, and says so.
+- **The worker is the fifth hosted background service**, and is
+  `ReimbursementImportJobRunner`'s shape exactly: `NayaxSalesHistoryImportJobRunner` takes the oldest
+  unfinished job across every business, one at a time, each in a service scope resolved to that one
+  business (`ServiceScopeNayaxSalesHistoryImportJobScopes`), with its first pass 45 seconds after
+  startup - a little after the reimbursement worker's, so a restart is not two imports competing for
+  the one write lock - and 15 seconds between idle passes. One job's trouble never stops another's,
+  and only cancellation ends the loop. `EfNayaxSalesHistoryImportJobQueue` is the one cross-business
+  statement this feature makes: one read-only statement projecting a job key and a business key, in a
+  scope that has deliberately resolved no business, for the reason the reimbursement queue's has
+  (AGENTS.md § Tenant ownership and data isolation).
+- **The HTTP surface is two routes on `ImportsController`**: `POST api/imports/nayax-sales-history`
+  (multipart, `202 Accepted` with the job id, `400` with one readable sentence for every refusal) and
+  `GET api/imports/nayax-sales-history/jobs` (the caller's own business's latest ten with their
+  progress). Both carry the controller's `Imports.Run` capability and
+  `[RequirePlan(PlanFeature.SalesFileImport)]` - the same access as the synchronous upload, because it
+  is the same import done in the background - and the status read is plan-gated too, so a locked
+  business is not offered a list the backend would refuse. The Imports page composes
+  `SalesHistoryImportComponent` behind the same inline plan lock as the sales card.
 
 ### Reimbursement import and reconciliation
 
@@ -15592,7 +15919,7 @@ cost.
 
 Child G1 of issue #329, after [the local key is the database's
 own](#the-local-key-is-the-databases-own-issue-735) and reusing [#759's external-id column
-pattern](#provider-identity-on-the-local-row-issues-732-759-and-735). Until it, **a machine was never
+pattern](#provider-identity-on-the-local-row-issues-732-759-760-and-735). Until it, **a machine was never
 persisted at all**: every machine list was a read of the live Nayax fleet, and every stored machine
 reference — a sale's `MachineID`, a refill's `MachineId`, a machine count's, an expense's, a stock
 event's, a timestamp repair's, an inventory-cost transition's — was Nayax's own number. A business
@@ -15819,7 +16146,10 @@ business's `SalesProvider` is Nayax, in the same statement. A number recorded on
 to nothing, never to the machine whose local id happens to be that number.
 `Inventory.Infrastructure.Persistence.EfNayaxMachineLinkStore` is the adapter the use cases hold and
 `Inventory.Infrastructure.Data.EfMachineLinkQueries` is the read itself, which the two reporting
-fact providers call directly — one translation, not one per caller.
+fact providers call directly — one translation, not one per caller. Since issue #1263 that one read
+also carries the machine's `Name`, for the caller that has to *display* the machine rather than only
+write against it (machine profitability's row name, see [Profit levels](#profit-levels)); it is the
+same statement and the same gate, in two shapes.
 
 **The API and the form.** `GET api/machines` adds `localMachineId` as an appended, nullable field;
 it carries no financial figure, so it survives the `Dashboard.ViewFinancials` redaction with the rest
@@ -17909,6 +18239,16 @@ timestamp repair are behind. All three are `POST`, including the one that previe
 provider's live catalogue and records the review the apply is then authorised by, and a cached `GET`
 would hand a caller a review id for a catalogue it never read.
 
+A fourth route sits under the same prefix on its own controller,
+`InventoryApi.Controllers.CatalogueReviewAttentionController`: `GET api/catalogue-review/attention`
+(`Imports.Run`, no plan gate), the Dashboard's read of what the import has left to do. It is declared
+separately rather than added to the controller above, whose three deliberately reviewed `POST`
+surfaces over the catalogue and over historical sale attribution are pinned to exactly three by
+`CatalogueReviewApiTests` — this one reads stored rows, writes nothing and decides nothing, which is
+the same reason the Super Admin plan-grant and SQS-sender surfaces are their own controllers under the
+businesses prefix. See
+[Nayax products selling without a local product](#nayax-products-selling-without-a-local-product-issue-1352).
+
 **What the review reports.** `Inventory.Application.CatalogueReview.StartCatalogueReview` reads the
 operator's products and groups through the existing `INayaxLynxClient` port, as one concurrent
 fan-out of two independent calls — the shape the direct import used — and reconciles them against the
@@ -18055,6 +18395,61 @@ table is tenant-owned in the ordinary way, so two businesses may review and link
 ids and neither can read, apply or resolve anything of the other's
 (`EfCatalogueReviewStoreTenancyTests`).
 
+#### Nayax products selling without a local product (issue #1352)
+
+Until this issue nothing told anyone that the Nayax catalogue held products the business had never
+imported: the only way to find out was to open Import products, which reads Nayax live. That matters
+because a sale of an unimported product is stored with **no local product** — `NayaxSales.ProductId`
+null with `ProviderProductIdIsRaw` true — so the machine really did dispense a unit and nothing in the
+inventory or the costing knows about it: the sale takes no stock and carries no cost.
+
+`GET api/catalogue-review/attention` (`CatalogueReviewAttentionController`, `Imports.Run`, no plan
+gate) answers `{ unimportedProductCount, examples: [ { nayaxProductId, productName } ] }` with at most
+three examples, most recently sold first. It carries no amount, price, cost or quantity. It is read
+through `Inventory.Application.CatalogueReview.GetUnimportedProviderProductAttention` and the
+`IUnimportedProviderProductReader` port (`EfUnimportedProviderProductReader`); both tables are
+tenant-owned, so the central query filters keep it to the caller's business and the adapter carries no
+business predicate of its own.
+
+**What qualifies, and what clears it.** The sale filter is the catalogue review's own unresolved-sale
+filter (`EfCatalogueReviewStore.UnresolvedSaleCountsAsync`): `ProductId` null, `Provider` Nayax,
+`ProviderProductIdIsRaw` true and `NayaxProductId` present. A provenance-unknown row is excluded for
+the reason it is excluded there — its stored number may be a raw provider id or the local product id
+the old synchronization wrote, so it is evidence about nothing. A raw sale that already carries a local
+`ProductId` is **not** counted even when its `NayaxProductId` is one no product holds: that sale has a
+product. The count is of **distinct** `NayaxProductId` values for which no product of the business —
+retired products included, because a retired row still carries the provider's id — holds that id as its
+`ExternalProductId`, compared as the opaque `ExternalId` text through
+`Inventory.Domain.Providers.NayaxExternalId` and never as a local key (issue #735). So what clears the
+alert is a **product**: the link or create Import products performs. Attributing the old sales to that
+product stays the Owner's separate, audited step, and a business that never takes it is still answered
+zero, because there is nothing left to import.
+
+**The window is thirty business calendar dates including today**, so an old one-off sale of a product
+the business never intends to stock does not nag for ever.
+`Inventory.Domain.Providers.UnimportedProviderProductAttentionPolicy` holds the rule (`WindowDays`,
+`MaxExamples`, `FirstBusinessDate`) and the use case turns its date into an instant through
+`IBusinessCalendar` — the business's own configured zone, `Australia/Sydney` for this business — from
+one reading of `IClock`, with "now" as the upper bound. It is a count of dates rather than of hours, so
+a daylight-saving change inside the window cannot move its first day: with today 20 October 2026 the
+window starts at `20 September 14:00Z` (AEST, UTC+10) and not at `21 September 03:00Z`. See
+[Time](#time).
+
+**What proves it.** `UnimportedProviderProductAttentionPolicyTests` (unit) pins the thirty-date span
+and the three examples; `GetUnimportedProviderProductAttentionTests` (unit) that the use case asks for
+that window, reads the clock once and publishes the store's answer unchanged;
+`UnimportedProviderProductAttentionTests` (relational, two businesses, real Sydney calendar) every
+qualifying condition one disqualified sale at a time, the distinct count, the latest sale's name, the
+linked and the retired product each clearing the count with the sales still unresolved, both date
+boundaries with and without a daylight-saving crossing, the three examples' order, and that another
+business's sales and products are invisible; and `CatalogueReviewAttentionApiTests` the published
+surface over real HTTP — an Operator refused, a Manager and an Owner answered the same figures, no
+amount anywhere in the body, and an anonymous request refused.
+
+**On the Dashboard** it is `UnimportedNayaxProductAlertComponent` in the Needs attention panel (see
+[Restockroo dashboard and authenticated navigation](#restockroo-dashboard-and-authenticated-navigation-issue-972)),
+which also records the three conditions under which it makes no request at all.
+
 ### The dedicated Import products page (issue #888)
 
 `/products/import` (`frontend/inventory-app/src/app/components/products/ProductImportPageComponent`)
@@ -18147,6 +18542,27 @@ names no local row is refused locally with a message rather than sent, because t
 whole apply over one such decision and would throw away every other answer on the screen. Both calls
 are disabled while a support session is active, for the reason every other write on this page is
 (issue #661): a session grants `Imports.Run` and the read-only rule refuses the `POST` itself.
+
+**A one-tap "Closest match" suggestion is a client-side hint, nothing more (issue #1353).** For each
+unlinked entry the screen scores the provider name against the local rows its link may name
+(`frontend/inventory-app/src/app/components/admin/imports/catalogue-review/catalogue-match.ts`,
+`scoreCatalogueNameMatch`): a Jaccard similarity of the two names' word sets once each is lower-cased,
+stripped of punctuation and stripped of the size/pack-count phrase it states, so that `COKE ZERO
+600ML` and `Coke Zero 600 mL` score as an exact match and small wording differences (`Monster Energy
+Original 500ml` vs `Monster Original 500ml`) score highly without being one. A size (volume
+normalised to mL, `1.25L` = `1250 mL`; weight to g) or pack count (`24pk`, `24 pack`, `x24`, `24 x`)
+that both names state and disagree on withholds the suggestion whatever the score — `Coke Zero
+375 mL` is never suggested against only `Coke Zero 600 mL` — but never removes the candidate from the
+Link to dropdown, which lists every candidate with no such conflict first, each group ordered by the
+same score then by name. Showing a suggestion, or the dropdown's order, changes no answer: the entry
+stays on Skip until the operator presses the suggestion's "Link to this" (which does exactly what
+choosing that row from the dropdown does) or picks one by hand. The server still links only the row
+the operator names (issue #738) — this is a display calculation over rows the page already loaded,
+never a new read, write or server-side matching rule, and it is unrelated to master product matching
+(#1049/#1051) and the price collector matcher. The same rule runs for a provider group against local
+categories. `catalogue-match.spec.ts` pins the scoring/conflict rule and
+`catalogue-review.component.spec.ts` pins the screen's side of it: shown/hidden, the default
+unchanged, "Link to this", the dropdown order and the category case.
 
 ### Nayax product catalogue import (issue #300)
 
@@ -18652,11 +19068,15 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `NayaxMachineStockApplyPolicy` rules, plus the `NayaxStockEventMatchStatus`/
   `NayaxStockEventProcessingStatus`/`NayaxDuplicateResolution`/`NayaxDuplicateResolutionChoice`
   states, are deterministic `Inventory.Domain.Nayax` types with no Nayax, HTTP, or EF Core
-  dependency.
+  dependency. Issue #1326 adds `NayaxProductReplacementWritePolicy` beside them, with its
+  `NayaxProductReplacementChoice`/`NayaxReplacementOutgoingDisposition`/
+  `NayaxReplacementMovementPlan` values, on exactly the same terms.
 - **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
   issue #196 - `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
-  #242 - and `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
+  #242 - `ApplyMachineStockProductReplacement` - the replacement apply, issue #1326, which holds
+  the persistence port and the log and deliberately no Nayax client - and
+  `RematchMachineStockEvents` with its `MachineStockMatchRefresh` mapping value, issue
   #1248), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
@@ -18668,7 +19088,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   product's cost once; and, since issue #1248, with the re-match pair `FindRematchCandidatesAsync`
   and `UpdateMatchesAsync`, whose `MachineStockEventMatchUpdate` carries the three match columns and
   nothing else - the use cases decide every event and own the commit, so no policy moved behind the
-  port). `MachineStockEventState` carries the event's parsed MDB and product name for the same
+  port; and, since issue #1326, with `FindActiveStorageProductAsync` and
+  `ApplyProductReplacementAsync`, whose `MachineStockReplacementWrite` carries the one event and the
+  Domain choice and whose `MachineReplacementApplication` reports the up-to-three movements it wrote
+  or the same `MachineRefillFailure` a refill batch reports).
+  `MachineStockEventState` carries the event's parsed MDB and product name for the same
   issue, because they are what a refreshed mapping resolves a stored event by. The Nayax read stays
   on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
@@ -18683,8 +19107,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `Inventory.Infrastructure` in issue #307.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`, and `POST /api/machines/{id}/sync-restock/resolve-manual`
-  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`.
+  binding for `ResolveMachineStockDuplicate`, `POST /api/machines/{id}/sync-restock/resolve-manual`
+  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`, and
+  `POST /api/machines/{id}/sync-restock/apply-replacement` (issue #1326) is the fifth, for
+  `ApplyMachineStockProductReplacement` (see
+  [Applying a confirmed product replacement](#applying-a-confirmed-product-replacement-issue-1326)).
   `POST /api/machines/{id}/sync-restock` additionally
   binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
   `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
@@ -18734,8 +19161,11 @@ explicit action above is waiting for them.
 
 When an operator replaces the product in one MDB position in Nayax Core, Nayax records a
 "Machine Product Changed" alert. Before issue #1325 the import kept only Event 501 and dropped it,
-so a replacement left no trace in Sync Restock. It is now imported and shown, read-only: **nothing
-here writes stock**. Applying a replacement is #1326 and its editing UI is #1327.
+so a replacement left no trace in Sync Restock. It is now imported and shown; **nothing in this
+subsection writes stock** - importing, listing and suggesting are read-only, and what an applied
+replacement writes is
+[Applying a confirmed product replacement](#applying-a-confirmed-product-replacement-issue-1326)
+below (issue #1326). Its editing UI is #1327.
 
 - **The contract and its evidence.** The Nayax developer portal documents `lastAlerts` but lists no
   event codes and no `EventData` format, so the contract rests on one real `lastAlerts` item the
@@ -18794,7 +19224,11 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   - *Apply* (`ApplyMachineStockSync`) and *Apply as separate restock*
     (`ResolveMachineStockDuplicate`) refuse it: `NayaxMachineStockApplyPolicy.Decide` takes the
     event code and answers `ProductReplacementNotApplicable` (outcome `NotApplicable`) for anything
-    but a 501, after the settled "already applied" and "already reconciled" answers.
+    but a 501, after the settled "already applied" and "already reconciled" answers. A replacement
+    carries two product names and no quantity, so a refill path has nothing to apply; its own apply
+    is the separate action below. Issue #1326 changed that refusal's **sentence** to point at that
+    action instead of saying a replacement cannot be applied at all, and changed nothing about which
+    events the refill path accepts.
   - *Already recorded manually* (`ResolveMachineStockEventsAsAlreadyRecorded`) accepts it and writes
     no stock, exactly as for a 501.
   - *Re-match* (`RematchMachineStockEvents.IsWaitingForAMatch` and
@@ -18806,11 +19240,170 @@ here writes stock**. Applying a replacement is #1326 and its editing UI is #1327
   - *Stock History presence* (`EfProductInventoryHistoryQueries`) reads `MatchedProductId`, which a
     replacement never has, so it adds no product history; the platform diagnostics surface still
     excludes the whole table.
-- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time,
-  both Nayax names, the suggestions and their reasons, the suggested quantity and any double-count
-  flag. It has no quantity or reason inputs, is never pre-selected or counted as applicable, and
-  can only be marked **Already recorded manually**; **Apply selected** is disabled while a
-  replacement is selected.
+- **Dialog.** The Sync Restock dialog shows a replacement row with the machine, MDB, event time and
+  both Nayax names. It is never pre-selected or counted as applicable through the ordinary Apply
+  path, and the bulk **Apply selected** stays disabled while a replacement is selected; it can still
+  be marked **Already recorded manually**, exactly as before. Since issue #1327 the row also offers
+  its own **Apply replacement** action, built from the suggestions above - see
+  [Reviewing and applying a product replacement in the dialog](#reviewing-and-applying-a-product-replacement-in-the-dialog-issue-1327)
+  below.
+
+#### Applying a confirmed product replacement (issue #1326)
+
+Issue #1325 left a replacement with one resolution, "already recorded manually", which is the right
+answer only when the operator already entered the movements by hand. The other answer is this one:
+the operator says what the replacement actually did to the units, and it is recorded in one step
+that can neither half-apply nor apply twice.
+`POST /api/machines/{id}/sync-restock/apply-replacement` runs
+`Inventory.Application.MachineStockSync.ApplyMachineStockProductReplacement` for **one** event.
+
+**It is deliberately a separate action from Apply.** A 501 stock adjustment carries its own matched
+product and its own signed quantity, so the ordinary apply needs nothing from the operator. A 510
+replacement carries two product *names* and no quantity at all, so the products and the quantities
+are the operator's and arrive in the request: the incoming product id and a whole quantity of `0` or
+more, and an outgoing choice of `None`, `ReturnedToStorage`, `Damaged` or `Expired` with an outgoing
+product id and a whole quantity of at least `1` for every choice but `None` (absent for that one).
+The incoming product is required even for a quantity of `0`, because the replacement records which
+product the slot now holds. `Inventory.Domain.Nayax.NayaxProductReplacementWritePolicy` is the one
+deterministic rule for all of it - the shape of the choice, whether both products are usable, and
+whether storage holds what was loaded - and it reads and writes nothing itself.
+
+**What each choice writes.** `NayaxProductReplacementWritePolicy.Movements` is the one place that
+answers it, and `EfMachineStockEventStore.ApplyProductReplacementAsync` stages exactly that, in this
+order:
+
+| Choice | Movements written |
+| --- | --- |
+| Incoming quantity > 0 | one `MachineRefill` with a **negative** storage change, `StockAdjustmentSource.Nayax`, the event's own `EventLogID` in its note, and the event's `EventDateTimeGMT` as its `MachineLedgerEffectiveAt` - written exactly as a Sync Restock refill is, under the same insufficient-storage rule and the same costing rebuild |
+| Incoming quantity 0 | no incoming movement at all |
+| `None` | nothing for the outgoing product |
+| `ReturnedToStorage` | one `MachineRefill` with a **positive** storage change: the return of those units to storage, costing-neutral |
+| `Damaged` / `Expired` | that same return, and then one `Damaged` / `Expired` adjustment of **−N** for the same product |
+
+So a disposal leaves storage **unchanged**, machine stock lower by N, and the loss costed once by
+the existing cost replay. A replacement that loaded nothing and recorded nothing for the outgoing
+units writes no movement at all and is still settled, so it leaves the working list.
+
+**Why a plain storage write-off is not used for machine units.** `Damaged` and `Expired` remove
+units from **storage**, and the units a replacement takes out of a slot are in the **machine**.
+Writing one off on its own would take units out of a storeroom that never held them - making
+physical storage stock wrong, and refused outright by the negative-stock guard once the storeroom is
+empty of that product - while leaving the machine's own ledger still expecting them. Returning them
+first is what makes both ledgers true at once, and it is also why the return comes first in the
+order above and in the cost replay (`MachineRefill` already replays before an "other" adjustment at
+the same instant). **No adjustment reason is added and no existing reason changes meaning**: the
+three movements use `MachineRefill` in both directions and the two write-off reasons that already
+exist.
+
+**Storage is checked on the incoming side only.** The loaded quantity must be available in storage,
+refused with `InsufficientStock` and the quantity/available pair exactly as a refill is. The
+outgoing quantity never needs storage to hold it first, because the return puts those units in and
+the write-off takes the same number straight back out - so a replacement may legitimately write off
+more units than the storeroom holds, and the business's **costing** inventory is what bounds it,
+since every unit in the machine is still counted there.
+
+**Both products must be active products of the current business.** The apply reads each one through
+`IMachineStockEventStore.FindActiveStorageProductAsync` - the ordinary tenant-filtered read, plus
+`IsActive` - **inside** its write transaction, and a retired product, another business's product and
+a product that no longer exists are refused by the same single sentence, deliberately: saying which
+of the three it is would say whether an id another business owns exists. It is a separate port
+method from `FindStorageProductAsync`, which the ordinary apply uses on a product the *import*
+matched; that match may legitimately name a product the operator has since retired, and holding it
+to the stricter rule would change the 501 apply's behaviour.
+
+**One event, one transaction, the shape every other write path here already uses.** The transaction
+is the same `BEGIN IMMEDIATE` `IMachineStockEventStore.BeginRefillWriteTransactionAsync` lock an
+apply batch and both duplicate resolutions take, and the event's own status and the incoming
+product's storage quantity are read **inside** it, because both decide a write. The three movements,
+the event's applied state and the choice it was applied with are one unit of work, and each product
+whose stock actually moved is rebuilt **once** (the two sides may legitimately be the same product,
+which is then rebuilt once). A validation refusal, a movement that cannot be recorded, a fatal
+costing data-quality refusal and a commit the database refuses all leave the event **pending** with
+no movement, because the transaction's disposal discards everything staged; each failure leaves one
+`IMachineStockSyncLog` warning and the established
+`Failed to apply this event; no inventory movement was recorded.` sentence, with the cost
+data-quality message appended for that one failure, exactly as a refill's failure is reported
+(issue #1240). Two simultaneous applies of one event serialise: the loser waits, re-reads the
+winner's committed state and reports the established `Already applied.` with the movement that
+apply recorded, having written nothing - and so does a straightforward repeat, whatever quantities
+it carries.
+
+**What the event records, for history.** Seven additive, nullable columns on
+`NayaxMachineStockEvents` (migration `AddNayaxMachineStockEventAppliedReplacement`):
+`ReplacementIncomingProductId`/`ReplacementIncomingQuantity`, `ReplacementOutgoingDisposition`,
+`ReplacementOutgoingProductId`/`ReplacementOutgoingQuantity`, and
+`ReplacementOutgoingReturnStockAdjustmentId`/`ReplacementOutgoingWriteOffStockAdjustmentId`. The
+existing `StockAdjustmentId` keeps its meaning and holds the **incoming** refill, so it is `NULL`
+for a replacement that loaded nothing. They are plain columns with no foreign key, like
+`StockAdjustmentId` itself: they record a decision rather than being a key anything joins on, the
+products are validated inside the write transaction as described above, and a constraint would make
+SQLite rebuild the whole imported-event table for an audit column. There is no backfill, and every
+pre-existing row keeps exactly the meaning it had.
+
+**An applied replacement never changes a slot's product link.** `MatchStatus`/`MatchedProductId` are
+left exactly as the import left them, the use case holds no Nayax client and no product-link port at
+all - so applying one, including an old one, makes no Nayax call - and `Product.ExternalProductId`
+is untouched. Which product an MDB position holds keeps being read live from Nayax, which is why
+the replacement's suggestions were advice in #1325 and why its record of what was applied is not a
+stored match either. The consequence for every other reader is the one #1325 already describes: an
+applied replacement has no `MatchedProductId`, so it adds no Stock History *presence* for a product,
+while the movements it wrote are ordinary `StockAdjustmentSource.Nayax` movements that appear in
+Stock History and the machine-stock ledger like any other. It becomes `Applied`, so the pending
+counts and the #1018 coverage fence stop counting it.
+
+**API.** `MachinesController.ApplySyncRestockReplacement` is the fifth equally thin Sync Restock
+binding. It answers `200` with the established `NayaxStockEventApplyResultDto` for an applied (or
+replayed) event and for an outcome of the attempt - `InsufficientStock`, or the `Error` of a failed
+write; `400` for a `NotApplicable` refusal about the request itself, which is a quantity that is not
+a count, a product that is not an active product of this business, or an event that is a 501 rather
+than a replacement; and the established `409` `ResolutionConflict` for an event already reconciled
+as recorded manually, because the operator decided that replacement needs no movement at all. It
+keeps `MachinesController`'s `Inventory.Operate` capability and declares no plan requirement, since
+it writes local movements and makes no Nayax call.
+
+#### Reviewing and applying a product replacement in the dialog (issue #1327)
+
+Issue #1326 gave a confirmed replacement one API endpoint and no screen; this issue is the screen -
+the frontend-only `MachineRestockSyncComponent` row that collects the operator's confirmation and
+calls it. **No backend changes** - the policy, the endpoint and the written movements are exactly
+#1326's.
+
+- **Both Nayax names, each with its own autocomplete.** The row shows the outgoing and incoming
+  names exactly as Nayax reported them, and beside each one the same searchable product combobox
+  used elsewhere in the application (`PurchaseProductPickerComponent`, issue #1029) - current
+  business, active products only (`ProductService.getAll()`, reloaded whenever the dialog opens).
+  Each box is prefilled with #1325's suggestion for that side when there is one
+  (`suggestedIncomingProductId`/`suggestedOutgoingProductId`) and starts empty, with the
+  suggestion's own reason shown, when there is none.
+- **Quantity restocked**, a whole-number input beside the incoming product, prefilled with #1325's
+  suggested quantity or left blank with its reason shown. A fixed hint - *"May be low if the machine
+  has sold some since the replacement"* - is shown instead whenever the field holds a value, because
+  that suggestion is PAR-derived and can read low by what sold since the replacement (see
+  [Product replacements](#product-replacements-event-510-issue-1325) above). The row also shows the
+  chosen incoming product's storage quantity and, once the entered amount would exceed it, the same
+  *"Insufficient storage: needs N, has M (short D)"* wording the ordinary 501 row already uses - a
+  client-side preview of `NayaxProductReplacementWritePolicy`'s own rule, never its authority.
+- **Quantity removed and What happened, beside the outgoing product.** A dropdown of `None`
+  (default), `Returned to storage`, `Damaged` and `Expired` - the same four choices
+  `NayaxReplacementOutgoingDisposition` names - and a whole-number quantity input that is disabled,
+  and cleared, whenever `None` is selected, mirroring the policy's own "absent for `None`" rule.
+- **The possible-double-count flag from #1325 stays on the row**, unchanged by this issue.
+- **Apply replacement is enabled only once the draft could actually be sent**: an incoming product
+  is chosen, the incoming quantity is a whole number, and - only when the outgoing disposition is
+  not `None` - an outgoing product is chosen and the outgoing quantity is a whole number of at least
+  one. This mirrors `NayaxProductReplacementWritePolicy.Refusal` client-side so the button is
+  disabled before a request is even built; the backend remains the sole authority once one is sent.
+  Clicking it opens the application's existing `ConfirmationDialogComponent` with a one- or
+  two-sentence summary of exactly what will be written (for example *"Record 7 unit(s) of Red Bull
+  Red Edition 250mL loaded into the machine. 4 unit(s) of V Energy 250ML will be returned to
+  storage."*), confirming calls
+  `POST /api/machines/{id}/sync-restock/apply-replacement` with that draft, and the dialog re-syncs
+  afterwards exactly as every other apply does - so an applied replacement drops out of the working
+  list. A refusal - `InsufficientStock`, the `Error` of a failed write, or the request-shaped `400` -
+  is shown on the row itself, in the server's own words, and the Sync Restock dialog stays open so
+  the operator can correct it and try again.
+- **Already recorded manually stays available** beside this new action, exactly as #1325 left it:
+  a replacement the operator already entered by hand still needs no movement.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 
@@ -19085,7 +19678,7 @@ no persistence port, no costing service and no stock writer, so it cannot import
 storage, recost inventory or apply a stock event — the things `SyncLatestNayaxSales` does with the
 very same adapter call. The machine is identified by the same `MachineID` every other
 `api/machines/{id}` endpoint uses today and is passed straight through; [issue
-#741](#provider-identity-on-the-local-row-issues-732-759-and-735) repoints all of them together, and
+#741](#provider-identity-on-the-local-row-issues-732-759-760-and-735) repoints all of them together, and
 until it does, this endpoint cannot drift onto a different machine from `GET api/machines/{id}`.
 
 **The verified contract.** `GET /v1/machines/{MachineID}/lastSales` ("Get Last Sales for Machine by
@@ -19154,7 +19747,7 @@ stable code, because each is a state of this business rather than a failure of t
 | `NayaxPermissionNotGrantedException` | `PermissionNotGranted` | Usable credentials, and Nayax refused this read with `403`. One feature's answer: nothing here writes a connection status. |
 
 The last two codes are spelled exactly as the [reorder and
-dashboard](#provider-optional-reorder-and-dashboard-summary) and site-commission surfaces spell the
+dashboard](#provider-optional-reorder-and-dashboard-summary-issue-726) and site-commission surfaces spell the
 same two answers, so a client meets one vocabulary. Everything else **propagates**: a transport
 failure, a cancellation and the support-session refusal
 (`SupportSessionNayaxUnavailableException` → `403 unavailable_in_support_view`, issue #551) are
@@ -19664,7 +20257,7 @@ this application or this repository, and this table has no column for one.
 **The screen.** Super Admin → Businesses offers **Nayax SQS sender** on an `Active` business's row,
 which opens `BusinessNayaxSqsSenderCardComponent` — its own load, field, revision, remove confirmation
 and error, composed through `[businessId]`/`[businessName]` per
-[Page composition boundary](#page-composition-boundary). The card shows the recorded sender id (or
+[Page composition boundary](#page-composition-boundary-issue-191). The card shows the recorded sender id (or
 "None"), On/Off, and the last message received in **Sydney time** (or "Never") — and, since issue
 #1106, that business's last successful reconciliation and the reader's own last successful poll,
 consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can

@@ -205,6 +205,68 @@ public class EfPlatformPlanGrantStoreTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The beta grant of issue #1258 is written through this same adapter, with its own source, and is
+    /// then administered here like any other: it reads back with that source, and a decision over it
+    /// updates the one row rather than creating a second.
+    /// </summary>
+    [Fact]
+    public async Task A_beta_grant_is_written_with_its_source_and_administered_like_any_other()
+    {
+        await WriteAsync(Write(FirstBusinessId, SubscriptionPlan.Pro, ManualPlanGrantSource.Beta));
+
+        await using (var db = TestAppDbContext.Denied(_options))
+        {
+            var target = await new EfPlatformPlanGrantStore(db)
+                .FindAsync(FirstBusinessId, CancellationToken.None);
+
+            var read = Assert.Single(target!.Grants);
+            Assert.Equal(SubscriptionPlan.Pro, read.Plan);
+            Assert.Equal(ManualPlanGrantSource.Beta, read.Source);
+            Assert.Null(read.Period.EndsAtUtc);
+            Assert.Equal(1, read.Revision);
+        }
+
+        // A Super Admin ending it: the one row is updated, and its source is not relabelled by the
+        // decision that ended it.
+        await WriteAsync(Write(FirstBusinessId, SubscriptionPlan.Pro) with
+        {
+            EndsAtUtc = Now.AddDays(1),
+            Revision = 2,
+            Change = PlatformPlanGrantChange.Ended,
+            FromPlan = SubscriptionPlan.Pro,
+            AuditReason = "Beta over for this business",
+        });
+
+        await using var reader = TestAppDbContext.Unrestricted(_options);
+
+        var grant = await reader.BusinessPlanGrants.AsNoTracking().SingleAsync();
+        Assert.Equal(ManualPlanGrantSource.Beta, grant.Source);
+        Assert.Equal(Now.AddDays(1), grant.EndsAtUtc);
+        Assert.Equal(2, grant.Revision);
+
+        var trail = await reader.BusinessPlanGrantAudits.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+        Assert.Equal(2, trail.Count);
+        Assert.Equal(PlatformPlanGrantChange.Ended, trail[1].Change);
+        Assert.Null(trail[1].ToPlan);
+    }
+
+    /// <summary>
+    /// The grandfathered grant is still invisible with the beta source declared beside it: widening
+    /// what this surface administers added exactly one source and not the step's own row.
+    /// </summary>
+    [Fact]
+    public async Task A_beta_grant_is_read_while_the_grandfathered_one_stays_invisible()
+    {
+        await SeedGrantAsync(FirstBusinessId, SubscriptionPlan.Starter, ManualPlanGrantSource.Grandfathered);
+        await WriteAsync(Write(FirstBusinessId, SubscriptionPlan.Pro, ManualPlanGrantSource.Beta));
+
+        await using var db = TestAppDbContext.Denied(_options);
+        var target = await new EfPlatformPlanGrantStore(db).FindAsync(FirstBusinessId, CancellationToken.None);
+
+        Assert.Equal(ManualPlanGrantSource.Beta, Assert.Single(target!.Grants).Source);
+    }
+
+    /// <summary>
     /// The two-business criterion: a decision about one business leaves the other's grant exactly as
     /// it was, and reading one never returns the other's.
     /// </summary>
@@ -386,13 +448,17 @@ public class EfPlatformPlanGrantStoreTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    private static PlatformPlanGrantWrite Write(int businessId, SubscriptionPlan plan)
+    private static PlatformPlanGrantWrite Write(
+        int businessId,
+        SubscriptionPlan plan,
+        ManualPlanGrantSource source = ManualPlanGrantSource.Complimentary)
     {
         Assert.True(ActorIdentity.TryCreate(DirectoryTenantId, AdministratorObjectId, out var actor));
 
         return new PlatformPlanGrantWrite(
             businessId,
             plan,
+            source,
             StartsAtUtc: Now,
             EndsAtUtc: null,
             GrantReason: "Complimentary pilot",

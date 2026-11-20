@@ -38,6 +38,11 @@ public interface IPlatformPlanGrantWriteTransaction : IAsyncDisposable
 /// One manual grant as stored, as this surface reads it (issue #982).
 /// </summary>
 /// <param name="Plan">The granted plan, exactly as stored - an undeclared value included.</param>
+/// <param name="Source">
+/// Why the grant exists, exactly as stored: a Super Admin's complimentary decision, or the beta grant
+/// an approval wrote (issue #1258). It is reported so the plan view can say which, and so ending a
+/// grant keeps the source it was created with rather than relabelling it.
+/// </param>
 /// <param name="Period">When it applies, half-open and in UTC (issue #966).</param>
 /// <param name="Reason">Why it was granted, as the administrator typed it.</param>
 /// <param name="Revision">
@@ -48,6 +53,7 @@ public interface IPlatformPlanGrantWriteTransaction : IAsyncDisposable
 /// <param name="GrantedAtUtc">When the grant was last written, from the application clock.</param>
 public sealed record PlatformPlanGrantState(
     SubscriptionPlan Plan,
+    ManualPlanGrantSource Source,
     EntitlementPeriod Period,
     string? Reason,
     int Revision,
@@ -64,10 +70,11 @@ public sealed record PlatformPlanGrantState(
 /// <param name="BusinessId">The key of the business row that was found.</param>
 /// <param name="Name">Its display name, so an answer needs no second read.</param>
 /// <param name="Grants">
-/// Every <em>complimentary</em> grant the business holds - never the grandfathered one, which this
-/// surface does not read, change or end. It is a list rather than one row because the schema of
-/// issue #966 permits several, and the Application layer refuses to decide between two rather than
-/// an adapter silently choosing one.
+/// Every grant the business holds that this surface <em>administers</em>: the complimentary ones of
+/// issue #982 and the beta grant of issue #1258 - never the grandfathered one, which this surface
+/// does not read, change or end. It is a list rather than one row because the schema of issue #966
+/// permits several, and the Application layer refuses to decide between two rather than an adapter
+/// silently choosing one.
 /// </param>
 public sealed record PlatformPlanGrantTarget(
     int BusinessId,
@@ -85,6 +92,12 @@ public sealed record PlatformPlanGrantTarget(
 /// value directly.
 /// </param>
 /// <param name="Plan">The plan the grant now carries.</param>
+/// <param name="Source">
+/// The source a grant row is <strong>created</strong> with: <c>Complimentary</c> for a Super Admin's
+/// own decision, and <c>Beta</c> for the grant an approval writes (issue #1258). A row that already
+/// exists keeps the source it was created with, so ending or changing a beta grant does not relabel
+/// why the business was given the plan.
+/// </param>
 /// <param name="StartsAtUtc">The instant it applies from, inclusive.</param>
 /// <param name="EndsAtUtc">The instant it stops at, exclusive, or <see langword="null"/> for none.</param>
 /// <param name="GrantReason">
@@ -109,6 +122,7 @@ public sealed record PlatformPlanGrantTarget(
 public sealed record PlatformPlanGrantWrite(
     int BusinessId,
     SubscriptionPlan Plan,
+    ManualPlanGrantSource Source,
     DateTime StartsAtUtc,
     DateTime? EndsAtUtc,
     string GrantReason,
@@ -137,6 +151,14 @@ public sealed record PlatformPlanGrantWrite(
 /// this surface cannot read the subscription to validate a grant and cannot change it, and
 /// <see cref="EffectiveEntitlementPolicy"/> remains the one rule that reads both.</para>
 ///
+/// <para><strong>It has a second caller since issue #1258, and no second method.</strong> The
+/// approval of a business application writes that business's beta Pro grant through
+/// <see cref="SaveAsync"/>, inside the approval's own transaction, for the approved business alone
+/// (<c>BetaProGrantOnApproval</c>). It is the same two tables, the same write, the same lease and the
+/// same audit row; what differs is the <see cref="PlatformPlanGrantWrite.Source"/> the row is created
+/// with and that no person typed the reason. No endpoint and no capability was added for it, and
+/// nothing else on this port moved.</para>
+///
 /// <para><strong>The business is a parameter here, and that is the exception's whole shape.</strong>
 /// Every tenant-owned write in this application is addressed to the business the caller's own
 /// membership resolved; a platform decision has to name the business it is about, so the id travels
@@ -148,8 +170,8 @@ public sealed record PlatformPlanGrantWrite(
 public interface IPlatformPlanGrantStore
 {
     /// <summary>
-    /// The business and its complimentary grants, or <see langword="null"/> when no business row has
-    /// that key.
+    /// The business and the grants this surface administers, or <see langword="null"/> when no
+    /// business row has that key.
     ///
     /// <para>Called twice by a decision: once before the transaction, to answer "no such business"
     /// without taking a write lock on the caller's behalf, and once <em>inside</em> it, which is the
@@ -165,9 +187,10 @@ public interface IPlatformPlanGrantStore
 
     /// <summary>
     /// Writes the grant and its audit row, in one <c>SaveChanges</c> inside the caller's
-    /// transaction. It creates the grant when the business holds none and updates the one it holds
-    /// otherwise; it never deletes a grant, never writes the grandfathered one, and never touches
-    /// any other table.
+    /// transaction. It creates the grant - with <see cref="PlatformPlanGrantWrite.Source"/> - when
+    /// the business holds none and updates the one it holds otherwise, leaving that row's source
+    /// exactly as it was; it never deletes a grant, never writes the grandfathered one, and never
+    /// touches any other table.
     /// </summary>
     Task SaveAsync(PlatformPlanGrantWrite write, CancellationToken cancellationToken);
 }

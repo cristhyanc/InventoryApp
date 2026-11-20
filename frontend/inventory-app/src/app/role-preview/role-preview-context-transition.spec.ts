@@ -41,6 +41,9 @@ const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachine
 const REVIEW_SUMMARY = '/api/nayax-sale-review/summary';
 // The Dashboard's "costs need attention" alert asks for its list as the page renders.
 const COST_ATTENTION = '/api/inventory-cost-attention';
+/** The Dashboard's unimported-Nayax-product alert (issue #1352), answered as nothing to import. */
+const UNIMPORTED_PRODUCTS = '/api/catalogue-review/attention';
+const NOTHING_TO_IMPORT = { unimportedProductCount: 0, examples: [] };
 const NOTHING_TO_REVIEW = { needsReviewCount: 0, notCountedCount: 0 };
 
 /** One answer's Dashboard, as the figures a test can recognise on screen. */
@@ -285,7 +288,14 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
   const answered: TestRequest[] = [];
   const answer = (
     url: string,
-    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | typeof NOTHING_TO_REVIEW | null
+    body:
+      | Machine[]
+      | Site[]
+      | DashboardSummary
+      | typeof HIDDEN_REMINDER
+      | typeof NOTHING_TO_REVIEW
+      | typeof NOTHING_TO_IMPORT
+      | null
   ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
       answered.push(request);
@@ -300,6 +310,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
   answer(REMINDER, HIDDEN_REMINDER);
   answer(REVIEW_SUMMARY, NOTHING_TO_REVIEW);
   answer(COST_ATTENTION, []);
+  answer(UNIMPORTED_PRODUCTS, NOTHING_TO_IMPORT);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);

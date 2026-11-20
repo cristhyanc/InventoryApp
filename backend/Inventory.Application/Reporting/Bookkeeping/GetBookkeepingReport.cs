@@ -61,35 +61,16 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
         // feature, but a deterministic rule over already-aggregated facts, so this report reuses it
         // rather than writing a second tolerance or status rule. The dependency direction is
         // unchanged: the dashboard composes this report, and this report does not know it exists.
+        //
+        // Since issue #1253 only a payout whose own period lies wholly inside the requested range
+        // is an actual reimbursement for it, so the actual is absent rather than zero for a range
+        // that merely cuts a payout period - and the policy then reports what happened instead of a
+        // difference nobody can act on.
         var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
             CardSales: facts.CardSales,
             FeesIncludingGst: facts.ProcessingFees.TotalFeeIncGst,
-            ActualReimbursement: facts.ImportedNetSettlement,
-            ImportedContainsRows: facts.ImportedContainsRows));
-
-        var qualityNotes = new List<string>();
-        if (facts.MissingStatusTransactionCount > 0)
-            qualityNotes.Add($"{facts.MissingStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
-        if (facts.UnknownStatusTransactionCount > 0)
-            qualityNotes.Add($"{facts.UnknownStatusTransactionCount} Nayax transaction(s) have an unrecognised status ID and are excluded from completed sales.");
-        if (facts.ExcludedByReviewTransactionCount > 0)
-            qualityNotes.Add($"{facts.ExcludedByReviewTransactionCount} Nayax sale(s) contradicted by Nayax or excluded by the owner are not counted in completed sales.");
-        if (facts.UnknownTransactions > 0)
-            qualityNotes.Add("One or more transactions have an unknown payment method.");
-        if (isMachineFiltered && !facts.ImportedMachineFilterMatched)
-            qualityNotes.Add("No reimbursement device row matched the selected machine ID.");
-        if (facts.ImportedFeesMachineFilterLimited)
-            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
-        if (facts.ProcessingFees.HasMissingRates)
-            qualityNotes.Add($"{facts.ProcessingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is unavailable.");
-        if (!facts.IsCogsComplete)
-            qualityNotes.Add(string.Create(CultureInfo.InvariantCulture,
-                $"{facts.UncostedTransactionCount} completed sale(s) totalling {facts.UncostedSalesAmount:0.00} have no persisted COGS; profit is incomplete."));
-        if (isMachineFiltered)
-            qualityNotes.Add("Net profit is unavailable for a machine-filtered report because shared business overhead is not allocated to individual machines.");
-        if (!facts.CommissionIsComplete)
-            qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
-        qualityNotes.AddRange(facts.CommissionWarnings);
+            ActualReimbursement: facts.ImportedHasNetSettlement ? facts.ImportedNetSettlement : null,
+            HasPartlyCoveredPayout: facts.ImportedPartlyCoveredPeriods.Count > 0));
 
         // How well recorded provider coverage accounts for this period (issue #730). The two
         // families are decided separately, from the sources that actually feed them: sale instants
@@ -102,8 +83,7 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
         // the figures were never measured over is what this carrier exists to prevent, and it is how
         // the daily, reconciliation and profitability reports already decide these states.
         var availability = facts.Coverage.Availability();
-        ReportAvailabilityNotes.Add(qualityNotes, availability.Sales, SalesFigures, ReportAvailabilityNotes.NoSalesData);
-        ReportAvailabilityNotes.Add(qualityNotes, availability.Fees, FeeFigures, ReportAvailabilityNotes.NoSettlementData);
+        var qualityNotes = QualityNotes(facts, isMachineFiltered, availability);
 
         // Conditional, scope-derived diagnostics (issue #476): every note above comes from a fact in
         // the requested business, date range and machine scope, and the calculation methodology this
@@ -153,6 +133,15 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             IsReconciled = reimbursement.IsReconciled,
             ReconciliationStatus = reimbursement.Status,
             ReconciliationTolerance = DashboardReimbursementPolicy.Tolerance,
+            // What the actual reimbursement is made of, and what the range cut (issue #1253). The
+            // periods are published rather than described so the presentation can label the figure
+            // with the dates it settles, and the partly covered payouts are listed beside it
+            // without being part of any total here.
+            ReimbursementPeriods = facts.ImportedFullyCoveredPeriods,
+            PartlyCoveredReimbursements = facts.ImportedPartlyCoveredPeriods,
+            // Whether the net settlement above is this report's own estimate - card sales less fees -
+            // because no payout covering these dates in full recorded one.
+            IsNetSettlementEstimated = profit.IsNetSettlementEstimated,
             PartialCostOfGoods = facts.PartialCostOfGoods,
             IsCogsComplete = facts.IsCogsComplete,
             UncostedTransactionCount = facts.UncostedTransactionCount,
@@ -165,6 +154,45 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             NayaxProcessingFees = facts.ProcessingFees,
             ProviderAvailability = availability
         };
+    }
+
+    /// <summary>
+    /// This period's data-quality notes, in the order the report publishes them: the scope-derived
+    /// diagnostics first, then the commission warnings the facts carry, and the two
+    /// provider-availability notes last. It decides nothing - every note restates a fact the
+    /// provider measured for the requested scope - and it is a method of its own so
+    /// <see cref="Handle"/> reads as the sequence of decisions the use case makes.
+    /// </summary>
+    private static List<string> QualityNotes(
+        BookkeepingReportFacts facts, bool isMachineFiltered, ReportProviderAvailabilityDto availability)
+    {
+        var qualityNotes = new List<string>();
+        if (facts.MissingStatusTransactionCount > 0)
+            qualityNotes.Add($"{facts.MissingStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
+        if (facts.UnknownStatusTransactionCount > 0)
+            qualityNotes.Add($"{facts.UnknownStatusTransactionCount} Nayax transaction(s) have an unrecognised status ID and are excluded from completed sales.");
+        if (facts.ExcludedByReviewTransactionCount > 0)
+            qualityNotes.Add($"{facts.ExcludedByReviewTransactionCount} Nayax sale(s) contradicted by Nayax or excluded by the owner are not counted in completed sales.");
+        if (facts.UnknownTransactions > 0)
+            qualityNotes.Add("One or more transactions have an unknown payment method.");
+        if (isMachineFiltered && !facts.ImportedMachineFilterMatched)
+            qualityNotes.Add("No reimbursement device row matched the selected machine ID.");
+        if (facts.ImportedFeesMachineFilterLimited)
+            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
+        if (facts.ProcessingFees.HasMissingRates)
+            qualityNotes.Add($"{facts.ProcessingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is unavailable.");
+        if (!facts.IsCogsComplete)
+            qualityNotes.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{facts.UncostedTransactionCount} completed sale(s) totalling {facts.UncostedSalesAmount:0.00} have no persisted COGS; profit is incomplete."));
+        if (isMachineFiltered)
+            qualityNotes.Add("Net profit is unavailable for a machine-filtered report because shared business overhead is not allocated to individual machines.");
+        if (!facts.CommissionIsComplete)
+            qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
+        qualityNotes.AddRange(facts.CommissionWarnings);
+
+        ReportAvailabilityNotes.Add(qualityNotes, availability.Sales, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+        ReportAvailabilityNotes.Add(qualityNotes, availability.Fees, FeeFigures, ReportAvailabilityNotes.NoSettlementData);
+        return qualityNotes;
     }
 
     /// <summary>

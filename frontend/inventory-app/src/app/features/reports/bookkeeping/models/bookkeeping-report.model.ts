@@ -1,5 +1,16 @@
 import { NayaxProcessingFeeResult, ReportProviderAvailability, ReportQuality } from '../../shared/models/reporting.models';
 
+/**
+ * One imported Nayax payout as the sales period it settles and the net total recorded for it
+ * (issue #1253). The dates are the settlement's own declared period - never its payout, bank or
+ * import date - and `total` is `null` when the import recorded none, which is not a payout of zero.
+ */
+export interface ImportedReimbursementPeriod {
+  periodStart: string;
+  periodEnd: string;
+  total?: number | null;
+}
+
 export interface BookkeepingReport {
   from: string; to: string; financialYear: string; sales: number; costOfGoods?: number | null;
   partialCostOfGoods?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number; uncostedSalesAmount?: number;
@@ -30,15 +41,27 @@ export interface BookkeepingReport {
   /**
    * The expected-versus-actual Nayax reimbursement comparison (issue #805).
    * `expectedReimbursement` is calculated from this period's card sales less the Nayax fees
-   * including GST; `actualReimbursement` is what the settlement import recorded for the period, and
-   * it is a measured zero only while `providerAvailability.fees` is `Complete` and
-   * `reconciliationStatus` is not `Pending` - `Pending` means no imported row covers the period at
-   * all. `reimbursementDifference` is actual less expected, signed. None of them is `netSettlement`,
+   * including GST; `actualReimbursement` is what the settlement import recorded for the period -
+   * counting only the payouts whose own settlement period lies *wholly inside* the requested range
+   * (issue #1253). It is `null` ("Not available") when the range has no such payout, and never a
+   * zero for that reason: a settlement that really paid nothing is a measured zero while
+   * `providerAvailability.fees` is `Complete`. `reimbursementDifference` is actual less expected,
+   * signed, and is `null` whenever there is no actual to compare. None of them is `netSettlement`,
    * which keeps its own established meaning. Optional because an older API response does not carry
    * them.
    */
-  expectedReimbursement?: number; actualReimbursement?: number; reimbursementDifference?: number;
+  expectedReimbursement?: number; actualReimbursement?: number | null; reimbursementDifference?: number | null;
   isReconciled?: boolean; reconciliationStatus?: string; reconciliationTolerance?: number;
+  /**
+   * The payouts `actualReimbursement` is the total of, with the period each settles, and the payouts
+   * the requested range only *partly* overlaps (issue #1253). The partly covered ones are shown on
+   * their own as "Payouts partly outside this range" and are part of no total in this response.
+   * `isNetSettlementEstimated` says whether `netSettlement` is this report's own estimate - card
+   * sales less fees - because no payout covering these dates in full recorded one.
+   */
+  reimbursementPeriods?: ImportedReimbursementPeriod[];
+  partlyCoveredReimbursements?: ImportedReimbursementPeriod[];
+  isNetSettlementEstimated?: boolean;
   // Transaction-status counts for the requested period/machine, scoped by the API before the
   // completed-sale filter excluded them (issue #476). Pending, refunded and cancelled/declined rows
   // are normal Nayax outcomes; only an unrecognised or absent status ID is a data-quality problem,

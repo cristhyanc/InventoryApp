@@ -1,8 +1,11 @@
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.PlatformPlans;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
@@ -35,12 +38,19 @@ public class BusinessApplicationDecisionTests
     private readonly FakeBusinessMembershipWriteStore _writeStore = new();
     private readonly FakePlatformBusinessDecisionAudit _audit = new();
     private readonly FakeBusinessSupplierProvisioningStore _provisioning = new();
+    private readonly FakePlatformPlanGrantStore _grants =
+        FakePlatformPlanGrantStore.WithBusiness(PendingBusinessId, "Coastal Vending");
+
+    private readonly FakePlatformPlanGrantAudit _grantAudit = new();
 
     public BusinessApplicationDecisionTests()
     {
         // So the copy of issue #849 appears in the write store's order of operations, which is where
         // "inside the transaction, before the commit" is asserted.
         _provisioning.Recorder = _writeStore.Record;
+
+        // And the beta grant of issue #1258 beside it, in the same order, for the same reason.
+        _grants.Recorder = _writeStore.Record;
     }
 
     #region Approving
@@ -276,6 +286,164 @@ public class BusinessApplicationDecisionTests
 
     #endregion
 
+    #region The beta Pro grant (issue #1258)
+
+    /// <summary>
+    /// The criterion: while the setting is on, an approval writes exactly one open-ended Pro grant
+    /// for the business it approved, with the beta source and the fixed reason, inside the write
+    /// transaction and before the commit - and the business id is the one the transaction read
+    /// rather than the route value.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_grants_open_ended_beta_pro_inside_the_transaction_before_committing()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        await Approve(FakeBetaProGrantOnApprovalFlag.On()).Handle(PendingBusinessId, CancellationToken.None);
+
+        var write = Assert.Single(_grants.Writes);
+        Assert.Equal(PendingBusinessId, write.BusinessId);
+        Assert.Equal(SubscriptionPlan.Pro, write.Plan);
+        Assert.Equal(ManualPlanGrantSource.Beta, write.Source);
+        Assert.Equal(DecidedAt, write.StartsAtUtc);
+        Assert.Null(write.EndsAtUtc);
+        Assert.Equal(BetaProGrantPolicy.GrantReason, write.GrantReason);
+        Assert.Equal(BetaProGrantPolicy.GrantReason, write.AuditReason);
+        Assert.Equal(PlatformPlanGrantChange.Created, write.Change);
+        Assert.Null(write.FromPlan);
+        Assert.Equal(1, write.Revision);
+
+        // The approving administrator is the actor on the audit row this write produces.
+        Assert.Equal(AdministratorObjectId, write.Actor.ObjectId);
+        Assert.Equal(DirectoryTenantId, write.Actor.DirectoryTenantId);
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.IdentityRead,
+                FakeBusinessSupplierProvisioningStore.Copy,
+                FakePlatformPlanGrantStore.Save,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            _writeStore.Operations);
+    }
+
+    /// <summary>
+    /// The grant's one log event follows the commit, as every platform-admin action's does, and
+    /// reports the transition the audit row recorded. It carries no reason text and no name of any
+    /// kind, which <see cref="PlatformPlanGrantAuditEntry"/> makes structurally true.
+    /// </summary>
+    [Fact]
+    public async Task A_committed_beta_grant_is_logged_once_with_the_approving_administrator()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        await Approve(FakeBetaProGrantOnApprovalFlag.On()).Handle(PendingBusinessId, CancellationToken.None);
+
+        var entry = Assert.Single(_grantAudit.Entries);
+        Assert.Equal(DirectoryTenantId, entry.ActorDirectoryTenantId);
+        Assert.Equal(AdministratorObjectId, entry.ActorObjectId);
+        Assert.Equal(PendingBusinessId, entry.BusinessId);
+        Assert.Equal(PlatformPlanGrantChange.Created, entry.Change);
+        Assert.Null(entry.FromPlan);
+        Assert.Equal(SubscriptionPlan.Pro, entry.ToPlan);
+        Assert.Null(entry.EndsAtUtc);
+        Assert.Equal(1, entry.Revision);
+        Assert.Equal(DecidedAt, entry.OccurredAtUtc);
+    }
+
+    /// <summary>
+    /// The shipped state: with the setting off an approval reads nothing about the business's plan
+    /// and writes no grant, so it behaves exactly as it did before this rule existed.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_grants_nothing_while_the_setting_is_off()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        var decision = await Approve().Handle(PendingBusinessId, CancellationToken.None);
+
+        Assert.Equal(BusinessStatus.Active, decision!.Status);
+        Assert.Empty(_grants.Writes);
+        Assert.Empty(_grantAudit.Entries);
+        Assert.Equal(0, _grants.Reads);
+    }
+
+    /// <summary>
+    /// A business that already holds a manual grant is left exactly as it is: no second grant is
+    /// written, and the one it holds keeps its plan, its period and its revision. Approving must
+    /// never overwrite a decision a Super Admin made.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_writes_no_second_grant_for_a_business_that_already_holds_one()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        var held = new PlatformPlanGrantState(
+            SubscriptionPlan.Starter,
+            ManualPlanGrantSource.Complimentary,
+            new EntitlementPeriod(DecidedAt.AddDays(-5), DecidedAt.AddDays(30)),
+            "Pilot site",
+            Revision: 3,
+            DecidedAt.AddDays(-5));
+        _grants.Holding(PendingBusinessId, held);
+
+        var decision = await Approve(FakeBetaProGrantOnApprovalFlag.On())
+            .Handle(PendingBusinessId, CancellationToken.None);
+
+        Assert.Equal(BusinessStatus.Active, decision!.Status);
+        Assert.Empty(_grants.Writes);
+        Assert.Empty(_grantAudit.Entries);
+        Assert.Equal(held, Assert.Single(_grants.GrantsOf(PendingBusinessId)));
+    }
+
+    /// <summary>
+    /// A rejection grants nothing even while the setting is on: there is no business to put on a
+    /// plan, and a refused applicant must not leave an entitlement behind.
+    /// </summary>
+    [Fact]
+    public async Task A_rejection_grants_nothing_while_the_setting_is_on()
+    {
+        GivenPendingApplication();
+
+        await Reject(FakeBetaProGrantOnApprovalFlag.On())
+            .Handle(PendingBusinessId, "Not enough detail.", CancellationToken.None);
+
+        Assert.Empty(_grants.Writes);
+        Assert.Empty(_grantAudit.Entries);
+        Assert.Equal(0, _grants.Reads);
+    }
+
+    /// <summary>
+    /// All or nothing, the other way round from the supplier copy: a grant that fails takes the
+    /// approval with it. Nothing is committed and neither audit trail records anything, so the
+    /// application is still waiting for a decision rather than trading without the Pro access it was
+    /// publicly promised.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_beta_grant_refuses_the_approval_and_audits_nothing()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+        _grants.FailWith = new InvalidOperationException("The beta grant write failed.");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Approve(FakeBetaProGrantOnApprovalFlag.On()).Handle(PendingBusinessId, CancellationToken.None));
+
+        Assert.Equal("The beta grant write failed.", failure.Message);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, _writeStore.Operations);
+        Assert.Contains(FakeBusinessMembershipWriteStore.Dispose, _writeStore.Operations);
+        Assert.Empty(_audit.Entries);
+        Assert.Empty(_grantAudit.Entries);
+    }
+
+    #endregion
+
     #region Refusing
 
     /// <summary>
@@ -491,6 +659,7 @@ public class BusinessApplicationDecisionTests
             FakeAuthenticatedActorAccessor.NotAuthenticated(),
             _store,
             _provisioning,
+            new BetaProGrantOnApproval(FakeBetaProGrantOnApprovalFlag.On(), _grants, _grantAudit),
             new MembershipWriteGuard(_writeStore),
             _audit,
             new FakeClock(DecidedAt));
@@ -500,6 +669,11 @@ public class BusinessApplicationDecisionTests
 
         Assert.Empty(_store.Operations);
         Assert.Empty(_audit.Entries);
+
+        // And no grant either, with the beta setting on: the actor is read before anything else, so
+        // a grant can never be committed for a request whose audit trail could not name who made it.
+        Assert.Empty(_grants.Writes);
+        Assert.Empty(_grantAudit.Entries);
     }
 
     #endregion
@@ -564,15 +738,25 @@ public class BusinessApplicationDecisionTests
         return identity!;
     }
 
-    private ApproveBusinessApplication Approve() => new(Writer());
+    /// <summary>
+    /// The approval, with the beta grant setting <em>off</em> unless a test says otherwise - which is
+    /// the shipped state and what every test written before issue #1258 is about.
+    /// </summary>
+    private ApproveBusinessApplication Approve(FakeBetaProGrantOnApprovalFlag? betaGrant = null) =>
+        new(Writer(betaGrant));
 
-    private RejectBusinessApplication Reject() => new(Writer());
+    private RejectBusinessApplication Reject(FakeBetaProGrantOnApprovalFlag? betaGrant = null) =>
+        new(Writer(betaGrant));
 
-    private BusinessApplicationDecisionWriter Writer() =>
+    private BusinessApplicationDecisionWriter Writer(FakeBetaProGrantOnApprovalFlag? betaGrant = null) =>
         new(
             FakeAuthenticatedActorAccessor.Identified(Administrator()),
             _store,
             _provisioning,
+            new BetaProGrantOnApproval(
+                betaGrant ?? FakeBetaProGrantOnApprovalFlag.Off(),
+                _grants,
+                _grantAudit),
             new MembershipWriteGuard(_writeStore),
             _audit,
             new FakeClock(DecidedAt));

@@ -40,6 +40,7 @@ public class MachinesController : ControllerBase
     private readonly GetMachineLatestSales _getMachineLatestSales;
     private readonly SyncMachineStockFromNayax _syncMachineStock;
     private readonly ApplyMachineStockSync _applyMachineStockSync;
+    private readonly ApplyMachineStockProductReplacement _applyMachineStockProductReplacement;
     private readonly ResolveMachineStockDuplicate _resolveMachineStockDuplicate;
     private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
     private readonly GetMachineStockReconciliation _getMachineStockReconciliation;
@@ -54,6 +55,7 @@ public class MachinesController : ControllerBase
         GetMachineLatestSales getMachineLatestSales,
         SyncMachineStockFromNayax syncMachineStock,
         ApplyMachineStockSync applyMachineStockSync,
+        ApplyMachineStockProductReplacement applyMachineStockProductReplacement,
         ResolveMachineStockDuplicate resolveMachineStockDuplicate,
         ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded,
         GetMachineStockReconciliation getMachineStockReconciliation,
@@ -67,6 +69,7 @@ public class MachinesController : ControllerBase
         _getMachineLatestSales = getMachineLatestSales;
         _syncMachineStock = syncMachineStock;
         _applyMachineStockSync = applyMachineStockSync;
+        _applyMachineStockProductReplacement = applyMachineStockProductReplacement;
         _resolveMachineStockDuplicate = resolveMachineStockDuplicate;
         _resolveMachineStockEventsAsAlreadyRecorded = resolveMachineStockEventsAsAlreadyRecorded;
         _getMachineStockReconciliation = getMachineStockReconciliation;
@@ -173,6 +176,45 @@ public class MachinesController : ControllerBase
 
         var result = await _applyMachineStockSync.Handle(machine, dto.EventIds, ct);
         return Ok(result);
+    }
+
+    // Applies one Nayax product replacement (Event 510, issue #1326) as the operator confirmed it:
+    // the product loaded into the slot and how many units of it, and what happened to the units
+    // taken out - nothing, returned to storage, or returned and then written off as damaged or
+    // expired. It is a separate action from Apply above because a replacement reports no quantity
+    // and two product names, so the quantities and products are the operator's.
+    //
+    // Everything for the event happens in one write-locked transaction (issue #1326): a validation
+    // refusal or a failed write leaves the event pending with no movement, and a repeated or
+    // concurrent apply of the same event reports the movement the first one recorded without
+    // writing anything again.
+    //
+    // A refusal that is about the request - a quantity that is not a count, a product that is not
+    // an active product of this business, an event that is a stock adjustment rather than a
+    // replacement - is NotApplicable and answered 400, because the dialog has to show it and fix
+    // it. An event already reconciled as recorded manually is the established ResolutionConflict
+    // 409 the duplicate resolutions answer with. Everything else keeps the apply result shape and
+    // its 200, exactly as Apply does: an insufficient-storage refusal and a failed write are
+    // outcomes of the attempt, not malformed requests.
+    [HttpPost("{id:long}/sync-restock/apply-replacement")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<NayaxStockEventApplyResultDto>> ApplySyncRestockReplacement(
+        long id, NayaxApplyProductReplacementRequestDto dto, CancellationToken ct)
+    {
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine?.NayaxMachineId is null) return NotFound();
+
+        var result = await _applyMachineStockProductReplacement.Handle(machine, dto, ct);
+
+        return result.Outcome switch
+        {
+            NayaxStockEventApplyOutcome.ResolutionConflict => Conflict(result),
+            NayaxStockEventApplyOutcome.NotApplicable => BadRequest(result),
+            _ => Ok(result),
+        };
     }
 
     // The explicit resolution for a Nayax event flagged as a possible duplicate of a manual refill

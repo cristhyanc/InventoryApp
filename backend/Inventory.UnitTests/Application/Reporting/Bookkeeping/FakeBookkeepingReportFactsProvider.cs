@@ -45,6 +45,11 @@ public sealed class FakeBookkeepingReportFactsProvider : IBookkeepingReportFacts
         UncostedSalesAmount: 0m,
         ReceiptDeliveryCost: 2m,
         ReceiptPackageCost: 1m,
+        // An imported payout covering these dates in full recorded this net settlement, so the
+        // report has an actual reimbursement to compare (issue #1253). The payout *periods* behind
+        // it are presentation detail and are left empty here: no figure is derived from either list
+        // except whether a partly covered payout exists at all, and the tests about those lists set
+        // them themselves.
         ImportedHasNetSettlement: true,
         ImportedNetSettlement: 74m,
         ImportedContainsRows: true,

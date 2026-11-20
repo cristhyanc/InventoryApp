@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { SupplierOrdersComponent } from './supplier-orders.component';
@@ -161,6 +162,25 @@ describe('SupplierOrdersComponent actions', () => {
     expect(cancel).toHaveBeenCalledWith(7);
     expect(toast.success).toHaveBeenCalledWith('Supplier order cancelled.');
     expect(getActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the server detail through a toast when a 409 refuses the cancellation (issue #1281)', () => {
+    const cancel = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 409, error: 'This order has already been received.' }))
+    );
+    const getActive = jest.fn(() => of([order()]));
+    const supplierOrderService = { getActive, cancel } as unknown as SupplierOrderService;
+    const navigate = jest.fn();
+    const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
+    const supportSession = { active$: of(false) } as unknown as SupportSessionService;
+    const component = new SupplierOrdersComponent(supplierOrderService, { navigate } as unknown as Router, toast as unknown as ToastService, supportSession);
+    component.ngOnInit();
+    getActive.mockClear();
+
+    component.cancelOrder(order({ id: 7 }));
+
+    expect(toast.error).toHaveBeenCalledWith('This order has already been received.');
+    expect(getActive).not.toHaveBeenCalled();
   });
 
   it('shows an error toast when cancellation fails and does not reload', () => {

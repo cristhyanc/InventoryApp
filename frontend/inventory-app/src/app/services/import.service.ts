@@ -30,6 +30,55 @@ export interface NayaxSalesImportResult {
 }
 
 /**
+ * What `POST api/imports/nayax-sales-history` answers with (issue #1304): the id of the job the
+ * accepted upload became, and nothing else. The upload has imported nothing yet; the job list below
+ * is what the page follows it with.
+ */
+export interface NayaxSalesHistoryUploadAccepted {
+  jobId: number;
+}
+
+/**
+ * Where one sales history import job has got to, mirroring
+ * `Inventory.Domain.Imports.NayaxSalesHistoryImportJobState`. The API serializes the enum by its
+ * number, so the numbers here are the contract and must stay in step with it.
+ */
+export enum NayaxSalesHistoryImportJobState {
+  /** Accepted and waiting for the worker. No row has been imported yet. */
+  Queued = 0,
+  /** The worker is working through it, batch by batch. */
+  Processing = 1,
+  /** Every row of the file has been read and applied. */
+  Completed = 2,
+  /**
+   * The job itself stopped. Every batch it had already committed stays committed, and the progress
+   * says how far it got.
+   */
+  Failed = 3
+}
+
+/**
+ * One job as `GET api/imports/nayax-sales-history/jobs` reports it (issue #1304), with the progress
+ * the background job recorded in the same transaction as the sales it describes.
+ */
+export interface NayaxSalesHistoryImportJobSummary {
+  readonly id: number;
+  readonly fileName: string;
+  readonly uploadedAtUtc: string;
+  readonly state: NayaxSalesHistoryImportJobState;
+  readonly totalRows: number;
+  readonly rowsRead: number;
+  readonly created: number;
+  readonly updated: number;
+  readonly skipped: number;
+  readonly invalid: number;
+  readonly keptStoredValues: number;
+  readonly attempts: number;
+  readonly lastError: string | null;
+  readonly finishedAtUtc: string | null;
+}
+
+/**
  * What `POST api/imports/reimbursement-report` answers with (issue #1149): the id of the job the
  * accepted upload became, and nothing else. The upload has imported nothing yet, so there is no
  * count to report; the job endpoints below are what the page follows it with.
@@ -121,6 +170,23 @@ export class ImportService {
     const formData = new FormData();
     formData.append('file', file, file.name);
     return this.http.post<NayaxSalesImportResult>(`${this.baseUrl}/nayax-sales`, formData);
+  }
+
+  /**
+   * Uploads a long sales history as a CSV and answers the queued job's id (issue #1304). The server
+   * checks the file - the byte limit, the format, its shape and the row ceiling - and refuses a bad
+   * one with `400` and a readable sentence, having stored nothing at all. It imports nothing in the
+   * request: the background job streams the rows and commits them in batches.
+   */
+  uploadNayaxSalesHistory(file: File): Observable<NayaxSalesHistoryUploadAccepted> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    return this.http.post<NayaxSalesHistoryUploadAccepted>(`${this.baseUrl}/nayax-sales-history`, formData);
+  }
+
+  /** This business's most recent sales history uploads, newest first, with their progress. */
+  nayaxSalesHistoryJobs(): Observable<readonly NayaxSalesHistoryImportJobSummary[]> {
+    return this.http.get<NayaxSalesHistoryImportJobSummary[]>(`${this.baseUrl}/nayax-sales-history/jobs`);
   }
 
   /**

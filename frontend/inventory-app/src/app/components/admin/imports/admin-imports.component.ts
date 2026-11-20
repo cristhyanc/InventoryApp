@@ -8,6 +8,7 @@ import { PlanLock, planLockOf } from '../../../access/plan-lock';
 import { ImportService, NayaxSalesImportResult } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { SalesHistoryImportComponent } from './sales-history/sales-history-import.component';
 
 /** The feature the Nayax sales file import is gated on - `ImportsController`'s `[RequirePlan]`. */
 const SALES_FILE_IMPORT_FEATURE: PlanFeature = 'SalesFileImport';
@@ -80,6 +81,13 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
  * at all - is rendered in the card too rather than as a generic toast with a futile Retry behind
  * it.</p>
  *
+ * <p><strong>A long history is imported by the card beside it</strong> (issue #1304).
+ * `SalesHistoryImportComponent` hosts the CSV upload of up to 250,000 rows and the list of what this
+ * business's uploads turned into; this page composes it and tells it only whether a support session
+ * is active. It is withheld by the same plan lock as the card above, because it is the same
+ * plan-gated feature - the same `[RequirePlan(PlanFeature.SalesFileImport)]` on both its endpoints -
+ * so a locked business is not offered a status list the backend would refuse.</p>
+ *
  * <p><strong>A finished import is reported with every count the server sends</strong> (issue
  * #1298), through {@link salesImportSummary}: the imported, updated and skipped counts as before,
  * plus how many rows kept a stored value because the file's cell was blank or its column was
@@ -95,7 +103,7 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
 @Component({
   selector: 'app-admin-imports',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, SalesHistoryImportComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -133,6 +141,17 @@ export function salesImportSummary(result: NayaxSalesImportResult): string {
             </div>
           </div>
         </section>
+
+        @if (!salesImportPlanLocked) {
+          <!--
+            The sales history import (issue #1304), composed as its own feature component because it
+            owns a workflow with its own state, actions and refresh lifecycle (AGENTS.md § Frontend
+            rules). It is withheld by the same lock as the card above and for the same reason: it is
+            the same plan-gated feature, its endpoints carry the same [RequirePlan], and the status
+            list is part of it - so a locked business is not offered a list it would be refused.
+          -->
+          <app-sales-history-import [disabled]="sessionActive" data-testid="sales-history-card" />
+        }
 
       </div>
     </div>

@@ -1,7 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
-using Inventory.Domain.NayaxSqs;
+using Inventory.Domain.Imports;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Imports;
@@ -77,7 +77,7 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// <list type="bullet">
 ///   <item>A row without a positive transaction identifier, a positive machine identifier and an
 ///   authorization time is skipped, never guessed at and never imported with a defaulted identity.</item>
-///   <item>The sale instant follows the precedence <see cref="ResolveInstant"/> documents
+///   <item>The sale instant follows the precedence <see cref="NayaxSalesRowApplier"/> documents
 ///   (issue #380): a usable <c>AuthorizationDateTimeGMT</c> value is authoritative and may correct a
 ///   stored instant; without one, a stored sale keeps the instant it already has, and only a new
 ///   sale falls back to the export's own <c>MachineAuthorizationTime</c> column, whose timezone is
@@ -85,7 +85,25 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   but that cannot be read never triggers that fallback.</item>
 ///   <item>A transaction this business already holds is updated in place rather than double
 ///   counted; a transaction another business holds is a new sale of this one, because a remote
-///   <c>TransactionID</c> is unique only within the operator account that issued it.</item>
+///   <c>TransactionID</c> is unique only within the operator account that issued it. One
+///   <em>file</em> naming a transaction twice is the same rule: its later row updates the sale its
+///   earlier row inserted or updated, so the file's last word about a transaction is what the
+///   business ends up holding and the sale exists once (issue #1300).</item>
+///   <item><b>What this business already holds is read once, for the whole file, inside the
+///   import's own write-locked transaction</b> (issue #1300). It used to be one query per row,
+///   outside any transaction: a 4,000-row upload took 30 seconds and an 8,000-row one 124, and a
+///   transaction the Nayax SQS queue reader stored between a row's lookup and the save failed the
+///   whole upload on the unique index on <c>(BusinessId, TransactionID)</c> with a <c>500</c>. Now
+///   the lookup and the save are one serialised operation, so such a row is found and updated. The
+///   cost replay deliberately stays outside the lock - see
+///   <see cref="INayaxSalesImportTransactions"/> for both halves of that.</item>
+///   <item><b>A file beyond the import's limits is refused before anything is read or written</b>
+///   (issue #1300, <see cref="NayaxSalesFilePolicy"/>): more data rows than
+///   <see cref="NayaxSalesFilePolicy.MaxRows"/>, or an XLSX whose sheet data expands past
+///   <see cref="NayaxSalesFilePolicy.MaxUncompressedSheetBytes"/>. The refusal is the same
+///   <see cref="InvalidOperationException"/> the unsupported-format rule raises, so the operator
+///   gets the same <c>400 Bad Request</c> with the sentence
+///   <see cref="NayaxSalesFilePolicy.TooLargeMessage"/> states, and nothing is stored.</item>
 ///   <item>An update never erases a historical cost the business already has: a row carrying no
 ///   transaction cost price leaves the stored one in place, and the cost actually applied to the
 ///   sale stays <see cref="ICostSale"/>'s decision with its recorded provenance.</item>
@@ -99,6 +117,12 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   is never mistaken for a blank one: the row is applied nowhere and is reported in
 ///   <see cref="NayaxSalesImportResult.InvalidRows"/> with its row number. A <em>new</em> sale
 ///   whose amount is blank is skipped rather than stored as a $0 sale.</item>
+///   <item><b>The per-row rules themselves live in <see cref="NayaxSalesRowApplier"/></b> (issue
+///   #1304) and are unchanged by that move. The sales history import of that issue applies the same
+///   rules to each of its batches, so "the history import applies the same row rules as the normal
+///   import" is true by construction rather than by two copies agreeing. What stays here is what is
+///   this import's own: the format and limit refusal, the one read of the whole file, the single
+///   write-locked transaction it is all applied in, and the cost replay afterwards.</item>
 ///   <item>Transaction statuses are classified by the Domain
 ///   <see cref="NayaxTransactionStatusClassifier"/> and products matched by the Domain
 ///   <see cref="ProductMatcher"/>; neither status identifiers nor matching rules are reimplemented
@@ -140,22 +164,38 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// </summary>
 public sealed class ImportNayaxSales
 {
+    /// <summary>
+    /// What this import is willing to read, from the Domain policy that owns both numbers
+    /// (issue #1300). Stated once here rather than at each call, so the reader is never asked to
+    /// read an uploaded sales file under some other ceiling.
+    /// </summary>
+    private static readonly NayaxSalesFileLimits Limits = new(
+        NayaxSalesFilePolicy.MaxRows, NayaxSalesFilePolicy.MaxUncompressedSheetBytes);
+
     private readonly INayaxSalesWorkbookReader _workbook;
     private readonly INayaxSalesImportStore _store;
-    private readonly ICostSale _saleCosting;
+    private readonly INayaxSalesImportTransactions _transactions;
+    private readonly NayaxSalesRowApplier _rows;
     private readonly IRebuildProductCost _inventoryCostRebuild;
     private readonly INayaxProductLinkStore _productLinks;
 
     public ImportNayaxSales(
         INayaxSalesWorkbookReader workbook,
         INayaxSalesImportStore store,
+        INayaxSalesImportTransactions transactions,
         ICostSale saleCosting,
         IRebuildProductCost inventoryCostRebuild,
         INayaxProductLinkStore productLinks)
     {
         _workbook = workbook;
         _store = store;
-        _saleCosting = saleCosting;
+        _transactions = transactions;
+
+        // The per-row rules, over the same store and the same costing this import was given
+        // (issue #1304). It is constructed rather than injected because it is not a port and holds
+        // no state of its own: it is the rules themselves, shared with the sales history import so
+        // the two cannot drift apart, and this import's own constructor stays exactly what it was.
+        _rows = new NayaxSalesRowApplier(store, saleCosting);
         _inventoryCostRebuild = inventoryCostRebuild;
         _productLinks = productLinks;
     }
@@ -182,291 +222,74 @@ public sealed class ImportNayaxSales
         if (!NayaxSalesExportFormats.IsSupported(file.FileName))
             throw new InvalidOperationException(NayaxSalesExportFormats.UnsupportedMessage);
 
-        IReadOnlyList<NayaxSalesImportRow> rows;
+        NayaxSalesWorkbookReadResult read;
         using (var content = file.OpenReadStream())
         {
-            rows = _workbook.Read(content, file.FileName);
+            read = _workbook.Read(content, file.FileName, Limits);
         }
+
+        // Beyond the limits the Domain policy fixes (issue #1300). The reader stopped instead of
+        // reading the file, so nothing was parsed, nothing is looked up and nothing is written: the
+        // operator gets the sentence that says what to do with the file instead of a server that
+        // spends a gigabyte on it and then holds the database for minutes.
+        if (read.ExceedsLimits)
+            throw new InvalidOperationException(NayaxSalesFilePolicy.TooLargeMessage);
+
+        var rows = read.Rows;
 
         // An export with no data rows reads nothing and writes nothing - not even the catalogue.
         if (rows.Count == 0)
             return new NayaxSalesImportResult(0, 0, 0);
 
-        var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
-
-        // Sales whose two candidate products disagreed when issue #758 resolved the existing
-        // history. Only an audited decision names one, so a re-import updates every other fact of
-        // such a sale and leaves its product exactly as it is. Expected to be empty.
-        var conflictingTransactionIds =
-            (await _store.GetConflictingTransactionIdsAsync(cancellationToken)).ToHashSet();
-
-        // The export's Nayax product ids are resolved to local product ids once, through the one
-        // lookup over the recorded provider ids (issue #745, parent #329 decision A2b),
-        // instead of being compared with Product.Id - which only ever worked because the local key
-        // *is* the Nayax id. Awaited in sequence with the catalogue read above and the per-row reads
-        // below: they all land on the request's own scoped context
-        // (docs/architecture.md § Concurrency inside one request).
-        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
-            rows
-                .Where(row => row.NayaxProductId.HasValue)
-                .Select(row => row.NayaxProductId!.Value)
-                .Distinct()
-                .ToList(),
-            cancellationToken);
-
-        var imported = 0;
-        var updated = 0;
-        var skipped = 0;
-        var keptStoredValues = 0;
-        var invalidRows = new List<NayaxSalesImportInvalidRow>();
+        // What the rows are merged against, read once for the whole file: the catalogue; the sales
+        // whose two candidate products disagreed when issue #758 resolved the existing history, so
+        // that a re-import updates every other fact of such a sale and leaves its product exactly as
+        // it is (expected to be empty); and the export's Nayax product ids resolved to local product
+        // ids through the one lookup over the recorded provider ids (issue #745, parent #329 decision
+        // A2b), instead of being compared with Product.Id - which only ever worked because the local
+        // key *is* the Nayax id. Awaited in sequence with the per-row reads below: they all land on
+        // the request's own scoped context (docs/architecture.md § Concurrency inside one request).
+        var facts = new NayaxSalesRowFacts(
+            await _store.GetProductCandidatesAsync(cancellationToken),
+            (await _store.GetConflictingTransactionIdsAsync(cancellationToken)).ToHashSet(),
+            await _productLinks.GetLocalProductIdsAsync(
+                NayaxSalesRowApplier.NayaxProductIdsOf(rows), cancellationToken));
 
         // Each affected product mapped to the earliest completed sale that touched it, which is the
         // instant its cost replay has to restart from.
         var affected = new Dictionary<long, DateTime>();
 
-        foreach (var row in rows)
+        // The find-and-save, inside one write-locked transaction (issue #1300): the stored sales of
+        // every transaction the file names are read *there*, each row is merged, costed and staged
+        // against what that read found, and the sales are saved and committed before the transaction
+        // is released. What one row does is NayaxSalesRowApplier's, which is also what the sales
+        // history import of issue #1304 applies to each of its batches - so the two imports cannot
+        // drift apart on a row rule.
+        NayaxSalesAppliedRows applied;
+        await using (var transaction = await _transactions.BeginAsync(cancellationToken))
         {
-            if (row.TransactionId <= 0 || row.MachineId <= 0 ||
-                (row.MachineAuthorizationTime is null && row.AuthorizationDateTimeGmtInput != NayaxSalesGmtInput.Valid))
-            {
-                skipped++;
-                continue;
-            }
+            applied = await _rows.ApplyAsync(rows, facts, affected, cancellationToken);
 
-            // A value the row does carry and this import cannot read is never read as "the file
-            // says nothing" (issue #1298): nothing of such a row is applied, and it is reported
-            // with its row number so the operator can fix the file rather than discover later that
-            // a sale quietly changed.
-            if (row.TransactionStatusInput == NayaxSalesCellInput.Malformed ||
-                row.SettlementValueInput == NayaxSalesCellInput.Malformed)
-            {
-                invalidRows.Add(new NayaxSalesImportInvalidRow(row.RowNumber, row.TransactionId));
-                continue;
-            }
-
-            var stored = await _store.FindByTransactionIdAsync(row.TransactionId, cancellationToken);
-            var instant = ResolveInstant(row, stored?.Sale);
-            if (instant is null)
-            {
-                skipped++;
-                continue;
-            }
-
-            // A new sale has no stored amount to keep, and a blank cell is not a zero sale: such a
-            // row is skipped and stays visible, exactly as a row with no usable identity does.
-            if (stored is null && row.SettlementValue is null)
-            {
-                skipped++;
-                continue;
-            }
-
-            // What this row actually states, with the stored value kept wherever it states nothing
-            // (issue #1298). The file is still the source of truth for every value it carries - a
-            // present status replaces the stored one in either direction, and an explicit 0 amount
-            // is a value it carries - so only a blank cell or a missing column is ignored. For the
-            // three text facts, a cell holding nothing but whitespace is a blank cell: StatedText
-            // decides that here, where the keep-or-overwrite rule lives, rather than relying on how
-            // a reader happened to trim it.
-            var productName = StatedText(row.ProductName) ?? stored?.Sale.ProductName;
-            var facts = new ImportedNayaxSale(
-                row.TransactionId,
-                row.MachineId,
-                instant.Value,
-                row.TransactionStatusId ?? stored?.Sale.TransactionStatusId,
-                // The local product this row belongs to, decided here and persisted on the sale
-                // (issue #758). The rule is the one this import has always applied - the recorded
-                // provider id first (issue #745), then the unambiguous name - but its answer is now
-                // stored instead of re-derived by every later reader. It is resolved against the
-                // name that will be stored, so a kept product name keeps the association it names.
-                ProductMatcher.MatchLinked(
-                    candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), productName),
-                row.NayaxProductId,
-                StatedText(row.MachineName) ?? stored?.MachineName,
-                row.SettlementValue ?? stored!.SettlementValue,
-                StatedText(row.PaymentMethod) ?? stored?.PaymentMethod,
-                productName,
-                // Never erase a transaction cost price the business already holds with a row that
-                // simply does not carry the column.
-                row.NayaxProductCostPrice ?? stored?.Sale.NayaxProductCostPrice);
-
-            CostableSale sale;
-            if (stored is null)
-            {
-                sale = _store.Add(facts);
-                imported++;
-            }
-            else
-            {
-                // The stored row's own product and instant are tracked before it is overwritten, so
-                // an update that moves a completed sale to another product or an earlier time
-                // replays both the product it left and the product it joined.
-                TrackStoredProduct(stored.Sale, affected);
-                sale = _store.Update(
-                    stored.Sale,
-                    facts with
-                    {
-                        // A conflicting sale keeps the product it has - none - until a human names
-                        // one through the audited operation (issue #758).
-                        ProductId = conflictingTransactionIds.Contains(row.TransactionId)
-                            ? stored.Sale.ProductId
-                            : facts.ProductId,
-                    });
-                updated++;
-                if (KeptAStoredValue(row, stored))
-                    keptStoredValues++;
-            }
-
-            var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
-            if (cost is not null)
-                _store.StageCost(sale, cost);
-            TrackImportedProduct(sale, affected);
+            await transaction.CommitAsync(cancellationToken);
         }
 
-        if (imported > 0 || updated > 0)
+        // Outside the write lock, deliberately (issue #1300): the sales are committed, and replaying
+        // the affected products' cost takes as long as their histories - which is not a wait every
+        // other writer in the application may be made to serve. The order and the failure behaviour
+        // are otherwise exactly what they were: replay, then save the replayed costs, so a fatal
+        // data-quality failure propagates with the sales saved and the rebuilt costs unsaved.
+        if (applied.Imported > 0 || applied.Updated > 0)
         {
-            await _store.SaveChangesAsync(cancellationToken);
             await RebuildPostTransitionProductsAsync(affected, cancellationToken);
             await _store.SaveChangesAsync(cancellationToken);
         }
 
-        return new NayaxSalesImportResult(imported, updated, skipped, keptStoredValues)
+        return new NayaxSalesImportResult(
+            applied.Imported, applied.Updated, applied.Skipped, applied.KeptStoredValues)
         {
-            InvalidRows = invalidRows,
+            InvalidRows = applied.InvalidRows,
         };
     }
-
-    /// <summary>
-    /// Whether an updated row left a stored value in place because the file carried none for it
-    /// (issue #1298): every field the merge above keeps - the status, the amount, the payment
-    /// method, the product name and the machine name - so the number an operator reads is the
-    /// rows this file said nothing new about, whichever of those facts it said nothing about.
-    ///
-    /// <para>It is a count of rows, not of fields: a row that kept four of them still counts once,
-    /// which is what makes that number one an operator can act on rather than a total of fields.</para>
-    ///
-    /// <para>A kept payment method, product name or machine name counts only where the stored sale
-    /// <em>holds</em> one. An export written without those columns is ordinary and long-standing,
-    /// and a column absent from the file for a sale that has nothing stored under it preserves
-    /// nothing - counting it would report a kept value where no value exists. The same holds for
-    /// the status: the stored status column is nullable and this import can store a sale with no
-    /// status, so a blank status counts only where the stored sale holds one. The amount needs no
-    /// such check: the stored amount column is never null, so an absent amount always keeps one.</para>
-    /// </summary>
-    private static bool KeptAStoredValue(NayaxSalesImportRow row, StoredImportedSale stored) =>
-        (row.TransactionStatusId is null && stored.Sale.TransactionStatusId is not null)
-        || row.SettlementValue is null
-        || KeptStoredText(row.PaymentMethod, stored.PaymentMethod)
-        || KeptStoredText(row.ProductName, stored.Sale.ProductName)
-        || KeptStoredText(row.MachineName, stored.MachineName);
-
-    /// <summary>
-    /// Whether the merge kept one stored text fact: the file stated none - exactly the condition
-    /// <see cref="StatedText"/> makes the merge keep the stored value on - and the stored sale holds
-    /// one to keep.
-    /// </summary>
-    private static bool KeptStoredText(string? fromFile, string? storedValue) =>
-        StatedText(fromFile) is null && !string.IsNullOrWhiteSpace(storedValue);
-
-    /// <summary>
-    /// What the file states in one text cell, or <see langword="null"/> when it states nothing
-    /// (issue #1298): no column, an empty cell, or a cell holding nothing but whitespace. One
-    /// notion of "the file said nothing" for the merge and for the kept count, so a row of spaces
-    /// cannot erase a stored payment method, product name or machine name - the reading the status
-    /// and the amount have had since this change. The value itself is passed through untouched;
-    /// trimming stays the reader's business.
-    /// </summary>
-    private static string? StatedText(string? fromFile) =>
-        string.IsNullOrWhiteSpace(fromFile) ? null : fromFile;
-
-    /// <summary>
-    /// The instant a row is imported at (issue #380), or <c>null</c> when it has no trustworthy one
-    /// and must be skipped:
-    /// <list type="number">
-    ///   <item>A usable <c>AuthorizationDateTimeGMT</c> value is the authoritative instant, for a new
-    ///   sale and for a stored one alike, so it may correct an older stored instant through the
-    ///   ordinary update and cost-rebuild path.</item>
-    ///   <item>Otherwise a stored sale keeps the instant it already holds. A later export without a
-    ///   usable GMT value must not move a sale the latest-sales synchronization stored at its
-    ///   authoritative instant, and that synchronization never rewrites a stored instant, so nothing
-    ///   would ever move it back. The row's other facts still update the sale.</item>
-    ///   <item>A new sale whose GMT value is present but unreadable is skipped: the export claimed an
-    ///   authoritative instant and it could not be read.</item>
-    ///   <item>A new sale from an export without the GMT column, or with a blank GMT cell, is imported
-    ///   at the export's own <c>MachineAuthorizationTime</c> column, read exactly as earlier imports
-    ///   read it. Nayax publishes no timezone contract for that column, so the value is not converted
-    ///   with an invented timezone and is not claimed to be a verified UTC instant; whether such rows
-    ///   should be refused instead is an open owner decision recorded in docs/architecture.md.</item>
-    /// </list>
-    /// </summary>
-    private static DateTime? ResolveInstant(NayaxSalesImportRow row, CostableSale? stored)
-    {
-        if (row.AuthorizationDateTimeGmtInput == NayaxSalesGmtInput.Valid && row.AuthorizationDateTimeGmt is { } gmt)
-            return gmt;
-        if (stored is not null)
-            return stored.AuthorizationTime;
-        if (row.AuthorizationDateTimeGmtInput == NayaxSalesGmtInput.Malformed)
-            return null;
-        return row.MachineAuthorizationTime;
-    }
-
-    /// <summary>
-    /// Records the product the row just imported affected: the association the import resolved and
-    /// persisted onto the sale (issue #758). An unresolved row affected no product's inventory and
-    /// stays visible through its own row and its costing provenance instead.
-    /// </summary>
-    private static void TrackImportedProduct(CostableSale sale, IDictionary<long, DateTime> affected)
-    {
-        // The stock rule, not the completed-sale rule (issue #1107): an imported status-62 row
-        // consumes its unit, so the product it belongs to has to be replayed. The import does change
-        // a stored row's status when the file carries a valid one (issue #1298) - in either
-        // direction, and on a sale the queue path stored - which is why the stored row's own product
-        // is tracked before the overwrite and replayed beside the updated one.
-        if (!NayaxSaleCountingPolicy.ConsumesStock(sale.TransactionStatusId, sale.SqsVerification))
-            return;
-
-        RecordAffectedProduct(sale.ProductId, sale, affected);
-    }
-
-    /// <summary>
-    /// Records the product a <em>stored</em> sale affected before this import overwrites it, read
-    /// from the association persisted on that row (issue #758) rather than re-derived from the
-    /// provider's product id or the reported name. That is what makes a re-import that moves a
-    /// transaction to another product replay both the product it left and the product it joined,
-    /// in one pass, from facts the previous writer decided.
-    /// </summary>
-    private static void TrackStoredProduct(CostableSale stored, IDictionary<long, DateTime> affected)
-    {
-        if (!NayaxSaleCountingPolicy.ConsumesStock(stored.TransactionStatusId, stored.SqsVerification))
-            return;
-
-        RecordAffectedProduct(stored.ProductId, stored, affected);
-    }
-
-    /// <summary>
-    /// Records the product a stock-consuming sale affected, keeping the earliest such sale's instant.
-    /// A sale that consumed no unit changed no costed inventory, and an unmatched product has no
-    /// inventory to replay - both stay visible through the sale's own status and costing provenance
-    /// instead.
-    /// </summary>
-    private static void RecordAffectedProduct(
-        long? productId,
-        CostableSale sale,
-        IDictionary<long, DateTime> affected)
-    {
-        if (productId is not null &&
-            (!affected.TryGetValue(productId.Value, out var existing) || sale.AuthorizationTime < existing))
-            affected[productId.Value] = sale.AuthorizationTime;
-    }
-
-    /// <summary>
-    /// The local product an imported row's <c>NayaxProductID</c> names, or <see langword="null"/>
-    /// when this business has recorded that Nayax id on no product.
-    /// </summary>
-    private static long? LocalProductId(
-        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
-        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
-            ? localProductId
-            : null;
 
     /// <summary>
     /// Replays the inventory cost of every affected product whose transition baseline cutoff the

@@ -37,6 +37,11 @@ public sealed record ImportedNayaxSale(
 /// <para>The costing contract stays what it says it is - the facts historical sale costing reads -
 /// so a settlement value, a payment method and a machine name, which costing never reads, are
 /// carried here instead of being added to it.</para>
+///
+/// <para>It is also how <see cref="ImportNayaxSales"/> carries a sale one of the file's own rows has
+/// just applied (issue #1300), so a second row naming that transaction merges against it rather
+/// than against the state the batched read found before either row ran. The store answers these from
+/// the rows it loaded; the import builds one from the row it just wrote.</para>
 /// </summary>
 /// <param name="Sale">The stored sale's costing view, carrying its status, product and instant.</param>
 /// <param name="SettlementValue">The stored settled amount; the column is not nullable.</param>
@@ -74,11 +79,22 @@ public interface INayaxSalesImportStore
     Task<IReadOnlyCollection<long>> GetConflictingTransactionIdsAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// The caller's stored sale carrying this remote transaction identifier, or <c>null</c> when
-    /// the business has none. The row is loaded for update, so <see cref="Update"/> and
-    /// <see cref="StageCost"/> write onto exactly it.
+    /// The caller's stored sales carrying any of these remote transaction identifiers, keyed by the
+    /// identifier. A transaction the business does not hold is simply absent. The rows are loaded
+    /// for update, so <see cref="Update"/> and <see cref="StageCost"/> write onto exactly them.
+    ///
+    /// <para><strong>One read for the whole file</strong> (issue #1300), in one query or in
+    /// fixed-size batches of the adapter's choosing - never one query per row, which is what made a
+    /// 4,000-row upload take 30 seconds and an 8,000-row one 124. It is called <em>inside</em> the
+    /// import's write-locked transaction, so what it answers is the state the save is then decided
+    /// on: a transaction the Nayax SQS queue reader stored while the file was being read is found
+    /// here and updated, instead of being inserted a second time and refused by the unique index on
+    /// <c>(BusinessId, TransactionID)</c>. What the file's own rows then make of those sales is the
+    /// import's business: it tracks a sale a row of the file applied itself rather than reading it
+    /// again, so this stays one read.</para>
     /// </summary>
-    Task<StoredImportedSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken);
+    Task<IReadOnlyDictionary<long, StoredImportedSale>> FindByTransactionIdsAsync(
+        IReadOnlyCollection<long> transactionIds, CancellationToken cancellationToken);
 
     /// <summary>
     /// Stages <paramref name="sale"/> as a new sale of the caller's business and answers it as a
@@ -94,7 +110,7 @@ public interface INayaxSalesImportStore
     /// product name and no machine name must not erase the stored ones (issue #1298) - belongs to
     /// <see cref="ImportNayaxSales"/>, which hands this the values it decided.
     /// </summary>
-    /// <param name="stored">A sale <see cref="FindByTransactionIdAsync"/> returned.</param>
+    /// <param name="stored">A sale <see cref="FindByTransactionIdsAsync"/> returned.</param>
     /// <param name="sale">The facts to write onto it.</param>
     CostableSale Update(CostableSale stored, ImportedNayaxSale sale);
 
@@ -111,4 +127,19 @@ public interface INayaxSalesImportStore
 
     /// <summary>Persists everything staged so far.</summary>
     Task SaveChangesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Forgets the sales this import has loaded or staged, so that a long import's working set does
+    /// not grow with the rows it has already committed (issue #1304).
+    ///
+    /// <para>The uploaded import never calls it: it applies one file inside one transaction and the
+    /// context is the request's own, which ends with the request. The sales history import calls it
+    /// after each batch is committed - 250,000 sales tracked in one context would cost memory per
+    /// row and make every later save slower than the one before it, which is precisely what reading
+    /// and committing in batches exists to avoid.</para>
+    ///
+    /// <para>It is only ever called with nothing staged: the batch's sales are saved and committed
+    /// first, so there is no unsaved change for it to discard. It affects the sales alone.</para>
+    /// </summary>
+    void ForgetTrackedSales();
 }

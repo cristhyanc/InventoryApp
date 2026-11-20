@@ -7,6 +7,8 @@ import {
   CatalogueReview,
   CatalogueReviewAction,
   CatalogueReviewApplied,
+  CatalogueReviewCategory,
+  CatalogueReviewProduct,
   CatalogueReviewService
 } from '../../../../services/catalogue-review.service';
 import { CategoryService } from '../../../../services/category.service';
@@ -179,6 +181,88 @@ const LOCAL_CATEGORIES: Category[] = [
   { id: 7, name: 'Snack food', providerManagedFields: ['name'] },
   { id: 12, name: 'Soft drinks', providerManagedFields: [] }
 ];
+
+/** A minimal local product, filled out beyond `overrides` with values this screen never reads. */
+function makeProduct(overrides: Partial<Product> & { id: number; name: string }): Product {
+  return {
+    averageUnitCost: 1,
+    machinePrice: null,
+    commissionValue: null,
+    quantityInStock: 0,
+    maxStockInMachine: 0,
+    machineReplenishmentNeed: 0,
+    onOrderQuantity: 0,
+    lowStockThreshold: 0,
+    restockTo: 0,
+    needToOrder: 0,
+    mdbCode: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    isActive: true,
+    isLowStock: false,
+    isReorderAlert: false,
+    providerManagedFields: [],
+    ...overrides
+  };
+}
+
+/** A minimal local category, filled out beyond `overrides`. */
+function makeCategory(overrides: Partial<Category> & { id: number; name: string }): Category {
+  return { providerManagedFields: [], ...overrides };
+}
+
+/** A minimal review carrying only what a test names. */
+function minimalReview(overrides: Partial<CatalogueReview> = {}): CatalogueReview {
+  return {
+    reviewId: 1,
+    startedAtUtc: '2026-01-01T00:00:00Z',
+    unitVolumeNote: '',
+    unlinkedCategoryCount: 0,
+    unlinkedProductCount: 0,
+    unresolvedSaleCount: 0,
+    categories: [],
+    products: [],
+    ...overrides
+  };
+}
+
+/** One unlinked provider product entry, filled out beyond `overrides`. */
+function productEntry(
+  overrides: Partial<CatalogueReviewProduct> & { itemId: number; providerName: string }
+): CatalogueReviewProduct {
+  return {
+    externalId: String(overrides.itemId),
+    providerGroupExternalId: null,
+    linkedProductId: null,
+    localName: null,
+    unresolvedSaleCount: 0,
+    automaticChanges: [],
+    choices: [],
+    isLinked: false,
+    ...overrides
+  };
+}
+
+/** One unlinked provider category entry, filled out beyond `overrides`. */
+function categoryEntry(
+  overrides: Partial<CatalogueReviewCategory> & { itemId: number; providerName: string }
+): CatalogueReviewCategory {
+  return {
+    externalId: String(overrides.itemId),
+    linkedCategoryId: null,
+    localName: null,
+    automaticChanges: [],
+    isLinked: false,
+    ...overrides
+  };
+}
+
+/** The lone button a closest-match suggestion renders inside one entry's row. */
+function suggestionButton(rowEl: HTMLElement): HTMLButtonElement {
+  const found = rowEl.querySelector<HTMLButtonElement>('button');
+  if (!found) throw new Error('No "Link to this" button rendered in this row.');
+  return found;
+}
 
 interface Harness {
   fixture: ComponentFixture<CatalogueReviewComponent>;
@@ -518,6 +602,181 @@ describe('CatalogueReviewComponent products step (issue #739)', () => {
     expect(toast.error).toHaveBeenCalledWith('Nothing was applied. Entry 201: ...');
     expect(component.applied).toBeNull();
     expect(row(host, UNLINKED_PRODUCT_ITEM)).toBeTruthy();
+  });
+});
+
+/**
+ * The closest-local-match suggestion (issue #1353). The scoring/conflict rule itself is pinned in
+ * `catalogue-match.spec.ts`; these tests hold the screen's side of the contract: the suggestion is a
+ * hint that never changes the default answer, "Link to this" does exactly what a manual choice
+ * does, a candidate withheld as a suggestion stays choosable and the dropdown orders by the same
+ * rule.
+ */
+describe('CatalogueReviewComponent closest-match suggestion (issue #1353)', () => {
+  const PRODUCT_ITEM = 301;
+  const OTHER_PRODUCT_ITEM = 302;
+  const CATEGORY_ITEM = 401;
+
+  it('suggests the closest local product ignoring case, spacing, punctuation and equivalent size formatting', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'COKE ZERO 600ML' })]
+    });
+    const products = [makeProduct({ id: 50, name: 'Coke Zero 600ml' })];
+
+    const { fixture, host, component, apply } = await render({
+      start: jest.fn(() => of(review)),
+      products,
+      categories: []
+    });
+    component.goToProducts();
+    fixture.detectChanges();
+
+    const entryRow = row(host, PRODUCT_ITEM);
+    expect(text(entryRow)).toContain('Closest match: Coke Zero 600ml');
+
+    // Showing the suggestion changes nothing: the entry is still on the honest Skip default.
+    expect(component.answer(PRODUCT_ITEM).action).toBe(CatalogueReviewAction.Defer);
+
+    suggestionButton(entryRow).click();
+    fixture.detectChanges();
+
+    expect(component.answer(PRODUCT_ITEM).action).toBe(CatalogueReviewAction.LinkExisting);
+    expect(component.answer(PRODUCT_ITEM).localRowId).toBe(50);
+
+    component.applyDecisions();
+    expect(decisionFor(apply, PRODUCT_ITEM)).toEqual({
+      itemId: PRODUCT_ITEM,
+      action: CatalogueReviewAction.LinkExisting,
+      localRowId: 50
+    });
+  });
+
+  it('shows no suggestion when nothing scores above the documented minimum', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'Coke Zero 600ml' })]
+    });
+    const products = [makeProduct({ id: 51, name: 'Totally Different Snack' })];
+
+    const { fixture, host, component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+    component.goToProducts();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="product-closest-match"]')).toBeNull();
+    expect(component.answer(PRODUCT_ITEM).action).toBe(CatalogueReviewAction.Defer);
+  });
+
+  it('required case: withholds the suggestion for a conflicting size (375 mL vs 600 mL) but keeps the candidate choosable', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'Coke Zero 375 mL' })]
+    });
+    const products = [makeProduct({ id: 52, name: 'Coke Zero 600 mL' })];
+
+    const { fixture, host, component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+    component.goToProducts();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="product-closest-match"]')).toBeNull();
+    expect(component.productCandidates(PRODUCT_ITEM).map((product) => product.id)).toEqual([52]);
+  });
+
+  it('required case: withholds the suggestion for a conflicting pack count (24 pack vs x30) but keeps the candidate choosable', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'Mars Bar 24 pack' })]
+    });
+    const products = [makeProduct({ id: 53, name: 'Mars Bar x30' })];
+
+    const { fixture, host, component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+    component.goToProducts();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="product-closest-match"]')).toBeNull();
+    expect(component.productCandidates(PRODUCT_ITEM).map((product) => product.id)).toEqual([53]);
+  });
+
+  it('never suggests a product the provider already manages, even once a free row scores lower', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'Coke Zero 600ml' })]
+    });
+    const products = [
+      makeProduct({ id: 60, name: 'Coke Zero 600ml', providerManagedFields: ['name'] }),
+      makeProduct({ id: 61, name: 'Coke Zero Can 600ml' })
+    ];
+
+    const { fixture, host, component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+    component.goToProducts();
+    fixture.detectChanges();
+
+    expect(component.closestProductMatch(PRODUCT_ITEM)?.id).toBe(61);
+    expect(text(row(host, PRODUCT_ITEM))).toContain('Closest match: Coke Zero Can 600ml');
+  });
+
+  it('orders the Link to dropdown with every non-conflicting candidate first, best score first, then by name', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 1,
+      products: [productEntry({ itemId: PRODUCT_ITEM, providerName: 'Coke Zero 600ml' })]
+    });
+    const products = [
+      makeProduct({ id: 70, name: 'Unrelated Product' }),
+      makeProduct({ id: 71, name: 'Coke Zero 600 mL' }),
+      makeProduct({ id: 72, name: 'Coke Zero 375 mL' })
+    ];
+
+    const { component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+
+    expect(component.productCandidates(PRODUCT_ITEM).map((product) => product.id)).toEqual([71, 70, 72]);
+  });
+
+  it('allows the same local product to be suggested for two different provider entries', async () => {
+    const review = minimalReview({
+      unlinkedProductCount: 2,
+      products: [
+        productEntry({ itemId: PRODUCT_ITEM, providerName: 'Coke Zero 600ml' }),
+        productEntry({ itemId: OTHER_PRODUCT_ITEM, providerName: 'Coke Zero 600ml' })
+      ]
+    });
+    const products = [makeProduct({ id: 80, name: 'Coke Zero 600ml' })];
+
+    const { component } = await render({ start: jest.fn(() => of(review)), products, categories: [] });
+
+    expect(component.closestProductMatch(PRODUCT_ITEM)?.id).toBe(80);
+    expect(component.closestProductMatch(OTHER_PRODUCT_ITEM)?.id).toBe(80);
+  });
+
+  it('suggests the closest local category the same way, and "Link to this" sets the link', async () => {
+    const review = minimalReview({
+      unlinkedCategoryCount: 1,
+      categories: [categoryEntry({ itemId: CATEGORY_ITEM, providerName: 'BEVERAGES' })]
+    });
+    const categories = [
+      makeCategory({ id: 90, name: 'Beverages', providerManagedFields: ['name'] }),
+      makeCategory({ id: 91, name: 'Beverages' })
+    ];
+
+    const { fixture, host, component, apply } = await render({
+      start: jest.fn(() => of(review)),
+      products: [],
+      categories
+    });
+
+    const entryRow = row(host, CATEGORY_ITEM);
+    expect(text(entryRow)).toContain('Closest match: Beverages');
+    expect(component.closestCategoryMatch(CATEGORY_ITEM)?.id).toBe(91);
+
+    suggestionButton(entryRow).click();
+    fixture.detectChanges();
+    component.goToProducts();
+    component.applyDecisions();
+
+    expect(decisionFor(apply, CATEGORY_ITEM)).toEqual({
+      itemId: CATEGORY_ITEM,
+      action: CatalogueReviewAction.LinkExisting,
+      localRowId: 91
+    });
   });
 });
 

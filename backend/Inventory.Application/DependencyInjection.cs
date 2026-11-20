@@ -137,6 +137,11 @@ public static class ApplicationServiceCollectionExtensions
         // tenancy scope (docs/architecture.md § Super Admin businesses API).
         services.AddScoped<ListPlatformBusinesses>();
         services.AddScoped<CountPendingBusinessApplications>();
+        // And the beta Pro grant an approval writes while the public beta setting is on (issue
+        // #1258). Scoped for exactly the reasons the decision writer is: it writes through the
+        // plan-grant store on the request's own AppDbContext, inside the same transaction the
+        // approval opened on that context, for the business that transaction read.
+        services.AddScoped<BetaProGrantOnApproval>();
         services.AddScoped<BusinessApplicationDecisionWriter>();
         services.AddScoped<ApproveBusinessApplication>();
         services.AddScoped<RejectBusinessApplication>();
@@ -397,6 +402,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RematchMachineStockEvents>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
+        // Applying a confirmed product replacement (issue #1326): the other resolution of a 510
+        // event beside "already recorded manually". Scoped like every other use case, and
+        // deliberately holding no Nayax client: applying a replacement makes no Nayax call.
+        services.AddScoped<ApplyMachineStockProductReplacement>();
         services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
 
@@ -533,7 +542,20 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<StartCatalogueReview>();
         services.AddScoped<ApplyCatalogueReview>();
         services.AddScoped<ResolveLinkedProviderSales>();
+        // The Dashboard's read of the provider products that are selling and have never been
+        // imported (issue #1352). It makes no Nayax call: the evidence is the business's own stored
+        // sales, so it is scoped like every other read here.
+        services.AddScoped<GetUnimportedProviderProductAttention>();
         services.AddScoped<ImportNayaxSales>();
+        // The uploaded sales history of issue #1304: the upload, the status read, and the one job the
+        // background worker runs in a scope resolved to that job's own business.
+        services.AddScoped<UploadNayaxSalesHistory>();
+        services.AddScoped<ListNayaxSalesHistoryImportJobs>();
+        // Its sale costing reads each product's ledger once per batch rather than once per row
+        // (NayaxSalesHistoryBatchCosting): the same CostSale and replay, over a snapshot that holds
+        // while a batch's row pass has saved nothing.
+        services.AddScoped<INayaxSalesHistoryBatchCosting, NayaxSalesHistoryBatchCosting>();
+        services.AddScoped<ProcessNayaxSalesHistoryImportJob>();
         // The per-file steps of the reimbursement report import (issue #1149): hash dedupe, the
         // atomic write, and the settlement coverage a committed file proves.
         services.AddScoped<ImportReimbursementXmlFile>();

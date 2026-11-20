@@ -377,6 +377,7 @@ public class ImportNayaxSalesTests
             () => new ImportNayaxSales(
                     reader.Object,
                     new EfNayaxSalesImportStore(db),
+                    new EfNayaxSalesImportTransactions(db),
                     TestCostingUseCases.CostSale(db),
                     Mock.Of<IRebuildProductCost>(),
                     IdentityLinks())
@@ -394,11 +395,13 @@ public class ImportNayaxSalesTests
     {
         await using var db = CreateDb();
         var reader = new Mock<INayaxSalesWorkbookReader>();
-        reader.Setup(x => x.Read(It.IsAny<Stream>(), fileName)).Returns([]);
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), fileName, It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(NayaxSalesWorkbookReadResult.Empty);
 
         var result = await new ImportNayaxSales(
                 reader.Object,
                 new EfNayaxSalesImportStore(db),
+                new EfNayaxSalesImportTransactions(db),
                 TestCostingUseCases.CostSale(db),
                 Mock.Of<IRebuildProductCost>(),
                 IdentityLinks())
@@ -417,11 +420,12 @@ public class ImportNayaxSalesTests
         await using var db = CreateDb();
         var store = new Mock<INayaxSalesImportStore>(MockBehavior.Strict);
         var reader = new Mock<INayaxSalesWorkbookReader>();
-        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>())).Returns([]);
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(NayaxSalesWorkbookReadResult.Empty);
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
-                IdentityLinks())
+                reader.Object, store.Object, new FakeNayaxSalesImportTransactions(),
+                Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(), IdentityLinks())
             .Handle(Csv("TransactionID,MachineID,MachineAuthorizationTime"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
@@ -438,13 +442,19 @@ public class ImportNayaxSalesTests
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        // The lookup the import makes for the file's identifiable rows - none here - answers the
+        // empty dictionary the port promises rather than Moq's default null.
+        store.Setup(x => x.FindByTransactionIdsAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, StoredImportedSale>());
         var reader = new Mock<INayaxSalesWorkbookReader>();
-        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>()))
-            .Returns([new NayaxSalesImportRow(0, 0, null, null, null, null, 0m, null, null, null)]);
+        reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<NayaxSalesFileLimits>()))
+            .Returns(new NayaxSalesWorkbookReadResult(
+                [new NayaxSalesImportRow(0, 0, null, null, null, null, 0m, null, null, null)], false));
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
-                IdentityLinks())
+                reader.Object, store.Object, new FakeNayaxSalesImportTransactions(),
+                Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(), IdentityLinks())
             .Handle(Csv("ignored"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 1), result);
@@ -477,6 +487,7 @@ public class ImportNayaxSalesTests
         return new ImportNayaxSales(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db, costRebuild),
             costRebuild,
             IdentityLinks());

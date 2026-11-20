@@ -32,6 +32,7 @@ using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Adapters.Products;
 using InventoryApi.Adapters.ReimbursementImport;
+using InventoryApi.Adapters.SalesHistoryImport;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
@@ -65,8 +66,9 @@ if (BusinessBootstrapCommand.Matches(args))
     return await BusinessBootstrapCommand.RunAsync(args, CancellationToken.None);
 }
 
-// Applying schema migrations is likewise a human-invoked command, not something a deployment
-// performs. Normal startup below applies nothing outside Development.
+// This explicit command is for diagnostics and manual use ahead of a deployment window. Normal
+// startup below still applies pending migrations itself in Development, Testing and Production
+// (issue #201), failing closed in Production rather than serving requests against a mismatched schema.
 if (DatabaseMigrationCommand.Matches(args))
 {
     return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
@@ -394,6 +396,16 @@ builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
 builder.Services.AddSingleton<ISubscriptionEnforcementFlag>(
     new ConfiguredSubscriptionEnforcementFlag(builder.Configuration));
 
+// And whether approving a business application also grants that business open-ended Pro for the
+// public beta (issue #1258). Read once here for the reason the flag above is, and published as its
+// own narrow port because the two settings answer different questions and are switched on at
+// different times: the beta grants have to exist before enforcement starts. Off unless the setting
+// says otherwise - an absent, blank or unparseable value leaves it off, and false is what is in
+// source control - and switching it off again stops new grants only. A singleton, because it is one
+// startup decision rather than a per-request one.
+builder.Services.AddSingleton<IBetaProGrantOnApprovalFlag>(
+    new ConfiguredBetaProGrantOnApprovalFlag(builder.Configuration));
+
 // How long an issued price collector run stays open (issue #924). Read once here, because only the
 // composition root reads configuration, and published as the Application layer's narrow port so the
 // run that is stored and the expiry the work list publishes cannot disagree. A blank, unparseable or
@@ -563,6 +575,25 @@ builder.Services.AddSingleton<IReimbursementImportJobLog, LoggingReimbursementIm
 builder.Services.AddSingleton<IReimbursementImportJobScopes, ServiceScopeReimbursementImportJobScopes>();
 builder.Services.AddSingleton<ReimbursementImportJobRunner>();
 builder.Services.AddHostedService<ReimbursementImportJobWorker>();
+
+// The fifth hosted background service (issue #1304): importing the long Nayax sales histories
+// operators upload. It first looks for work about forty-five seconds after startup - a little after
+// the reimbursement worker, so a restart is not two imports competing for the one write lock - and
+// then takes the oldest unfinished job, one at a time, each in its own service scope resolved to that
+// job's own business. It streams the file and commits NayaxSalesHistoryPolicy.BatchRows rows at a
+// time - the one place that number lives - releasing the write lock between batches, so a user save
+// or the Nayax queue reader's own save goes through while a year of history is importing.
+//
+// It is in-process for the reasons the three workers above are - one writer on one SQLite file, no
+// second identity or configuration surface - and App Service Always On is the same human
+// prerequisite: without it a queued job waits until the next request wakes the app. It has no setting
+// to switch it on; an environment where nobody has uploaded a history finds nothing to do and writes
+// nothing.
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobSchedule, SystemNayaxSalesHistoryImportJobSchedule>();
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobLog, LoggingNayaxSalesHistoryImportJobLog>();
+builder.Services.AddSingleton<INayaxSalesHistoryImportJobScopes, ServiceScopeNayaxSalesHistoryImportJobScopes>();
+builder.Services.AddSingleton<NayaxSalesHistoryImportJobRunner>();
+builder.Services.AddHostedService<NayaxSalesHistoryImportJobWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

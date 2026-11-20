@@ -111,6 +111,17 @@
                 <p class="mt-2 text-sm value-muted">Nothing about it has changed in Nayax.</p>
               }
             } @else {
+              @if (closestCategoryMatch(entry.itemId); as suggestion) {
+                <p class="mt-2 text-sm text-md-gray-800" data-testid="category-closest-match">
+                  Closest match: <strong>{{ suggestion.name }}</strong>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-secondary ml-2"
+                    (click)="linkToSuggestion(entry.itemId, suggestion.id)"
+                  >Link to this</button>
+                </p>
+              }
+
               <fieldset class="mt-2">
                 <legend class="field-label">What should this group be?</legend>
                 <div class="mt-1 grid gap-1">
@@ -235,6 +246,17 @@
                 </ul>
               }
             } @else {
+              @if (closestProductMatch(entry.itemId); as suggestion) {
+                <p class="mt-2 text-sm text-md-gray-800" data-testid="product-closest-match">
+                  Closest match: <strong>{{ suggestion.name }}</strong>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-secondary ml-2"
+                    (click)="linkToSuggestion(entry.itemId, suggestion.id)"
+                  >Link to this</button>
+                </p>
+              }
+
               <fieldset class="mt-2">
                 <legend class="field-label">What should this product be?</legend>
                 <div class="mt-1 grid gap-1">

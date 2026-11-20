@@ -173,6 +173,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
         return new ImportNayaxSales(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
+            new EfNayaxSalesImportTransactions(db),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild,
             // The real link table over the same business-scoped context, so the identity resolution

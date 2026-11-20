@@ -109,6 +109,12 @@ public class EndpointPlanRequirementTests
         new("CatalogueReviewController.ResolveUnresolvedSales", PlanRequirementKind.None), // POST api/catalogue-review/unresolved-sales/apply
         new("CatalogueReviewController.Start", PlanRequirementKind.ViaProviderGate), // POST api/catalogue-review
 
+        // The Dashboard's unimported-provider-product alert (issue #1352). It makes no Nayax call at
+        // all - the evidence is this business's own stored sales - so every plan includes it, and a
+        // plan requirement here would hide from a downgraded business the fact that sales it already
+        // took are taking no stock and carrying no cost.
+        new("CatalogueReviewAttentionController.Get", PlanRequirementKind.None), // GET api/catalogue-review/attention
+
         // The catalogue: Free's own feature throughout.
         new("CategoriesController.Create", PlanRequirementKind.None), // POST api/Categories
         new("CategoriesController.Delete", PlanRequirementKind.None), // DELETE api/Categories/{id:long}
@@ -135,6 +141,13 @@ public class EndpointPlanRequirementTests
 
         // The uploaded Nayax sales export is Pro (decided on #965's review of 29 October 2026).
         new("ImportsController.ImportNayaxSales", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales
+        // The uploaded Nayax sales history of issue #1304 is the same uploaded-file import done in
+        // the background, so it declares the same feature - the upload and the status read that
+        // reports what the background job made of it alike. The history import is one plan-gated
+        // feature and its progress is part of it, which is also what lets the Imports page lock the
+        // whole card rather than offer a list it cannot read.
+        new("ImportsController.UploadNayaxSalesHistory", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales-history
+        new("ImportsController.NayaxSalesHistoryJobs", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // GET api/imports/nayax-sales-history/jobs
         // The uploaded Nayax reimbursement report ZIP of issue #1149 is a settlement statement the
         // business was sent, and its figures feed the two reports a Starter business includes, so it
         // carries no plan requirement - and neither do the two reads that report what became of one.
@@ -184,6 +197,9 @@ public class EndpointPlanRequirementTests
         // without the provider sees its machines as the local records they are. Applying or
         // resolving an already-imported restock event, and recording a count, are local writes.
         new("MachinesController.ApplySyncRestock", PlanRequirementKind.None), // POST api/Machines/{id:long}/sync-restock/apply
+        // Issue #1326: applying an already-imported product replacement writes local movements and
+        // makes no Nayax call at all.
+        new("MachinesController.ApplySyncRestockReplacement", PlanRequirementKind.None), // POST api/Machines/{id:long}/sync-restock/apply-replacement
         new("MachinesController.GetAll", PlanRequirementKind.ViaProviderGate), // GET api/Machines
         new("MachinesController.GetById", PlanRequirementKind.ViaProviderGate), // GET api/Machines/{id:long}
         new("MachinesController.GetLatestSales", PlanRequirementKind.ViaProviderGate), // GET api/Machines/{id:long}/latest-sales

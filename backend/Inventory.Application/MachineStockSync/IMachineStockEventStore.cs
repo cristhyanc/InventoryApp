@@ -120,6 +120,34 @@ public sealed record MachineStockRefillRequest(
 public sealed record AppliedMachineRefill(int EventId, int StockAdjustmentId);
 
 /// <summary>
+/// One confirmed product replacement to record (issue #1326): the 510 event it settles, that
+/// event's own <c>EventLogID</c> for the movements' notes, and the operator's choice as the
+/// deterministic Domain rule <see cref="NayaxProductReplacementWritePolicy"/> accepted it.
+/// </summary>
+public sealed record MachineStockReplacementWrite(
+    int EventId, long NayaxEventLogId, NayaxProductReplacementChoice Choice);
+
+/// <summary>
+/// The movements one applied replacement created, each <see langword="null"/> when the choice wrote
+/// none: the incoming refill out of storage, the outgoing units' return to storage, and - for a
+/// disposal only - the write-off of exactly those returned units.
+/// </summary>
+public sealed record AppliedProductReplacement(
+    int? IncomingStockAdjustmentId,
+    int? OutgoingReturnStockAdjustmentId,
+    int? OutgoingWriteOffStockAdjustmentId);
+
+/// <summary>
+/// The outcome of one replacement's write. A failed one has recorded nothing at all - no movement
+/// and no applied state on the event - and <see cref="Failure"/> says why, in the same shape and for
+/// the same reasons as <see cref="MachineRefillApplication"/> (issue #1240).
+/// </summary>
+public sealed record MachineReplacementApplication(
+    bool Succeeded,
+    AppliedProductReplacement? Applied,
+    MachineRefillFailure? Failure = null);
+
+/// <summary>
 /// Why one product's batch of refills could not be recorded (issue #1240).
 ///
 /// <para><see cref="FailureType"/> is a short code for the diagnostic log line - an exception's type
@@ -270,6 +298,21 @@ public interface IMachineStockEventStore
     Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The product with this id while it is an <strong>active</strong> product of the caller's own
+    /// business, and <see langword="null"/> otherwise (issue #1326). One answer covers a retired
+    /// product, another business's product and one that no longer exists alike: the tenant query
+    /// filters are what make a foreign id indistinguishable from a missing one here, and the
+    /// replacement apply's single refusal sentence is what keeps it that way for the caller too.
+    ///
+    /// <para>It is deliberately separate from <see cref="FindStorageProductAsync"/>, which an
+    /// ordinary apply uses on a product the <em>import</em> matched: that match may legitimately
+    /// name a product the operator has since retired, and refusing it here would change the 501
+    /// apply's behaviour. A product a request names is held to the stricter rule.</para>
+    /// </summary>
+    Task<NayaxStockSyncProduct?> FindActiveStorageProductAsync(
+        long productId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Opens the write transaction one product's batch of refills runs in (issue #1127). Every read
     /// that decides those writes - the events' own stored state and the product's storage quantity -
     /// must happen inside it.
@@ -305,6 +348,33 @@ public interface IMachineStockEventStore
         Machines.MachineIdentity machine,
         long productId,
         IReadOnlyList<MachineStockRefillRequest> refills,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records one confirmed product replacement (issue #1326): up to three movements, the event's
+    /// applied state and the choice it was applied with, all in the caller's own write-locked
+    /// transaction and in <strong>one</strong> unit of work, so the event can never be left marked
+    /// applied without the movements it names - or with only some of them.
+    ///
+    /// <para>The movements are exactly what
+    /// <see cref="NayaxProductReplacementWritePolicy.Movements"/> describes, in that order: the
+    /// incoming refill (a negative storage change, costing-neutral, carrying the event's own
+    /// <c>EventDateTimeGMT</c> as the machine ledger's instant exactly as a Sync Restock refill
+    /// does), then - for an outgoing choice - the return of the outgoing units to storage (the same
+    /// <c>MachineRefill</c> reason with a <em>positive</em> storage change, equally costing-neutral),
+    /// then - for a disposal only - the established <c>Damaged</c>/<c>Expired</c> write-off of
+    /// exactly those units. The return is staged before the write-off deliberately: the units are in
+    /// the machine, so they are in storage before they are written off it.</para>
+    ///
+    /// <para>Each product whose stock actually moved is rebuilt <strong>once</strong>, so the loss a
+    /// disposal records is costed by the one authoritative cost replay. Like
+    /// <see cref="ApplyProductRefillsAsync"/> it saves inside the caller's transaction and
+    /// deliberately does <b>not</b> commit: a failure is answered with <c>Succeeded: false</c> and
+    /// the caller's disposal discards every write.</para>
+    /// </summary>
+    Task<MachineReplacementApplication> ApplyProductReplacementAsync(
+        Machines.MachineIdentity machine,
+        MachineStockReplacementWrite replacement,
         CancellationToken cancellationToken);
 
     /// <summary>

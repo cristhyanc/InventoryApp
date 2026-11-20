@@ -35,6 +35,14 @@ namespace InventoryApi.Controllers;
 /// Starter business includes. A refused import stores nothing - the plan is evaluated before the
 /// multipart body is read at all - and nothing already imported is deleted or altered.</para>
 ///
+/// <para><strong>A long sales history is a second, background import</strong> (issue #1304).
+/// <c>POST api/imports/nayax-sales-history</c> accepts a CSV of up to 250,000 rows, stores it and
+/// answers at once with a job id; the background worker streams the rows and commits them in batches
+/// of <see cref="NayaxSalesHistoryPolicy.BatchRows"/>, each in its own short write-locked
+/// transaction. It carries the same capability and the same plan requirement as the normal sales
+/// file upload, applies the same per-row rules, and leaves that upload's own 5,000-row ceiling
+/// exactly as it is.</para>
+///
 /// <para><strong>A reimbursement report is uploaded here and nowhere else</strong> (issue #1237).
 /// <c>POST api/imports/pending-xml</c> imported whatever XML somebody with server access had left in
 /// a folder under the API's web root; it was the one import that did not take its input from the
@@ -48,17 +56,23 @@ namespace InventoryApi.Controllers;
 public sealed class ImportsController : ControllerBase
 {
     private readonly ImportNayaxSales _importNayaxSales;
+    private readonly UploadNayaxSalesHistory _uploadNayaxSalesHistory;
+    private readonly ListNayaxSalesHistoryImportJobs _listNayaxSalesHistoryImportJobs;
     private readonly UploadReimbursementReportArchive _uploadReimbursementReport;
     private readonly ListReimbursementImportJobs _listReimbursementImportJobs;
     private readonly GetReimbursementImportJob _getReimbursementImportJob;
 
     public ImportsController(
         ImportNayaxSales importNayaxSales,
+        UploadNayaxSalesHistory uploadNayaxSalesHistory,
+        ListNayaxSalesHistoryImportJobs listNayaxSalesHistoryImportJobs,
         UploadReimbursementReportArchive uploadReimbursementReport,
         ListReimbursementImportJobs listReimbursementImportJobs,
         GetReimbursementImportJob getReimbursementImportJob)
     {
         _importNayaxSales = importNayaxSales;
+        _uploadNayaxSalesHistory = uploadNayaxSalesHistory;
+        _listNayaxSalesHistoryImportJobs = listNayaxSalesHistoryImportJobs;
         _uploadReimbursementReport = uploadReimbursementReport;
         _listReimbursementImportJobs = listReimbursementImportJobs;
         _getReimbursementImportJob = getReimbursementImportJob;
@@ -92,6 +106,77 @@ public sealed class ImportsController : ControllerBase
             return BadRequest(ex.Message);
         }
     }
+
+    /// <summary>
+    /// Accepts a long Nayax sales history as a CSV and queues it for import in batches (issue
+    /// #1304).
+    ///
+    /// <para><strong>It imports nothing and waits for nothing.</strong> The file is checked against
+    /// <c>Inventory.Domain.Imports.NayaxSalesHistoryPolicy</c> here and now - the byte limit, the
+    /// format, the file's shape and the 250,000-row ceiling, counted by a streamed read - so a bad
+    /// file is a <c>400</c> the operator sees in seconds, and an accepted one is stored as a queued
+    /// job. The reply is <c>202</c> with the job id, and the background worker does the importing: it
+    /// streams the rows and commits them <see cref="NayaxSalesHistoryPolicy.BatchRows"/> at a time,
+    /// each batch in its own short transaction.</para>
+    ///
+    /// <para><strong>The normal upload above is unchanged.</strong> It keeps its own formats, its
+    /// 5,000-row ceiling and its synchronous counts exactly as issue #1300 delivered them. This is a
+    /// second route for a different operation, and the two share their per-row rules - through
+    /// <c>Inventory.Application.Imports.NayaxSalesRowApplier</c> - rather than their limits.</para>
+    ///
+    /// <para><strong>Authorization and plan are the normal upload's.</strong> The controller's
+    /// <c>Imports.Run</c> capability and <see cref="PlanFeature.SalesFileImport"/>: it is the same
+    /// uploaded-file import, so a business that may run one may run the other and a business whose
+    /// plan excludes the sales file import is refused here too, before the multipart body is read at
+    /// all. A role preview and a read-only support session are refused centrally because this is a
+    /// <c>POST</c>.</para>
+    ///
+    /// <para><strong>The business is the caller's own resolved business.</strong> Nothing in the
+    /// request can choose one: there is no business id in the route, the form or a header.</para>
+    /// </summary>
+    [HttpPost("nayax-sales-history")]
+    [RequirePlan(PlanFeature.SalesFileImport)]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(NayaxSalesHistoryPolicy.MaxUploadBytes)]
+    public async Task<ActionResult<NayaxSalesHistoryUploadAccepted>> UploadNayaxSalesHistory(
+        IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(NayaxSalesHistoryPolicy.EmptyUploadMessage);
+
+        if (file.Length > NayaxSalesHistoryPolicy.MaxUploadBytes)
+            return BadRequest(NayaxSalesHistoryPolicy.TooLargeMessage);
+
+        // The IFormFile stays here, at the HTTP boundary. The bytes are read into memory rather than
+        // to a path - nothing about this import touches the filesystem - and what bounds how much is
+        // read is the request size limit above plus the length check beside it, for a client that
+        // lied about it. The reading of the *rows* is what streams: the use case and the job walk
+        // these bytes one line at a time and never materialise the file's rows.
+        var content = await ReadAsync(file, cancellationToken);
+
+        var result = await _uploadNayaxSalesHistory.Handle(
+            file.FileName, content, cancellationToken);
+
+        if (!result.IsAccepted) return BadRequest(result.Rejection);
+
+        return Accepted(new NayaxSalesHistoryUploadAccepted(result.JobId!.Value));
+    }
+
+    /// <summary>
+    /// The caller's own business's latest sales history import jobs (issue #1304), newest first,
+    /// with the progress each one has committed.
+    ///
+    /// <para>Readable by the same members who may run the import, and - because it is a <c>GET</c> -
+    /// by a read-only support session, by that feature's own central method rule. It carries the same
+    /// plan requirement as the upload: the history import is one plan-gated feature, and its status
+    /// is part of it.</para>
+    /// </summary>
+    [HttpGet("nayax-sales-history/jobs")]
+    [RequirePlan(PlanFeature.SalesFileImport)]
+    public async Task<ActionResult<IReadOnlyList<NayaxSalesHistoryImportJobSummary>>>
+        NayaxSalesHistoryJobs(CancellationToken cancellationToken) =>
+        Ok(await _listNayaxSalesHistoryImportJobs.Handle(cancellationToken));
 
     /// <summary>
     /// Accepts the ZIP Nayax emails, exactly as it arrives, and queues it for import (issue #1149).

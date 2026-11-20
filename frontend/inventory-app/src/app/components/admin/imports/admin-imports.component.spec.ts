@@ -73,7 +73,10 @@ async function render(
     imports: [AdminImportsComponent],
     providers: [
       provideRouter([]),
-      { provide: ImportService, useValue: importService },
+      // The sales history card (issue #1304) reads its own job list on arrival, so the stub answers
+      // that read unless a case says otherwise - which is what keeps every other case here about
+      // the one import this page runs itself.
+      { provide: ImportService, useValue: { nayaxSalesHistoryJobs: () => of([]), ...importService } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } },
       { provide: SupportSessionService, useValue: { active$: sessionActive } },
       { provide: AccessService, useValue: { access$: access } }
@@ -203,13 +206,17 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
   it('keeps the sales file input restricted to the accepted extensions and disables the action while importing', async () => {
     const { fixture, host } = await render({ importNayaxSales: jest.fn(() => of(importResult({}))) });
 
-    expect(host.querySelector('input[type="file"]')?.getAttribute('accept')).toBe('.xlsx,.xls,.csv');
+    // Scoped to this card: the sales history card beside it (issue #1304) has a file input and an
+    // upload button of its own, and what this case is about is the upload this page runs itself.
+    const card = host.querySelector<HTMLElement>('section.card')!;
+
+    expect(card.querySelector('input[type="file"]')?.getAttribute('accept')).toBe('.xlsx,.xls,.csv');
 
     fixture.componentInstance.loading = true;
     fixture.detectChanges();
 
-    // The one import this page still runs, and not Download template, which calls no API.
-    const disabled = Array.from(host.querySelectorAll('button')).filter(button => button.disabled);
+    // The import itself, and not Download template, which calls no API.
+    const disabled = Array.from(card.querySelectorAll('button')).filter(button => button.disabled);
     expect(disabled).toHaveLength(1);
     expect(disabled[0].textContent).toContain('Importing');
   });
@@ -270,17 +277,18 @@ describe('AdminImportsComponent Nayax sales template (issue #389)', () => {
  * The product catalogue import (issue #888) and the reimbursement report (issue #1152) each have
  * their own page, and this page used to keep a short card linking to each. Both cards were removed
  * at the owner's request (17 November 2026): the pages are reached from their own sidebar entries,
- * and Import products also from All Products. What is left is the Nayax sales card alone.
+ * and Import products also from All Products. What is left is the two imports this page runs
+ * itself - the Nayax sales file upload and, since issue #1304, the sales history.
  */
 describe('AdminImportsComponent cards', () => {
   function cardTitles(host: HTMLElement): string[] {
     return Array.from(host.querySelectorAll<HTMLElement>('section.card .card-title')).map((title) => title.textContent?.trim() ?? '');
   }
 
-  it('shows only the Nayax sales import card', async () => {
+  it('shows the two imports it runs itself and nothing else', async () => {
     const { host } = await render({});
 
-    expect(cardTitles(host)).toEqual(['Import Nayax sales']);
+    expect(cardTitles(host)).toEqual(['Import Nayax sales', 'Import a sales history']);
   });
 
   it('no longer links to the Import products or Reimbursement Report pages', async () => {
@@ -578,5 +586,60 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
     fixture.detectChanges();
 
     expect(planLock(host)?.textContent).toContain('needs the Pro plan.');
+  });
+});
+
+/**
+ * The sales history import card (issue #1304) is composed here, not grown into this page: what it
+ * does with a file, a job list and a refresh is its own component's and its own spec's. What this
+ * page is responsible for is whether it is offered at all, and what it is told about the support
+ * session.
+ */
+describe('AdminImportsComponent sales history card (issue #1304)', () => {
+  function card(host: HTMLElement): HTMLElement | null {
+    return host.querySelector<HTMLElement>('app-sales-history-import');
+  }
+
+  it('offers the sales history import beside the normal upload', async () => {
+    const nayaxSalesHistoryJobs = jest.fn(() => of([]));
+    const { host } = await render({ nayaxSalesHistoryJobs }, undefined, of(false), of(granted(enforced('Pro'))));
+
+    expect(card(host)).not.toBeNull();
+    expect(card(host)!.textContent).toContain('Import a sales history');
+
+    // It reads its own list on arrival; this page neither reads it nor passes it in.
+    expect(nayaxSalesHistoryJobs).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The same lock, because it is the same plan-gated feature: both of its endpoints carry
+   * `[RequirePlan(PlanFeature.SalesFileImport)]`, so a locked business is not offered a status list
+   * the backend would refuse either.
+   */
+  it('withholds the whole card while the plan locks the sales file import', async () => {
+    const nayaxSalesHistoryJobs = jest.fn(() => of([]));
+    const { host } = await render(
+      { nayaxSalesHistoryJobs },
+      undefined,
+      of(false),
+      of(granted(enforced('Free')))
+    );
+
+    expect(card(host)).toBeNull();
+    expect(host.querySelector('[data-testid="sales-import-plan-lock"]')).not.toBeNull();
+
+    // And nothing is read for a card that is not there.
+    expect(nayaxSalesHistoryJobs).not.toHaveBeenCalled();
+  });
+
+  it('tells the card when a support session is active', async () => {
+    const { host } = await render({}, undefined, of(true), of(granted(enforced('Pro'))));
+
+    const upload = card(host)!.querySelector<HTMLButtonElement>(
+      '[data-testid="sales-history-upload-button"]'
+    );
+
+    expect(upload).not.toBeNull();
+    expect(upload!.disabled).toBe(true);
   });
 });

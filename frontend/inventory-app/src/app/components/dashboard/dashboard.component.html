@@ -274,6 +274,8 @@
       <app-nayax-sale-review-alert></app-nayax-sale-review-alert>
       <!-- Products whose stock cost could not be recalculated; they no longer fail the sales sync. -->
       <app-inventory-cost-attention-alert></app-inventory-cost-attention-alert>
+      <!-- Issue #1352: Nayax products that are selling and have never been imported, so their sales take no stock and carry no cost. -->
+      <app-unimported-nayax-product-alert></app-unimported-nayax-product-alert>
     </div>
 
     <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
