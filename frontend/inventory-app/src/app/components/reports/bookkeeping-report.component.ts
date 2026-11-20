@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
+import { ImportedReimbursementPeriod } from '../../features/reports/bookkeeping/models/bookkeeping-report.model';
 import { MachineService } from '../../services/machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, BookkeepingReport } from '../../services/reporting.service';
@@ -60,15 +61,29 @@ import { IconComponent } from '../shared/icon.component';
       <div class="grid gap-5 lg:grid-cols-2">
         <section class="card"><div class="card-header"><h2 class="card-title">Cost of Sales</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Gross Sales</span><strong>{{ moneyOrState(report.sales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Card Sales</span><strong>{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Cash Sales</span><strong>{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>COGS</span><strong>{{ report.isCogsComplete === false ? 'Partial ' + money(report.partialCostOfGoods) : moneyOrState(report.costOfGoods, salesAvailability(report)) }}</strong></div>@if (report.isCogsComplete === false) {<div class="text-md-warning-text">{{ report.uncostedTransactionCount }} completed sale(s) uncosted ({{ money(report.uncostedSalesAmount) }})</div>}<div class="flex justify-between border-t border-md-gray-200 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ moneyOrState(report.grossProfit, salesAvailability(report), 'Profit unavailable') }}</strong></div><div class="flex justify-between"><span class="value-muted">Gross Margin</span><strong>{{ report.grossProfit == null ? 'Profit unavailable' : percentOrState(margin(report.sales, report.grossProfit), salesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Operating Costs</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Total Nayax Processing Fees</span><strong data-testid="nayax-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="pl-2"><span class="value-muted">@if (availabilityBadge(feesAvailability(report)); as badge) { <span data-testid="fees-availability">{{ badge }}</span> } @else if (report.nayaxProcessingFees?.hasEstimatedFees) { {{ money(report.nayaxProcessingFees?.actualFeeIncGst) }} actual · {{ money(report.nayaxProcessingFees?.estimatedFeeIncGst) }} estimated } @else {Actual}</span></div><div class="flex justify-between"><span>Site Commission</span><strong data-testid="site-commission">{{ moneyOrState(report.siteCommission, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>Delivery Costs</span><strong data-testid="delivery-costs">{{ money(report.deliveryCosts) }}</strong></div><div class="flex justify-between"><span>Package Costs</span><strong data-testid="package-costs">{{ money(report.packageCosts) }}</strong></div>@for (entry of categoryEntries(report); track entry[0]) {<div class="flex justify-between"><span>{{ categoryLabel(entry[0]) }}</span><strong>{{ money(entry[1]) }}</strong></div>}<div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total Operating Costs</span><strong data-testid="total-operating-costs">{{ moneyOrState(totalOperatingCosts(report), combinedAvailability(report)) }}</strong></div></div></section>
-        <section class="card lg:col-span-2"><div class="card-header"><h2 class="card-title">Nayax Card Settlement</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Card Sales</span><strong data-testid="settlement-card-sales">{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>- Nayax Fees</span><strong data-testid="settlement-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Net Reimbursement</span><strong data-testid="net-reimbursement">{{ moneyOrState(report.netSettlement, combinedAvailability(report)) }}</strong></div></div><div class="card-footer">Net reimbursement is the amount paid by Nayax for card sales and is not business profit.</div></section>
+        <section class="card lg:col-span-2"><div class="card-header"><h2 class="card-title">Nayax Card Settlement</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Card Sales</span><strong data-testid="settlement-card-sales">{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>- Nayax Fees</span><strong data-testid="settlement-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Net Reimbursement</span><strong data-testid="net-reimbursement">{{ moneyOrState(report.netSettlement, combinedAvailability(report)) }}</strong></div>@if (report.isNetSettlementEstimated) {<p class="value-muted" data-testid="net-reimbursement-estimated">Estimated: no imported payout covers the whole of this range, so this is card sales less the Nayax fees rather than an amount Nayax paid.</p>}</div><div class="card-footer">Net reimbursement is the amount paid by Nayax for card sales and is not business profit.</div></section>
         <section class="card lg:col-span-2" data-testid="reimbursement-reconciliation">
           <div class="card-header"><h2 class="card-title">Nayax Reimbursement Reconciliation</h2><span class="badge" [ngClass]="reconciliationBadgeClass(report.reconciliationStatus)" data-testid="reconciliation-status">{{ report.reconciliationStatus || 'Pending' }}{{ report.isReconciled ? ' ✓' : '' }}</span></div>
           <div class="card-body max-w-xl space-y-3">
             <div class="flex justify-between"><span>Expected Reimbursement (calculated)</span><strong data-testid="expected-reimbursement">{{ moneyOrState(report.expectedReimbursement, combinedAvailability(report)) }}</strong></div>
             <div class="flex justify-between"><span>Actual Reimbursement (imported)</span><strong data-testid="actual-reimbursement">{{ actualReimbursementLabel(report) }}</strong></div>
+            @if (report.reimbursementPeriods?.length) {
+              <p class="value-muted" data-testid="reimbursement-periods">Payout period@if (report.reimbursementPeriods!.length > 1) {s}: @for (period of report.reimbursementPeriods; track period.periodStart + period.periodEnd) {<span>{{ period.periodStart | date:'dd/MM/yyyy' }} – {{ period.periodEnd | date:'dd/MM/yyyy' }}{{ $last ? '' : ', ' }}</span>}</p>
+            }
             <div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Difference</span><strong data-testid="reimbursement-difference">{{ reimbursementDifferenceLabel(report) }}</strong></div>
           </div>
-          <div class="card-footer">Expected reimbursement is calculated from this period's card sales less the Nayax fees including GST. Actual reimbursement is what an imported Nayax settlement recorded for the period, matched on the transaction period it covers. Reconciled when the absolute difference is at most {{ money(report.reconciliationTolerance ?? 0.01) }}; until a settlement import covers this period the comparison stays pending.</div>
+          @if (report.partlyCoveredReimbursements?.length) {
+            <div class="card-body max-w-xl" data-testid="partly-covered-payouts">
+              <p class="font-semibold">Payouts partly outside this range</p>
+              <ul class="list-disc pl-5 value-muted">
+                @for (period of report.partlyCoveredReimbursements; track period.periodStart + period.periodEnd) {
+                  <li>{{ period.periodStart | date:'dd/MM/yyyy' }} – {{ period.periodEnd | date:'dd/MM/yyyy' }}: {{ payoutTotalLabel(period) }}</li>
+                }
+              </ul>
+              <p class="value-muted">These payouts settle days outside the selected dates, so they are not counted in the actual reimbursement, the net reimbursement or the difference. Select the dates a payout covers to reconcile it.</p>
+            </div>
+          }
+          <div class="card-footer">Expected reimbursement is calculated from this period's card sales less the Nayax fees including GST. Actual reimbursement is what imported Nayax settlements recorded for the period: only a payout whose own settlement period lies entirely inside the dates you selected is counted, because a payout that also settles days outside them is not this period's money. Reconciled when the absolute difference is at most {{ money(report.reconciliationTolerance ?? 0.01) }}; with no payout lying entirely inside these dates there is nothing to compare, so the actual reimbursement is shown as not available.</div>
         </section>
         <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Taxable Sales</span><strong data-testid="taxable-sales">{{ moneyOrState(report.taxableSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>GST-free Sales</span><strong data-testid="gst-free-sales">{{ moneyOrState(report.gstFreeSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Sales of products with no GST rule</span><strong data-testid="no-gst-rule-sales">{{ moneyOrState(report.noGstRuleSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3"><span>GST on Sales</span><strong>{{ moneyOrState(report.gstOnSales, salesAvailability(report)) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">GST on sales is one eleventh of taxable sales (GST-inclusive), taken once from the period total. Sales of products whose GST rule is GST-free are left out; a product with no GST rule is taxable, and those sales are shown above so you can see how much of the total rests on it.</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ moneyOrState(report.gstOnFees, feesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Cash Reconciliation</h2></div><div class="card-body"><div class="flex justify-between"><span>Cash Sales</span><strong data-testid="reconciliation-cash-sales">{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div></div><div class="card-footer">Cash collection data is not currently recorded.</div></section>
@@ -97,7 +112,7 @@ import { IconComponent } from '../shared/icon.component';
           <p>Cost of goods and profit use the cost recorded on each sale when that sale was costed, so an earlier period keeps the cost history it was built from. A completed sale with no recorded cost stays uncosted: cost of goods is shown as partial and profit is left unavailable rather than estimated from today's product cost.</p>
           <p>Site commission comes from the effective-dated site commission agreement that covered each sale's date, so a rate that changed part-way through the period applies from the date it took effect.</p>
           <p>Nayax processing fees use the imported fee amounts for the dates those cover, and the configured rate for the remaining dates; any estimated part is shown beside the fee total.</p>
-          <p>The expected reimbursement is calculated from this period's card sales less those Nayax fees including GST. The actual reimbursement is not calculated at all: it is the amount an imported Nayax settlement recorded for the period, matched on the transaction period that settlement covers rather than on the date it was paid out or imported. A period with no imported settlement yet is shown as pending rather than compared against a zero.</p>
+          <p>The expected reimbursement is calculated from this period's card sales less those Nayax fees including GST. The actual reimbursement is not calculated at all: it is the amount imported Nayax settlements recorded for the period, matched on the transaction period each settlement covers rather than on the date it was paid out or imported. Only a payout whose settlement period lies entirely inside the dates you selected is counted — a weekly payout is not a single day's money, and a payout the dates cut is listed separately instead of being added in. When no payout lies entirely inside the selected dates there is nothing to compare: the actual reimbursement is shown as not available rather than as a zero, and the net reimbursement beside it is labelled as an estimate because it is then card sales less the fees rather than an amount Nayax paid.</p>
           <p>GST on sales follows each product's own GST rule. Sales of products whose rule is GST-free are left out of taxable sales; a product with no GST rule yet is taxable, as is a sale whose product could not be matched, and those sales are reported separately so you can see how much of the figure rests on products nobody has classified. GST on sales is then one eleventh of taxable sales, taken once from the period total rather than per sale, so a month of small sales carries no rounding drift.</p>
           <p>Each product's GST rule as it stands today is used: no GST classification is recorded per sale and no history of a product's rule is kept, so changing a product's rule changes what this report says about its past sales. GST on Nayax fees and operating-expense GST come from imported and recorded amounts and are not derived this way.</p>
           <p>If your business is set to <strong>Registered for GST</strong> in Business Settings, the GST summary above restates these figures under the BAS labels G1, 1A and 1B and shows the estimated net GST for the dates selected. It is the same server calculation the GST / BAS Accounting Aid report uses, so both pages report the same period identically, and it covers the whole business — select all machines to see it. It is an estimate for reviewing the GST section of a BAS, not a lodgement figure: where the figures rest on records that are missing, unclassified or estimated the summary says so.</p>
@@ -160,28 +175,32 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
     return status === 'Reconciled' ? 'badge-success' : 'badge-warning';
   }
 
-  /** Whether no imported settlement row covers this period, so there is no actual to compare. */
-  isReimbursementPending(report: BookkeepingReport): boolean {
-    return (report.reconciliationStatus || 'Pending') === 'Pending';
-  }
-
   /**
-   * The imported actual reimbursement: the amount when a settlement import covers the period, the
-   * settlement availability state in place of a zero nothing measured, and the word `Pending` when
-   * no imported row covers the period at all - which is a different statement from a settlement
-   * that really paid nothing, and the one case where this figure is not an amount.
+   * The imported actual reimbursement: the amount when a payout lying entirely inside the selected
+   * dates recorded one, the settlement availability state in place of a zero nothing measured, and
+   * `Not available` when the range has no such payout at all (issue #1253). The last case is a
+   * different statement from a settlement that really paid nothing, and it is the one case where
+   * this figure is not an amount - the API reports it as absent rather than as a zero.
    */
   actualReimbursementLabel(report: BookkeepingReport): string {
-    return this.isReimbursementPending(report)
-      ? 'Pending'
+    return report.actualReimbursement == null
+      ? 'Not available'
       : this.moneyOrState(report.actualReimbursement, this.feesAvailability(report));
   }
 
-  /** The signed difference, or nothing to show while the comparison is pending. */
+  /** The signed difference, or nothing to show when there is no actual to compare against. */
   reimbursementDifferenceLabel(report: BookkeepingReport): string {
-    return this.isReimbursementPending(report)
+    return report.reimbursementDifference == null
       ? '—'
       : this.moneyOrState(report.reimbursementDifference, this.combinedAvailability(report));
+  }
+
+  /**
+   * One listed payout's own total. A payout whose import recorded no total at all is shown as such
+   * rather than as `$0.00`, for the same reason the actual reimbursement is (issue #1253).
+   */
+  payoutTotalLabel(period: ImportedReimbursementPeriod): string {
+    return period.total == null ? 'Not available' : this.money(period.total);
   }
 
   /** The state the API decided for every figure derived from stored provider sales (issue #730). */

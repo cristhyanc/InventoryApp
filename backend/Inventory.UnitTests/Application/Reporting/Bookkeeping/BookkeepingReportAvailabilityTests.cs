@@ -196,8 +196,9 @@ public class BookkeepingReportAvailabilityTests
     /// <summary>
     /// Issue #805: the imported actual reimbursement is settlement-sourced and the comparison built
     /// on it depends on both families, so the fee note has to name them and the combined state has
-    /// to govern the difference. A period with no settlement import reports an actual of zero in the
-    /// contract, and that zero is exactly the one the state exists to stop a reader believing.
+    /// to govern the difference. A period with no payout wholly inside it reports no actual at all
+    /// in the contract since issue #1253 - the zero that used to stand there is exactly the figure
+    /// both that issue and this state exist to stop a reader believing.
     /// </summary>
     [Fact]
     public async Task The_fee_note_names_the_actual_reimbursement_and_the_reconciliation_when_no_settlement_covered_the_period()
@@ -214,7 +215,7 @@ public class BookkeepingReportAvailabilityTests
 
         Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
         Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Combined.State);
-        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Null(report.ActualReimbursement);
         Assert.Equal("Pending", report.ReconciliationStatus);
         Assert.Contains("actual reimbursement", Notes(report), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("reconciliation", Notes(report), StringComparison.OrdinalIgnoreCase);

@@ -4,16 +4,17 @@
 #
 # Pipeline:
 #   1. Run the InventoryApp Agent Evals corpus and runner tests
-#   2. Restore backend
-#   3. Verify C# formatting          (dotnet format --verify-no-changes)
-#   4. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
-#   5. Test backend with coverage    (Inventory.UnitTests and Inventory.IntegrationTests; the latter includes the architecture tests)
-#   6. Check vulnerable NuGet packages
-#   7. Install frontend dependencies (npm ci)
-#   8. Angular ESLint                (npm run lint)
-#   9. Frontend unit/component tests (npm run test)
-#  10. Angular production build      (npm run build)
-#  11. npm audit report
+#   2. Check documentation links and anchors (scripts/check-doc-links.mjs)
+#   3. Restore backend
+#   4. Verify C# formatting          (dotnet format --verify-no-changes)
+#   5. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
+#   6. Test backend with coverage    (Inventory.UnitTests and Inventory.IntegrationTests; the latter includes the architecture tests)
+#   7. Check vulnerable NuGet packages
+#   8. Install frontend dependencies (npm ci)
+#   9. Angular ESLint                (npm run lint)
+#  10. Frontend unit/component tests (npm run test)
+#  11. Angular production build      (npm run build)
+#  12. npm audit report
 #
 # scripts/validate.ps1 performs the same checks on Windows PowerShell. Keep the two in step.
 
@@ -122,6 +123,12 @@ run_step "Test price collector scripts" \
     "${repo_root}/scripts/price-collector/pagination.test.mjs" \
     "${repo_root}/scripts/price-collector/workflow.test.mjs" \
     "${repo_root}/scripts/price-collector/workflow-contract.test.mjs"
+
+run_step "Test documentation link checker" \
+    node --test "${repo_root}/scripts/check-doc-links.test.mjs"
+
+run_step "Check documentation links and anchors" \
+    node "${repo_root}/scripts/check-doc-links.mjs"
 
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"

@@ -22,17 +22,17 @@ InventoryApp runs a real vending-machine business. Every contribution — human 
    powershell -ExecutionPolicy Bypass -File scripts/validate.ps1    # Windows PowerShell
    ```
 
-   This single script runs backend restore/format/build/tests with coverage, a NuGet vulnerability check, `npm ci`, Angular ESLint, and the Angular production build. Report the actual result — never claim it passed without running it.
+   This single script runs the Agent Evals corpus and node:test suites, backend restore/format/build/tests with coverage, a NuGet vulnerability check, `npm ci`, Angular ESLint, Jest frontend tests, and the Angular production build. Report the actual result — never claim it passed without running it.
 7. **Open a pull request targeting `develop`** using `.github/pull_request_template.md`. Fill in the acceptance criteria checklist, validation evidence, impact table, and the `## Documentation impact` section (`Decision: UPDATED` or `Decision: NOT REQUIRED` with specific evidence — see [AGENTS.md § Documentation impact gate](AGENTS.md#documentation-impact-gate)). CI rejects a missing, placeholder, or generic declaration.
 8. **A human reviews and merges.** Only a maintainer approves, merges, or prepares a `develop` → `main` release pull request; no contributor or automated agent may merge, deploy, run production migrations, or touch production data.
 
 ## What external contributors cannot do
 
-This repository runs privileged automation (an implementation agent, an independent review agent, and Azure deployment workflows) that must not be reachable from untrusted contributions:
+This repository runs privileged automation (an implementation agent, a separate read-only Claude review (same provider), and Azure deployment workflows) that must not be reachable from untrusted contributions:
 
 - **Opening a pull request from a fork never grants access to repository or deployment secrets.** The pull-request validation workflow (`validate.yml`) runs the same-repository build/test job with `contents: read` only and no Anthropic or Azure credential, regardless of who opened the PR; that credential-free job is what actually runs `scripts/validate.sh` against the merge result. A fork PR can therefore be built and tested safely, and a maintainer must approve the first workflow run on a new contributor's pull request (GitHub's standard fork-PR protection).
 - **A fork PR cannot trigger the implementation, review, or repair agents.** Those workflows require an existing `agent/issue-*` branch that lives in this repository, an issue explicitly labelled `agent-ready-claude` (or another Claude readiness label) by a maintainer, or a repair comment from the repository owner — none of which an external contributor can produce.
-- **A fork PR cannot deploy anything.** The Azure deployment workflows (`vm-manager.yml`, the Static Web Apps workflow) trigger only on a `push` to `main`, which requires an already-merged, maintainer-approved change; they never run against a pull request.
+- **A fork PR cannot deploy anything.** There is no Static Web Apps workflow. Production deploys only through the human-started `Deploy Production` workflow (`deploy-production.yml`), which takes no pull-request trigger at all; the hosted testing environment deploys through `Deploy Testing` (`deploy-testing.yml`) on a push to `develop`, which requires an already-merged, maintainer-approved change. Neither workflow ever runs against a pull request.
 - **No contributor-supplied code runs with write access to this repository or with deployment credentials before a maintainer has reviewed it.**
 
 See [docs/automation.md](docs/automation.md) for the complete authority model.

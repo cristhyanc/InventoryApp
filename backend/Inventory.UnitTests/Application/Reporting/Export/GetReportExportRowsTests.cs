@@ -298,6 +298,13 @@ public class GetReportExportRowsTests
     private static string Invariant(decimal value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
+    /// An amount the API reports as absent is an <em>empty</em> cell, never a zero (issue #1253 for
+    /// the actual reimbursement, issue #730 for the rule).
+    /// </summary>
+    private static string Invariant(decimal? value) =>
+        value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+
+    /// <summary>
     /// A period no provider source accounted for and that holds no provider data, with every
     /// provider-sourced amount genuinely at zero, so the export's cells are the only thing that can
     /// tell "nobody measured this" from "it was zero". The business's own delivery, package and
@@ -549,6 +556,71 @@ public class GetReportExportRowsTests
         Assert.Equal("0", Cell(table, "ReimbursementDifference"));
         Assert.Equal("Reconciled", Cell(table, "ReconciliationStatus"));
         Assert.Equal("True", Cell(table, "IsReconciled"));
+    }
+
+    /// <summary>
+    /// Issue #1253: a range with no payout wholly inside it has no actual reimbursement, and in a
+    /// fully accounted-for period that cell is <strong>blank</strong> - never <c>0</c>, which a
+    /// reader pasting the file into a working paper would take for a settlement of nothing. The net
+    /// settlement beside it is this report's own estimate and carries the <c>Estimated</c> marker,
+    /// and the payout the range cut is listed with its period dates and total in a column of its own.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_leaves_an_unavailable_actual_blank_and_marks_the_estimate()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(sales: 100m, cardSales: 100m, cashSales: 0m, cashTransactions: 0) with
+            {
+                ProcessingFees = new NayaxProcessingFeeResult(2.5m, 0.25m, 2.75m, 2.75m, 0m, 0m, 0, DateTime.UtcNow, null),
+                ImportedHasNetSettlement = false,
+                ImportedNetSettlement = 0m,
+                ImportedPartlyCoveredPeriods =
+                    [new ImportedReimbursementPeriodDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m)],
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2026, 9, 7), new DateTime(2026, 9, 7));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("Complete", Cell(table, "FeeDataAvailability"));
+        Assert.Equal(string.Empty, Cell(table, "ActualReimbursement"));
+        Assert.Equal(string.Empty, Cell(table, "ReimbursementDifference"));
+        Assert.Equal("Range cuts a payout period", Cell(table, "ReconciliationStatus"));
+        Assert.Equal("False", Cell(table, "IsReconciled"));
+        // The estimate itself is still published - card sales 100.00 less fees 2.75 - and is labelled.
+        Assert.Equal("97.25", Cell(table, "NetSettlement"));
+        Assert.Equal("Estimated", Cell(table, "NetSettlementSource"));
+        Assert.Equal("2026-09-01 to 2026-09-07: 680.75", Cell(table, "PartlyCoveredPayouts"));
+        Assert.Equal(string.Empty, Cell(table, "ReimbursementPeriods"));
+        // The expected reimbursement is unchanged and stays on its own line.
+        Assert.Equal("97.25", Cell(table, "ExpectedReimbursement"));
+    }
+
+    /// <summary>
+    /// And a range whose payout lies wholly inside it exports the imported amount, the periods it is
+    /// made of, and an <c>Imported</c> net settlement - no estimate marker (issue #1253).
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_marks_an_imported_net_settlement_and_lists_its_periods()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(sales: 700m, cardSales: 700m, cashSales: 0m, cashTransactions: 0) with
+            {
+                ProcessingFees = new NayaxProcessingFeeResult(17.5m, 1.75m, 19.25m, 19.25m, 0m, 0m, 0, DateTime.UtcNow, null),
+                ImportedHasNetSettlement = true,
+                ImportedNetSettlement = 680.75m,
+                ImportedFullyCoveredPeriods =
+                    [new ImportedReimbursementPeriodDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m)],
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("680.75", Cell(table, "ActualReimbursement"));
+        Assert.Equal("680.75", Cell(table, "NetSettlement"));
+        Assert.Equal("Imported", Cell(table, "NetSettlementSource"));
+        Assert.Equal("2026-09-01 to 2026-09-07: 680.75", Cell(table, "ReimbursementPeriods"));
+        Assert.Equal(string.Empty, Cell(table, "PartlyCoveredPayouts"));
+        Assert.Equal("Reconciled", Cell(table, "ReconciliationStatus"));
     }
 
     [Fact]

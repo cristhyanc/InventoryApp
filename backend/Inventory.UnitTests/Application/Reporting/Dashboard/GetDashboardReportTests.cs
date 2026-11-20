@@ -18,7 +18,7 @@ public class GetDashboardReportTests
         decimal nayaxFeesExGst = 4m, decimal siteCommission = 3m, decimal? netProfit = 40m,
         decimal? netMarginPercent = 36.36m, decimal? directProfit = null, decimal? directMarginPercent = null,
         bool isCogsComplete = true, decimal partialCostOfGoods = 50m, bool hasMissingFeeRates = false,
-        int transactionCount = 10, decimal importedNetSettlement = 74m, bool importedContainsRows = true)
+        int transactionCount = 10, decimal? importedNetSettlement = 74m, bool hasPartlyCoveredPayout = false)
     {
         // The expected-versus-actual reimbursement comparison is the bookkeeping report's own since
         // issue #805, decided there by the same Domain policy this summary used to call. The fake
@@ -26,7 +26,7 @@ public class GetDashboardReportTests
         // bookkeeping report would publish for these card sales, fees and imported settlement.
         var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
             CardSales: cardSales, FeesIncludingGst: nayaxFeesIncludingGst,
-            ActualReimbursement: importedNetSettlement, ImportedContainsRows: importedContainsRows));
+            ActualReimbursement: importedNetSettlement, HasPartlyCoveredPayout: hasPartlyCoveredPayout));
         return new(
         From: new DateTime(2025, 8, 1), To: new DateTime(2025, 8, 31), FinancialYear: "FY2025-26",
         Sales: sales, CostOfGoods: isCogsComplete ? partialCostOfGoods : null, GrossProfit: grossProfit,
@@ -195,18 +195,42 @@ public class GetDashboardReportTests
         Assert.Equal("Reconciled", report.ReconciliationStatus);
     }
 
+    /// <summary>
+    /// No payout lies wholly inside the range, so this summary republishes an actual reimbursement
+    /// that is not available at all - never a zero (issue #1253).
+    /// </summary>
     [Fact]
-    public async Task No_imported_rows_reports_pending_reconciliation()
+    public async Task No_imported_rows_reports_pending_reconciliation_with_no_actual_at_all()
     {
         var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 5m,
-            importedContainsRows: false, importedNetSettlement: 0m);
+            importedNetSettlement: null);
         var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
         Assert.Equal("Pending", report.ReconciliationStatus);
         Assert.False(report.IsReconciled);
-        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Null(report.ActualReimbursement);
+        Assert.Null(report.NetReimbursement);
+        Assert.Null(report.ReimbursementDifference);
+    }
+
+    /// <summary>
+    /// And a range that only cuts a payout period republishes that status, so the reports dashboard
+    /// cannot show "Needs Review" for a difference nothing measured (issue #1253).
+    /// </summary>
+    [Fact]
+    public async Task A_range_that_only_cuts_a_payout_period_republishes_that_status()
+    {
+        var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 2.75m,
+            importedNetSettlement: null, hasPartlyCoveredPayout: true);
+        var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.Equal("Range cuts a payout period", report.ReconciliationStatus);
+        Assert.False(report.IsReconciled);
+        Assert.Null(report.ActualReimbursement);
     }
 
     [Fact]

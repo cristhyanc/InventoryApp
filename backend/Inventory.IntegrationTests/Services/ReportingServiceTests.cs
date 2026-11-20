@@ -1056,6 +1056,42 @@ public class ReportingRegressionTests
         }
     }
 
+    /// <summary>
+    /// A machine whose stored sale name changed is one row on the screen, and the export is that same
+    /// row (issue #1263). Before the fix both showed a row per stored name, each charged the machine's
+    /// whole expenses, fees and commission.
+    /// </summary>
+    [Fact]
+    public async Task Machine_profitability_csv_export_shows_the_one_row_per_machine_the_api_report_does()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 410, MachineID = 10, MachineName = "Lobby", SettlementValue = 10m, PaymentMethod = "Credit Card", CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 411, MachineID = 10, MachineName = "Lobby (Level 1)", SettlementValue = 10m, PaymentMethod = "Credit Card", CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+        await RecordFullCoverageAsync(db, new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+
+        var report = await service.GetMachineProfitabilityAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("machine-profitability", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+
+        var apiRow = Assert.Single(report.Rows);
+        Assert.Equal(20m, apiRow.Sales);
+        // The latest sale's name, because this business has recorded no machine of its own here.
+        Assert.Equal("Lobby (Level 1)", apiRow.MachineName);
+        var values = Assert.Single(lines.Skip(1)).Trim('"').Split("\",\"");
+        var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+        Assert.Equal(apiRow.MachineId.ToString(CultureInfo.InvariantCulture), row["MachineId"]);
+        Assert.Equal(apiRow.MachineName, row["MachineName"]);
+        Assert.Equal(apiRow.Sales.ToString(CultureInfo.InvariantCulture), row["Sales"]);
+        Assert.Equal(apiRow.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
+        Assert.Equal(apiRow.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), row["NayaxFeeIncGST"]);
+    }
+
     [Fact]
     public async Task Product_profitability_csv_export_uses_the_same_authoritative_values_as_the_api_report()
     {
