@@ -38,6 +38,54 @@ public class EfMachineProfitabilityReportFactsProviderTests
         return mock.Object;
     }
 
+    /// <summary>
+    /// A commission report with one site holding exactly <paramref name="machines"/>, so a test can
+    /// prove what each machine row is charged rather than only that nothing is.
+    /// </summary>
+    private static IGetSiteCommissionReport CommissionsFor(decimal rate, params (long MachineId, decimal Due)[] machines)
+    {
+        var mock = new Mock<IGetSiteCommissionReport>();
+        mock.Setup(x => x.HandleBusinessPeriod(It.IsAny<SiteCommissionBusinessPeriod>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SiteCommissionBusinessPeriod period, long? _, CancellationToken _) =>
+                new SiteCommissionReport(period.FirstBusinessDate, period.LastBusinessDate,
+                [
+                    new SiteCommissionReportRow(91, "Site 91", period.FirstBusinessDate, period.LastBusinessDate,
+                        CommissionFrequency.Monthly, CommissionBasis.GrossSales, 0m, 0m, 0m, 0m, rate,
+                        machines.Sum(machine => machine.Due),
+                        machines.Select(machine => new SiteCommissionMachineReportRow(
+                            machine.MachineId, $"Machine {machine.MachineId}", 0, 0m, 0m, 0m, 0m, machine.Due)).ToList(),
+                        [])
+                ]));
+        return mock.Object;
+    }
+
+    /// <summary>The business whose machines carry Nayax's own numbers, as the expense tests seed it.</summary>
+    private static void SeedNayaxBusiness(AppDbContext db) =>
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+
+    private static NayaxSales Sale(
+        long transactionId, long machineId, string? machineName, DateTime authorizedAt, decimal settlementValue,
+        string paymentMethod = "Cash") =>
+        new()
+        {
+            BusinessId = 1,
+            TransactionID = transactionId,
+            MachineID = machineId,
+            MachineName = machineName,
+            SettlementValue = settlementValue,
+            PaymentMethod = paymentMethod,
+            MachineAuthorizationTime = authorizedAt,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 4m,
+        };
+
     [Fact]
     public async Task Splits_card_and_cash_sales_per_machine_and_reports_cogs_completeness()
     {
@@ -180,5 +228,144 @@ public class EfMachineProfitabilityReportFactsProviderTests
 
         Assert.Equal(2, facts.MissingFeeRateTransactionCount);
         Assert.All(facts.Machines, machine => Assert.True(machine.ProcessingFees.HasMissingRates));
+    }
+
+    /// <summary>
+    /// Issue #1263's fixture. A machine whose stored sale name changed between two sales is still one
+    /// machine, so it is one row - and its own expense is charged to that row once. Grouping by
+    /// <c>{ MachineID, MachineName }</c> produced a row per name and charged each one the machine's
+    /// whole $6 expense, reporting $12 of cost the business never incurred.
+    /// </summary>
+    [Fact]
+    public async Task One_row_per_machine_even_when_its_stored_sale_name_changed()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        SeedNayaxBusiness(db);
+        var machine10 = new LocalMachine { BusinessId = 1, Name = "Lobby", ExternalMachineId = "10" };
+        db.Machines.Add(machine10);
+        db.NayaxSales.AddRange(
+            Sale(1, 10, "Lobby", date, 10m),
+            Sale(2, 10, "Lobby (Level 1)", date, 10m));
+        await db.SaveChangesAsync();
+        db.OperatingExpenses.Add(new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 6m });
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        var machine = Assert.Single(facts.Machines);
+        Assert.Equal(10, machine.MachineId);
+        Assert.Equal(20m, machine.Sales);
+        Assert.Equal(6m, machine.OperatingExpenses);
+    }
+
+    /// <summary>
+    /// The other two per-machine charges the duplicate rows multiplied: the machine's fees were
+    /// estimated once per row from all of its card sales, and its whole commission due was charged to
+    /// every row (issue #1263).
+    /// </summary>
+    [Fact]
+    public async Task Fees_and_commission_are_charged_once_per_machine()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        SeedNayaxBusiness(db);
+        db.Machines.Add(new LocalMachine { BusinessId = 1, Name = "Lobby", ExternalMachineId = "10" });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { BusinessId = 1, EffectiveFrom = new DateTime(2020, 1, 1), FeeExGst = 0.20m });
+        db.NayaxSales.AddRange(
+            Sale(1, 10, "Lobby", date, 10m, "Credit Card"),
+            Sale(2, 10, "Lobby (Level 1)", date, 10m, "Credit Card"));
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db), CommissionsFor(0.10m, (10, 2m)),
+            TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        var machine = Assert.Single(facts.Machines);
+        // Two card transactions at the one effective rate, and the machine's commission once.
+        Assert.Equal(0.40m, machine.ProcessingFees.EstimatedFeeExGst);
+        Assert.Equal(2m, machine.CommissionDue);
+        Assert.Equal(0.10m, machine.CommissionPercent);
+        Assert.Equal(0.40m, facts.Machines.Sum(x => x.ProcessingFees.EstimatedFeeExGst));
+        Assert.Equal(2m, facts.Machines.Sum(x => x.CommissionDue));
+    }
+
+    /// <summary>
+    /// The row's name is this business's own machine record's name, whatever the provider called the
+    /// machine when each sale was stored (issue #1263).
+    /// </summary>
+    [Fact]
+    public async Task Row_name_is_the_local_machine_name()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        SeedNayaxBusiness(db);
+        db.Machines.Add(new LocalMachine { BusinessId = 1, Name = "Lobby", ExternalMachineId = "10" });
+        db.NayaxSales.AddRange(
+            Sale(1, 10, "Lobby", date, 10m),
+            Sale(2, 10, "Lobby (Level 1)", date.AddHours(1), 10m));
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        Assert.Equal("Lobby", Assert.Single(facts.Machines).MachineName);
+    }
+
+    /// <summary>
+    /// With no local machine record there is no name of this business's own, so the row falls back to
+    /// the latest sale's name - and when two names are equally recent, to the one on the sale with the
+    /// higher transaction id, so the answer does not depend on the order rows came back in
+    /// (issue #1263).
+    /// </summary>
+    [Fact]
+    public async Task Row_name_falls_back_to_the_latest_sale_name_and_breaks_a_tie_on_transaction_id()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        SeedNayaxBusiness(db);
+        // The winning row is neither the first nor the last stored, and the machine's highest
+        // transaction id is on its oldest sale, so only "latest, then higher transaction id" picks it.
+        db.NayaxSales.AddRange(
+            Sale(12, 10, "Lobby (older)", date, 10m),
+            Sale(9, 10, "Lobby (tie, higher id)", date.AddHours(2), 10m),
+            Sale(7, 10, "Lobby (tie, lower id)", date.AddHours(2), 10m));
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        Assert.Equal("Lobby (tie, higher id)", Assert.Single(facts.Machines).MachineName);
+    }
+
+    /// <summary>
+    /// A machine with no local record and no stored sale name is still one row, named from its
+    /// provider number as it always was.
+    /// </summary>
+    [Fact]
+    public async Task Row_name_falls_back_to_the_machine_number_when_nothing_names_the_machine()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        db.NayaxSales.AddRange(
+            Sale(1, 10, null, date, 10m),
+            Sale(2, 10, null, date, 10m));
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(
+            db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions(), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        Assert.Equal("Machine 10", Assert.Single(facts.Machines).MachineName);
     }
 }
