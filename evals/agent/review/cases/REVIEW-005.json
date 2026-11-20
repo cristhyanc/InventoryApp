@@ -1,0 +1,48 @@
+{
+  "id": "REVIEW-005",
+  "title": "Take Inventory apply: the stale-count check races a concurrent write it never locks against",
+  "pullRequest": 267,
+  "baseSha": "6e529ecb2386c8ad653d3dcbbf7fcbb063a68705",
+  "headSha": "f49fcc313ab6295c29d9d426445e1dbbd54fd997",
+  "context": {
+    "prTitle": "Add Take Inventory page for physical stock counting",
+    "prSummary": "Adds a routed Take Inventory page (/take-inventory, TakeInventoryComponent) where an operator counts physical storage stock per product. Confirming an unchanged count is frontend-only; a non-zero difference reuses the existing positive Restock movement (increase) or Correction movement (decrease) through a new Inventory.Application.InventoryCounting.ApplyInventoryCount use case behind IInventoryCountAdjustmentStore (implemented by EfInventoryCountAdjustmentStore), never MachineRefill. The use case re-reads the authoritative current quantity (GetCurrentStockAsync) at the mutation boundary and throws DomainConflictException (409) when it no longer matches the quantity the operator counted against (ExpectedCurrentStock), refusing a stale count instead of silently overwriting a concurrent change. A positive difference uses the same restock-cost suggestion (last purchase cost, else average unit cost) an operator-entered manual Restock already offers, refusing Apply with a validation error when neither is available. Adds InventoryCountController, the frontend routing/component and docs/architecture.md Take Inventory section.",
+    "linkedIssue": "#245 \"Take Inventory page for physical stock counting\" (risk Medium: new stock-mutating endpoint reusing existing Restock/Correction movement and costing rules)",
+    "acceptanceCriteria": [
+      "Given an operator counts a product's physical storage stock and the counted value equals the authoritative current stock, when Apply runs, then no StockAdjustment is written and the outcome is Confirmed.",
+      "Given a counted value above the current stock, when Apply runs, then the positive difference is recorded as the existing positive Restock movement (never MachineRefill), using the same restock-cost suggestion (last purchase cost, else average unit cost) an operator-entered manual Restock already offers, and Apply is refused with a validation error when neither cost is available.",
+      "Given a counted value below the current stock, when Apply runs, then the negative difference is recorded as the existing Correction movement.",
+      "Given the authoritative current stock has changed since the operator started the count (the request's ExpectedCurrentStock no longer matches it), when Apply runs, then it refuses with a 409 and records nothing, instead of silently overwriting a concurrent change with a count based on stale UI state.",
+      "Both non-zero outcomes persist an ordinary StockAdjustment through the same costing/rebuild transaction every other stock movement in this document uses, so a count difference is auditable in Stock History exactly like a manual Restock or Correction.",
+      "docs/architecture.md documents Take Inventory: the three count outcomes, the reused Restock/Correction movement semantics, and the stale-count refusal."
+    ],
+    "outOfScope": [
+      "A durable count-session/history record of confirmed-unchanged rows; the green/confirmed row state is frontend/session state only, and a durable record would be its own schema change and issue.",
+      "Any change to MachineRefill, Sync Restock, or the pick-list refill flow.",
+      "Any change to the existing manual Restock/Correction movement rules or their restock-cost suggestion themselves."
+    ],
+    "documentationImpact": "Decision: UPDATED. Evidence: docs/architecture.md gains a \"Take Inventory (issue #245)\" section describing the three count-adjustment outcomes, the reused Restock/Correction movement semantics, the stale-count 409 refusal, and the controller/use-case/adapter shape.",
+    "validation": "The merge-validation check (bash scripts/validate.sh: restore, C# format check, backend build with analyzers and warnings-as-errors, backend tests with coverage including architecture tests, NuGet vulnerability check, npm ci, Angular ESLint and production build) is required to pass before a merge into develop under this repository's branch protection, and this pull request merged cleanly into develop at this head (merge commit 759d2fa7eca5dc97b42c77e61fbe4362c9966845). Treat it as the exact-SHA validation evidence for this review."
+  },
+  "expected": {
+    "verdict": "CHANGES REQUESTED",
+    "findings": [
+      {
+        "id": "stale-count-race-outside-lock",
+        "summary": "ApplyInventoryCount.Handle reads the authoritative current quantity (GetCurrentStockAsync) with no transaction or lock around it, and EfInventoryCountAdjustmentStore.ApplyAsync only opens its own, later transaction at the write. A count or another stock write that commits in the gap between the read and that write is invisible to the staleness check, so a stale count can still be applied to a quantity nobody counted even though the 409 refusal claims to prevent exactly that, and no test exercises two overlapping requests - only a single mocked read followed by a single write.",
+        "paths": [
+          "ApplyInventoryCount",
+          "EfInventoryCountAdjustmentStore",
+          "GetCurrentStockAsync",
+          "IInventoryCountAdjustmentStore"
+        ],
+        "allOf": [
+          "concurrent|race|simultaneous|overlapping|in between|in the gap|meanwhile|two request|second request|another writer|another request",
+          "lock|transaction|atomic|begin immediate|before the read|outside the (write )?lock|not (locked|atomic)|no lock"
+        ]
+      }
+    ],
+    "forbiddenBlockers": []
+  },
+  "source": "Introducing PR identified from git history: commit 6b5ade799d290fb2c4e59710cbf047c43a305df0 \"Add Take Inventory page for physical stock counting\" (closes #245), merged to develop in PR #267 (merge commit 759d2fa7eca5dc97b42c77e61fbe4362c9966845; base 6e529ecb2386c8ad653d3dcbbf7fcbb063a68705 is the merge-base; head f49fcc313ab6295c29d9d426445e1dbbd54fd997 is a trivial merge-from-develop touching only docs/architecture.md, tree-identical to develop immediately after 759d2fa7). `git log --follow` on backend/Inventory.Application/InventoryCounting/ApplyInventoryCount.cs shows exactly two commits ever touched it: 6b5ade79 (creation, this case's head) and the fix below; `git show f49fcc31:.../EfInventoryCountAdjustmentStore.cs` confirms GetCurrentStockAsync is an AsNoTracking read with no surrounding transaction and ApplyAsync opens a separate, later transaction, unchanged until the fix. This is also the PR evals/agent/README.md Review-judgment scenarios (issue #268) names as the original incident behind INV-005/INV-006: a reviewer found the same read/write race against this PR's own concurrency acceptance criterion and called it non-blocking because the legacy flow was worse. Fixed by commit 0e6b8dacf61ef5bd8c78f9e9445546be9fb32b1e \"Read stock inside the write lock for counts and adjustments (#1241)\", merged to develop in PR #1270 (merge commit 06964a8f78f92c43956f9600c7048694105ade08): ApplyInventoryCount.Handle now opens IInventoryCountAdjustmentStore.BeginWriteTransactionAsync (SQLite BEGIN IMMEDIATE) before GetCurrentStockAsync and commits after ApplyAsync. The same fix PR separately locks EfStockAdjustmentStore's manual-adjustment staging (audit finding INV-04's other half, a different, unrelated code path with its own multi-step Clean Architecture migration history and no single clean introducing commit); that half is not covered by this case. Audit #1230 finding INV-04."
+}

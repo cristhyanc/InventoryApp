@@ -229,15 +229,16 @@ test('a fixture run grades every case and summarises caught, missed and false al
     'REVIEW-002': review({ blockers: ['unrelated'] }),
     'REVIEW-003': review({ blockers: ['docs/price-collector-testing.md:461 the bearer token is stored in plain text in the Logic App definition.'] }),
     'REVIEW-004': review({ verdict: 'READY FOR HUMAN REVIEW' }),
+    'REVIEW-005': review({ blockers: ['ApplyInventoryCount.cs:27 GetCurrentStockAsync reads with no lock or transaction; EfInventoryCountAdjustmentStore.ApplyAsync only opens its transaction later, so a concurrent write that commits in that gap is invisible to the staleness check and a stale count can overwrite it. Add a regression test for two overlapping requests.'] }),
   };
   const report = await runReviewEvals({ cases, provider: createFixtureProvider(responses), reviewStep, variant: 'current', addendum });
-  assert.equal(report.summary.expectedFindings, 3);
-  assert.equal(report.summary.caughtFindings, 2);
+  assert.equal(report.summary.expectedFindings, 4);
+  assert.equal(report.summary.caughtFindings, 3);
   assert.equal(report.summary.missedFindings, 1);
   assert.equal(report.summary.falseAlarms, 0);
-  assert.equal(report.summary.verdictMatches, 4);
-  assert.equal(report.summary.actionableBlockers, 1);
-  assert.equal(report.summary.passed, 3);
+  assert.equal(report.summary.verdictMatches, 5);
+  assert.equal(report.summary.actionableBlockers, 2);
+  assert.equal(report.summary.passed, 4);
 });
 
 test('arguments: a provider is required and variants are checked', async () => {

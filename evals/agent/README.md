@@ -324,8 +324,9 @@ Each file in `evals/agent/review/cases/` pins one pull request head and base by 
 | `REVIEW-002` | #1131 Sites overview | `CHANGES REQUESTED` | A long unbroken site name cannot wrap in the mobile card and is clipped (fixed by 166292b8). |
 | `REVIEW-003` | #1133 Azure schedule | `CHANGES REQUESTED` | The setup guide puts the GitHub token literally in the Logic App HTTP action; secure inputs only hide run history (fixed by 72dd1c7b). |
 | `REVIEW-004` | #1130 Dashboard SQS | `READY FOR HUMAN REVIEW` | Control: the healthy-queue shortcut preserves the forced Refresh. A blocker claiming otherwise is a false alarm. |
+| `REVIEW-005` | #267 Take Inventory page | `CHANGES REQUESTED` | `ApplyInventoryCount` reads the authoritative current stock with no lock, and the adapter only opens its own transaction at the later write; a concurrent write that commits in that gap is invisible to the staleness check, so a stale count can still be applied (fixed by 0e6b8dac, PR #1270, issue #1241). Held out from the 2026 audit (#1230, finding INV-04); not used to write the candidate checklist. |
 
-Merge validation passed on all four heads. A case holds what the reviewer is given (`context`: PR
+Merge validation passed on every head. A case holds what the reviewer is given (`context`: PR
 title and summary, acceptance criteria, exclusions, documentation-impact declaration and the CI
 result) and the hidden rubric (`expected`, `source`). `expected.findings` are the blockers the
 review must raise; `expected.forbiddenBlockers` are blockers it must not raise. Each is matched by
@@ -333,6 +334,21 @@ case-insensitive patterns: one of `paths` and every one of `allOf` must appear i
 inline comment. The runner rejects a set without a `READY FOR HUMAN REVIEW` control, so an "always
 block" reviewer cannot pass. Add a case only with a confirmed answer: a later fix commit, or an owner
 decision, named in `source`.
+
+Two other candidates from the same audit (#1230) were considered and skipped rather than turned into
+cases:
+
+- **COST-01** (the inventory-cost transition matched machine stock by local product id, fixed by PR
+  #1269/#1256): `git log -S`/`--follow` traces the bug to the line's introduction in commit
+  `e2467745` ("Fix", 8 Sep 2026), inside the original, brand-new `InventoryCostTransitionService`.
+  That commit sits directly on `develop`'s first-parent chain hours before this repository's first
+  pull request (`#1` merged 9 Sep 2026): it predates the pull-request workflow entirely, so there is
+  no pull request or merge commit to pin, and no issue/acceptance-criteria text to build a fair
+  `context` from.
+- **INV-01** (opening stock with no cost froze the product, fixed by PR #1271/#1238): the same trace
+  leads to commit `1f1dce80` ("COGS calculations", also 8 Sep 2026), which first let `ProductService.Create`
+  record a costed opening `Restock` movement with no required unit cost. It is in the same pre-pull-request
+  window as COST-01, for the same reason: no pull request exists to pin.
 
 ### Running it
 
@@ -381,9 +397,11 @@ CLI reported. The model is never asked whether it passed. Exit codes: `0` every 
 case failed, `2` usage or case error, `3` the CLI is missing. Results and their interpretation are in
 `baseline.md` ("Review-prompt evals").
 
-The candidate's checklist was written after reading these four bugs, so these cases can show that
-it finds them but not that it generalises. Judge a candidate on new cases it was not written from
-before relying on it.
+The candidate's checklist was written after reading the first four bugs (`REVIEW-001`-`004`), so
+those four cases can show that it finds them but not that it generalises. `REVIEW-005` was added
+afterwards, from the 2026 audit (#1230), without changing the checklist to fit it, so it is the first
+case in this corpus that can actually show generalisation once it is run (issue #1295 runs both
+variants against it). Judge a candidate on new cases it was not written from before relying on it.
 
 ## Regression/baseline workflow
 
