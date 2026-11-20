@@ -154,6 +154,20 @@ node --test scripts/check-doc-links.test.mjs
 node scripts/check-doc-links.mjs
 ```
 
+Workflow contract checks (the same offline checks `.github/workflows/validate.yml` runs in its "Validate agent workflow contracts", "Validate runner placement contract" and "Validate deployment workflow contracts" steps, so a broken contract fails locally before it reaches CI; the documentation-impact gate on the pull request body stays CI-only, since it needs the pull request body):
+
+```bash
+node scripts/validate-agent-workflows.mjs
+node --test scripts/validate-agent-workflows.test.mjs
+node --test scripts/validate-documentation-impact.test.mjs
+node --test scripts/sonar-new-issues.test.mjs
+node scripts/validate-runner-placement.mjs
+node --test scripts/validate-runner-placement.test.mjs
+node scripts/validate-deployment-workflows.mjs
+node --test scripts/validate-deployment-workflows.test.mjs
+node --test scripts/deployment-migration-preflight.test.mjs
+```
+
 Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
 
 - The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
@@ -165,6 +179,7 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
 - `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
 - `scripts/run-agent-evals.mjs` is a dependency-free Node runner over the version-controlled corpus in `evals/agent/cases/`; both validation scripts run it (and its own tests) before the backend restore. It checks that the guardrail text/code each case cites is still present, not what a model would decide; see `evals/agent/README.md`. The validation scripts also run the unit tests of `scripts/run-agent-model-evals.mjs`, but never the model-decision evals themselves: those call a model, run only when a person invokes them with an explicit `--provider`, and reuse the locally signed-in Claude Code CLI without adding any credential (see `evals/agent/README.md` § Model-decision evals).
+- `node --test scripts/validate-agent-workflows.test.mjs` imports, and so also runs, every other `scripts/agent-*.test.mjs` and `scripts/workflow-structure.test.mjs` and `scripts/select-implementation-model.test.mjs` file that exists for the agent pipeline's own workflow contracts (see that file's own `import` lines for the exact, current list); neither validation script lists those files separately. The workflow contract checks are offline and run against the repository's own workflow files, not against GitHub; they are the same checks `.github/workflows/validate.yml` runs, kept here so a broken contract fails before a pull request reaches CI.
 
 ## Architecture rules
 
