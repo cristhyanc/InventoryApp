@@ -15,7 +15,7 @@ It deliberately separates three things:
 
 | Category | Meaning |
 | --- | --- |
-| **Exists now** | Behaviour implemented by files in this repository today: the validation and deployment workflows, the Claude Code implementation, read-only Claude architecture-check and review, repair and updated-head scheduling workflows (`agent-implement.yml`, `agent-architecture.yml`, `agent-review.yml`, `agent-review-request.yml`, `agent-repair.yml`, `agent-head-update.yml`, plus `agent-branch-cleanup.yml` housekeeping; see [Cross-review: Claude implements, Copilot reviews](#cross-review-claude-implements-copilot-reviews)), the validation scripts, the workflow-contract and documentation-impact validators in `scripts/`, `AGENTS.md`, `CLAUDE.md`, the agent task issue form, the pull request template, the [documentation impact gate](#documentation-impact-gate), and the deterministic [Agent Evals](#guardrails-ci-validation-review-and-evals) corpus/runner in `evals/agent/`. |
+| **Exists now** | Behaviour implemented by files in this repository today: the validation and deployment workflows, the Claude Code implementation, read-only Claude architecture-check and review, repair and updated-head scheduling workflows (`agent-implement.yml`, `agent-architecture.yml`, `agent-review.yml`, `agent-review-request.yml`, `agent-repair.yml`, `agent-head-update.yml`, plus `agent-branch-cleanup.yml` housekeeping; see [Provider roles and readiness labels](#provider-roles-and-readiness-labels)), the validation scripts, the workflow-contract and documentation-impact validators in `scripts/`, `AGENTS.md`, `CLAUDE.md`, the agent task issue form, the pull request template, the [documentation impact gate](#documentation-impact-gate), and the deterministic [Agent Evals](#guardrails-ci-validation-review-and-evals) corpus/runner in `evals/agent/`. |
 | **Proposed for future pull requests** | Automation that is designed here but **not implemented**: mechanical enforcement of the two-attempt repair limit, staging, release automation, monitoring, and any auto-merge. |
 | **Human-controlled** | Decisions that stay with a human regardless of how much automation is added: choosing the route by applying exactly one readiness label (`agent-ready-claude` by default, or the `agent-ready-full-claude` fallback label), authorising and counting repair attempts (and the fresh review that follows one), approving, merging, releasing, deploying. The *initial* final review is requested automatically once validation succeeds; it is no longer a separate human decision. |
 
@@ -109,7 +109,7 @@ runner. The variable is set by a human in Repository Settings → Secrets and va
 Variables. Agents never set, change or remove it. **An unset variable means GitHub-hosted**: to keep
 jobs on the VM, set it to `true` before a release carrying this change reaches `main`.
 
-It applies to all 15 files in `.github/workflows/`: implementation (`agent-implement.yml`, including the
+It applies to every workflow file in `.github/workflows/`: implementation (`agent-implement.yml`, including the
 documentation-impact preflight and the architecture dispatcher), model selection
 (`agent-model-selection.yml`, a reusable workflow in this repository that reads the same repository
 variable through `vars` itself, as it already read the isolation variable, so a caller cannot hand it a
@@ -483,6 +483,16 @@ Issue #192 gives the agents read-only access to Nayax's official developer docum
 ## Implementation model tiers
 
 These tiers apply only to the initial implementation invocation. Architecture checks, architecture/Sonar fixes, final reviews, format recovery and human-requested repairs retain their existing models: the architecture check and the final review run `--model sonnet --effort high`, and the architecture/Sonar fix and repairs run `--model opus --effort high` (the fix previously named no model and followed the action's default). Every Claude Code invocation must name its model; `scripts/workflow-structure.mjs` enforces it. In the rest of this document, the unsuffixed readiness labels also describe their corresponding low/high implementation paths unless a particular trigger is stated.
+
+| Pipeline stage | Workflow (job) | Model | Effort |
+| --- | --- | --- | --- |
+| Implementation | `agent-implement.yml` (`implement`) | Claude Haiku, Sonnet or Opus — picked by the tier below | the action's default (no `--effort` flag) |
+| Architecture check (read-only) | `agent-architecture.yml` (`claude-check`) | Claude Sonnet | high |
+| Architecture/Sonar fix | `agent-architecture.yml` (`architecture`) | Claude Opus | high |
+| Final review (read-only) | `agent-review.yml` (`review`) | Claude Sonnet | high |
+| Repair | `agent-repair.yml` (`repair`) | Claude Opus | high |
+
+Model triage (`agent-model-selection.yml`), which picks the implementation tier below, is itself a Claude Haiku invocation with no `--effort` flag.
 
 | Human readiness label | Implementation selection |
 | --- | --- |
@@ -910,7 +920,7 @@ A human creates the labels below in the repository's label settings; no file in 
 | --- | --- | --- |
 | `agent-ready-claude` | A human has reviewed the issue, confirmed the acceptance criteria are complete and testable and the documentation impact decision is correct, and authorises Claude to implement it, with separate read-only Claude invocations as architecture checker and final reviewer (same-provider, not independent). Applying it starts `agent-implement.yml`, whose read-only preflight first validates the documentation impact declaration; if that fails, the label is left in place and nothing else runs until a human edits the issue and re-applies it. | **Human only** |
 | `agent-ready-claude-low` / `agent-ready-claude-high` | The same reviewed Claude task authority, with the explicit implementation model tier described above. | **Human only** |
-| `agent-ready-full-claude` | The same human confirmation for the single-provider fallback: Claude implements, and separate read-only Claude invocations check the architecture and do the final review (same-provider, not independent; see [Single-provider fallback route](#single-provider-fallback-route)). Applying it starts `agent-implement.yml` like `agent-ready-claude`; applying it alongside another readiness label blocks the run. A human creates this label; it does nothing until the release that routes it reaches `main`. | **Human only** |
+| `agent-ready-full-claude` | The same human confirmation for the single-provider fallback: Claude implements, and separate read-only Claude invocations check the architecture and do the final review (same-provider, not independent; see [Provider roles and readiness labels](#provider-roles-and-readiness-labels)). Applying it starts `agent-implement.yml` like `agent-ready-claude`; applying it alongside another readiness label blocks the run. A human creates this label; it does nothing until the release that routes it reaches `main`. | **Human only** |
 | `agent-working` | An implementation agent has started and owns a feature branch for this issue. | `agent-implement.yml` (replaces the readiness label), at the start of the run |
 | `agent-review` | On an **issue**: a pull request is open and awaiting the route's final review. On a **pull request**: authorises the (now automatic) initial final review and a fresh review after any later repair or other new commit. `agent-repair.yml` accepts the repository owner's `@claude repair` comments while the label remains present; a pushed repair, and any other new commit, is validated and reviewed again automatically. Removing the label stops further automatic reviews, and the publish job records a review still in progress as `Not eligible` instead of publishing it. | Issue and pull request: the `agent-architecture.yml` finalizer after a successful architecture stage and exact current-head recheck; a human may also apply it manually (for example to re-request review outside a repair) |
 | `agent-blocked` | The agent stopped because validation/review failed after the permitted repair attempts, or because a human decision or permission is required. The issue or PR must state the exact blocker. | `agent-implement.yml` for coding/publication failure; `agent-architecture.yml` for architecture or architecture-to-validation handoff failure; otherwise human (including after the second failed repair) |

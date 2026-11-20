@@ -30,7 +30,7 @@ push to `develop` runs Deploy Testing as a no-op that reports "switched off".
    testing variables, refusing the production App Service name and the production API host. It
    repeats the order check, then signs in with the testing identity through OIDC. Next it reads the
    test App Service settings and refuses to deploy unless the database and documents live outside
-   the package (see [Test API application settings](#test-api-application-settings)). It compares
+   the package (see [Test API application settings](#5-test-api-application-settings)). It compares
    those values without printing them. It then records the upload attempt as a GitHub deployment
    with task `deploy:testing-attempt` and stops if that record cannot be written. Finally it
    deploys `testing-api-<sha>`.
