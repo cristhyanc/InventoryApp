@@ -434,7 +434,7 @@ Nayax's developer documentation, not the code or a guess, is the authority on a 
 ## Tests required by change type
 
 - Domain formula/rule: focused unit tests, including boundaries and failure cases.
-- EF query or persistence: relational SQLite integration test where SQL/transactions/constraints matter.
+- EF query or persistence: relational SQLite integration test where SQL/transactions/constraints matter; new persistence/costing/import/stock tests use SQLite through `TestAppDbContext`, not the EF Core InMemory provider, and `Inventory.IntegrationTests/Architecture/InMemoryDatabaseAllowlistTests.cs` keeps the InMemory provider's remaining use to a shrinking, reviewed allowlist.
 - Migration: upgrade test from the previous migration and verification of preserved data.
 - Nayax import/status/payment behavior: representative imported rows plus unknown/duplicate/missing cases.
 - Financial report: totals, card/cash split, COGS-complete and incomplete paths, fee source, commission coverage, reconciliation, filters, and export parity as applicable.
