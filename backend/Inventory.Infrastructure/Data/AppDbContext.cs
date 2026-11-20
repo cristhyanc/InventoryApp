@@ -622,6 +622,15 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<ReimbursementImportJobFile> ReimbursementImportJobFiles =>
         Set<ReimbursementImportJobFile>();
+
+    /// <summary>
+    /// The uploaded Nayax sales histories waiting to be, or already, imported in batches (issue
+    /// #1304). Ordinary tenant-owned data; the uploaded CSV lives on the row until the job reaches a
+    /// final state and is deleted then, and the progress counts are written in the same transaction
+    /// as the sales they describe. See <see cref="NayaxSalesHistoryImportJob"/>.
+    /// </summary>
+    public DbSet<NayaxSalesHistoryImportJob> NayaxSalesHistoryImportJobs =>
+        Set<NayaxSalesHistoryImportJob>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
     public DbSet<ImportedDevicePayment> ImportedDevicePayments => Set<ImportedDevicePayment>();
@@ -1236,6 +1245,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxSales>()
             .HasIndex(s => new { s.BusinessId, s.TransactionID })
             .IsUnique();
+
+        // One product's stock-consuming sales are what every sale-time cost replay and inventory-cost
+        // rebuild reads (EfInventoryCostLedgerStore, EfSaleCostingStore). The central business filter
+        // is translated as "(@unrestricted OR BusinessId = @business)", and SQLite cannot use the
+        // composite (BusinessId, ProductId) index under that OR, so without an index that leads with
+        // ProductId each of those reads scanned every business's sales - a cost that grew with the
+        // whole table and, for the background sales history import, with every batch (issue #1304).
+        // It is the same shape StockAdjustments and InventoryCostRepairs already have.
+        modelBuilder.Entity<NayaxSales>()
+            .HasIndex(s => s.ProductId);
 
         // MachineAuthorizationTime is a persisted true UTC instant (see docs/architecture.md
         // § Nayax sale timestamps for where that instant is established - the latest-sales
@@ -2209,6 +2228,57 @@ public class AppDbContext : DbContext
         ConfigureConnectedMachineSnapshots(modelBuilder);
 
         ConfigureReimbursementImportJobs(modelBuilder);
+
+        ConfigureNayaxSalesHistoryImportJobs(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the uploaded Nayax sales history import jobs of issue #1304: one tenant-owned row per
+    /// uploaded CSV, carrying the file, where the import has got to and what it has made of the rows
+    /// so far.
+    ///
+    /// <para><strong>It is ordinary tenant-owned data.</strong>
+    /// <see cref="ConfigureBusinessOwnership"/> gives it the business key, its index, the central
+    /// query filter and the ownership stamp, and nothing here replaces any of that. A business's
+    /// sales history is a fact about that business, so this is not a platform table, declared or
+    /// otherwise.</para>
+    ///
+    /// <para><strong>The discovery index is the worker's whole query.</strong> (state, upload
+    /// instant) is the order the one cross-business statement reads in - the oldest job that is not
+    /// finished - and it deliberately does <em>not</em> lead with the business key, because that
+    /// statement has no business to narrow by: whose job is waiting is what it is for. The
+    /// (business, upload instant) index beside it is the Imports page's own read.</para>
+    ///
+    /// <para><strong>No unique index, deliberately.</strong> One running job per business is a rule
+    /// about <em>unfinished</em> jobs and is enforced inside the create's own write-locked
+    /// transaction (<c>EfNayaxSalesHistoryImportJobStore.CreateAsync</c>); a unique index over
+    /// (business, state) would also refuse a business's second <em>completed</em> job, which is the
+    /// ordinary case of importing a history one file at a time.</para>
+    ///
+    /// <para>Every instant is persisted UTC and marked UTC on the way out, for the reason the
+    /// reimbursement job's are: the SQLite provider returns an unspecified kind otherwise, and these
+    /// instants are reported to the Imports page.</para>
+    /// </summary>
+    private static void ConfigureNayaxSalesHistoryImportJobs(ModelBuilder modelBuilder)
+    {
+        var job = modelBuilder.Entity<NayaxSalesHistoryImportJob>();
+
+        job.HasIndex(x => new { x.State, x.UploadedAtUtc });
+        job.HasIndex(x => new { x.BusinessId, x.UploadedAtUtc });
+
+        job.Property(x => x.FileName).HasMaxLength(NayaxSalesHistoryPolicy.MaxFileNameLength);
+        job.Property(x => x.UploadedByDirectoryTenantId).HasMaxLength(100);
+        job.Property(x => x.UploadedByObjectId).HasMaxLength(100);
+        job.Property(x => x.LastError).HasMaxLength(400);
+
+        job.Property(x => x.UploadedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        job.Property(x => x.FinishedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
     }
 
     /// <summary>

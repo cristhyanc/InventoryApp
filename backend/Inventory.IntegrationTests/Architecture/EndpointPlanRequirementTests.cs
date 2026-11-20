@@ -141,6 +141,13 @@ public class EndpointPlanRequirementTests
 
         // The uploaded Nayax sales export is Pro (decided on #965's review of 29 October 2026).
         new("ImportsController.ImportNayaxSales", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales
+        // The uploaded Nayax sales history of issue #1304 is the same uploaded-file import done in
+        // the background, so it declares the same feature - the upload and the status read that
+        // reports what the background job made of it alike. The history import is one plan-gated
+        // feature and its progress is part of it, which is also what lets the Imports page lock the
+        // whole card rather than offer a list it cannot read.
+        new("ImportsController.UploadNayaxSalesHistory", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales-history
+        new("ImportsController.NayaxSalesHistoryJobs", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // GET api/imports/nayax-sales-history/jobs
         // The uploaded Nayax reimbursement report ZIP of issue #1149 is a settlement statement the
         // business was sent, and its figures feed the two reports a Starter business includes, so it
         // carries no plan requirement - and neither do the two reads that report what became of one.

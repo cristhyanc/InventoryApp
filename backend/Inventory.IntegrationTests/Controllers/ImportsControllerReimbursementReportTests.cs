@@ -289,6 +289,15 @@ public class ImportsControllerReimbursementReportTests
                 Mock.Of<Inventory.Application.Costing.ICostSale>(),
                 Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
                 InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
+            // The sales history upload and its status read (issue #1304) take no part in these
+            // cases, which are about the reimbursement report upload.
+            new UploadNayaxSalesHistory(
+                Mock.Of<Inventory.Application.Imports.INayaxSalesHistoryCsvReader>(),
+                Mock.Of<Inventory.Application.Imports.INayaxSalesHistoryImportJobStore>(),
+                FakeAuthenticatedActorAccessor.Identified(ReimbursementImportJobFixture.Actor()),
+                fixture.Clock),
+            new ListNayaxSalesHistoryImportJobs(
+                Mock.Of<Inventory.Application.Imports.INayaxSalesHistoryImportJobStore>()),
             new UploadReimbursementReportArchive(
                 new Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader(
                     NullLogger<Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader>.Instance),

@@ -9,6 +9,25 @@ public interface INayaxSalesImportTransaction : IAsyncDisposable
 {
     /// <summary>Commits the imported and updated sales.</summary>
     Task CommitAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Forgets everything this transaction staged, because it is not going to be committed
+    /// (issue #1304).
+    ///
+    /// <para><strong>Why rolling back is not enough.</strong> The rollback undoes what the database
+    /// was told; it says nothing about what the <em>unit of work</em> is still holding. A caller that
+    /// staged sales, pending cost rebuilds or a progress row and then failed part-way through the
+    /// batch still has every one of those changes tracked, and the next
+    /// <c>SaveChanges</c> on that same unit of work - the one that records the failure, outside any
+    /// transaction - would write them. Calling this before the rollback is what makes "the batch
+    /// committed or nothing of it did" true of the application's own state as well as the
+    /// database's, and it is what makes the failure record read the job's <em>durable</em> progress
+    /// instead of the progress the lost batch had staged onto it.</para>
+    ///
+    /// <para>It is only ever called on a transaction that will not be committed, and the caller
+    /// re-reads anything it still needs afterwards.</para>
+    /// </summary>
+    void DiscardStagedChanges();
 }
 
 /// <summary>

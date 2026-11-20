@@ -826,7 +826,7 @@ The split is the same one the application already makes for a business with no u
 
 - **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
-- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), **up to 100 scans per month** (issue #1164), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan, with no limit.
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import and the [sales history import](#the-sales-history-import-issue-1304) under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), **up to 100 scans per month** (issue #1164), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan, with no limit.
 
 A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
 
@@ -852,7 +852,7 @@ Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nay
 **What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
 
 - **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
-- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report and agreements); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
+- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report and agreements); the Nayax sales file import and the sales history import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
 
 A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
 
@@ -1331,9 +1331,10 @@ the same way, from the file's own compressed entry sizes, before the spreadsheet
 
 Both limits are there because a single upload used to decide how much memory the whole server had: a
 9.9 MB CSV of 114,250 rows cost about a gigabyte just to be read, and saving it held the database for
-minutes. **To import more than 5,000 sales, export a shorter period** — one file per quarter for a
-quiet fleet, one file per month for a busy one — and upload them one at a time. The longer-history
-import the message mentions is planned separately (issue #1304) and is not available yet.
+minutes. **To import more than 5,000 sales, use the [sales history
+import](#the-sales-history-import-issue-1304) on the same page** — it takes a CSV of up to 250,000
+rows and imports it in the background — or export a shorter period and upload the files one at a
+time.
 
 5,000 is the number the measured database lock below allows, rather than a guess: a file of 20,000
 rows held that lock for about fourteen seconds on a slower server, which is longer than any other
@@ -1350,6 +1351,76 @@ takes](docs/architecture.md#limits-on-one-uploaded-sales-file-and-the-write-lock
 
 The import needs `Imports.Run` (a Manager or an Owner) and the **Pro** plan, like the rest of the
 Nayax features.
+
+## The sales history import (issue #1304)
+
+A new business usually has one to three years of Nayax sales to bring in, and the upload above takes
+5,000 rows at a time. **Admin → Imports** therefore has a second card, **Import a sales history**,
+that takes the whole thing: a **CSV of up to 250,000 rows**, up to **50 MB**. The upload is checked
+and accepted in seconds — it answers with a job, not with counts — and the importing happens in the
+background.
+
+**It applies exactly the same row rules as the upload above.** The same transaction identity, the
+same instant precedence, the same "a blank cell changes nothing" rule, the same product matching and
+the same historical costing: the two imports share that code rather than describing it twice, so a
+row cannot mean one thing in a quarterly file and another in a history. What differs is only how the
+file is read and saved.
+
+**CSV only.** A spreadsheet cannot be read a row at a time without expanding the whole thing in
+memory, which is the cost this import exists to avoid, so an `.xlsx` is refused with *"A sales history
+must be a .csv file. Export the history from Nayax Core as CSV."* Export the history from Nayax Core
+as CSV and upload that.
+
+**What a refusal looks like.** A file is refused — with nothing at all stored — when it is empty,
+larger than 50 MB, not a CSV, not a readable Nayax sales export (no column headings, or no
+`TransactionID` column), carries no rows under its headings, or carries more than 250,000 of them.
+Each refusal is one readable sentence shown beside the file you chose.
+
+**One history imports at a time per business.** A second upload while one is still running is refused
+with *"A sales history import is already running for this business. Wait for it to finish, then upload
+the next file."* Two of them would contend for the same database write lock and the same sales rows
+for no gain.
+
+**How it runs, and why other work keeps working.** The job reads the file one row at a time — it never
+holds the file's rows in memory — and commits them in **batches of 500**, each batch in its own short
+database transaction. Between batches the database's single write lock is released, so a purchase, a
+stock adjustment or the Nayax SQS queue reader's own save goes through while a year of history is
+importing instead of waiting behind it. A batch holds that lock for under a second early in a
+history and longer as the history grows, because each row's cost is worked out from its own
+product's history up to that sale. Measured on a full 250,000-row history over a 200-product
+catalogue, every one of the 500 batches stayed inside the ten-second goal (the longest 2.3 s) and the
+whole import took about 9 minutes. **A history that concentrates a quarter of a million rows on a
+handful of products is the case that can leave it**: on four products (62,500 sales each), the last
+batches reached 9 to 11 seconds and 4 of 500 passed ten. Nothing is lost when that happens — the batch
+still commits and the next writer still waits rather than failing — but another save can wait a
+little longer than the ten seconds this application aims for. A long history is in any case a job of
+many minutes rather than one request nothing else can write around.
+
+**You can follow it, leave the page, and come back.** The card lists this business's recent history
+uploads, newest first, with the state (**Queued**, **Importing**, **Completed** or **Failed**), how
+far it has got (*"1,500 of 6,000 rows"*) and what the rows turned into (imported, updated, skipped,
+could not be read, kept stored values). While something is running the list refreshes itself every
+five seconds and stops once nothing is.
+
+**Stopping it is safe, and so is uploading the same file again.** Every count is written in the same
+transaction as the sales it describes, so *"1,500 of 6,000 rows"* means exactly 1,500 rows are
+imported. A job interrupted by a restart or a database failure resumes from the row after the last
+committed batch, and a job that stops for good keeps what it imported and says why. Because a sale is
+matched by its transaction id, re-uploading the same file — or a file that overlaps one you already
+imported — updates those sales instead of storing them twice.
+
+**Rebuilding the products' costs happens afterwards, not per batch.** Each batch records which
+products need their inventory cost replayed, once per product and from that product's earliest
+affected sale; the replay itself runs in the application's existing cost-rebuild pass rather than
+inside the import, because replaying a product's whole history once per batch is exactly what the
+batching is for.
+
+**There is nothing to configure**, and **Always On** is the one prerequisite, for the same reason the
+[Reimbursement Report import](#the-reimbursement-report-import-issue-1149) has it: without it an
+idled process imports nothing and a queued upload waits for somebody's next request.
+
+It needs `Imports.Run` (a Manager or an Owner) and the **Pro** plan — the same access as the sales
+file upload above, because it is the same import.
 
 ## The Reimbursement Report import (issue #1149)
 

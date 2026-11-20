@@ -45,6 +45,12 @@ namespace Inventory.Infrastructure.Imports;
 ///   nothing parsed.</item>
 /// </list>
 ///
+/// <para><b>The cell conversions themselves live in <see cref="NayaxSalesCells"/></b> (issue #1304)
+/// and are unchanged by that move: this reader keeps the two readings only a worksheet has - a
+/// date-typed cell and a numeric cell - and asks that type for every cell that is text, which is
+/// every cell of a CSV. The streaming history reader asks the same type, so a value cannot be read
+/// one way by the uploaded import and another by the history import.</para>
+///
 /// Unlike <see cref="ZipReimbursementArchiveReader"/>, a failure is deliberately *not*
 /// translated into a plain answer here: an upload whose bytes are not a readable workbook must stay
 /// a failure rather than be reported to the operator as an import of zero rows, and the exception
@@ -159,7 +165,7 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
                 return null;
             }
 
-            var values = ParseCsvLine(line);
+            var values = NayaxSalesCells.ParseLine(line);
             for (var column = 0; column < values.Count; column++)
                 worksheet.Cell(rowNumber, column + 1).Value = values[column];
             rowNumber++;
@@ -234,46 +240,7 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         return buffer;
     }
 
-    private static IReadOnlyList<string> ParseCsvLine(string line)
-    {
-        var values = new List<string>();
-        var value = new StringBuilder();
-        var quoted = false;
-
-        var index = 0;
-        while (index < line.Length)
-        {
-            var character = line[index];
-            if (character == '"')
-            {
-                if (quoted && index + 1 < line.Length && line[index + 1] == '"')
-                {
-                    value.Append('"');
-                    index += 2;
-                    continue;
-                }
-
-                quoted = !quoted;
-            }
-            else if (character == ',' && !quoted)
-            {
-                values.Add(value.ToString());
-                value.Clear();
-            }
-            else
-            {
-                value.Append(character);
-            }
-
-            index++;
-        }
-
-        values.Add(value.ToString());
-        return values;
-    }
-
-    private static string NormalizeHeader(string value) =>
-        new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    private static string NormalizeHeader(string value) => NayaxSalesCells.NormalizeHeader(value);
 
     /// <summary>The row's cell under the first of <paramref name="names"/> the header row carries.</summary>
     private static IXLCell? Cell(IXLRow row, IReadOnlyDictionary<string, int> headers, params string[] names)
@@ -292,20 +259,14 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
     /// amount - so it must not reach the import as an empty machine name, payment method or product
     /// name, which the update would then write over a stored one.
     /// </summary>
-    private static string? TextValue(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty())
-            return null;
-        var text = cell.GetString().Trim();
-        return text.Length == 0 ? null : text;
-    }
+    private static string? TextValue(IXLCell? cell) =>
+        cell is null || cell.IsEmpty() ? null : NayaxSalesCells.Text(cell.GetString());
 
-    private static long LongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : 0;
+    private static long LongValue(IXLCell? cell) => NayaxSalesCells.Long(TextValue(cell));
 
-    private static long? NullableLongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : null;
+    private static long? NullableLongValue(IXLCell? cell) => NayaxSalesCells.NullableLong(TextValue(cell));
 
-    private static decimal? DecimalValue(IXLCell? cell) =>
-        decimal.TryParse(TextValue(cell), NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : null;
+    private static decimal? DecimalValue(IXLCell? cell) => NayaxSalesCells.Decimal(TextValue(cell));
 
     /// <summary>
     /// The transaction-status cell, together with what the export carried there (issue #1298): no
@@ -313,15 +274,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
     /// case used to read as the first, so a status nobody could read looked exactly like a file
     /// that said nothing about the transaction.
     /// </summary>
-    private static (int? Value, NayaxSalesCellInput Input) IntInput(IXLCell? cell)
-    {
-        var text = TextValue(cell);
-        if (string.IsNullOrWhiteSpace(text))
-            return (null, NayaxSalesCellInput.Absent);
-        return int.TryParse(text, out var value)
-            ? (value, NayaxSalesCellInput.Valid)
-            : (null, NayaxSalesCellInput.Malformed);
-    }
+    private static (int? Value, NayaxSalesCellInput Input) IntInput(IXLCell? cell) =>
+        NayaxSalesCells.IntInput(TextValue(cell));
 
     /// <summary>
     /// The settlement-value cell, read the same three ways (issue #1298). An explicit <c>0</c> is a
@@ -330,15 +284,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
     /// symbol - so a value this reader could not read before is now reported as invalid rather than
     /// silently becoming zero.
     /// </summary>
-    private static (decimal? Value, NayaxSalesCellInput Input) DecimalInput(IXLCell? cell)
-    {
-        var text = TextValue(cell);
-        if (string.IsNullOrWhiteSpace(text))
-            return (null, NayaxSalesCellInput.Absent);
-        return decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
-            ? (value, NayaxSalesCellInput.Valid)
-            : (null, NayaxSalesCellInput.Malformed);
-    }
+    private static (decimal? Value, NayaxSalesCellInput Input) DecimalInput(IXLCell? cell) =>
+        NayaxSalesCells.DecimalInput(TextValue(cell));
 
     /// <summary>
     /// A cell under a column the export itself names as GMT, read as a true UTC instant (issue #380).
@@ -363,11 +310,7 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         if (cell.Value.IsNumber)
             return DateTime.SpecifyKind(DateTime.FromOADate(cell.Value.GetNumber()), DateTimeKind.Utc);
 
-        var text = cell.GetString().Trim();
-        if (DateTime.TryParseExact(
-                text, "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var exact))
-            return DateTime.SpecifyKind(exact, DateTimeKind.Utc);
-        return NayaxGmtTimestamp.ParseInstantUtc(text);
+        return NayaxSalesCells.UtcDate(cell.GetString());
     }
 
     /// <summary>
@@ -393,9 +336,6 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
             return cell.Value.GetDateTime();
         if (cell.Value.IsNumber)
             return DateTime.FromOADate(cell.Value.GetNumber());
-        return DateTime.TryParseExact(
-            cell.GetString().Trim(), "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
-            ? value
-            : null;
+        return NayaxSalesCells.ExportDate(cell.GetString());
     }
 }

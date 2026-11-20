@@ -491,6 +491,12 @@ public class EndpointAuthorizationClassificationTests
     // waiting is of no use to a role that may not run the import.
     [InlineData("api/catalogue-review/attention", "GET", Capability.ImportsRun)]
     [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
+    // Issue #1304's uploaded Nayax sales history: uploading one is running the import, and the read
+    // that reports what the background job made of it is readable by exactly the members who may run
+    // it - the same capability as the normal sales file upload above, which is what the issue asks
+    // for.
+    [InlineData("api/imports/nayax-sales-history", "POST", Capability.ImportsRun)]
+    [InlineData("api/imports/nayax-sales-history/jobs", "GET", Capability.ImportsRun)]
     // Issue #1149's uploaded Nayax reimbursement report ZIP: uploading one is running the import, and
     // the two reads that report what became of one are readable by exactly the members who may run it.
     [InlineData("api/imports/reimbursement-report", "POST", Capability.ImportsRun)]

@@ -31,19 +31,30 @@ public sealed class EfNayaxSalesImportTransactions : INayaxSalesImportTransactio
 
     /// <inheritdoc />
     public async Task<INayaxSalesImportTransaction> BeginAsync(CancellationToken cancellationToken) =>
-        new Transaction(await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken));
+        new Transaction(await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken), _db);
 
     private sealed class Transaction : INayaxSalesImportTransaction
     {
         private readonly SqliteWriteLockTransaction _transaction;
+        private readonly AppDbContext _db;
 
-        public Transaction(SqliteWriteLockTransaction transaction)
+        public Transaction(SqliteWriteLockTransaction transaction, AppDbContext db)
         {
             _transaction = transaction;
+            _db = db;
         }
 
         public Task CommitAsync(CancellationToken cancellationToken) =>
             _transaction.CommitAsync(cancellationToken);
+
+        /// <summary>
+        /// Detaches everything the context is tracking, which is what the rollback this transaction
+        /// is about to make leaves behind: the batch's added and modified sales, its staged pending
+        /// cost rebuilds and the progress staged onto the job row. Nothing of the batch survives it,
+        /// so the save that records the failure writes only what it loads afterwards - from the
+        /// database, which is where the durable progress is.
+        /// </summary>
+        public void DiscardStagedChanges() => _db.ChangeTracker.Clear();
 
         public ValueTask DisposeAsync() => _transaction.DisposeAsync();
     }
