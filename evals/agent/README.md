@@ -324,7 +324,7 @@ Each file in `evals/agent/review/cases/` pins one pull request head and base by 
 | `REVIEW-002` | #1131 Sites overview | `CHANGES REQUESTED` | A long unbroken site name cannot wrap in the mobile card and is clipped (fixed by 166292b8). |
 | `REVIEW-003` | #1133 Azure schedule | `CHANGES REQUESTED` | The setup guide puts the GitHub token literally in the Logic App HTTP action; secure inputs only hide run history (fixed by 72dd1c7b). |
 | `REVIEW-004` | #1130 Dashboard SQS | `READY FOR HUMAN REVIEW` | Control: the healthy-queue shortcut preserves the forced Refresh. A blocker claiming otherwise is a false alarm. |
-| `REVIEW-005` | #267 Take Inventory page | `CHANGES REQUESTED` | `ApplyInventoryCount` reads the authoritative current stock with no lock, and the adapter only opens its own transaction at the later write; a concurrent write that commits in that gap is invisible to the staleness check, so a stale count can still be applied (fixed by 0e6b8dac, PR #1270, issue #1241). Held out from the 2026 audit (#1230, finding INV-04); not used to write the candidate checklist. |
+| `REVIEW-005` | #267 Take Inventory page | `CHANGES REQUESTED` | Two blockers. (1) `ApplyInventoryCount` reads the authoritative current stock with no lock, and the adapter only opens its own transaction at the later write; a concurrent write that commits in that gap is invisible to the staleness check, so a stale count can still be applied (fixed by 0e6b8dac, PR #1270, issue #1241; held out from the 2026 audit #1230, finding INV-04). (2) A positive count difference is valued at the product's average unit cost when it has no recorded purchase, which issue #245's recorded owner decision of 30 September 2026 does not approve: it requires the latest recorded purchase cost. Not used to write the candidate checklist. |
 
 Merge validation passed on every head. A case holds what the reviewer is given (`context`: PR
 title and summary, acceptance criteria, exclusions, documentation-impact declaration and the CI
@@ -334,6 +334,18 @@ case-insensitive patterns: one of `paths` and every one of `allOf` must appear i
 inline comment. The runner rejects a set without a `READY FOR HUMAN REVIEW` control, so an "always
 block" reviewer cannot pass. Add a case only with a confirmed answer: a later fix commit, or an owner
 decision, named in `source`.
+
+`REVIEW-005`'s `context` was cross-checked against the real issue #245 and pull request #267 by the
+repository owner (on pull request #1373, 20 Nov 2026), so it states the requirement the owner
+approved rather than what the implementation claimed about it: issue #245 is risk High, and its
+30 September 2026 decision requires the latest recorded purchase cost and explicitly does not
+approve an average-cost fallback. Its `context.validation` names the workflow run that validated
+that exact head (run 36715748861: head `f49fcc31`, event `pull_request`, conclusion success)
+instead of inferring a check from the merge or from branch protection. Its second expected finding
+is confirmed by that owner decision alone - unlike the concurrency half it has no fix commit, and
+`Inventory.Domain.Stock.RestockCostSuggestionPolicy` with
+`EfInventoryCountAdjustmentStore.GetRestockUnitCostAsync` still apply the fallback on develop, so
+whether that divergence is still open is a human decision outside this eval.
 
 Two other candidates from the same audit (#1230) were considered and skipped rather than turned into
 cases:

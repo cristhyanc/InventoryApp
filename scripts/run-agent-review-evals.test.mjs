@@ -30,6 +30,14 @@ const cases = loadReviewCases();
 const reviewStep = extractReviewStep(workflowText);
 const byId = Object.fromEntries(cases.map((c) => [c.id, c]));
 
+// The two blockers a correct review of REVIEW-005 (#267 Take Inventory) raises: the unlocked
+// stale-count read, and the positive count difference valued at an average cost issue #245's
+// recorded owner decision does not approve.
+const REVIEW_005_RACE_BLOCKER =
+  'ApplyInventoryCount.cs:27 GetCurrentStockAsync reads with no lock or transaction; EfInventoryCountAdjustmentStore.ApplyAsync only opens its transaction later, so a concurrent write that commits in that gap is invisible to the staleness check and a stale count can overwrite it. Add a regression test for two overlapping requests.';
+const REVIEW_005_COST_BLOCKER =
+  'EfInventoryCountAdjustmentStore.cs:50 GetRestockUnitCostAsync returns the manual-restock suggestion, which falls back to the product\'s average unit cost when no purchase is recorded, so a positive count difference is valued at a cost no purchase ever recorded. Issue #245 approved the latest recorded purchase cost only: refuse the apply instead, and add a test for a product with no purchase.';
+
 function review(overrides = {}) {
   return {
     reviewed_head_sha: 'a'.repeat(40),
@@ -229,16 +237,34 @@ test('a fixture run grades every case and summarises caught, missed and false al
     'REVIEW-002': review({ blockers: ['unrelated'] }),
     'REVIEW-003': review({ blockers: ['docs/price-collector-testing.md:461 the bearer token is stored in plain text in the Logic App definition.'] }),
     'REVIEW-004': review({ verdict: 'READY FOR HUMAN REVIEW' }),
-    'REVIEW-005': review({ blockers: ['ApplyInventoryCount.cs:27 GetCurrentStockAsync reads with no lock or transaction; EfInventoryCountAdjustmentStore.ApplyAsync only opens its transaction later, so a concurrent write that commits in that gap is invisible to the staleness check and a stale count can overwrite it. Add a regression test for two overlapping requests.'] }),
+    'REVIEW-005': review({ blockers: [REVIEW_005_RACE_BLOCKER, REVIEW_005_COST_BLOCKER] }),
   };
   const report = await runReviewEvals({ cases, provider: createFixtureProvider(responses), reviewStep, variant: 'current', addendum });
-  assert.equal(report.summary.expectedFindings, 4);
-  assert.equal(report.summary.caughtFindings, 3);
+  assert.equal(report.summary.expectedFindings, 5);
+  assert.equal(report.summary.caughtFindings, 4);
   assert.equal(report.summary.missedFindings, 1);
   assert.equal(report.summary.falseAlarms, 0);
   assert.equal(report.summary.verdictMatches, 5);
-  assert.equal(report.summary.actionableBlockers, 2);
+  assert.equal(report.summary.actionableBlockers, 3);
   assert.equal(report.summary.passed, 4);
+});
+
+test('REVIEW-005 expects both the concurrency blocker and the unapproved average-cost valuation', () => {
+  const caseObj = byId['REVIEW-005'];
+  assert.deepEqual(caseObj.expected.findings.map((m) => m.id), [
+    'stale-count-race-outside-lock', 'average-cost-fallback-not-approved',
+  ]);
+
+  const raceOnly = gradeReviewCase(caseObj, { raw: review({ blockers: [REVIEW_005_RACE_BLOCKER] }) });
+  assert.equal(raceOnly.status, 'FAIL');
+  assert.deepEqual(raceOnly.findings.map((f) => f.caught), [true, false]);
+
+  const both = gradeReviewCase(caseObj, { raw: review({ blockers: [REVIEW_005_RACE_BLOCKER, REVIEW_005_COST_BLOCKER] }) });
+  assert.equal(both.status, 'PASS');
+  assert.deepEqual(both.findings.map((f) => f.caught), [true, true]);
+  // The valuation blocker is a valid second finding, never a false alarm and never an unjudged extra.
+  assert.deepEqual(both.falseAlarms, []);
+  assert.deepEqual(both.otherBlockers, []);
 });
 
 test('arguments: a provider is required and variants are checked', async () => {
