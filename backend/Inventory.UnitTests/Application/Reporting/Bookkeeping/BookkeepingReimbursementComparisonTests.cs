@@ -51,6 +51,11 @@ public class BookkeepingReimbursementComparisonTests
         Assert.Equal("Needs Review", report.ReconciliationStatus);
     }
 
+    /// <summary>
+    /// With no payout lying wholly inside the range there is nothing to compare, so the actual
+    /// reimbursement is not available at all - never a zero (issue #1253) - and the expected figure
+    /// still stands on its own line.
+    /// </summary>
     [Fact]
     public async Task Absent_imported_rows_report_pending_and_are_never_reconciled()
     {
@@ -59,13 +64,99 @@ public class BookkeepingReimbursementComparisonTests
         Assert.Equal("Pending", report.ReconciliationStatus);
         Assert.False(report.IsReconciled);
         Assert.Equal(100m, report.ExpectedReimbursement);
-        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Null(report.ActualReimbursement);
+        Assert.Null(report.ReimbursementDifference);
+    }
+
+    /// <summary>
+    /// The issue's own fixture, at the use-case boundary: card sales of 100.00 for one day, fees of
+    /// 2.75, and the only imported payout settles 1-7 September while the report was asked about
+    /// 7 September. Nothing lies wholly inside the day, so the actual reimbursement is not available,
+    /// the net settlement stays the 97.25 estimate and says it is one, the status names what
+    /// happened instead of "Needs Review", and the payout is reported with its own dates and total.
+    /// </summary>
+    [Fact]
+    public async Task A_day_inside_a_weekly_payout_reports_no_actual_an_estimate_and_the_payout_it_cut()
+    {
+        var partlyCovered = new ImportedReimbursementPeriodDto(
+            new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m);
+        var facts = FakeBookkeepingReportFactsProvider.Complete(
+            sales: 100m, cardSales: 100m, cashSales: 0m, cashTransactions: 0) with
+        {
+            ProcessingFees = new NayaxProcessingFeeResult(2.5m, 0.25m, 2.75m, 2.75m, 0m, 0m, 0, DateTime.UtcNow, null),
+            ImportedHasNetSettlement = false,
+            ImportedNetSettlement = 0m,
+            ImportedPartlyCoveredPeriods = [partlyCovered],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Null(report.ActualReimbursement);
+        Assert.Null(report.ReimbursementDifference);
+        Assert.False(report.IsReconciled);
+        Assert.Equal("Range cuts a payout period", report.ReconciliationStatus);
+        Assert.NotEqual("Needs Review", report.ReconciliationStatus);
+        Assert.Equal(97.25m, report.ExpectedReimbursement);
+        Assert.Equal(97.25m, report.NetSettlement);
+        Assert.True(report.IsNetSettlementEstimated);
+        Assert.Equal([partlyCovered], report.PartlyCoveredReimbursements);
+        Assert.Empty(report.ReimbursementPeriods);
+    }
+
+    /// <summary>
+    /// The same payout asked about the week it settles is wholly inside the range: it is the actual
+    /// reimbursement, it is published with the period it covers, and the net settlement is the
+    /// imported amount rather than an estimate.
+    /// </summary>
+    [Fact]
+    public async Task A_payout_wholly_inside_the_range_is_the_actual_and_the_net_settlement_is_not_estimated()
+    {
+        var covered = new ImportedReimbursementPeriodDto(
+            new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), 680.75m);
+        var facts = FakeBookkeepingReportFactsProvider.Complete(
+            sales: 700m, cardSales: 700m, cashSales: 0m, cashTransactions: 0) with
+        {
+            ProcessingFees = new NayaxProcessingFeeResult(17.5m, 1.75m, 19.25m, 19.25m, 0m, 0m, 0, DateTime.UtcNow, null),
+            ImportedHasNetSettlement = true,
+            ImportedNetSettlement = 680.75m,
+            ImportedFullyCoveredPeriods = [covered],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(680.75m, report.ActualReimbursement);
+        Assert.Equal(680.75m, report.NetSettlement);
+        Assert.False(report.IsNetSettlementEstimated);
+        Assert.Equal([covered], report.ReimbursementPeriods);
+        Assert.Empty(report.PartlyCoveredReimbursements);
+        Assert.Equal(680.75m, report.ExpectedReimbursement);
+        Assert.Equal("Reconciled", report.ReconciliationStatus);
+    }
+
+    /// <summary>
+    /// A payout the range cuts explains an absent actual; it can never change one that exists. A
+    /// range holding both compares only what it covers in full and lists the rest beside it.
+    /// </summary>
+    [Fact]
+    public async Task A_partly_covered_payout_is_listed_beside_a_fully_covered_one_and_changes_no_total()
+    {
+        var partlyCovered = new ImportedReimbursementPeriodDto(
+            new DateTime(2026, 7, 28), new DateTime(2026, 8, 3), 500m);
+        var facts = WithImported(100m) with { ImportedPartlyCoveredPeriods = [partlyCovered] };
+
+        var report = await Report(facts);
+
+        Assert.Equal(100m, report.ActualReimbursement);
+        Assert.Equal(0m, report.ReimbursementDifference);
+        Assert.Equal("Reconciled", report.ReconciliationStatus);
+        Assert.Equal([partlyCovered], report.PartlyCoveredReimbursements);
     }
 
     /// <summary>
     /// A settlement import that really did settle nothing is a measured zero and reconciles against
-    /// a zero expectation; a period with no imported row at all reports the same two amounts and is
-    /// still <c>Pending</c>. The status is what separates them, so neither can be read as the other.
+    /// a zero expectation; a period with no payout wholly inside it has no actual reimbursement at
+    /// all and is still <c>Pending</c>. Since issue #1253 the two differ in the figure itself - a
+    /// zero against nothing - as well as in the status, so neither can be read as the other.
     /// </summary>
     [Fact]
     public async Task An_imported_zero_stays_distinguishable_from_absent_imported_rows()
@@ -85,7 +176,8 @@ public class BookkeepingReimbursementComparisonTests
         Assert.True(imported.IsReconciled);
         Assert.Equal("Reconciled", imported.ReconciliationStatus);
 
-        Assert.Equal(0m, absent.ActualReimbursement);
+        Assert.Null(absent.ActualReimbursement);
+        Assert.Null(absent.ReimbursementDifference);
         Assert.False(absent.IsReconciled);
         Assert.Equal("Pending", absent.ReconciliationStatus);
     }

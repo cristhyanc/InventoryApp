@@ -276,13 +276,14 @@ describe('BookkeepingReportComponent expected-versus-actual reimbursement (issue
 
   it('shows a pending comparison when no settlement import covers the period, never a difference', async () => {
     const host = await render({
-      expectedReimbursement: 95, actualReimbursement: 0, reimbursementDifference: -95,
+      expectedReimbursement: 95, actualReimbursement: null, reimbursementDifference: null,
       isReconciled: false, reconciliationStatus: 'Pending', reconciliationTolerance: 0.01,
       providerAvailability: COMPLETE
     });
 
     const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
-    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('Pending');
+    expect(section.querySelector('[data-testid="reconciliation-status"]')!.textContent).toContain('Pending');
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('Not available');
     expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).not.toContain('$0.00');
     expect(section.querySelector('[data-testid="reimbursement-difference"]')!.textContent).not.toContain('$');
     expect(section.querySelector('[data-testid="expected-reimbursement"]')!.textContent).toContain('$95.00');
@@ -332,6 +333,69 @@ describe('BookkeepingReportComponent expected-versus-actual reimbursement (issue
     const help = host.querySelector('[data-testid="calculation-help"]')!.textContent ?? '';
     expect(help).toContain('expected reimbursement');
     expect(help).toContain('imported');
+    // Issue #1253: the help says which payouts are counted and what happens when none are.
+    expect(help).toContain('entirely inside');
+    expect(help).toContain('not available');
+  });
+
+  /**
+   * Issue #1253, the issue's own fixture: card sales of $100 a day for 1-7 September 2026 with one
+   * payout for that week of $680.75, viewed for 7 September alone. The day has no actual
+   * reimbursement, the net reimbursement beside it is labelled as an estimate, and the payout the
+   * day cuts is listed on its own instead of being counted as money received that day.
+   */
+  it('reports no actual, an estimated net reimbursement and the payout the range cuts', async () => {
+    const host = await render({
+      cardSales: 100, nayaxFeesIncludingGst: 2.75, netSettlement: 97.25, isNetSettlementEstimated: true,
+      expectedReimbursement: 97.25, actualReimbursement: null, reimbursementDifference: null,
+      isReconciled: false, reconciliationStatus: 'Range cuts a payout period', reconciliationTolerance: 0.01,
+      reimbursementPeriods: [],
+      partlyCoveredReimbursements: [{ periodStart: '2026-09-01', periodEnd: '2026-09-07', total: 680.75 }],
+      providerAvailability: COMPLETE
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('Not available');
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).not.toContain('680.75');
+    expect(section.querySelector('[data-testid="reimbursement-difference"]')!.textContent).not.toContain('$');
+    expect(section.querySelector('[data-testid="reconciliation-status"]')!.textContent).toContain('Range cuts a payout period');
+    expect(section.querySelector('[data-testid="reconciliation-status"]')!.textContent).not.toContain('Needs Review');
+    // The expected figure for the day is unchanged and stays on its own line.
+    expect(section.querySelector('[data-testid="expected-reimbursement"]')!.textContent).toContain('$97.25');
+
+    const partly = section.querySelector('[data-testid="partly-covered-payouts"]')!;
+    expect(partly.textContent).toContain('Payouts partly outside this range');
+    expect(partly.textContent).toContain('01/09/2026');
+    expect(partly.textContent).toContain('07/09/2026');
+    expect(partly.textContent).toContain('$680.75');
+
+    // The net reimbursement card keeps the estimate and says it is one.
+    expect(host.querySelector('[data-testid="net-reimbursement"]')!.textContent).toContain('$97.25');
+    expect(host.querySelector('[data-testid="net-reimbursement-estimated"]')!.textContent).toContain('Estimated');
+  });
+
+  /**
+   * The same payout viewed for the week it settles: it lies wholly inside the range, so it is the
+   * actual reimbursement, it is labelled with the period it covers, nothing is listed as partly
+   * outside, and the net reimbursement is the imported amount rather than an estimate.
+   */
+  it('labels the actual reimbursement with the payout periods it is made of', async () => {
+    const host = await render({
+      cardSales: 700, nayaxFeesIncludingGst: 19.25, netSettlement: 680.75, isNetSettlementEstimated: false,
+      expectedReimbursement: 680.75, actualReimbursement: 680.75, reimbursementDifference: 0,
+      isReconciled: true, reconciliationStatus: 'Reconciled', reconciliationTolerance: 0.01,
+      reimbursementPeriods: [{ periodStart: '2026-09-01', periodEnd: '2026-09-07', total: 680.75 }],
+      partlyCoveredReimbursements: [],
+      providerAvailability: COMPLETE
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('$680.75');
+    const periods = section.querySelector('[data-testid="reimbursement-periods"]')!;
+    expect(periods.textContent).toContain('01/09/2026');
+    expect(periods.textContent).toContain('07/09/2026');
+    expect(section.querySelector('[data-testid="partly-covered-payouts"]')).toBeNull();
+    expect(host.querySelector('[data-testid="net-reimbursement-estimated"]')).toBeNull();
   });
 
   it('builds the comparison from shared tokens the committed stylesheet already compiles', async () => {

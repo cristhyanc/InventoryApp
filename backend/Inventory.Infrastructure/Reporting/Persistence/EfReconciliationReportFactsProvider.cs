@@ -17,10 +17,13 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 ///
 /// Its completed-sale and all-status sales queries are shared with
 /// <see cref="EfBookkeepingReportFactsProvider"/>/<see cref="EfDailyReportFactsProvider"/> through
-/// <see cref="EfReportingSharedQueries"/>. Its per-reimbursement-period matching, with the
+/// <see cref="EfReportingSharedQueries"/>, as is the wholly-inside date rule that decides which
+/// payouts a requested range may count at all
+/// (<see cref="EfReportingSharedQueries.IsPeriodWhollyInside"/>, shared with bookkeeping's
+/// settlement query since issue #1253). Its per-reimbursement-period facts, with the
 /// <c>Devices</c>/<c>DevicePayments</c>/<c>PaymentMethods</c>/<c>Fees</c> navigation graph and the
-/// card-gross fallback cascade between them, is specific to reconciliation and has no bookkeeping
-/// or daily equivalent, so it stays local to this adapter.
+/// card-gross fallback cascade between them, are specific to reconciliation and have no bookkeeping
+/// or daily equivalent, so they stay local to this adapter.
 /// </summary>
 public sealed class EfReconciliationReportFactsProvider : IReconciliationReportFactsProvider
 {
@@ -55,9 +58,12 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             .ToListAsync(cancellationToken);
 
         // Reconciliation is deliberately period based: an overlapping reimbursement is not
-        // silently attributed to a different requested period.
+        // silently attributed to a different requested period. Which payouts a range may count is
+        // decided by the one shared predicate bookkeeping's settlement query also calls (issue
+        // #1253), so the two reports cannot drift apart on the boundary convention.
         var matching = reimbursements
-            .Where(x => x.ReimbursementStartDate!.Value.Date >= from.Date && x.ReimbursementEndDate!.Value.Date <= to.Date)
+            .Where(x => EfReportingSharedQueries.IsPeriodWhollyInside(
+                x.ReimbursementStartDate, x.ReimbursementEndDate, from, endExclusive))
             .OrderBy(x => x.Id)
             .ToList();
 

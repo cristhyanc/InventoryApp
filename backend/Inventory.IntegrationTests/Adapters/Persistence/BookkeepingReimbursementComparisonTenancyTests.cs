@@ -142,7 +142,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
         var report = await useCase.Handle(new ReportingFilterDto(Day, Day), CancellationToken.None);
 
         Assert.Equal(0m, report.ExpectedReimbursement);
-        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Null(report.ActualReimbursement);
         Assert.False(report.IsReconciled);
         Assert.Equal("Pending", report.ReconciliationStatus);
     }
@@ -161,7 +161,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
         var report = await useCase.Handle(
             new ReportingFilterDto(Day.AddMonths(1), Day.AddMonths(1)), CancellationToken.None);
 
-        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Null(report.ActualReimbursement);
         Assert.Equal("Pending", report.ReconciliationStatus);
         Assert.False(report.IsReconciled);
     }
@@ -183,7 +183,7 @@ public sealed class BookkeepingReimbursementComparisonTenancyTests : IDisposable
         Assert.Equal(-40m, filtered.ReimbursementDifference);
 
         Assert.Equal(0m, otherMachine.ExpectedReimbursement);
-        Assert.Equal(0m, otherMachine.ActualReimbursement);
+        Assert.Null(otherMachine.ActualReimbursement);
         Assert.Contains(otherMachine.DataQuality.Notes!,
             note => note.Contains("No reimbursement device row matched the selected machine ID"));
     }

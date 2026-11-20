@@ -85,33 +85,41 @@ public record BookkeepingReportDto(
     public decimal ExpectedReimbursement { get; init; }
 
     /// <summary>
-    /// The net reimbursement the settlement import recorded for this period, matched on its covered
-    /// reimbursement period. It is <c>0</c> when no imported row covers the period at all, which
-    /// <see cref="ReconciliationStatus"/> reports as <c>Pending</c> and
-    /// <see cref="ReportProviderAvailabilityDto.Fees"/> labels - a settlement import that really
-    /// settled nothing stays a measured zero in a <c>Complete</c> period, and the two must never be
-    /// read as each other.
+    /// The net reimbursement the settlement import recorded for this period: the total of the
+    /// payouts whose own declared sales period lies <em>wholly inside</em> the requested range
+    /// (issue #1253). A payout the range only overlaps settles days outside it, so it is reported in
+    /// <see cref="PartlyCoveredReimbursements"/> and is no part of this figure.
+    ///
+    /// <para>It is <c>null</c> - "Not available" - when no payout lies wholly inside the range, and
+    /// is <strong>never</strong> <c>0</c> for that reason: a settlement import that really settled
+    /// nothing is a measured zero in a <c>Complete</c> period, and the two must never be read as
+    /// each other. <see cref="ReconciliationStatus"/> says which case a range is in and
+    /// <see cref="ReportProviderAvailabilityDto.Fees"/> labels the figure.</para>
     /// </summary>
-    public decimal ActualReimbursement { get; init; }
+    public decimal? ActualReimbursement { get; init; }
 
     /// <summary>
     /// <see cref="ActualReimbursement"/> less <see cref="ExpectedReimbursement"/>, signed: negative
-    /// means the import paid less than this period's card sales and fees expected. Governed by
-    /// <see cref="ReportProviderAvailabilityDto.Combined"/>, because a difference of zero between
-    /// two sides that were never both measured is the most misleading figure in this comparison.
+    /// means the import paid less than this period's card sales and fees expected. <c>null</c>
+    /// whenever there is no actual reimbursement to compare, because a difference computed against a
+    /// missing side is the most misleading figure in this comparison. Governed by
+    /// <see cref="ReportProviderAvailabilityDto.Combined"/>.
     /// </summary>
-    public decimal ReimbursementDifference { get; init; }
+    public decimal? ReimbursementDifference { get; init; }
 
     /// <summary>
-    /// Whether the comparison reconciled: an imported row exists for the period and the absolute
-    /// difference is within <see cref="ReconciliationTolerance"/>. A <c>Pending</c> period is never
-    /// reconciled.
+    /// Whether the comparison reconciled: a payout lying wholly inside the range recorded an actual
+    /// reimbursement and the absolute difference is within <see cref="ReconciliationTolerance"/>. A
+    /// range with no such payout is never reconciled and is never flagged for review either -
+    /// nothing was compared.
     /// </summary>
     public bool IsReconciled { get; init; }
 
     /// <summary>
-    /// <c>Pending</c> (no imported row covers the period), <c>Reconciled</c> or <c>Needs Review</c>,
-    /// from the same policy and the same vocabulary the reporting dashboard published.
+    /// <c>Pending</c> (no imported payout relates to the range at all), <c>Range cuts a payout
+    /// period</c> (every payout for these dates settles days outside the range, so nothing was
+    /// compared), <c>Reconciled</c> or <c>Needs Review</c> - from the one Domain policy, which is
+    /// also where these literals are named.
     /// </summary>
     public string ReconciliationStatus { get; init; } = PendingReconciliationStatus;
 
@@ -122,10 +130,35 @@ public record BookkeepingReportDto(
     public decimal ReconciliationTolerance { get; init; } = DashboardReimbursementPolicy.Tolerance;
 
     /// <summary>
-    /// The status a report with no imported settlement row carries, named so a presentation can
-    /// recognise it without repeating the literal (the dashboard's own card does the same).
+    /// The imported payouts <see cref="ActualReimbursement"/> is the total of, each with the sales
+    /// period it settles, so the figure can be labelled with the dates it covers (issue #1253).
+    /// Empty whenever the actual reimbursement is not available.
     /// </summary>
-    public const string PendingReconciliationStatus = "Pending";
+    public IReadOnlyList<ImportedReimbursementPeriodDto> ReimbursementPeriods { get; init; } = [];
+
+    /// <summary>
+    /// The imported payouts this range only <em>partly</em> overlaps, with their own period dates
+    /// and totals (issue #1253). They are published so the report can show which payout period the
+    /// requested range cut, and they are part of no total in this response - not
+    /// <see cref="ActualReimbursement"/>, not <see cref="NetSettlement"/> and not
+    /// <see cref="ReimbursementDifference"/>.
+    /// </summary>
+    public IReadOnlyList<ImportedReimbursementPeriodDto> PartlyCoveredReimbursements { get; init; } = [];
+
+    /// <summary>
+    /// Whether <see cref="NetSettlement"/> is this report's own estimate - this period's card sales
+    /// less its Nayax fees including GST - because no payout covering these dates in full recorded
+    /// one (issue #1253). An estimate is always labelled as one: it is a calculation from the
+    /// figures here, not an amount anybody paid.
+    /// </summary>
+    public bool IsNetSettlementEstimated { get; init; }
+
+    /// <summary>
+    /// The status a report with no imported settlement row carries, named so a presentation can
+    /// recognise it without repeating the literal (the dashboard's own card does the same). It is
+    /// the Domain policy's own constant: the vocabulary is decided in one place.
+    /// </summary>
+    public const string PendingReconciliationStatus = DashboardReimbursementPolicy.PendingStatus;
 
     public decimal PartialCostOfGoods { get; init; }
     public bool IsCogsComplete { get; init; } = true;
