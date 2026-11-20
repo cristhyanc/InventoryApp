@@ -225,14 +225,14 @@ public class SnapshotInventoryCostLedgerReadsTests
 
     private static StockAdjustment Movement(
         long productId, DateTime at, int quantity, StockAdjustmentReason reason, decimal? unitCost) => new()
-    {
-        ProductId = productId,
-        QuantityChange = quantity,
-        QuantityAfter = quantity,
-        Reason = reason,
-        UnitCost = unitCost,
-        EffectiveAt = at,
-    };
+        {
+            ProductId = productId,
+            QuantityChange = quantity,
+            QuantityAfter = quantity,
+            Reason = reason,
+            UnitCost = unitCost,
+            EffectiveAt = at,
+        };
 
     private static NayaxSales Sale(long transactionId, long productId, DateTime at) => new()
     {
@@ -248,15 +248,15 @@ public class SnapshotInventoryCostLedgerReadsTests
 
     private static InventoryCostTransitionBaseline Baseline(
         DateTime cutoff, int home, int costing, decimal value) => new()
-    {
-        ProductId = Product,
-        CutoffAt = cutoff,
-        HomeStockQuantity = home,
-        OpeningCostingQuantity = costing,
-        InventoryValue = value,
-        AverageUnitCost = value / costing,
-        CreatedAt = Opening.AddDays(8),
-    };
+        {
+            ProductId = Product,
+            CutoffAt = cutoff,
+            HomeStockQuantity = home,
+            OpeningCostingQuantity = costing,
+            InventoryValue = value,
+            AverageUnitCost = value / costing,
+            CreatedAt = Opening.AddDays(8),
+        };
 
     private sealed class CountingLedgerStore : IInventoryCostLedgerStore
     {
