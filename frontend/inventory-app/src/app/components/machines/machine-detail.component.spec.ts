@@ -7,6 +7,7 @@ import { MachineDetailComponent } from './machine-detail.component';
 import { Machine, MachineLatestSales, Product } from '../../models/models';
 import { ConfigService } from '../../services/config.service';
 import { MachineService } from '../../services/machine.service';
+import { ProductService } from '../../services/product.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
@@ -34,6 +35,14 @@ function product(quantityInStock: number): Product {
 
 function breadcrumbServiceStub(): { setCurrentPageLabel: jest.Mock } & BreadcrumbService {
   return { setCurrentPageLabel: jest.fn() } as unknown as { setCurrentPageLabel: jest.Mock } & BreadcrumbService;
+}
+
+/**
+ * The Sync Restock panel's product-change row autocompletes read the business's active products
+ * (issue #1327). This page's own tests are not about that catalogue, so an empty list stands in.
+ */
+function productServiceStub(): ProductService {
+  return { getAll: () => of([]) } as unknown as ProductService;
 }
 
 /** An available window with no sales, for the Sales panel the page now composes (issue #768). */
@@ -239,7 +248,8 @@ describe('MachineDetailComponent Products panel read (issue #768)', () => {
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub() }
+        { provide: SupportSessionService, useValue: supportSessionStub() },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     }).compileComponents();
 
@@ -441,7 +451,8 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub() }
+        { provide: SupportSessionService, useValue: supportSessionStub() },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     }).compileComponents();
 
@@ -492,7 +503,8 @@ describe('MachineDetailComponent Record refill link (issue #744 machine-page con
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) }
+        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     }).compileComponents();
 
@@ -587,7 +599,8 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } },
-        { provide: SupportSessionService, useValue: supportSessionStub() }
+        { provide: SupportSessionService, useValue: supportSessionStub() },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     }).compileComponents();
 
@@ -666,7 +679,8 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub() }
+        { provide: SupportSessionService, useValue: supportSessionStub() },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     })
       .compileComponents()
@@ -732,7 +746,8 @@ describe('MachineDetailComponent Open Sync Restock from the Dashboard (issue #10
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: supportSessionStub(of(sessionActive)) }
+        { provide: SupportSessionService, useValue: supportSessionStub(of(sessionActive)) },
+        { provide: ProductService, useValue: productServiceStub() }
       ]
     }).compileComponents();
 

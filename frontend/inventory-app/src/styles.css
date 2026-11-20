@@ -2027,6 +2027,14 @@ video {
   min-width: 15rem;
 }
 
+.min-w-\[160px\] {
+  min-width: 160px;
+}
+
+.min-w-\[220px\] {
+  min-width: 220px;
+}
+
 .min-w-\[32rem\] {
   min-width: 32rem;
 }
