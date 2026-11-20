@@ -212,10 +212,10 @@ public class ProductsController : ControllerBase
     /// and <c>PUT</c> on the same id with <c>isActive: true</c> is how it is reactivated.
     /// </summary>
     [HttpGet("{id:long}")]
-    public async Task<ActionResult<ProductResponse>> Get(long id)
+    public async Task<ActionResult<ProductResponse>> Get(long id, CancellationToken ct = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var product = await _getProduct.Handle(id, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var product = await _getProduct.Handle(id, ct);
         return product is null ? NotFound() : Ok(ProductRecordResponseMapper.ToResponse(product, visibility));
     }
 
@@ -307,7 +307,7 @@ public class ProductsController : ControllerBase
     /// product back through this action - keep working for a legacy row.</para>
     /// </summary>
     [HttpPut("{id:long}")]
-    public async Task<IActionResult> Update(long id, ProductUpdateDto dto)
+    public async Task<IActionResult> Update(long id, ProductUpdateDto dto, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(dto);
 
@@ -321,7 +321,7 @@ public class ProductsController : ControllerBase
             dto.CategoryId,
             dto.IsActive);
 
-        var result = await _updateProduct.Handle(id, fields, CancellationToken.None);
+        var result = await _updateProduct.Handle(id, fields, ct);
         return result.Outcome switch
         {
             UpdateProductOutcome.Success => NoContent(),

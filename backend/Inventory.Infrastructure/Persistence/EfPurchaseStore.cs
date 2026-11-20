@@ -52,19 +52,31 @@ public sealed class EfPurchaseStore : IPurchaseStore
         _clock = clock;
     }
 
+    /// <summary>
+    /// A pure read (issue #1289, audit #1226 finding DB-04): no caller ever mutates the
+    /// <see cref="PurchaseRecord"/>s this returns, so tracking every purchase, line and product it
+    /// loads bought nothing and grew without bound as more purchases were recorded.
+    /// <c>AsSplitQuery</c> keeps the result identical - the two collections (<c>Items</c> and, through
+    /// it, each item's <c>Product</c>) are still loaded, now as separate queries joined in memory
+    /// rather than one cartesian-product join - while avoiding the row multiplication a single query
+    /// would otherwise do across both one-to-many relationships at once.
+    /// </summary>
     public async Task<IReadOnlyList<PurchaseRecord>> ListAsync(int? supplierId, CancellationToken cancellationToken)
     {
-        var query = _db.Receipts.Include(r => r.Supplier).AsQueryable();
+        var query = _db.Receipts.AsNoTracking().Include(r => r.Supplier).AsQueryable();
         if (supplierId.HasValue) query = query.Where(r => r.SupplierId == supplierId);
 
         var purchases = await query.Include(r => r.Items).ThenInclude(i => i.Product)
+            .AsSplitQuery()
             .OrderByDescending(r => r.PurchaseDate).ToListAsync(cancellationToken);
         return purchases.Select(ToRecord).ToList();
     }
 
+    /// <summary>A pure read, for the same reason <see cref="ListAsync"/> is one (issue #1289).</summary>
     public async Task<PurchaseRecord?> FindByIdAsync(int id, CancellationToken cancellationToken)
     {
-        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+        var purchase = await _db.Receipts.AsNoTracking()
+            .Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
         return purchase is null ? null : ToRecord(purchase);
     }
