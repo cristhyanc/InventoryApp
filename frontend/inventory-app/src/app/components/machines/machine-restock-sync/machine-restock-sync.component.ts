@@ -25,6 +25,7 @@ import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import { NayaxStatusBannerComponent } from '../../shared/nayax-status-banner/nayax-status-banner.component';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { apiErrorMessage } from '../../shared/api-error-message';
 import { PurchaseProductPickerComponent } from '../../purchases/purchase-form/purchase-product-picker.component';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
@@ -660,10 +661,11 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
           this.restockApplied.emit();
         }
       },
-      error: () => {
+      error: (error: unknown) => {
         this.applying$.next(false);
-        this.applyError$.next('Failed to apply the selected Nayax stock-adjustment events.');
-        this.toastService.error('Failed to apply the selected Nayax stock-adjustment events.');
+        const message = apiErrorMessage(error, 'Failed to apply the selected Nayax stock-adjustment events.');
+        this.applyError$.next(message);
+        this.toastService.error(message);
       }
     });
   }
@@ -710,7 +712,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
           ? (failure.error as NayaxStockEventApplyResult | null)?.message
           : null;
 
-        const message = conflict ?? 'Failed to resolve the possible duplicate.';
+        const message = conflict ?? apiErrorMessage(failure, 'Failed to resolve the possible duplicate.');
         this.applyError$.next(message);
         if (conflict) {
           this.toastService.warning(message);
@@ -750,10 +752,11 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
         this.selectedEventIds.clear();
         this.refreshPreview();
       },
-      error: () => {
+      error: (error: unknown) => {
         this.resolvingManyEvents$.next(false);
-        this.applyError$.next('Failed to resolve the selected events as already recorded manually.');
-        this.toastService.error('Failed to resolve the selected events as already recorded manually.');
+        const message = apiErrorMessage(error, 'Failed to resolve the selected events as already recorded manually.');
+        this.applyError$.next(message);
+        this.toastService.error(message);
       }
     });
   }

@@ -148,6 +148,34 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
   });
 
   /**
+   * A refusal that carries a server detail (issue #1281) is shown instead of the fixed sentence;
+   * a failure with no server detail - a network error, or a 500 with no body, as above - keeps
+   * showing that fixed sentence as its fallback.
+   */
+  it('shows the server detail instead of the fixed sentence when the write is refused with one', async () => {
+    const setGstRule = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 409, error: 'This GST rule conflicts with the product\'s category.' }))
+    );
+    const { host, choose, productCreated } = await render({ setGstRule });
+
+    choose('Taxable');
+    productCreated(55);
+
+    expect(host.textContent).toContain('This GST rule conflicts with the product\'s category.');
+    expect(host.textContent).not.toContain('The product was created, but its GST rule was not saved.');
+  });
+
+  it('keeps the fixed sentence as the fallback for a network error that carries no server detail', async () => {
+    const setGstRule = jest.fn(() => throwError(() => new Error('network down')));
+    const { host, choose, productCreated } = await render({ setGstRule });
+
+    choose('Taxable');
+    productCreated(55);
+
+    expect(host.textContent).toContain('The product was created, but its GST rule was not saved.');
+  });
+
+  /**
    * The retry is the reason this write lives here rather than on the page: it must re-send the rule
    * the person chose, which means nothing may re-read the created product's stored rule - still
    * unset, because this is the write that failed - over that choice. The composed panel is deferred

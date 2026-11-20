@@ -8,6 +8,7 @@ import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { SupplierOrder, SupplierOrderStatus } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { apiErrorMessage } from '../shared/api-error-message';
 
 /** '' means "every open status"; 0/1 match `SupplierOrderStatus.Ordered`/`PartiallyReceived`. */
 export type SupplierOrderStatusFilter = '' | 0 | 1;
@@ -106,7 +107,7 @@ export class SupplierOrdersComponent implements OnInit, OnDestroy {
         this.toastService.success('Supplier order cancelled.');
         this.loadOrders();
       },
-      error: () => this.toastService.error('Unable to cancel this supplier order.')
+      error: (error: unknown) => this.toastService.error(apiErrorMessage(error, 'Unable to cancel this supplier order.'))
     });
   }
 
