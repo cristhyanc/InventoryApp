@@ -551,6 +551,10 @@ public static class ApplicationServiceCollectionExtensions
         // background worker runs in a scope resolved to that job's own business.
         services.AddScoped<UploadNayaxSalesHistory>();
         services.AddScoped<ListNayaxSalesHistoryImportJobs>();
+        // Its sale costing reads each product's ledger once per batch rather than once per row
+        // (NayaxSalesHistoryBatchCosting): the same CostSale and replay, over a snapshot that holds
+        // while a batch's row pass has saved nothing.
+        services.AddScoped<INayaxSalesHistoryBatchCosting, NayaxSalesHistoryBatchCosting>();
         services.AddScoped<ProcessNayaxSalesHistoryImportJob>();
         // The per-file steps of the reimbursement report import (issue #1149): hash dedupe, the
         // atomic write, and the settlement coverage a committed file proves.

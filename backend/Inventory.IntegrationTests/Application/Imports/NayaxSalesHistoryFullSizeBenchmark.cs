@@ -40,27 +40,21 @@ namespace InventoryApi.Tests.Application.Imports;
 /// depth for the same batch size. A run therefore reports both numbers, and a budget met at one
 /// distribution says nothing about a much smaller catalogue.</para>
 ///
-/// <para><strong>What it has measured, on this repository's runners (19 November 2026).</strong></para>
+/// <para><strong>What it has measured (cloud runner, 20 November 2026)</strong>, with each batch reading a
+/// product's ledger once (<c>SnapshotInventoryCostLedgerReads</c>) and <c>IX_NayaxSales_ProductId</c>
+/// in place:</para>
 /// <code>
-/// rows     products  sales/product  longest batch  whole import
-///   2,000       200             10          1.1 s           4 s
-///  25,000        20          1,250          4.6 s       1.9 min
-///  20,000         4          5,000         12.6 s       4.2 min   (10 of 40 batches over budget)
+/// rows     products  sales/product  longest batch  over 10 s   whole import
+///  20,000         4          5,000          0.8 s     0 of 40           17 s
+/// 250,000       200          1,250          2.3 s     0 of 500       8.7 min
+/// 250,000         4         62,500         11.1 s     4 of 500      40.2 min
 /// </code>
-/// <para>The middle line is the depth a 250,000-row history over a 200-product catalogue ends at, and
-/// at that depth every batch stayed inside the budget (1.0 s rising to 4.6 s over fifty batches).
-/// The last line is the small-catalogue case: from about three thousand sales a product the holds
-/// passed <see cref="NayaxSalesHistoryPolicy.MaxWriteLockHoldSeconds"/> - 10.3 s to 12.6 s for its
-/// last ten batches - so the 10-second budget is <em>not</em> met by a history that concentrates a
-/// quarter of a million rows on a handful of products, and a smaller batch size only moves that
-/// depth rather than bounding it. Bounding it needs the incremental sale-time ledger read that is
-/// recorded as follow-up work, which is a costing-internals change issue #1304 excludes.</para>
-///
-/// <para><strong>A full 250,000-row run has not completed here.</strong> The attempt exceeded the
-/// 30-minute ceiling of the commands this environment allows, so the total duration at the row
-/// ceiling is known only as more than half an hour. The per-batch hold - which is what the budget is
-/// about, and what a batch of a fixed size costs at a given depth - is therefore measured at the
-/// depth a full-size history ends at rather than projected from a shorter file.</para>
+/// <para>Before those two changes, 20,000 rows over 4 products reached 12.6 s and 250,000 over 200
+/// reached 7.5 s in 30.7 minutes. The full-size history over a real catalogue is now well inside
+/// <see cref="NayaxSalesHistoryPolicy.MaxWriteLockHoldSeconds"/>. The last line is the extreme
+/// small-catalogue case: the per-row replay still runs over the product's whole history, so once each
+/// of four products holds about 52,000 sales a few batches pass the budget, and this case fails its
+/// assertion by design - that failure is the measurement, not a broken test.</para>
 /// </summary>
 public class NayaxSalesHistoryFullSizeBenchmark
 {

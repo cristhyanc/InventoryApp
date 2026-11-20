@@ -166,27 +166,31 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
 
     /// <summary>
     /// The real job processor over <paramref name="db"/>, wired exactly as the composition root
-    /// wires it: the real streaming reader, the real sales store, the real sale costing over the real
-    /// inventory-cost replay, the real provider-id link store, the real pending-rebuild recorder and
+    /// wires it: the real streaming reader, the real sales store, the real per-batch sale costing over
+    /// the real inventory-cost replay, the real provider-id link store, the real pending-rebuild recorder and
     /// the real <c>BEGIN IMMEDIATE</c> transaction.
     ///
     /// <para><paramref name="transactions"/> is how the batching, the lock timing and the
     /// interrupted-attempt cases get at the transaction from outside; left unset, it is the real
     /// one. <paramref name="saleCosting"/> is the same opening on the one per-row collaboration that
-    /// can fail with part of a batch already staged; left unset, it is the real costing.</para>
+    /// can fail with part of a batch already staged; given, every batch is costed by it, and left
+    /// unset, it is the real per-batch costing.</para>
     /// </summary>
     public ProcessNayaxSalesHistoryImportJob Process(
         AppDbContext db,
         INayaxSalesImportTransactions? transactions = null,
         ICostSale? saleCosting = null)
     {
-        var rebuild = TestCostingUseCases.Rebuild(db);
+        INayaxSalesHistoryBatchCosting costing = saleCosting is null
+            ? new NayaxSalesHistoryBatchCosting(
+                TestCostingUseCases.SaleCostingStore(db, Clock), new EfInventoryCostLedgerStore(db))
+            : new FixedBatchCosting(saleCosting);
 
         return new ProcessNayaxSalesHistoryImportJob(
             Jobs(db),
             Reader(),
             new EfNayaxSalesImportStore(db),
-            saleCosting ?? TestCostingUseCases.CostSale(db, rebuild, Clock),
+            costing,
             new EfNayaxProductLinkStore(db),
             new EfPendingInventoryCostRebuildStore(db, Clock),
             transactions ?? new EfNayaxSalesImportTransactions(db),
@@ -629,4 +633,17 @@ internal sealed class FailingSalesHistoryTransactions : INayaxSalesImportTransac
 
         return _inner.BeginAsync(cancellationToken);
     }
+}
+
+/// <summary>
+/// One given sale costing for every batch (issue #1304): how a case that needs to reach the per-row
+/// costing - a failure part-way through a batch - substitutes it for the production per-batch one.
+/// </summary>
+internal sealed class FixedBatchCosting : INayaxSalesHistoryBatchCosting
+{
+    private readonly ICostSale _costing;
+
+    public FixedBatchCosting(ICostSale costing) => _costing = costing;
+
+    public ICostSale ForOneBatch() => _costing;
 }

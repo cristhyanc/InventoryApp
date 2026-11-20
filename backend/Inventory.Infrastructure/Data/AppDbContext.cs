@@ -1246,6 +1246,16 @@ public class AppDbContext : DbContext
             .HasIndex(s => new { s.BusinessId, s.TransactionID })
             .IsUnique();
 
+        // One product's stock-consuming sales are what every sale-time cost replay and inventory-cost
+        // rebuild reads (EfInventoryCostLedgerStore, EfSaleCostingStore). The central business filter
+        // is translated as "(@unrestricted OR BusinessId = @business)", and SQLite cannot use the
+        // composite (BusinessId, ProductId) index under that OR, so without an index that leads with
+        // ProductId each of those reads scanned every business's sales - a cost that grew with the
+        // whole table and, for the background sales history import, with every batch (issue #1304).
+        // It is the same shape StockAdjustments and InventoryCostRepairs already have.
+        modelBuilder.Entity<NayaxSales>()
+            .HasIndex(s => s.ProductId);
+
         // MachineAuthorizationTime is a persisted true UTC instant (see docs/architecture.md
         // § Nayax sale timestamps for where that instant is established - the latest-sales
         // synchronization writes it from the Nayax payload's authoritative AuthorizationDateTimeGMT

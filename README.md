@@ -1385,16 +1385,16 @@ for no gain.
 holds the file's rows in memory — and commits them in **batches of 500**, each batch in its own short
 database transaction. Between batches the database's single write lock is released, so a purchase, a
 stock adjustment or the Nayax SQS queue reader's own save goes through while a year of history is
-importing instead of waiting behind it. A batch holds that lock for a second or two early in a
-history and longer as the history grows, because each row's cost replays its own product's ledger:
-measured, a batch took 1.0 s at the start and 4.6 s by the point a 250,000-row history over a
-200-product catalogue reaches — inside the ten-second goal. **A history that concentrates that many
-rows on a handful of products is the case that leaves it**: on four products, batches passed ten
-seconds (up to 12.6 s) once each product held about three thousand sales. Nothing is lost when that
-happens — the batch still commits and the next writer still waits rather than failing — but another
-save can wait longer than the ten seconds this application aims for, and the fix for it (a cheaper
-sale-time cost replay) is follow-up work. A long history is in any case a job of many minutes rather
-than one request nothing else can write around.
+importing instead of waiting behind it. A batch holds that lock for under a second early in a
+history and longer as the history grows, because each row's cost is worked out from its own
+product's history up to that sale. Measured on a full 250,000-row history over a 200-product
+catalogue, every one of the 500 batches stayed inside the ten-second goal (the longest 2.3 s) and the
+whole import took about 9 minutes. **A history that concentrates a quarter of a million rows on a
+handful of products is the case that can leave it**: on four products (62,500 sales each), the last
+batches reached 9 to 11 seconds and 4 of 500 passed ten. Nothing is lost when that happens — the batch
+still commits and the next writer still waits rather than failing — but another save can wait a
+little longer than the ten seconds this application aims for. A long history is in any case a job of
+many minutes rather than one request nothing else can write around.
 
 **You can follow it, leave the page, and come back.** The card lists this business's recent history
 uploads, newest first, with the state (**Queued**, **Importing**, **Completed** or **Failed**), how

@@ -14937,36 +14937,49 @@ instead of files.
   batch; at that size a synthetic history measured 3.4 s, 5.6 s and 9.3 s for its first three batches
   on this repository's CI runners - growing, and already at the edge of the budget. It grows because
   each row's cost replays that product's own ledger up to the sale's instant (`CostSale`, the same
-  rule every other sales writer applies), and that replay reads the product's stored stock-consuming
-  sales before it: the cost of row *n* of a product grows with the sales of that product already
-  stored. `BatchRows` is therefore **500**, which measures 1.0 s to 3.1 s over twelve batches of a
-  6,000-row history on four products - a quarter of the budget at the fast end of that growth.
-  `NayaxSalesHistoryWriteLockHoldTests` asserts every batch is inside
-  `MaxWriteLockHoldSeconds` and writes the figures to the test output. The quadratic per-row costing
-  itself is pre-existing and unchanged.
-- **What the hold depends on is the sales stored *per product*, and at 500 rows a batch it leaves the
-  budget somewhere around three thousand of them.** `NayaxSalesHistoryFullSizeBenchmark` is the
-  opt-in measurement (`INVENTORY_NAYAX_HISTORY_BENCHMARK=1`, outside repository validation because it
-  runs for minutes to tens of minutes), and what it measured on this repository's runners is:
+  rule every other sales writer applies), so the cost of row *n* of a product grows with the sales of
+  that product already stored. `BatchRows` is therefore **500**.
+  `NayaxSalesHistoryWriteLockHoldTests` asserts every batch of a 6,000-row history is inside
+  `MaxWriteLockHoldSeconds` and writes the figures to the test output.
+- **A batch reads each product's ledger once, not once per row.** `ProcessNayaxSalesHistoryImportJob`
+  costs each batch through `INayaxSalesHistoryBatchCosting.ForOneBatch()`: the ordinary `CostSale`
+  over the ordinary `RebuildProductCost`, whose ledger reads go through a
+  `SnapshotInventoryCostLedgerReads` made for that batch and thrown away with it. The snapshot loads a
+  product's whole read-only ledger the first time a row of the batch asks for it, and answers each
+  row's as-of read by filtering that one read in memory with exactly the database read's predicates
+  (movements and repairs effective, stock-consuming sales authorised, at or before the instant); a
+  read before the product's transition baseline is passed to the database unchanged. This changes no
+  cost: a batch's row pass saves nothing until it ends, so every as-of read inside it sees the same
+  rows either way, and the replay orders its events by its own total key, so the order they were read
+  in cannot matter. `SnapshotInventoryCostLedgerReadsTests` pins the equivalence on SQLite, read for
+  read and cost for cost, at every event instant, one tick either side, sub-second instants and across
+  a baseline. The synchronous upload is unchanged and still reads per row.
+- **One product's sales are read through an index.** The central business filter is translated as
+  `(@unrestricted OR BusinessId = @business)`, and SQLite does not use the composite
+  `(BusinessId, ProductId)` index on `NayaxSales` under that `OR`, so every read of one product's
+  stock-consuming sales - every sale-time cost replay and inventory-cost rebuild, in every writer -
+  scanned the whole sales table. That made each history batch slower than the last as the table grew
+  even when no product's own history was long. The additive migration
+  `20261120080832_AddNayaxSalesProductIdIndex` adds `IX_NayaxSales_ProductId`, the shape
+  `StockAdjustments` and `InventoryCostRepairs` already have; `AddNayaxSalesProductIdIndexMigrationTests`
+  covers the upgrade over stored sales, the rollback, and the query plan under the business filter.
+- **What the hold depends on is the sales stored *per product*.** `NayaxSalesHistoryFullSizeBenchmark`
+  is the opt-in measurement (`INVENTORY_NAYAX_HISTORY_BENCHMARK=1`, outside repository validation
+  because it runs for minutes to tens of minutes). With both changes above, on a cloud runner on
+  20 November 2026:
 
-  | Rows | Products | Sales a product | Longest batch | Whole import |
-  | --- | --- | --- | --- | --- |
-  | 2,000 | 200 | 10 | 1.1 s | 4 s |
-  | 25,000 | 20 | 1,250 | **4.6 s** | 1.9 min |
-  | 20,000 | 4 | 5,000 | **12.6 s** - over budget from batch 31 (about 3,000 sales a product) | 4.2 min |
+  | Rows | Products | Sales a product | Longest batch | Batches over 10 s | Whole import |
+  | --- | --- | --- | --- | --- | --- |
+  | 20,000 | 4 | 5,000 | 0.8 s | 0 of 40 | 17 s |
+  | **250,000** | **200** | **1,250** | **2.3 s** | **0 of 500** | **8.7 min** |
+  | 250,000 | 4 | 62,500 | 11.1 s | 4 of 500 | 40.2 min |
 
-  The middle row is the depth a **250,000-row history over a 200-product catalogue** ends at (250,000
-  ÷ 200 = 1,250 sales a product), measured directly rather than extrapolated: the hold grows from
-  1.0 s to 4.6 s and no batch leaves the budget. The last row is the small-catalogue case and it
-  **exceeds** `MaxWriteLockHoldSeconds`: ten of its forty batches held the lock for 10.3 s to 12.6 s.
-  So the budget holds for a history spread over a real catalogue and does not hold for one that
-  concentrates a quarter of a million rows on a handful of products, and no batch size fixes that -
-  halving the batch halves the hold once, while the per-row replay keeps growing with the history.
-  Bounding it needs the incremental sale-time ledger read listed under
-  [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds) as follow-up work, which
-  changes costing internals and is outside issue #1304. **A full 250,000-row end-to-end run has still
-  not completed in this environment**: the attempt exceeded the 30-minute command ceiling, so the
-  total duration for that size is known only as *more than half an hour*, not as a figure.
+  Before them the same runs measured 12.6 s (20,000 rows over 4 products) and 7.5 s with a 30.7-minute
+  total (250,000 over 200). A full-size history spread over a real catalogue is therefore well inside
+  `MaxWriteLockHoldSeconds`. A quarter of a million rows concentrated on four products still passes
+  it near the end (batches of 8.5 s to 11.1 s once each product holds about 52,000 sales), because the
+  replay itself still runs once per row over the product's whole history; bounding that needs an
+  incremental sale-time replay, which changes costing internals and is outside issue #1304.
 - **The replays are recorded once per product, not once per batch.** Each batch stages its own
   affected products through the shared `PendingInventoryCostRebuildRecorder` - behind the new narrow
   `IPendingInventoryCostRebuildStore` port, because this is the first writer that stores sales through

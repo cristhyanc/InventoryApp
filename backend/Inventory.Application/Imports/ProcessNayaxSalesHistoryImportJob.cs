@@ -88,7 +88,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
 
     private readonly INayaxSalesHistoryImportJobStore _jobs;
     private readonly INayaxSalesHistoryCsvReader _reader;
-    private readonly NayaxSalesRowApplier _rows;
+    private readonly INayaxSalesHistoryBatchCosting _costing;
     private readonly INayaxSalesImportStore _store;
     private readonly INayaxProductLinkStore _productLinks;
     private readonly IPendingInventoryCostRebuildStore _rebuilds;
@@ -99,7 +99,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         INayaxSalesHistoryImportJobStore jobs,
         INayaxSalesHistoryCsvReader reader,
         INayaxSalesImportStore store,
-        ICostSale saleCosting,
+        INayaxSalesHistoryBatchCosting costing,
         INayaxProductLinkStore productLinks,
         IPendingInventoryCostRebuildStore rebuilds,
         INayaxSalesImportTransactions transactions,
@@ -107,12 +107,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
     {
         _jobs = jobs;
         _reader = reader;
-
-        // The per-row rules, over the same store and costing the uploaded import is given
-        // (issue #1304). Constructed rather than injected for the reason ImportNayaxSales
-        // constructs its own: it is the rules, not a port, and both imports asking for the same two
-        // dependencies is what makes "the same rules" structural.
-        _rows = new NayaxSalesRowApplier(store, saleCosting);
+        _costing = costing;
         _store = store;
         _productLinks = productLinks;
         _rebuilds = rebuilds;
@@ -227,6 +222,15 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         // others touched ends with one row at the earliest instant of all of them.
         var affected = new Dictionary<long, DateTime>();
 
+        // The per-row rules, over the same store and the same sale costing the uploaded import is
+        // given (issue #1304). Constructed rather than injected for the reason ImportNayaxSales
+        // constructs its own: it is the rules, not a port, and both imports building it from the
+        // same two collaborators is what makes "the same rules" structural. It is built per batch
+        // because the costing is: its ledger reads are a snapshot that holds only while this
+        // batch's pass has saved nothing (NayaxSalesHistoryBatchCosting), so one product's ledger
+        // is read once for the batch rather than once for each of its rows.
+        var rows = new NayaxSalesRowApplier(_store, _costing.ForOneBatch());
+
         NayaxSalesHistoryImportProgress applied;
         var transaction = await _transactions.BeginAsync(cancellationToken);
         await using (transaction)
@@ -234,7 +238,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
             try
             {
                 applied = progress.Plus(
-                    batch.Length, await _rows.ApplyAsync(batch, facts, affected, cancellationToken));
+                    batch.Length, await rows.ApplyAsync(batch, facts, affected, cancellationToken));
 
                 await _rebuilds.StageAsync(affected, cancellationToken);
 

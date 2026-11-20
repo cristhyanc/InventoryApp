@@ -1927,6 +1927,8 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId");
 
+                    b.HasIndex("ProductId");
+
                     b.HasIndex("BusinessId", "ProductId");
 
                     b.HasIndex("BusinessId", "TransactionID")
