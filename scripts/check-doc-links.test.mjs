@@ -53,6 +53,16 @@ describe('extractAnchors', () => {
     assert.deepEqual([...anchors], ['real-heading']);
   });
 
+  it('ignores an ATX closing sequence and trailing whitespace in the heading text', () => {
+    const anchors = extractAnchors('## Section one ##\n\n### Section two\t\n');
+    assert.deepEqual([...anchors].sort(), ['section-one', 'section-two']);
+  });
+
+  it('produces no anchor for a heading whose text is only whitespace', () => {
+    const anchors = extractAnchors('##   \n\n## Real heading\n');
+    assert.deepEqual([...anchors], ['real-heading']);
+  });
+
   it('ignores a heading-shaped line inside a tilde-fenced code block', () => {
     const anchors = extractAnchors('## Real heading\n\n~~~bash\n# not a heading either\n~~~\n');
     assert.deepEqual([...anchors], ['real-heading']);
@@ -81,6 +91,16 @@ describe('extractLinks', () => {
     const markdown = 'See [a purchase without a\nreceipt](#a-purchase-without-a-receipt) for detail.\n';
     const links = extractLinks(markdown);
     assert.deepEqual(links, [{ line: 1, target: '#a-purchase-without-a-receipt' }]);
+  });
+
+  it('extracts the target of a link whose text contains an opening bracket', () => {
+    const links = extractLinks('Odd [text [with a bracket](./page.md) here.\n');
+    assert.deepEqual(links, [{ line: 1, target: './page.md' }]);
+  });
+
+  it('extracts nothing from an unclosed bracket or parenthesis', () => {
+    assert.deepEqual(extractLinks('A stray [ bracket and a stray ( parenthesis.\n'), []);
+    assert.deepEqual(extractLinks('[unclosed text(./page.md)\n'), []);
   });
 
   it('extracts two links on the same line independently', () => {
@@ -231,6 +251,13 @@ describe('listDocumentationFiles', () => {
       assert.ok(files.includes(expected), `expected ${expected} in ${JSON.stringify(files)}`);
     }
     assert.ok(files.every((file) => file.endsWith('.md')));
+  });
+
+  it('lists them in code-unit order, so the scan order does not depend on the locale', () => {
+    const files = listDocumentationFiles(repositoryRoot);
+    for (let index = 1; index < files.length; index += 1) {
+      assert.ok(files[index - 1] < files[index], `${files[index - 1]} must sort before ${files[index]}`);
+    }
   });
 });
 

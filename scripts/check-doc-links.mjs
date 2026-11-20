@@ -15,17 +15,30 @@ export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '
 // genuine hand-maintained documentation (they are not generated), so they are in scope too.
 const ROOT_DOCUMENTATION_FILES = ['README.md', 'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'SECURITY.md'];
 
+// Code-unit order, so the scanned file list (and with it the report order) is the same on every
+// machine instead of following the locale, as `localeCompare` would.
+const compareStrings = (left, right) => {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+};
+
 export function listDocumentationFiles(root = repositoryRoot) {
   const docsDir = join(root, 'docs');
   const docFiles = readdirSync(docsDir, { recursive: true })
     .filter((entry) => entry.toLowerCase().endsWith('.md'))
     .map((entry) => join('docs', entry));
-  return [...ROOT_DOCUMENTATION_FILES, ...docFiles].sort();
+  return [...ROOT_DOCUMENTATION_FILES, ...docFiles].sort(compareStrings);
 }
 
 // --- Headings and anchors ----------------------------------------------------------------
 
-const HEADING_PATTERN = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
+// An ATX heading, whose text runs to the end of the line. A closing `##` sequence and trailing
+// whitespace need no alternative of their own here (and matching them with one would make the
+// heading text's end ambiguous, so the match would backtrack): slugify below drops `#` and trims.
+// Requiring a non-space first character keeps the text's start unambiguous against the separator.
+const HEADING_PATTERN = /^(#{1,6})[ \t]+(\S.*)$/;
 const FENCE_PATTERN = /^\s*(```|~~~)/;
 
 // GitHub's own heading-to-anchor rule: lower-case, drop everything but letters, digits,
@@ -71,9 +84,11 @@ export function extractAnchors(markdown) {
 
 // An inline Markdown link, `[text](target)`, excluding an image's `![text](target)`. The link text
 // may wrap across lines (this repository hand-wraps prose), so only the target itself, which is
-// never written across a line break, excludes newlines. Fenced code blocks are stripped first, so
-// an example link inside one is never checked as a real link.
-const LINK_PATTERN = /(?<!!)\[[^\]]*\]\(([^)\n]+)\)/g;
+// never written across a line break, excludes newlines. Neither run accepts its own opening
+// delimiter: an unclosed `[` or `(` would otherwise be rescanned from every following position, and
+// bracketed link text still yields the same target from its innermost `[`. Fenced code blocks are
+// stripped first, so an example link inside one is never checked as a real link.
+const LINK_PATTERN = /(?<!!)\[[^[\]]*\]\(([^()\n]+)\)/g;
 const SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 
 function stripFencedCodeBlocks(markdown) {
@@ -125,6 +140,65 @@ function fileExists(path) {
   }
 }
 
+// Nothing in the repository can resolve these: an empty target, anything carrying a URL scheme
+// (`https:`, `mailto:`) and a protocol-relative `//host/path`.
+function isExternalTarget(target) {
+  return target === '' || SCHEME_PATTERN.test(target) || target.startsWith('//');
+}
+
+// `dir/file.md?plain=1#anchor` split into the path part and the lower-cased anchor (null when the
+// target names no anchor at all).
+function splitTarget(target) {
+  const hashIndex = target.indexOf('#');
+  const rawPathPart = hashIndex === -1 ? target : target.slice(0, hashIndex);
+  return {
+    pathPart: rawPathPart.split('?')[0],
+    anchor: hashIndex === -1 ? null : target.slice(hashIndex + 1).toLowerCase(),
+  };
+}
+
+function decodePathPart(pathPart) {
+  try {
+    return decodeURIComponent(pathPart);
+  } catch {
+    // Not valid percent-encoding: use the literal text, which is what the filesystem sees too.
+    return pathPart;
+  }
+}
+
+/**
+ * Why one link in the file `from` describes is broken, or null when it resolves.
+ *
+ * @param {string} target
+ * @param {{ absolutePath: string, relativePath: string }} from
+ * @param {(path: string) => Set<string>} anchorsFor
+ * @returns {string | null}
+ */
+function brokenLinkReason(target, from, anchorsFor) {
+  const { pathPart, anchor } = splitTarget(target);
+  const targetAbsolutePath = pathPart === '' ? from.absolutePath : resolve(dirname(from.absolutePath), decodePathPart(pathPart));
+
+  if (!fileExists(targetAbsolutePath)) {
+    return `target does not exist: ${pathPart}`;
+  }
+
+  if (anchor === null || anchor === '') {
+    return null;
+  }
+
+  if (extname(targetAbsolutePath).toLowerCase() !== '.md') {
+    // Not a Markdown file: GitHub still scrolls to a named element, but there is no
+    // heading-derived anchor to verify here, so file existence above is all that applies.
+    return null;
+  }
+
+  if (anchorsFor(targetAbsolutePath).has(anchor)) {
+    return null;
+  }
+
+  return `no heading produces anchor "#${anchor}" in ${pathPart === '' ? from.relativePath : pathPart}`;
+}
+
 /**
  * Checks every relative link and in-document anchor in `relativePaths` (repository-relative,
  * forward-slash paths) and returns one entry per broken link.
@@ -144,44 +218,16 @@ export function checkDocumentationLinks(relativePaths, root = repositoryRoot) {
   };
 
   for (const relativePath of relativePaths) {
-    const absolutePath = join(root, relativePath);
-    const markdown = readFileSync(absolutePath, 'utf8');
+    const from = { absolutePath: join(root, relativePath), relativePath };
 
-    for (const { line, target } of extractLinks(markdown)) {
-      if (target === '' || SCHEME_PATTERN.test(target) || target.startsWith('//')) {
+    for (const { line, target } of extractLinks(readFileSync(from.absolutePath, 'utf8'))) {
+      if (isExternalTarget(target)) {
         continue;
       }
 
-      const hashIndex = target.indexOf('#');
-      const rawPathPart = hashIndex === -1 ? target : target.slice(0, hashIndex);
-      const anchor = hashIndex === -1 ? null : target.slice(hashIndex + 1).toLowerCase();
-      const pathPart = rawPathPart.split('?')[0];
-
-      let decodedPathPart = pathPart;
-      try {
-        decodedPathPart = decodeURIComponent(pathPart);
-      } catch {
-        // Not valid percent-encoding: use the literal text, which is what the filesystem sees too.
-      }
-      const targetAbsolutePath = pathPart === '' ? absolutePath : resolve(dirname(absolutePath), decodedPathPart);
-
-      if (!fileExists(targetAbsolutePath)) {
-        broken.push({ file: relativePath, line, target, reason: `target does not exist: ${pathPart}` });
-        continue;
-      }
-
-      if (anchor === null || anchor === '') {
-        continue;
-      }
-
-      if (extname(targetAbsolutePath).toLowerCase() !== '.md') {
-        // Not a Markdown file: GitHub still scrolls to a named element, but there is no
-        // heading-derived anchor to verify here, so file existence above is all that applies.
-        continue;
-      }
-
-      if (!anchorsFor(targetAbsolutePath).has(anchor)) {
-        broken.push({ file: relativePath, line, target, reason: `no heading produces anchor "#${anchor}" in ${pathPart === '' ? relativePath : pathPart}` });
+      const reason = brokenLinkReason(target, from, anchorsFor);
+      if (reason !== null) {
+        broken.push({ file: relativePath, line, target, reason });
       }
     }
   }
