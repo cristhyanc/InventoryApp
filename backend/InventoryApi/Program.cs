@@ -65,8 +65,9 @@ if (BusinessBootstrapCommand.Matches(args))
     return await BusinessBootstrapCommand.RunAsync(args, CancellationToken.None);
 }
 
-// Applying schema migrations is likewise a human-invoked command, not something a deployment
-// performs. Normal startup below applies nothing outside Development.
+// This explicit command is for diagnostics and manual use ahead of a deployment window. Normal
+// startup below still applies pending migrations itself in Development, Testing and Production
+// (issue #201), failing closed in Production rather than serving requests against a mismatched schema.
 if (DatabaseMigrationCommand.Matches(args))
 {
     return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
