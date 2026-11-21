@@ -30,9 +30,10 @@ const cases = loadReviewCases();
 const reviewStep = extractReviewStep(workflowText);
 const byId = Object.fromEntries(cases.map((c) => [c.id, c]));
 
-// The two blockers a correct review of REVIEW-005 (#267 Take Inventory) raises: the unlocked
-// stale-count read, and the positive count difference valued at an average cost issue #245's
-// recorded owner decision does not approve.
+// The two blockers a correct review of REVIEW-005 (#267 Take Inventory) can raise: the unlocked
+// stale-count read, which the rubric requires because PR #1270 fixed it, and the positive count
+// difference valued at an average cost issue #245's recorded decision does not approve, which is
+// valid at that head but not required, because it has no fix on develop.
 const REVIEW_005_RACE_BLOCKER =
   'ApplyInventoryCount.cs:27 GetCurrentStockAsync reads with no lock or transaction; EfInventoryCountAdjustmentStore.ApplyAsync only opens its transaction later, so a concurrent write that commits in that gap is invisible to the staleness check and a stale count can overwrite it. Add a regression test for two overlapping requests.';
 const REVIEW_005_COST_BLOCKER =
@@ -240,8 +241,8 @@ test('a fixture run grades every case and summarises caught, missed and false al
     'REVIEW-005': review({ blockers: [REVIEW_005_RACE_BLOCKER, REVIEW_005_COST_BLOCKER] }),
   };
   const report = await runReviewEvals({ cases, provider: createFixtureProvider(responses), reviewStep, variant: 'current', addendum });
-  assert.equal(report.summary.expectedFindings, 5);
-  assert.equal(report.summary.caughtFindings, 4);
+  assert.equal(report.summary.expectedFindings, 4);
+  assert.equal(report.summary.caughtFindings, 3);
   assert.equal(report.summary.missedFindings, 1);
   assert.equal(report.summary.falseAlarms, 0);
   assert.equal(report.summary.verdictMatches, 5);
@@ -249,22 +250,32 @@ test('a fixture run grades every case and summarises caught, missed and false al
   assert.equal(report.summary.passed, 4);
 });
 
-test('REVIEW-005 expects both the concurrency blocker and the unapproved average-cost valuation', () => {
+test('REVIEW-005 requires only the fixed concurrency blocker, and the valuation one is an accepted extra', () => {
   const caseObj = byId['REVIEW-005'];
-  assert.deepEqual(caseObj.expected.findings.map((m) => m.id), [
-    'stale-count-race-outside-lock', 'average-cost-fallback-not-approved',
-  ]);
+  assert.deepEqual(caseObj.expected.findings.map((m) => m.id), ['stale-count-race-outside-lock']);
+  assert.deepEqual(caseObj.expected.forbiddenBlockers, []);
 
+  // The concurrency race is the whole requirement: it is the half PR #1270 fixed on develop.
   const raceOnly = gradeReviewCase(caseObj, { raw: review({ blockers: [REVIEW_005_RACE_BLOCKER] }) });
-  assert.equal(raceOnly.status, 'FAIL');
-  assert.deepEqual(raceOnly.findings.map((f) => f.caught), [true, false]);
+  assert.equal(raceOnly.status, 'PASS');
+  assert.deepEqual(raceOnly.findings.map((f) => f.caught), [true]);
+  assert.deepEqual(raceOnly.otherBlockers, []);
 
+  // The valuation blocker is valid at that head but is not required, because it is not fixed on
+  // develop. Raising it as well still passes, is never a false alarm, and is reported as an extra
+  // blocker for a human to judge rather than scored.
   const both = gradeReviewCase(caseObj, { raw: review({ blockers: [REVIEW_005_RACE_BLOCKER, REVIEW_005_COST_BLOCKER] }) });
   assert.equal(both.status, 'PASS');
-  assert.deepEqual(both.findings.map((f) => f.caught), [true, true]);
-  // The valuation blocker is a valid second finding, never a false alarm and never an unjudged extra.
+  assert.deepEqual(both.findings.map((f) => f.caught), [true]);
   assert.deepEqual(both.falseAlarms, []);
-  assert.deepEqual(both.otherBlockers, []);
+  assert.deepEqual(both.otherBlockers, [REVIEW_005_COST_BLOCKER]);
+
+  // The extra blocker is no substitute for the required one.
+  const costOnly = gradeReviewCase(caseObj, { raw: review({ blockers: [REVIEW_005_COST_BLOCKER] }) });
+  assert.equal(costOnly.status, 'FAIL');
+  assert.deepEqual(costOnly.findings.map((f) => f.caught), [false]);
+  assert.ok(costOnly.failures.some((f) => f.startsWith('Missed blocker stale-count-race-outside-lock')));
+  assert.deepEqual(costOnly.otherBlockers, [REVIEW_005_COST_BLOCKER]);
 });
 
 test('arguments: a provider is required and variants are checked', async () => {

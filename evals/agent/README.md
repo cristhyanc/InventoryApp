@@ -324,7 +324,7 @@ Each file in `evals/agent/review/cases/` pins one pull request head and base by 
 | `REVIEW-002` | #1131 Sites overview | `CHANGES REQUESTED` | A long unbroken site name cannot wrap in the mobile card and is clipped (fixed by 166292b8). |
 | `REVIEW-003` | #1133 Azure schedule | `CHANGES REQUESTED` | The setup guide puts the GitHub token literally in the Logic App HTTP action; secure inputs only hide run history (fixed by 72dd1c7b). |
 | `REVIEW-004` | #1130 Dashboard SQS | `READY FOR HUMAN REVIEW` | Control: the healthy-queue shortcut preserves the forced Refresh. A blocker claiming otherwise is a false alarm. |
-| `REVIEW-005` | #267 Take Inventory page | `CHANGES REQUESTED` | Two blockers. (1) `ApplyInventoryCount` reads the authoritative current stock with no lock, and the adapter only opens its own transaction at the later write; a concurrent write that commits in that gap is invisible to the staleness check, so a stale count can still be applied (fixed by 0e6b8dac, PR #1270, issue #1241; held out from the 2026 audit #1230, finding INV-04). (2) A positive count difference is valued at the product's average unit cost when it has no recorded purchase, which issue #245's recorded owner decision of 30 September 2026 does not approve: it requires the latest recorded purchase cost. Not used to write the candidate checklist. |
+| `REVIEW-005` | #267 Take Inventory page | `CHANGES REQUESTED` | Required blocker: `ApplyInventoryCount` reads the authoritative current stock with no lock, and the adapter only opens its own transaction at the later write; a concurrent write that commits in that gap is invisible to the staleness check, so a stale count can still be applied (fixed by 0e6b8dac, PR #1270, issue #1241; held out from the 2026 audit #1230, finding INV-04). A review that also blocks on the positive count difference being valued at the product's average unit cost is right - issue #245's recorded decision of 30 September 2026 requires the latest recorded purchase cost - but that blocker is accepted as an extra rather than required, because it has no fix on develop. Not used to write the candidate checklist. |
 
 Merge validation passed on every head. A case holds what the reviewer is given (`context`: PR
 title and summary, acceptance criteria, exclusions, documentation-impact declaration and the CI
@@ -335,17 +335,25 @@ inline comment. The runner rejects a set without a `READY FOR HUMAN REVIEW` cont
 block" reviewer cannot pass. Add a case only with a confirmed answer: a later fix commit, or an owner
 decision, named in `source`.
 
-`REVIEW-005`'s `context` was cross-checked against the real issue #245 and pull request #267 by the
-repository owner (on pull request #1373, 20 Nov 2026), so it states the requirement the owner
-approved rather than what the implementation claimed about it: issue #245 is risk High, and its
-30 September 2026 decision requires the latest recorded purchase cost and explicitly does not
-approve an average-cost fallback. Its `context.validation` names the workflow run that validated
-that exact head (run 36715748861: head `f49fcc31`, event `pull_request`, conclusion success)
-instead of inferring a check from the merge or from branch protection. Its second expected finding
-is confirmed by that owner decision alone - unlike the concurrency half it has no fix commit, and
+`REVIEW-005`'s `context` was cross-checked against the real issue #245 and pull request #267, and
+corrected, during the review of pull request #1373 (its repair requests of 20 and 21 Nov 2026), so it
+states the requirement issue #245 records rather than what the implementation claimed about it:
+issue #245 is risk High, and its 30 September 2026 decision requires the latest recorded purchase
+cost and explicitly does not approve an average-cost fallback. Its `context.validation` names the
+workflow run that validated that exact head (run 36715748861: head `f49fcc31`, event
+`pull_request`, conclusion success) instead of inferring a check from the merge or from branch
+protection.
+
+That corrected context leaves a second problem visible at the pinned head: a positive count
+difference is valued at the product's average unit cost when it has no recorded purchase. Only the
+concurrency race is an `expected.findings` matcher, because only it is fixed on develop (0e6b8dac)
+and issue #1294, which added this case, excludes cases for defects that are not yet fixed there -
 `Inventory.Domain.Stock.RestockCostSuggestionPolicy` with
-`EfInventoryCountAdjustmentStore.GetRestockUnitCostAsync` still apply the fallback on develop, so
-whether that divergence is still open is a human decision outside this eval.
+`EfInventoryCountAdjustmentStore.GetRestockUnitCostAsync` still apply the fallback. The valuation
+blocker is deliberately not forbidden either: `expected.forbiddenBlockers` is empty, so a review
+that raises it is never scored as a false alarm, and the runner lists it in `otherBlockers` for a
+human to judge while the case still passes. Whether that fallback on develop is a defect to fix or a
+decision since amended is a separate human decision outside this eval.
 
 Two other candidates from the same audit (#1230) were considered and skipped rather than turned into
 cases:
