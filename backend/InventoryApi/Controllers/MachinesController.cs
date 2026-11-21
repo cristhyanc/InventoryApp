@@ -85,34 +85,34 @@ public class MachinesController : ControllerBase
     // asked about a machine that has no Nayax number. The machine-stock ledger and its counts are
     // this application's own data and work for a machine without one.
     [HttpGet("{id:long}")]
-    public async Task<ActionResult<MachineResponse>> GetById(long id)
+    public async Task<ActionResult<MachineResponse>> GetById(long id, CancellationToken ct = default)
     {
-        var machineIdentity = await _resolveMachine.Handle(id, CancellationToken.None);
+        var machineIdentity = await _resolveMachine.Handle(id, ct);
         if (machineIdentity?.NayaxMachineId is not { } nayaxMachineId) return NotFound();
 
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var machine = await _getMachineDashboard.Handle(nayaxMachineId, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var machine = await _getMachineDashboard.Handle(nayaxMachineId, ct);
         return machine is null
             ? NotFound()
             : Ok(MachineResponseMapper.ToResponse(machine with { LocalMachineId = id }, visibility));
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<MachineResponse>>> GetAll()
+    public async Task<ActionResult<List<MachineResponse>>> GetAll(CancellationToken ct = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var machines = await _listMachineDashboard.Handle(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var machines = await _listMachineDashboard.Handle(ct);
         return Ok(machines.Select(machine => MachineResponseMapper.ToResponse(machine, visibility)).ToList());
     }
 
     [HttpGet("{id:long}/products")]
-    public async Task<ActionResult<List<ProductResponse>>> GetMachineProducts(long id)
+    public async Task<ActionResult<List<ProductResponse>>> GetMachineProducts(long id, CancellationToken ct = default)
     {
-        var machine = await _resolveMachine.Handle(id, CancellationToken.None);
+        var machine = await _resolveMachine.Handle(id, ct);
         if (machine?.NayaxMachineId is not { } nayaxMachineId) return NotFound();
 
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var products = await _listMachineProducts.Handle(nayaxMachineId, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var products = await _listMachineProducts.Handle(nayaxMachineId, ct);
         return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
     }
 

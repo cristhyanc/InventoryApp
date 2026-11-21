@@ -43,9 +43,9 @@ public class SitesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<SiteSummaryDto>>> GetAll()
+    public async Task<ActionResult<List<SiteSummaryDto>>> GetAll(CancellationToken ct = default)
     {
-        var summaries = await _getSiteSummaries.Handle(CancellationToken.None);
+        var summaries = await _getSiteSummaries.Handle(ct);
         return Ok(summaries.Select(SiteResponseMapper.ToDto).ToList());
     }
 
@@ -58,12 +58,9 @@ public class SitesController : ControllerBase
     /// same fleet read. <c>GET api/sites</c> is unchanged and still serves the Dashboard and the
     /// Sites page.
     ///
-    /// <para>It invokes the use case with the <b>request's own</b> cancellation token, so a caller
-    /// that navigates away abandons the Nayax fleet read instead of leaving it to finish
-    /// unobserved. The two actions beside it still pass <c>CancellationToken.None</c>: that is the
-    /// signature issue #302 deliberately left alone when it moved them off the legacy delegator,
-    /// and threading a real token through them changes their cancellation behaviour, which is not
-    /// this endpoint's to decide.</para>
+    /// <para>It invokes the use case with the request's own cancellation token, so a caller that
+    /// navigates away abandons the Nayax fleet read instead of leaving it to finish unobserved -
+    /// the same reason issue #1289 gave the two actions beside it their own request token.</para>
     /// </summary>
     [HttpGet("list")]
     public async Task<ActionResult<List<SiteListItemDto>>> GetList(CancellationToken ct)
@@ -73,9 +70,9 @@ public class SitesController : ControllerBase
     }
 
     [HttpGet("{id:long}/products")]
-    public async Task<ActionResult<List<SiteProductDto>>> GetProducts(long id)
+    public async Task<ActionResult<List<SiteProductDto>>> GetProducts(long id, CancellationToken ct = default)
     {
-        var products = await _getSiteProducts.Handle(id, CancellationToken.None);
+        var products = await _getSiteProducts.Handle(id, ct);
         return Ok(products.Select(SiteResponseMapper.ToDto).ToList());
     }
 }

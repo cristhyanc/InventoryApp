@@ -52,25 +52,26 @@ public class SupplierOrdersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<SupplierOrderResponse>>> GetActive()
+    public async Task<ActionResult<IEnumerable<SupplierOrderResponse>>> GetActive(CancellationToken ct = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var orders = await _listActiveSupplierOrders.Handle(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var orders = await _listActiveSupplierOrders.Handle(ct);
         return Ok(orders.Select(order => SupplierOrderResponseMapper.ToResponse(order, visibility)).ToList());
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<SupplierOrderResponse>> GetById(int id)
+    public async Task<ActionResult<SupplierOrderResponse>> GetById(int id, CancellationToken ct = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var order = await _getSupplierOrder.Handle(id, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var order = await _getSupplierOrder.Handle(id, ct);
         return order is null ? NotFound() : Ok(SupplierOrderResponseMapper.ToResponse(order, visibility));
     }
 
     [HttpPost]
-    public async Task<ActionResult<SupplierOrderResponse>> Create(SupplierOrderCreateDto dto)
+    public async Task<ActionResult<SupplierOrderResponse>> Create(
+        SupplierOrderCreateDto dto, CancellationToken ct = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
 
         // The use case's deliberate validation checks throw DomainValidationException, which
         // DomainExceptionHandler (see Http/DomainExceptionHandler.cs) maps centrally to a 400
@@ -83,7 +84,7 @@ public class SupplierOrdersController : ControllerBase
                 dto.Reference,
                 dto.Notes,
                 dto.Lines.Select(line => new SupplierOrderLineInput(line.ProductId, line.QuantityOrdered, line.UnitPrice, line.Notes)).ToList()),
-            CancellationToken.None);
+            ct);
 
         return order is null
             ? BadRequest("Invalid supplier.")
@@ -94,8 +95,8 @@ public class SupplierOrdersController : ControllerBase
     }
 
     [HttpPost("{id:int}/cancel")]
-    public async Task<IActionResult> Cancel(int id) =>
-        await _cancelSupplierOrder.Handle(id, CancellationToken.None) ? NoContent() : NotFound();
+    public async Task<IActionResult> Cancel(int id, CancellationToken ct = default) =>
+        await _cancelSupplierOrder.Handle(id, ct) ? NoContent() : NotFound();
 
     /// <summary>
     /// What this order would still be owed once the purchase currently on the form is applied, and
@@ -110,7 +111,7 @@ public class SupplierOrdersController : ControllerBase
     /// </summary>
     [HttpPost("{id:int}/completion-preview")]
     public async Task<ActionResult<SupplierOrderCompletionPreviewResponse>> CompletionPreview(
-        int id, SupplierOrderCompletionPreviewDto dto)
+        int id, SupplierOrderCompletionPreviewDto dto, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(dto);
 
@@ -119,7 +120,7 @@ public class SupplierOrdersController : ControllerBase
             dto.SupplierId,
             dto.PurchaseDate ?? DateTime.UtcNow,
             (dto.Lines ?? []).Select(line => new PurchaseLineToReceive(line.ProductId, line.Quantity)).ToList(),
-            CancellationToken.None);
+            ct);
 
         return preview is null
             ? NotFound()

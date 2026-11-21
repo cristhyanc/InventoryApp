@@ -110,18 +110,19 @@ public class PurchasesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<PurchaseResponseDto>>> GetAll([FromQuery] int? supplierId)
+    public async Task<ActionResult<IEnumerable<PurchaseResponseDto>>> GetAll(
+        [FromQuery] int? supplierId, CancellationToken cancellationToken = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var purchases = await _listPurchases.Handle(supplierId, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
+        var purchases = await _listPurchases.Handle(supplierId, cancellationToken);
         return Ok(purchases.Select(purchase => ToResponseDto(purchase, visibility)).ToList());
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<PurchaseResponseDto>> Get(int id)
+    public async Task<ActionResult<PurchaseResponseDto>> Get(int id, CancellationToken cancellationToken = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var purchase = await _getPurchase.Handle(id, CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
+        var purchase = await _getPurchase.Handle(id, cancellationToken);
         if (purchase is null) return NotFound();
         return Ok(ToResponseDto(purchase, visibility));
     }
@@ -149,9 +150,9 @@ public class PurchasesController : ControllerBase
     }
 
     [HttpGet("{id:int}/file")]
-    public async Task<IActionResult> GetFile(int id)
+    public async Task<IActionResult> GetFile(int id, CancellationToken cancellationToken = default)
     {
-        var file = await _getPurchaseFile.Handle(id, CancellationToken.None);
+        var file = await _getPurchaseFile.Handle(id, cancellationToken);
         if (file is null) return NotFound();
         return File(file.Content, file.ContentType, file.FileName);
     }
@@ -190,14 +191,15 @@ public class PurchasesController : ControllerBase
         [FromForm] string? items,
         [FromForm] int? completeSupplierOrderId,
         [FromForm] string? completeSupplierOrderFingerprint,
-        [FromForm] string? idempotencyKey)
+        [FromForm] string? idempotencyKey,
+        CancellationToken cancellationToken = default)
     {
         // The uploaded file stays an HTTP concern: the controller is the only place that sees
         // IFormFile and adapts it to the Application layer's PurchaseFileInput port. A body with no
         // file part at all is a purchase with no document (issue #976), which model binding reports
         // as a null IFormFile - so "no document" and "a document the use case refuses" stay
         // different requests, answered 201 and 400 respectively.
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
 
         PurchaseRecord? purchase;
         try
@@ -210,6 +212,11 @@ public class PurchasesController : ControllerBase
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 ToCompletionRequest(completeSupplierOrderId, completeSupplierOrderFingerprint),
                 idempotencyKey,
+                // CancellationToken.None (issue #1289): once the document's bytes are written to
+                // storage and its quota reserved, the use case's own clean-up on failure re-uses
+                // this same token - an abandoned request would cancel that clean-up too, so the
+                // storage write that already happened would never be undone and the quota it
+                // reserved would leak. This write finishes once started.
                 CancellationToken.None);
         }
         catch (InvalidOperationException ex)
@@ -237,12 +244,17 @@ public class PurchasesController : ControllerBase
     // defaults to FormOptions' 128 MB regardless of RequestSizeLimit.
     [RequestSizeLimit(10485760)]
     [RequestFormLimits(MultipartBodyLengthLimit = 10485760)]
-    public async Task<ActionResult<PurchaseResponseDto>> AddFile(int id, IFormFile? file)
+    public async Task<ActionResult<PurchaseResponseDto>> AddFile(
+        int id, IFormFile? file, CancellationToken cancellationToken = default)
     {
         if (ToFileInput(file) is not { } input)
             return BadRequest(PurchaseDocumentPolicy.MissingDocumentMessage);
 
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
+        // CancellationToken.None (issue #1289): once the document's bytes are written to storage
+        // and its quota reserved, the use case's own clean-up on failure re-uses this same token -
+        // an abandoned request would cancel that clean-up too, leaving an orphaned document and a
+        // leaked reservation. This write finishes once started.
         var result = await _attachPurchaseDocument.Handle(id, input, CancellationToken.None);
 
         return result.Outcome switch
@@ -283,9 +295,10 @@ public class PurchasesController : ControllerBase
     // so neither is the one that is left open; ReceiptScanUploadLimitTests pins them.
     [RequestSizeLimit(MaxScanUploadBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxScanUploadBytes)]
-    public async Task<ActionResult<PurchaseScanResponseDto>> Scan(IFormFile? file)
+    public async Task<ActionResult<PurchaseScanResponseDto>> Scan(
+        IFormFile? file, CancellationToken cancellationToken = default)
     {
-        var result = await _scanReceipt.Handle(ToFileInput(file), CancellationToken.None);
+        var result = await _scanReceipt.Handle(ToFileInput(file), cancellationToken);
 
         return result.Outcome switch
         {
@@ -352,9 +365,10 @@ public class PurchasesController : ControllerBase
         [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
-        [FromForm] string? items)
+        [FromForm] string? items,
+        CancellationToken cancellationToken = default)
     {
-        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
 
         PurchaseRecord? purchase;
         try
@@ -365,7 +379,7 @@ public class PurchasesController : ControllerBase
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
                     deliveryGstClassification, packageGstClassification, invoiceNumber),
                 ParseItems(items)?.Select(ToItemInput).ToList(),
-                CancellationToken.None);
+                cancellationToken);
         }
         catch (InvalidOperationException ex)
         {
@@ -376,10 +390,14 @@ public class PurchasesController : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id)
+    public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken = default)
     {
         try
         {
+            // CancellationToken.None (issue #1289): the use case deletes the database row and then
+            // deletes the document it referenced from storage; once the row is gone, an abandoned
+            // request must not stop that second step, or the document is orphaned with nothing left
+            // able to delete it.
             var ok = await _deletePurchase.Handle(id, CancellationToken.None);
             return ok ? NoContent() : NotFound();
         }
