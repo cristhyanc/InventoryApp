@@ -137,6 +137,30 @@ export function shiftCalendarDate(date: CalendarDate, deltaDays: number): Calend
   return { year: utc.getUTCFullYear(), month: utc.getUTCMonth() + 1, day: utc.getUTCDate() };
 }
 
+/**
+ * Today's calendar date in the business's own `timeZoneId`, or the device's local date when the
+ * zone is not known yet (issue #1273) - never the UTC date, which from midnight until the business's
+ * own UTC offset has elapsed is still yesterday in a zone ahead of UTC (e.g. Sydney).
+ *
+ * This is the one place a date field or a report period preset decides what day it is "today":
+ * `nayax-settings.component.ts`'s and `site-commission-agreements.component.ts`'s "Effective from",
+ * `product-needs-ordering.component.ts`'s Create order dialog "Order date", and
+ * `report-page.base.ts`'s and `site-commissions-report.component.ts`'s period presets all read it
+ * from here rather than computing their own `new Date()` or `toISOString().slice(0, 10)`.
+ */
+export function todaysBusinessDate(timeZoneId: string | null, now: Date = new Date()): CalendarDate {
+  if (timeZoneId !== null) {
+    return currentDateInTimeZone(now, timeZoneId);
+  }
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+}
+
+/** Formats a calendar date as an `<input type="date">` value (`yyyy-MM-dd`). */
+export function toDateValue(date: CalendarDate): string {
+  const pad = (value: number) => value.toString().padStart(2, '0');
+  return `${date.year}-${pad(date.month)}-${pad(date.day)}`;
+}
+
 /** A wall-clock date and time, independent of any instant or timezone once resolved. */
 export interface CalendarDateTime extends CalendarDate {
   hour: number;

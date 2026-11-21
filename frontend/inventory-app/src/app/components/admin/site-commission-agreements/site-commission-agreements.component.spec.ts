@@ -7,6 +7,7 @@ import { ToastService } from '../../../services/toast.service';
 import { SiteListItem } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 function agreement(overrides: Partial<SiteCommissionAgreement> = {}): SiteCommissionAgreement {
   return { id: 1, siteId: 1, effectiveFrom: '2026-01-01', commissionRate: 0.1, frequency: 1, basis: 0, ...overrides };
@@ -24,7 +25,8 @@ async function render(
   reporting: Partial<ReportingService>,
   siteService: Partial<SiteService> = { getList: jest.fn(() => of([site()])) },
   toast?: Partial<ToastService>,
-  sessionActive: Observable<boolean> = of(false)
+  sessionActive: Observable<boolean> = of(false),
+  timeZoneId?: string | null
 ) {
   await TestBed.configureTestingModule({
     imports: [SiteCommissionAgreementsComponent],
@@ -36,6 +38,10 @@ async function render(
       { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
+
+  if (timeZoneId !== undefined) {
+    TestBed.inject(BusinessTimeZoneService).publish(timeZoneId);
+  }
 
   const fixture = TestBed.createComponent(SiteCommissionAgreementsComponent);
   fixture.detectChanges();
@@ -292,5 +298,40 @@ describe('SiteCommissionAgreementsComponent End agreement (issue #1254)', () => 
     fixture.componentInstance.endAgreement(agreement({ id: undefined }), '2026-06-30');
 
     expect(endSiteCommissionAgreement).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "Effective from" defaults to today's date in the business's own time zone, never the UTC date
+ * (issue #1273).
+ */
+describe('SiteCommissionAgreementsComponent "Effective from" default date (issue #1273)', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it("opens on the business's own calendar date at 08:30 Sydney, when UTC has not yet crossed into it", async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-12T21:30:00Z')); // 08:30 AEDT on 13 Nov
+
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement: jest.fn() },
+      undefined,
+      undefined,
+      of(false),
+      'Australia/Sydney'
+    );
+
+    expect(fixture.componentInstance.commissionEffectiveFrom).toBe('2026-11-13');
+  });
+
+  it("falls back to the browser's own local date, never the UTC date, while the time zone is still loading", async () => {
+    const instant = new Date('2026-11-12T21:30:00Z');
+    jest.useFakeTimers().setSystemTime(instant);
+
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement: jest.fn() }
+    );
+
+    const pad = (value: number) => value.toString().padStart(2, '0');
+    const expected = `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`;
+    expect(fixture.componentInstance.commissionEffectiveFrom).toBe(expected);
   });
 });

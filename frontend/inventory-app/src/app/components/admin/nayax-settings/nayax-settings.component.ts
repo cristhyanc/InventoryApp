@@ -6,6 +6,8 @@ import { Subscription } from 'rxjs';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../../services/nayax-settings.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
+import { toDateValue, todaysBusinessDate } from '../../../formatting/business-time-zone';
 import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
 
 /**
@@ -96,7 +98,14 @@ export class NayaxSettingsComponent implements OnDestroy {
   loading = false;
   feeRates: NayaxProcessingFeeRate[] = [];
   feeExGst = 0.17;
-  effectiveFrom = new Date().toISOString().slice(0, 10);
+
+  /**
+   * Today's date in the business's own time zone (issue #1273), never the UTC date - which, from
+   * midnight until the business's own UTC offset has elapsed, is still yesterday in a zone ahead of
+   * UTC (e.g. Sydney). Set in the constructor rather than here: it needs `businessTimeZone`, which a
+   * field initializer runs before the constructor body assigns.
+   */
+  effectiveFrom: string;
 
   /**
    * Whether a support session is active (issue #660): Save rate is disabled while it is, because a
@@ -111,8 +120,10 @@ export class NayaxSettingsComponent implements OnDestroy {
   constructor(
     private readonly nayaxSettings: NayaxSettingsService,
     private readonly toast: ToastService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    businessTimeZone: BusinessTimeZoneService
   ) {
+    this.effectiveFrom = toDateValue(todaysBusinessDate(businessTimeZone.timeZoneId));
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.loadFeeRates();
   }

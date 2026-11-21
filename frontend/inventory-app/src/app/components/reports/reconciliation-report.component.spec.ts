@@ -4,6 +4,7 @@ import { of } from 'rxjs';
 import { ReconciliationReportComponent } from './reconciliation-report.component';
 import { ReconciliationPeriod, ReconciliationReport, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import {
   provideNayaxConnectionStatus,
   providerAvailabilityDouble
@@ -13,7 +14,8 @@ function createComponent(): ReconciliationReportComponent {
   const route = {} as unknown as ActivatedRoute;
   const reports = {} as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
-  return new ReconciliationReportComponent(route, reports, machines, providerAvailabilityDouble());
+  const businessTimeZone = { timeZoneId: null } as unknown as BusinessTimeZoneService;
+  return new ReconciliationReportComponent(route, reports, machines, providerAvailabilityDouble(), businessTimeZone);
 }
 
 describe('ReconciliationReportComponent statusClass (issue #419 Material restyle)', () => {

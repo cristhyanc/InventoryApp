@@ -6,6 +6,8 @@ import {
   shiftCalendarDate,
   startOfDayUtc,
   toDateTimeLocalValue,
+  toDateValue,
+  todaysBusinessDate,
   zonedDateTimeToUtc
 } from './business-time-zone';
 
@@ -117,6 +119,48 @@ describe('toDateTimeLocalValue / fromDateTimeLocalValue (issue #361)', () => {
     const wallClock = fromDateTimeLocalValue('2026-01-02T09:05')!;
     const utcInstant = zonedDateTimeToUtc(wallClock.year, wallClock.month, wallClock.day, wallClock.hour, wallClock.minute, 'Australia/Canberra');
     expect(toDateTimeLocalValue(currentDateTimeInTimeZone(utcInstant, 'Australia/Canberra'))).toBe('2026-01-02T09:05');
+  });
+});
+
+describe('todaysBusinessDate (issue #1273)', () => {
+  it('resolves the Sydney calendar date at 08:30 Sydney, when UTC has not yet crossed into it', () => {
+    // 2026-11-12T21:30:00Z is 2026-11-13 08:30 AEDT (+11) in Sydney.
+    expect(todaysBusinessDate('Australia/Sydney', new Date('2026-11-12T21:30:00Z'))).toEqual({
+      year: 2026,
+      month: 11,
+      day: 13
+    });
+  });
+
+  it('resolves the Sydney calendar date at 23:30 Sydney, still the same Sydney day', () => {
+    // 2026-06-30T13:30:00Z is 2026-06-30 23:30 AEST (+10) in Sydney.
+    expect(todaysBusinessDate('Australia/Sydney', new Date('2026-06-30T13:30:00Z'))).toEqual({
+      year: 2026,
+      month: 6,
+      day: 30
+    });
+  });
+
+  it('resolves a non-Sydney business time zone on its own calendar date', () => {
+    // 2026-11-12T21:30:00Z is 2026-11-12 13:30 PST (-8) in Los Angeles - still the UTC day.
+    expect(todaysBusinessDate('America/Los_Angeles', new Date('2026-11-12T21:30:00Z'))).toEqual({
+      year: 2026,
+      month: 11,
+      day: 12
+    });
+  });
+
+  it('falls back to the device local date, never the UTC date, when the time zone is not known yet', () => {
+    // A local wall-clock time deliberately not expressed as UTC, so a Jest run pinned to UTC
+    // still exercises the fallback's own local-date reading rather than agreeing by coincidence.
+    const localNow = new Date(2026, 10, 13, 8, 30);
+    expect(todaysBusinessDate(null, localNow)).toEqual({ year: 2026, month: 11, day: 13 });
+  });
+});
+
+describe('toDateValue', () => {
+  it('formats a calendar date as a zero-padded <input type="date"> value', () => {
+    expect(toDateValue({ year: 2026, month: 1, day: 2 })).toBe('2026-01-02');
   });
 });
 

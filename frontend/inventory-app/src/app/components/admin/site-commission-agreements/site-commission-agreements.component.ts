@@ -9,6 +9,7 @@ import { SiteListItem } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
+import { toDateValue, todaysBusinessDate } from '../../../formatting/business-time-zone';
 import { EndCommissionAgreementComponent } from './end-commission-agreement.component';
 
 /**
@@ -95,7 +96,14 @@ export class SiteCommissionAgreementsComponent implements OnDestroy {
   sites: SiteListItem[] = [];
   commissionSiteId: number | null = null;
   commissionRate = 0;
-  commissionEffectiveFrom = new Date().toISOString().slice(0, 10);
+
+  /**
+   * Today's date in the business's own time zone (issue #1273), never the UTC date - which, from
+   * midnight until the business's own UTC offset has elapsed, is still yesterday in a zone ahead of
+   * UTC (e.g. Sydney). Set in the constructor rather than here: it needs `businessTimeZone`, which a
+   * field initializer runs before the constructor body assigns.
+   */
+  commissionEffectiveFrom: string;
   commissionFrequency = 0;
   commissionBasis = 0;
   commissionDueDays: number | null = null;
@@ -127,6 +135,7 @@ export class SiteCommissionAgreementsComponent implements OnDestroy {
     supportSession: SupportSessionService,
     businessTimeZone: BusinessTimeZoneService
   ) {
+    this.commissionEffectiveFrom = toDateValue(todaysBusinessDate(businessTimeZone.timeZoneId));
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.timeZoneSubscription = businessTimeZone.timeZoneId$.subscribe((zone) => (this.timeZoneId = zone));
     this.loadCommissionAgreements();

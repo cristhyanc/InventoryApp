@@ -7,6 +7,7 @@ import { ImportedReimbursementPeriod } from '../../features/reports/bookkeeping/
 import { MachineService } from '../../services/machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, BookkeepingReport } from '../../services/reporting.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
 import { GstBasSummaryComponent } from '../../features/reports/gst/gst-bas-summary.component';
@@ -124,7 +125,7 @@ import { IconComponent } from '../shared/icon.component';
   `
 })
 export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport> {
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService, businessTimeZone: BusinessTimeZoneService) { super(route, reports, machines, provider, businessTimeZone); }
   request(filter: ReportingFilter): Observable<BookkeepingReport> { return this.reports.bookkeeping(filter); }
 
   /**
