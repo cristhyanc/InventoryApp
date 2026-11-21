@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { SiteCommissionsReportComponent } from './site-commissions-report.component';
 import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../../services/reporting.service';
 import { SiteService } from '../../services/site.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 function row(overrides: Partial<SiteCommissionRow> = {}): SiteCommissionRow {
@@ -34,7 +35,7 @@ function report(rows: SiteCommissionRow[] = [row()]): SiteCommissionReport {
  * that answers the report and nothing else: the page makes no write call, so every test below would
  * fail to construct the component if either came back.
  */
-async function render() {
+async function render(timeZoneId?: string | null) {
   const reporting = { siteCommissions: jest.fn(() => of(report())) };
 
   await TestBed.configureTestingModule({
@@ -45,6 +46,10 @@ async function render() {
       provideNayaxConnectionStatus()
     ]
   }).compileComponents();
+
+  if (timeZoneId !== undefined) {
+    TestBed.inject(BusinessTimeZoneService).publish(timeZoneId);
+  }
 
   const fixture = TestBed.createComponent(SiteCommissionsReportComponent);
   fixture.detectChanges();
@@ -130,5 +135,65 @@ describe('SiteCommissionsReportComponent without payment recording (issue #1251)
     expect(printed).toContain('Products sold');
     expect(printed).not.toContain('Outstanding');
     expect(printed).not.toContain('Payment history');
+  });
+});
+
+/**
+ * The period presets read "today" from the business's own time zone, never the UTC date (issue
+ * #1273).
+ */
+describe('SiteCommissionsReportComponent period presets read the business time zone (issue #1273)', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('defaults This month to the Sydney date at construction, when UTC has not yet crossed into it', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-12T21:30:00Z')); // 08:30 AEDT on 13 Nov
+    const { component } = await render('Australia/Sydney');
+
+    expect(component.period).toBe('thisMonth');
+    expect(component.from).toBe('2026-11-01');
+    expect(component.to).toBe('2026-11-13');
+  });
+
+  it('gives the Sydney month for This month and Last month on the last day of the month, while UTC is still the day before', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-29T21:30:00Z')); // 08:30 AEDT on 30 Nov
+    const { component } = await render('Australia/Sydney');
+
+    component.selectPeriod('thisMonth');
+    expect(component.from).toBe('2026-11-01');
+    expect(component.to).toBe('2026-11-30');
+
+    component.selectPeriod('lastMonth');
+    expect(component.from).toBe('2026-10-01');
+    expect(component.to).toBe('2026-10-31');
+  });
+
+  it('starts Current FY on 1 July of the new year and ends Previous FY on 30 June, at 08:30 Sydney on 1 July while UTC is still 30 June', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-30T22:30:00Z')); // 08:30 AEST on 1 July
+    const { component } = await render('Australia/Sydney');
+
+    component.selectPeriod('currentFy');
+    expect(component.from).toBe('2026-07-01');
+    expect(component.to).toBe('2026-07-01');
+
+    component.selectPeriod('previousFy');
+    expect(component.from).toBe('2025-07-01');
+    expect(component.to).toBe('2026-06-30');
+  });
+
+  it('keeps Current FY in the old financial year at 23:30 Sydney on 30 June', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-30T13:30:00Z')); // 23:30 AEST on 30 June
+    const { component } = await render('Australia/Sydney');
+
+    component.selectPeriod('currentFy');
+    expect(component.from).toBe('2025-07-01');
+    expect(component.to).toBe('2026-06-30');
+  });
+
+  it('falls back to the device local date, never the UTC date, while the time zone is not known yet', async () => {
+    jest.useFakeTimers().setSystemTime(new Date(2026, 10, 13, 8, 30)); // local 13 Nov 2026 08:30
+    const { component } = await render(null);
+
+    expect(component.from).toBe('2026-11-01');
+    expect(component.to).toBe('2026-11-13');
   });
 });

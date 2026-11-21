@@ -15,6 +15,7 @@ import { CheapestSupplierService } from '../../services/cheapest-supplier.servic
 import { ToastService } from '../../services/toast.service';
 import { Product, Supplier } from '../../models/models';
 import { CheapestSupplierSummary, SupplierPriceBasis } from '../../models/cheapest-supplier';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 
 /** What the shared Cheapest supplier read answers in the specs that are not about it. */
 const noCheapestSuppliers: CheapestSupplierSummary = {
@@ -68,6 +69,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       create?: jest.Mock;
       suppliers?: Supplier[];
       getAll?: jest.Mock;
+      timeZoneId?: string | null;
     } = {}
   ) {
     const navigate = jest.fn();
@@ -106,6 +108,10 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     }).compileComponents();
 
     jest.spyOn(TestBed.inject(Router), 'navigate').mockImplementation(navigate);
+
+    if (options.timeZoneId !== undefined) {
+      TestBed.inject(BusinessTimeZoneService).publish(options.timeZoneId);
+    }
 
     const fixture = TestBed.createComponent(ProductNeedsOrderingComponent);
     fixture.detectChanges();
@@ -482,6 +488,44 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       'Acme',
       'Zenith'
     ]);
+  });
+
+  /**
+   * The Create order dialog's "Order date" defaults to today in the business's own time zone, never
+   * the UTC date (issue #1273), set when the dialog opens rather than once at component construction.
+   */
+  describe('Create order dialog "Order date" default (issue #1273)', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("opens with the business's own calendar date at 08:30 Sydney, when UTC has not yet crossed into it", async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-11-12T21:30:00Z')); // 08:30 AEDT on 13 Nov
+
+      const { fixture } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { timeZoneId: 'Australia/Sydney' }
+      );
+      const component = fixture.componentInstance;
+
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+
+      expect(component.orderForm.orderDate).toBe('2026-11-13');
+    });
+
+    it("falls back to the browser's own local date, never the UTC date, while the time zone is still loading", async () => {
+      const instant = new Date('2026-11-12T21:30:00Z');
+      jest.useFakeTimers().setSystemTime(instant);
+
+      const { fixture } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })]);
+      const component = fixture.componentInstance;
+
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+
+      const pad = (value: number) => value.toString().padStart(2, '0');
+      const expected = `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`;
+      expect(component.orderForm.orderDate).toBe(expected);
+    });
   });
 
   /**

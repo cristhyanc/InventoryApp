@@ -6,6 +6,8 @@ import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../..
 import { SiteService } from '../../services/site.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { todaysBusinessDate } from '../../formatting/business-time-zone';
 
 @Component({
   selector: 'app-site-commissions-report',
@@ -79,7 +81,13 @@ export class SiteCommissionsReportComponent implements OnInit {
    */
   sitesError = '';
   siteId: number | null = null; loading = false; error = ''; period = 'thisMonth';
-  from = this.date(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); to = this.date(new Date());
+
+  /**
+   * This month's start and today, both in the business's own time zone (issue #1273) - set in the
+   * constructor rather than here, since that needs `businessTimeZone`, which a field initializer
+   * runs before the constructor body assigns. See {@link selectPeriod}.
+   */
+  from: string; to: string;
   periods = [['thisMonth', 'This Month'], ['lastMonth', 'Last Month'], ['thisQuarter', 'This Quarter'], ['lastQuarter', 'Last Quarter'], ['currentFy', 'Current FY'], ['previousFy', 'Previous FY'], ['custom', 'Custom']];
 
   /**
@@ -110,8 +118,13 @@ export class SiteCommissionsReportComponent implements OnInit {
   constructor(
     private readonly reports: ReportingService,
     private readonly siteService: SiteService,
-    private readonly provider: ProviderAvailabilityService
-  ) {}
+    private readonly provider: ProviderAvailabilityService,
+    private readonly businessTimeZone: BusinessTimeZoneService
+  ) {
+    const today = this.businessToday();
+    this.from = this.date(new Date(today.getFullYear(), today.getMonth(), 1));
+    this.to = this.date(today);
+  }
   ngOnInit(): void {
     loadProviderList(this.provider, 'machineFleet', () => this.siteService.getList()).subscribe(outcome => {
       this.sites = outcome.kind === 'listed' ? outcome.items : [];
@@ -122,7 +135,7 @@ export class SiteCommissionsReportComponent implements OnInit {
     this.load();
   }
   load(): void { this.loading = true; this.error = ''; this.selected = null; this.reports.siteCommissions({ from: this.from, to: this.to }, this.siteId).subscribe({ next: report => { this.report = report; this.loading = false; }, error: () => { this.error = 'Unable to load site commissions.'; this.loading = false; } }); }
-  selectPeriod(period: string): void { this.period = period; const now = new Date(); const month = now.getMonth(); const year = now.getFullYear(); if (period === 'thisMonth') { this.from = this.date(new Date(year, month, 1)); this.to = this.date(now); } else if (period === 'lastMonth') { this.from = this.date(new Date(year, month - 1, 1)); this.to = this.date(new Date(year, month, 0)); } else if (period.includes('Quarter')) { const quarter = Math.floor(month / 3) + (period === 'lastQuarter' ? -1 : 0); this.from = this.date(new Date(year, quarter * 3, 1)); this.to = this.date(period === 'thisQuarter' ? now : new Date(year, quarter * 3 + 3, 0)); } else if (period === 'currentFy' || period === 'previousFy') { const startYear = year - (month < 6 ? 1 : 0) - (period === 'previousFy' ? 1 : 0); this.from = this.date(new Date(startYear, 6, 1)); this.to = this.date(period === 'currentFy' ? now : new Date(startYear + 1, 5, 30)); } }
+  selectPeriod(period: string): void { this.period = period; const now = this.businessToday(); const month = now.getMonth(); const year = now.getFullYear(); if (period === 'thisMonth') { this.from = this.date(new Date(year, month, 1)); this.to = this.date(now); } else if (period === 'lastMonth') { this.from = this.date(new Date(year, month - 1, 1)); this.to = this.date(new Date(year, month, 0)); } else if (period.includes('Quarter')) { const quarter = Math.floor(month / 3) + (period === 'lastQuarter' ? -1 : 0); this.from = this.date(new Date(year, quarter * 3, 1)); this.to = this.date(period === 'thisQuarter' ? now : new Date(year, quarter * 3 + 3, 0)); } else if (period === 'currentFy' || period === 'previousFy') { const startYear = year - (month < 6 ? 1 : 0) - (period === 'previousFy' ? 1 : 0); this.from = this.date(new Date(startYear, 6, 1)); this.to = this.date(period === 'currentFy' ? now : new Date(startYear + 1, 5, 30)); } }
   printDetails(): void {
     if (!this.selected) return;
     const row = this.selected;
@@ -139,4 +152,15 @@ export class SiteCommissionsReportComponent implements OnInit {
   }
   money(value: number): string { return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(value); }
   private date(value: Date): string { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`; }
+
+  /**
+   * Today in the business's own time zone (issue #1273), as a local-midnight `Date` so the month,
+   * quarter and financial-year arithmetic above - which only ever reads calendar fields back off it
+   * - stays exactly as it was. Never the UTC date, which from midnight until the business's own UTC
+   * offset has elapsed is still yesterday in a zone ahead of UTC (e.g. Sydney).
+   */
+  private businessToday(): Date {
+    const { year, month, day } = todaysBusinessDate(this.businessTimeZone.timeZoneId);
+    return new Date(year, month - 1, day);
+  }
 }
