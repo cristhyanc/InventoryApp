@@ -83,7 +83,7 @@ Inventory App/
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) **10.0.100 or newer**. `global.json` at the repository root sets that as the **minimum** .NET 10 SDK feature band with `rollForward: latestFeature`, so any newer 10.0 feature band or patch you have installed is used, while an SDK older than 10.0.100 — or a newer major SDK such as 11.0 — is not. Install a 10.0 SDK if `dotnet --version` run in the repository directory reports an error instead of a 10.0 version.
 - [Node.js 20.11+ or 22](https://nodejs.org/) and npm
 
 A global Angular CLI installation is not required; the npm scripts use the repository's locked CLI version.
