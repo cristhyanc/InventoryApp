@@ -5,16 +5,18 @@
 # Pipeline:
 #   1. Run the InventoryApp Agent Evals corpus and runner tests
 #   2. Check documentation links and anchors (scripts/check-doc-links.mjs)
-#   3. Restore backend
-#   4. Verify C# formatting          (dotnet format --verify-no-changes)
-#   5. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
-#   6. Test backend with coverage    (Inventory.UnitTests and Inventory.IntegrationTests; the latter includes the architecture tests)
-#   7. Check vulnerable NuGet packages
-#   8. Install frontend dependencies (npm ci)
-#   9. Angular ESLint                (npm run lint)
-#  10. Frontend unit/component tests (npm run test)
-#  11. Angular production build      (npm run build)
-#  12. npm audit report
+#   3. Validate agent workflow, runner placement and deployment workflow contracts
+#      (the same offline contract checks CI runs in .github/workflows/validate.yml)
+#   4. Restore backend
+#   5. Verify C# formatting          (dotnet format --verify-no-changes)
+#   6. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
+#   7. Test backend with coverage    (Inventory.UnitTests and Inventory.IntegrationTests; the latter includes the architecture tests)
+#   8. Check vulnerable NuGet packages
+#   9. Install frontend dependencies (npm ci)
+#  10. Angular ESLint                (npm run lint)
+#  11. Frontend unit/component tests (npm run test)
+#  12. Angular production build      (npm run build)
+#  13. npm audit report
 #
 # scripts/validate.ps1 performs the same checks on Windows PowerShell. Keep the two in step.
 
@@ -129,6 +131,38 @@ run_step "Test documentation link checker" \
 
 run_step "Check documentation links and anchors" \
     node "${repo_root}/scripts/check-doc-links.mjs"
+
+# The same offline contract checks .github/workflows/validate.yml runs in its "Validate agent
+# workflow contracts", "Validate runner placement contract" and "Validate deployment workflow
+# contracts" steps, so a broken contract fails here instead of only in CI. The
+# documentation-impact gate on the pull request body stays CI-only: it needs the pull request
+# body, which is not available locally.
+run_step "Validate agent workflow contracts" \
+    node "${repo_root}/scripts/validate-agent-workflows.mjs"
+
+run_step "Test agent workflow contract validator" \
+    node --test "${repo_root}/scripts/validate-agent-workflows.test.mjs"
+
+run_step "Test documentation-impact validator" \
+    node --test "${repo_root}/scripts/validate-documentation-impact.test.mjs"
+
+run_step "Test Sonar new-issues validator" \
+    node --test "${repo_root}/scripts/sonar-new-issues.test.mjs"
+
+run_step "Validate runner placement contract" \
+    node "${repo_root}/scripts/validate-runner-placement.mjs"
+
+run_step "Test runner placement contract validator" \
+    node --test "${repo_root}/scripts/validate-runner-placement.test.mjs"
+
+run_step "Validate deployment workflow contracts" \
+    node "${repo_root}/scripts/validate-deployment-workflows.mjs"
+
+run_step "Test deployment workflow contract validator" \
+    node --test "${repo_root}/scripts/validate-deployment-workflows.test.mjs"
+
+run_step "Test deployment migration preflight" \
+    node --test "${repo_root}/scripts/deployment-migration-preflight.test.mjs"
 
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"

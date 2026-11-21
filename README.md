@@ -2340,16 +2340,17 @@ powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 | 1 | Test agent eval runner | `node --test scripts/run-agent-evals.test.mjs` | yes |
 | 2 | Run agent eval corpus | `node scripts/run-agent-evals.mjs` against `evals/agent/cases/` (see `evals/agent/README.md`) | yes |
 | 3 | Check documentation links and anchors | `node scripts/check-doc-links.mjs` resolves every relative link and heading anchor in README, AGENTS, CLAUDE, CONTRIBUTING, SECURITY and `docs/**/*.md` | yes |
-| 4 | Restore backend | NuGet restore for `backend/InventoryApi/InventoryApi.slnx` | yes |
-| 5 | Verify C# formatting | `dotnet format --verify-no-changes` against the root `.editorconfig` | yes |
-| 6 | Build backend | Release build with .NET analyzers, code-style enforcement and warnings-as-errors | yes |
-| 7 | Test backend with coverage | xUnit suite plus Coverlet line/branch coverage | yes |
-| 8 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
-| 9 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
-| 10 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
-| 11 | Test frontend | `npm run test` (Jest, via `jest-preset-angular`) | yes |
-| 12 | Build frontend | Angular production build | yes |
-| 13 | Audit frontend dependencies | `npm audit` | no, report only |
+| 4 | Validate agent workflow, runner-placement and deployment workflow contracts | `validate-agent-workflows.mjs`, `validate-runner-placement.mjs` and `validate-deployment-workflows.mjs` (each checks the repository's own `.github/workflows/*.yml`) plus their `--test` suites and the related `validate-documentation-impact.test.mjs`, `sonar-new-issues.test.mjs` and `deployment-migration-preflight.test.mjs` unit tests, all offline; the same checks `.github/workflows/validate.yml` runs, so a broken contract fails here instead of only in CI | yes |
+| 5 | Restore backend | NuGet restore for `backend/InventoryApi/InventoryApi.slnx` | yes |
+| 6 | Verify C# formatting | `dotnet format --verify-no-changes` against the root `.editorconfig` | yes |
+| 7 | Build backend | Release build with .NET analyzers, code-style enforcement and warnings-as-errors | yes |
+| 8 | Test backend with coverage | xUnit suite plus Coverlet line/branch coverage | yes |
+| 9 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
+| 10 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
+| 11 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
+| 12 | Test frontend | `npm run test` (Jest, via `jest-preset-angular`) | yes |
+| 13 | Build frontend | Angular production build | yes |
+| 14 | Audit frontend dependencies | `npm audit` | no, report only |
 
 ### Backend code quality
 

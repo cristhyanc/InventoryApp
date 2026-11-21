@@ -27,6 +27,6 @@ bash scripts/validate.sh                                    # macOS, Linux, Git 
 powershell -ExecutionPolicy Bypass -File scripts/validate.ps1   # Windows PowerShell
 ```
 
-One script is the complete local pipeline: restore, C# formatting check, backend build with analyzers and warnings-as-errors, backend tests with coverage (including the architecture tests), NuGet vulnerability check, `npm ci`, Angular ESLint, Angular production build, and an informational `npm audit`. Run the script rather than the individual commands.
+One script is the complete local pipeline: the agent workflow, runner-placement and deployment workflow contract checks that CI also runs (so a broken contract fails locally, not only in CI), restore, C# formatting check, backend build with analyzers and warnings-as-errors, backend tests with coverage (including the architecture tests), NuGet vulnerability check, `npm ci`, Angular ESLint, Angular production build, and an informational `npm audit`. Run the script rather than the individual commands.
 
 The frontend has configured `lint` and `test` scripts (`ng lint`, `jest`); do not claim either ran unless it actually ran. See `AGENTS.md` § Commands for what is blocking and what is only reported.
