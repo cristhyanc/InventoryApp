@@ -29,8 +29,8 @@
          deliberately NOT referenced here: choosing a provider and a connection string is a
          composition-root decision, so Microsoft.EntityFrameworkCore.Sqlite (and the Design package
          the `dotnet ef` tooling needs) stay in InventoryApi. -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.15" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
     <!-- The platform diagnostics read path (issue #336) enforces its boundary inside SQLite
          itself - a read-only connection, PRAGMA query_only, a zero SQLITE_LIMIT_ATTACHED and an
          authorizer callback consulted during statement preparation - so it needs the ADO.NET
@@ -39,11 +39,14 @@
          EF Core SQLite provider: choosing an EF provider and a connection string remains the
          composition root's decision, and InventoryApi still owns
          Microsoft.EntityFrameworkCore.Sqlite and the native SQLitePCLRaw.lib.e_sqlite3 bundle.
-         Both packages here are .Core variants, so no second native library is bundled. -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.0" />
-    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.11" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+         Both packages here are .Core variants, so no second native library is bundled.
+         SQLitePCLRaw.core stays on the same stable version as the native SQLitePCLRaw.lib.e_sqlite3
+         package InventoryApi pins (issue #1290); bump the two together, which
+         SqlitePclRawPackageAlignmentTests enforces against the restored project.assets.json. -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.15" />
+    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.13" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.15" />
     <PackageReference Include="Polly.Core" Version="8.6.4" />
   </ItemGroup>
 

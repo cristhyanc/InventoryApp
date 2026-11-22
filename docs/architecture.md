@@ -30,6 +30,28 @@ default; a different value can only come from an App Service application setting
 (`ConnectionStrings__DefaultConnection`), which is Azure configuration outside this repository and
 not verifiable from source.
 
+**The native engine.** The SQLite engine itself is pinned, not inherited: `InventoryApi.csproj`
+references `SQLitePCLRaw.lib.e_sqlite3` **2.1.13** directly — whose bundled native SQLite is
+**3.53.3** — and `SQLitePCLRaw.core` in `Inventory.Infrastructure` is held on the same stable
+version, so every SQLitePCLRaw package in the graph (`core`, `bundle_e_sqlite3`,
+`provider.e_sqlite3`, `lib.e_sqlite3`) resolves to one stable 2.1.13 (issue #1290). The direct
+reference exists because the engine version is a deployment fact rather than a package-graph
+accident: `InventoryApi`'s publish output is what carries the native library
+(`runtimes/<rid>/native/[lib]e_sqlite3.*`) to App Service, so the composition root is where that
+version is chosen — exactly as it chooses the EF provider and the connection string. Never express
+it as a version range or a prerelease; `NativeSqliteLibraryTests`
+(`backend/Inventory.IntegrationTests/Infrastructure/Sqlite/`) reports `SELECT sqlite_version()` and
+fails if a pin ever moves the engine below 3.53.3.
+
+Only two of those four packages are pinned directly and NuGet enforces no version equality between
+package ids, so the alignment itself is a checked invariant rather than a property of a green build:
+`SqlitePclRawPackageAlignmentTests`, beside the test above, reads the `obj/project.assets.json` that
+`dotnet restore` writes for every project of `backend/InventoryApi/InventoryApi.slnx` and fails if
+the family resolves to more than one version, to a prerelease, or without one of its four members —
+and if an assets file is missing, rather than passing vacuously. It reports the resolved
+package/version set to the test output, so every `scripts/validate.sh` run records which engine
+package the backend actually resolved.
+
 **Where the file lives and what persists.** Azure App Service keeps exactly one directory durable
 across process restarts and reboots, and shared across every instance if the plan ever scales to
 more than one: `/home` (Windows: `d:\home`), mounted from the platform's own storage rather than

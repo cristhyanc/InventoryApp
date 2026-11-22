@@ -7,9 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.15" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.15" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
@@ -19,8 +19,9 @@
     <!-- Transitive security pin: the test host's package graph otherwise resolves 10.0.10, which has
          high-severity advisories (GHSA-r955-8q5j-3h83, GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj).
          System.Security.Cryptography.Pkcs is pinned in InventoryApi.csproj and flows here through the
-         project reference. Remove once a direct dependency brings a patched version itself. -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+         project reference. Remove once a direct dependency brings a patched version itself. Still
+         required at 10.0.15 (issue #1290): restoring without this pin fails with NU1903 on 10.0.10. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.15" />
 
     <!-- Architecture tests: asserts the Clean Architecture dependency direction against the
          compiled assemblies (see Architecture/CleanArchitectureDependencyTests.cs). -->
