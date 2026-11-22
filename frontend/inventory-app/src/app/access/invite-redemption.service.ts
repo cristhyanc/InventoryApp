@@ -31,9 +31,20 @@ export class InviteRedemptionService {
     private readonly config: ConfigService
   ) {}
 
-  redeem(token: string): Observable<RedeemedMemberInvite> {
+  /**
+   * @param token The invite token, which travels only in this request's body.
+   * @param acceptedLegalVersion
+   * The version of the Terms of Use and Privacy Policy the page showed when the agreement was
+   * ticked (issue #1259), exactly as `GET /api/me/account-state` published it. `null` when the
+   * account state could not be read, which the API refuses with its own "please refresh" sentence -
+   * the right answer, rather than this service inventing a version.
+   */
+  redeem(token: string, acceptedLegalVersion: string | null): Observable<RedeemedMemberInvite> {
     return this.http
-      .post<RedeemedMemberInviteResponse>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/invites/redeem`, { token })
+      .post<RedeemedMemberInviteResponse>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/invites/redeem`, {
+        token,
+        acceptedLegalVersion
+      })
       .pipe(map((response) => ({ role: response.role })));
   }
 }

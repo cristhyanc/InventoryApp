@@ -69,9 +69,17 @@ describe('AccountStateService cache (issue #529)', () => {
     expect(get).toHaveBeenCalledWith('/api/me/account-state');
   });
 
-  it('reports the state, onboarding eligibility and rejection reason the API named', async () => {
+  it('reports the state, onboarding eligibility, rejection reason and legal version the API named', async () => {
     const { service } = configure({
-      responses: [() => of({ state: 'ApplicationRejected', onboardingEnabled: true, rejectionReason: 'Incomplete application' })]
+      responses: [
+        () =>
+          of({
+            state: 'ApplicationRejected',
+            onboardingEnabled: true,
+            rejectionReason: 'Incomplete application',
+            legalVersion: '2026-11-13'
+          })
+      ]
     });
 
     const answer = await firstValueFrom(service.state$);
@@ -83,8 +91,27 @@ describe('AccountStateService cache (issue #529)', () => {
     expect(answer.accountState).toEqual({
       state: 'ApplicationRejected',
       onboardingEnabled: true,
-      rejectionReason: 'Incomplete application'
+      rejectionReason: 'Incomplete application',
+      legalVersion: '2026-11-13'
     });
+  });
+
+  /**
+   * Issue #1259: during the few minutes between the API deploy and the frontend one, an API that
+   * does not publish a version yet answers without the field. It is reported as missing rather than
+   * invented, so the pages that send it back are refused by the server with the sentence asking the
+   * person to refresh - which is exactly what that window is supposed to produce.
+   */
+  it('reports a missing legal version as none rather than inventing one', async () => {
+    const { service } = configure({ responses: [() => of(MEMBER_RESPONSE)] });
+
+    const answer = await firstValueFrom(service.state$);
+
+    expect(answer.status).toBe('known');
+    if (answer.status !== 'known') {
+      return;
+    }
+    expect(answer.accountState.legalVersion).toBeNull();
   });
 
   it('falls back to the most restrictive state for a value this build does not recognise', async () => {

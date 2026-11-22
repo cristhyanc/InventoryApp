@@ -305,7 +305,7 @@ public sealed record MeSupportSessionResponse(string BusinessName, DateTime Expi
 /// Which state the signed-in person's account is in, as <c>GET /api/me/account-state</c> returns
 /// it (issue #523), so the frontend can show the right screen instead of a bare 403.
 ///
-/// These three fields are the whole contract. The response deliberately carries nothing about a
+/// These four fields are the whole contract. The response deliberately carries nothing about a
 /// business - not a name, not an id, not whether one exists - because the caller may be somebody
 /// no business has approved, and the state alone is what decides the screen.
 /// </summary>
@@ -325,7 +325,16 @@ public sealed record MeSupportSessionResponse(string BusinessName, DateTime Expi
 /// rejection whose reason was not recorded. Serialized as an explicit <c>null</c> rather than
 /// omitted, so the field is a stable part of the shape.
 /// </param>
+/// <param name="LegalVersion">
+/// The version of the published Terms of Use and Privacy Policy that is in force, as the effective
+/// date they took effect on - for example <c>2026-11-13</c> (issue #1259). It is
+/// <c>Inventory.Domain.Legal.LegalTerms.CurrentVersion</c> and nothing else, and it is reported for
+/// every state because it describes the documents rather than the caller. The business application
+/// and invite acceptance pages read it here and send it back with their submission, so what a page
+/// showed and what the server will accept cannot drift.
+/// </param>
 public sealed record MeAccountStateResponse(
     string State,
     bool OnboardingEnabled,
-    string? RejectionReason);
+    string? RejectionReason,
+    string LegalVersion);

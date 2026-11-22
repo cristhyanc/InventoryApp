@@ -195,9 +195,22 @@ describe('REDEEMABLE_ACCOUNT_STATES and nonRedeemableAccountStateDestination', (
 
 /** Pins the shape `AccountState` exposes, so a renamed field is caught here rather than at runtime. */
 describe('AccountState shape', () => {
-  it('describes the state, onboarding eligibility and rejection reason, and nothing about a business', () => {
-    const accountState: AccountState = { state: 'NoMembership', onboardingEnabled: true, rejectionReason: null };
+  it('describes the state, onboarding eligibility, rejection reason and legal version, and nothing about a business', () => {
+    const accountState: AccountState = {
+      state: 'NoMembership',
+      onboardingEnabled: true,
+      rejectionReason: null,
+      // The published Terms version (issue #1259). It describes the documents rather than the
+      // caller, exactly as onboardingEnabled describes the deployment, so it is not a business
+      // detail reaching a caller who has not earned one.
+      legalVersion: '2026-11-13'
+    };
 
-    expect(Object.keys(accountState).sort()).toEqual(['onboardingEnabled', 'rejectionReason', 'state']);
+    expect(Object.keys(accountState).sort()).toEqual([
+      'legalVersion',
+      'onboardingEnabled',
+      'rejectionReason',
+      'state'
+    ]);
   });
 });

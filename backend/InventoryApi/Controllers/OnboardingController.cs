@@ -27,14 +27,17 @@ namespace InventoryApi.Controllers;
 /// <c>access_as_user</c> scope - "membership not required" is not "anonymous" - and it still runs
 /// with a <em>denied</em> <c>BusinessScope</c>: nothing resolves a business for the request, the
 /// tenant query filters and <c>BusinessOwnershipEnforcer</c> stay fully in force, and it reads no
-/// business data. The two tables it reaches, businesses and memberships, are structurally
-/// non-tenant-owned, and the business it writes in is the one it creates
+/// business data. Two of the three tables it reaches, businesses and memberships, are structurally
+/// non-tenant-owned; the third is the acceptance record of issue #1259, which is tenant-owned and
+/// written through the narrow, reviewed window of <c>AppDbContext.BeginLegalAcceptanceWrite</c>. The
+/// business it writes in is the one it creates
 /// (docs/architecture.md § Self-service business application).</para>
 ///
 /// <para><strong>Nothing in the request chooses anything but the new business's own details.</strong>
-/// The body carries the six settings the application records and nothing else: the applicant, their
-/// role, the business's lifecycle status and its identifier are all decided by the server, the first
-/// from the validated token the request authenticated with.</para>
+/// The body carries the six settings the application records, the version of the Terms the page
+/// showed, and nothing else: the applicant, their role, the business's lifecycle status, its
+/// identifier and which version of the Terms is <em>current</em> are all decided by the server, the
+/// first from the validated token the request authenticated with.</para>
 ///
 /// <para><strong>It is behind a flag, and the flag's "off" answer is a bare <c>404</c>.</strong>
 /// A deployment that has not switched self-service onboarding on has no such endpoint, which is
@@ -78,9 +81,12 @@ public sealed class OnboardingController : ControllerBase
     /// The application was recorded, or the identical one that was already waiting is reported back.
     /// </response>
     /// <response code="400">
-    /// The submitted details break one of the application rules - a missing or over-long name, a
-    /// contact address that cannot be an address, an unstated GST registration, a malformed ABN, a
-    /// missing or unresolvable time zone, or a missing or unrecognised state. Nothing was written.
+    /// The submission carries no accepted legal version, or one that is not the current one (issue
+    /// #1259) - which is what an open browser tab serving the previous Terms of Use gets, with the
+    /// sentence asking the person to refresh - or the submitted details break one of the application
+    /// rules: a missing or over-long name, a contact address that cannot be an address, an unstated
+    /// GST registration, a malformed ABN, a missing or unresolvable time zone, or a missing or
+    /// unrecognised state. Nothing was written.
     /// </response>
     /// <response code="404">Self-service onboarding is not switched on for this deployment.</response>
     /// <response code="409">
@@ -112,7 +118,8 @@ public sealed class OnboardingController : ControllerBase
                 request.Abn,
                 request.GstRegistered,
                 request.TimeZoneId,
-                request.State),
+                request.State,
+                request.AcceptedLegalVersion),
             cancellationToken);
 
         if (!outcome.Enabled)

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -70,11 +71,16 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(
-            ["onboardingEnabled", "rejectionReason", "state"],
+            ["legalVersion", "onboardingEnabled", "rejectionReason", "state"],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(expectedState, json.GetProperty("state").GetString());
         Assert.False(json.GetProperty("onboardingEnabled").GetBoolean());
         Assert.Equal(JsonValueKind.Null, json.GetProperty("rejectionReason").ValueKind);
+
+        // The published legal version (issue #1259), reported for every state because it describes
+        // the documents rather than the caller - and it is the one place the two pages that have to
+        // collect an agreement read it from.
+        Assert.Equal(LegalTerms.CurrentVersion, json.GetProperty("legalVersion").GetString());
     }
 
     /// <summary>
@@ -94,9 +100,10 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(
-            ["onboardingEnabled", "rejectionReason", "state"],
+            ["legalVersion", "onboardingEnabled", "rejectionReason", "state"],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal("ApplicationRejected", json.GetProperty("state").GetString());
+        Assert.Equal(LegalTerms.CurrentVersion, json.GetProperty("legalVersion").GetString());
         Assert.Equal(ApiFactory.RejectionReason, json.GetProperty("rejectionReason").GetString());
         Assert.False(json.GetProperty("onboardingEnabled").GetBoolean());
     }

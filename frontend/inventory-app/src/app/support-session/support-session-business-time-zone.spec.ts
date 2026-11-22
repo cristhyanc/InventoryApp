@@ -88,7 +88,12 @@ async function render(options: { accountState?: AccountStateName } = {}): Promis
   };
   const accountState: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: options.accountState ?? 'Member', onboardingEnabled: false, rejectionReason: null }
+    accountState: {
+      state: options.accountState ?? 'Member',
+      onboardingEnabled: false,
+      rejectionReason: null,
+      legalVersion: null
+    }
   };
   const msal = {
     instance: {

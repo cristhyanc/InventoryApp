@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Inventory.Application.Members;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -70,7 +71,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         Assert.Equal(HttpStatusCode.Forbidden, (await joiner.GetAsync("/api/me/access")).StatusCode);
         Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(ApiFactory.JoinerObjectId));
 
-        var response = await joiner.PostAsJsonAsync(Uri, new { token });
+        var response = await joiner.PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var redeemed = await ReadJsonAsync(response);
@@ -108,7 +109,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Operator, "a-known-token");
 
         var response = await _factory.Authenticated(ApiFactory.JoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         var body = await response.Content.ReadAsStringAsync();
 
@@ -129,7 +130,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "with-a-profile");
 
         var client = _factory.Authenticated(ApiFactory.JoinerObjectId, "Dana Doe", "dana@example.test");
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(Uri, new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
 
         var membership = await _factory.MembershipAsync(ApiFactory.JoinerObjectId);
         Assert.Equal("Dana Doe", membership.DisplayName);
@@ -154,7 +155,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         Assert.Equal("MembershipRevoked", await _factory.AccountStateOfAsync(ApiFactory.JoinerObjectId));
 
         var response = await _factory.Authenticated(ApiFactory.JoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("Owner", (await ReadJsonAsync(response)).GetProperty("role").GetString());
@@ -183,7 +184,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
 
         Assert.Equal(
             HttpStatusCode.OK,
-            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, new { token })).StatusCode);
+            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
 
         var membership = await _factory.MembershipAsync(ApiFactory.JoinerObjectId);
         Assert.Equal(ApiFactory.OtherBusinessId, membership.BusinessId);
@@ -220,7 +221,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedUnusableAsync(kind);
 
         var response = await _factory.Authenticated(ApiFactory.JoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
 
@@ -245,15 +246,23 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
     /// malformed submission is still a different answer, and a caller probing for tokens learns
     /// from any difference at all.
     /// </summary>
+    /// <para>Each body carries the current legal version (issue #1259), because without one the
+    /// refusal is the refresh sentence instead - which is itself asserted by
+    /// <see cref="A_redemption_without_the_current_legal_version_is_refused_and_writes_nothing"/>.
+    /// What is being pinned here is the token half, so the version half is held constant.</para>
     [Theory]
-    [InlineData("""{"token":null}""")]
-    [InlineData("""{"token":""}""")]
-    [InlineData("""{"token":"   "}""")]
-    [InlineData("{}")]
+    [InlineData("""{"token":null,"acceptedLegalVersion":"2026-11-13"}""")]
+    [InlineData("""{"token":"","acceptedLegalVersion":"2026-11-13"}""")]
+    [InlineData("""{"token":"   ","acceptedLegalVersion":"2026-11-13"}""")]
+    [InlineData("""{"acceptedLegalVersion":"2026-11-13"}""")]
     public async Task A_missing_or_blank_token_gets_the_same_refusal(string body)
     {
         await _factory.ResetAsync();
         await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "a-live-link");
+
+        // The version the bodies above hard-code has to be the one in force, or this theory would
+        // silently become a test of the stale-version refusal.
+        Assert.Contains(LegalTerms.CurrentVersion, body, StringComparison.Ordinal);
 
         var response = await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsync(
             Uri,
@@ -282,7 +291,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "a-known-token");
 
         var response = await _factory.Authenticated(ApiFactory.JoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token = submitted });
+            .PostAsJsonAsync(Uri, Redemption(submitted));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Empty(await _factory.MembershipsOfAsync(ApiFactory.JoinerObjectId));
@@ -300,10 +309,10 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
 
         Assert.Equal(
             HttpStatusCode.OK,
-            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, new { token })).StatusCode);
+            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
 
         var second = await _factory.Authenticated(ApiFactory.SecondJoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.BadRequest, second.StatusCode);
         Assert.Equal(
@@ -331,7 +340,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedInviteAsync(ApiFactory.OtherBusinessId, BusinessRole.Owner, "move-business");
 
         var response = await _factory.Authenticated(ApiFactory.ManagerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal(
@@ -366,7 +375,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         Assert.Equal("BusinessDeactivated", await _factory.AccountStateOfAsync(ApiFactory.OtherOwnerObjectId));
 
         var response = await _factory.Authenticated(ApiFactory.OtherOwnerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
 
@@ -397,7 +406,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         Assert.Equal("ApplicationPending", await _factory.AccountStateOfAsync(ApiFactory.OtherOwnerObjectId));
 
         var response = await _factory.Authenticated(ApiFactory.OtherOwnerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal(
@@ -425,7 +434,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
 
         Assert.Equal(
             HttpStatusCode.OK,
-            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, new { token })).StatusCode);
+            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
 
         // The new membership is in the inviting business, and the rejected record stays as it is.
         var memberships = await _factory.MembershipsOfAsync(ApiFactory.JoinerObjectId);
@@ -448,7 +457,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         await _factory.ResetAsync();
         var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "needs-a-token");
 
-        var response = await _factory.CreateClient().PostAsJsonAsync(Uri, new { token });
+        var response = await _factory.CreateClient().PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Equal(MemberInviteStatus.Pending, (await _factory.InvitesAsync())[0].Status);
@@ -466,7 +475,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "needs-a-scope");
 
         var response = await _factory.WithoutScope(ApiFactory.JoinerObjectId)
-            .PostAsJsonAsync(Uri, new { token });
+            .PostAsJsonAsync(Uri, Redemption(token));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Empty(await _factory.MembershipsOfAsync(ApiFactory.JoinerObjectId));
@@ -503,7 +512,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
             (await joiner.PostAsJsonAsync("/api/members/invites", new { role = "Owner" })).StatusCode);
 
         // And the one endpoint they may call still works.
-        Assert.Equal(HttpStatusCode.OK, (await joiner.PostAsJsonAsync(Uri, new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await joiner.PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
     }
 
     /// <summary>
@@ -519,7 +528,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Owner, "then-a-member");
         var joiner = _factory.Authenticated(ApiFactory.JoinerObjectId);
 
-        var response = await joiner.PostAsJsonAsync(Uri, new { token });
+        var response = await joiner.PostAsJsonAsync(Uri, Redemption(token));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         // Nothing about the business came back with the redemption itself.
@@ -550,7 +559,7 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         Assert.Equal(
             HttpStatusCode.OK,
             (await _factory.Authenticated(ApiFactory.JoinerObjectId, "Dana Doe", "dana@example.test")
-                .PostAsJsonAsync(Uri, new { token })).StatusCode);
+                .PostAsJsonAsync(Uri, Redemption(token))).StatusCode);
 
         var invite = (await _factory.InvitesAsync())[0];
         var logged = _factory.LoggedText();
@@ -581,11 +590,11 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         _factory.ClearLog();
         Assert.Equal(
             HttpStatusCode.Conflict,
-            (await _factory.Authenticated(ApiFactory.ManagerObjectId).PostAsJsonAsync(Uri, new { token = live }))
+            (await _factory.Authenticated(ApiFactory.ManagerObjectId).PostAsJsonAsync(Uri, Redemption(live)))
                 .StatusCode);
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, new { token = "nothing" }))
+            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, Redemption("nothing")))
                 .StatusCode);
 
         var logged = _factory.LoggedText();
@@ -596,8 +605,131 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
 
     #endregion
 
+    #region Accepting the Terms of Use (issue #1259)
+
+    /// <summary>
+    /// The version the page has to send back is the one this endpoint's own host publishes on
+    /// <c>GET /api/me/account-state</c> - which the person opening an invite link can call, because
+    /// that endpoint carries the same membership-not-required marker this one does. The frontend
+    /// never holds a copy of the version, so the two cannot drift.
+    /// </summary>
+    [Fact]
+    public async Task The_account_state_publishes_the_legal_version_the_redemption_must_carry()
+    {
+        await _factory.ResetAsync();
+
+        Assert.Equal(LegalTerms.CurrentVersion, await _factory.LegalVersionOfAsync(ApiFactory.JoinerObjectId));
+    }
+
+    /// <summary>
+    /// A redemption with no accepted version at all - what an open tab serving the previous frontend
+    /// sends between the API deploy and the frontend one - and one carrying a version that is no
+    /// longer current are both refused with the one sentence. Nothing is written: no membership, no
+    /// acceptance, and the invite is left live so the person can use it once they have reloaded.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2026-11-12")]
+    [InlineData("13 November 2026")]
+    public async Task A_redemption_without_the_current_legal_version_is_refused_and_writes_nothing(
+        string? submitted)
+    {
+        await _factory.ResetAsync();
+        var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "stale-page-link");
+
+        var response = await _factory.Authenticated(ApiFactory.JoinerObjectId)
+            .PostAsJsonAsync(Uri, new { token, acceptedLegalVersion = submitted });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            LegalTerms.StaleVersionMessage,
+            (await ReadJsonAsync(response)).GetProperty("detail").GetString());
+
+        Assert.Empty(await _factory.MembershipsOfAsync(ApiFactory.JoinerObjectId));
+        Assert.Empty(await _factory.LegalAcceptancesAsync());
+        Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(ApiFactory.JoinerObjectId));
+
+        var invite = Assert.Single(await _factory.InvitesAsync());
+        Assert.Equal(MemberInviteStatus.Pending, invite.Status);
+        Assert.Null(invite.UsedAtUtc);
+    }
+
+    /// <summary>
+    /// A committed redemption writes exactly one acceptance, naming the business the invite named -
+    /// not the other seeded one - and carrying no display name and no email address, even though the
+    /// joiner's token reported both.
+    /// </summary>
+    [Fact]
+    public async Task A_committed_redemption_writes_exactly_one_acceptance_and_no_personal_data()
+    {
+        await _factory.ResetAsync();
+        var token = await _factory.SeedInviteAsync(ApiFactory.BusinessId, BusinessRole.Manager, "joining-link");
+
+        var response = await _factory
+            .Authenticated(ApiFactory.JoinerObjectId, displayName: "Dana Doe", email: "dana@example.test")
+            .PostAsJsonAsync(Uri, Redemption(token));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var acceptance = Assert.Single(await _factory.LegalAcceptancesAsync());
+        Assert.Equal(ApiFactory.BusinessId, acceptance.BusinessId);
+        Assert.Equal(LegalTerms.CurrentVersion, acceptance.Version);
+
+        // The same normalized Entra pair the membership the redemption created records, which is
+        // what makes the two rows describe one person rather than two spellings of one.
+        var membership = await _factory.MembershipAsync(ApiFactory.JoinerObjectId);
+        Assert.Equal(membership.DirectoryTenantId, acceptance.DirectoryTenantId);
+        Assert.Equal(membership.ObjectId, acceptance.ObjectId);
+        Assert.Equal(LegalAcceptanceContext.InviteRedemption, acceptance.Context);
+
+        // The agreement is recorded at the instant the invite was really consumed.
+        var invite = Assert.Single(await _factory.InvitesAsync());
+        Assert.Equal(invite.UsedAtUtc, acceptance.AcceptedAtUtc);
+
+        var row = string.Join(
+            '|',
+            acceptance.DirectoryTenantId,
+            acceptance.ObjectId,
+            acceptance.Version,
+            acceptance.Context.ToString());
+        Assert.DoesNotContain("Dana Doe", row, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dana@example.test", row, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A refused redemption - an unusable link, and a caller who already holds a membership - leaves
+    /// no acceptance: nobody joined anything, so nobody agreed to anything as part of joining.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_redemption_records_no_acceptance()
+    {
+        await _factory.ResetAsync();
+        var live = await _factory.SeedInviteAsync(ApiFactory.OtherBusinessId, BusinessRole.Owner, "refused-acceptance");
+
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await _factory.Authenticated(ApiFactory.JoinerObjectId).PostAsJsonAsync(Uri, Redemption("unknown")))
+                .StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Conflict,
+            (await _factory.Authenticated(ApiFactory.ManagerObjectId).PostAsJsonAsync(Uri, Redemption(live)))
+                .StatusCode);
+
+        Assert.Empty(await _factory.LegalAcceptancesAsync());
+    }
+
+    #endregion
+
     private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+
+    /// <summary>
+    /// The request body as the invite acceptance page sends it (issue #1259): the token, and the
+    /// version of the Terms the page showed when the agreement was ticked.
+    /// </summary>
+    private static object Redemption(string? token) =>
+        new { token, acceptedLegalVersion = LegalTerms.CurrentVersion };
 
     /// <summary>
     /// The API host over one in-memory SQLite connection, with the real migration history and two
@@ -693,6 +825,34 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         {
             await using var db = Database();
             return await db.MemberInvites.AsNoTracking().OrderBy(invite => invite.Id).ToListAsync();
+        }
+
+        /// <summary>
+        /// The <c>legalVersion</c> the caller's own account state reports (issue #1259) - the value
+        /// the invite acceptance page sends back, read exactly the way that page reads it.
+        /// </summary>
+        public async Task<string?> LegalVersionOfAsync(string objectId)
+        {
+            var response = await Authenticated(objectId).GetAsync("/api/me/account-state");
+            response.EnsureSuccessStatusCode();
+
+            return JsonDocument.Parse(await response.Content.ReadAsStringAsync())
+                .RootElement
+                .GetProperty("legalVersion")
+                .GetString();
+        }
+
+        /// <summary>
+        /// Every recorded acceptance of the Terms of Use and Privacy Policy, in key order (issue
+        /// #1259). Read outside the boundary, because nothing in the application reads one back.
+        /// </summary>
+        public async Task<IReadOnlyList<BusinessLegalAcceptance>> LegalAcceptancesAsync()
+        {
+            await using var db = Database();
+            return await db.BusinessLegalAcceptances
+                .AsNoTracking()
+                .OrderBy(acceptance => acceptance.Id)
+                .ToListAsync();
         }
 
         public async Task<BusinessMembership> MembershipAsync(string objectId)
@@ -820,6 +980,8 @@ public sealed class InviteRedemptionApiTests : IClassFixture<InviteRedemptionApi
         public async Task ResetAsync()
         {
             await using var db = Database();
+            db.BusinessLegalAcceptances.RemoveRange(await db.BusinessLegalAcceptances.ToListAsync());
+            await db.SaveChangesAsync();
             // Invites first: one may point at a membership, and that foreign key is restricted.
             db.MemberInvites.RemoveRange(await db.MemberInvites.ToListAsync());
             await db.SaveChangesAsync();

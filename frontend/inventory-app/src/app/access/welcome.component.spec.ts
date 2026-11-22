@@ -9,7 +9,10 @@ import { WelcomeComponent } from './welcome.component';
 class InvitePageComponent {}
 
 function known(onboardingEnabled: boolean): AccountStateAnswer {
-  return { status: 'known', accountState: { state: 'NoMembership', onboardingEnabled, rejectionReason: null } };
+  return {
+    status: 'known',
+    accountState: { state: 'NoMembership', onboardingEnabled, rejectionReason: null, legalVersion: null }
+  };
 }
 
 async function render(accountState$: Observable<AccountStateAnswer>): Promise<{

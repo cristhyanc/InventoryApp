@@ -1,6 +1,7 @@
 using Inventory.Application.Members;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Members;
@@ -194,9 +195,10 @@ public class MemberInviteRedemptionConcurrencyTests : IAsyncDisposable
             new EfBusinessMembershipStore(db),
             new EfMemberInviteRedemptionStore(db),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
+            new EfLegalAcceptanceStore(db),
             new FakeMemberInviteAudit(),
             new FakeClock(Now));
 
-        await redeem.Handle(token, cancellationToken);
+        await redeem.Handle(token, LegalTerms.CurrentVersion, cancellationToken);
     }
 }

@@ -150,6 +150,25 @@ public class BusinessApplicationApiFactory : WebApplicationFactory<Program>
     public Task<string?> OnboardingEnabledOfAsync(string objectId) =>
         AccountStateFieldAsync(objectId, "onboardingEnabled");
 
+    /// <summary>
+    /// The <c>legalVersion</c> the caller's own account state reports (issue #1259) - the value the
+    /// application page sends back, read exactly the way that page reads it.
+    /// </summary>
+    public Task<string?> LegalVersionOfAsync(string objectId) => AccountStateFieldAsync(objectId, "legalVersion");
+
+    /// <summary>
+    /// Every recorded acceptance of the Terms of Use and Privacy Policy, in key order (issue #1259).
+    /// Read outside the boundary, because nothing in the application reads one back.
+    /// </summary>
+    public async Task<IReadOnlyList<BusinessLegalAcceptance>> LegalAcceptancesAsync()
+    {
+        await using var db = Database();
+        return await db.BusinessLegalAcceptances
+            .AsNoTracking()
+            .OrderBy(acceptance => acceptance.Id)
+            .ToListAsync();
+    }
+
     public async Task<Business> BusinessAsync(string name)
     {
         await using var db = Database();
@@ -252,6 +271,8 @@ public class BusinessApplicationApiFactory : WebApplicationFactory<Program>
     public async Task ResetAsync()
     {
         await using var db = Database();
+        db.BusinessLegalAcceptances.RemoveRange(await db.BusinessLegalAcceptances.ToListAsync());
+        await db.SaveChangesAsync();
         db.MemberInvites.RemoveRange(await db.MemberInvites.ToListAsync());
         await db.SaveChangesAsync();
         db.BusinessMemberships.RemoveRange(await db.BusinessMemberships.ToListAsync());

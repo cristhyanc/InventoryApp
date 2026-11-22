@@ -1,7 +1,9 @@
 using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Legal;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
@@ -42,7 +44,8 @@ public class ApplyForBusinessTests
         var world = new World { Onboarding = FakeSelfServiceOnboardingFlag.Disabled };
 
         // Deliberately an invalid submission: it must not be the thing that decides the answer.
-        var outcome = await world.Apply(new BusinessApplicationSubmission(null, null, null, null, null, null));
+        var outcome = await world.Apply(
+            new BusinessApplicationSubmission(null, null, null, null, null, null, null));
 
         Assert.False(outcome.Enabled);
         Assert.Null(outcome.Application);
@@ -84,6 +87,7 @@ public class ApplyForBusinessTests
                 FakeBusinessMembershipWriteStore.Begin,
                 FakeBusinessMembershipWriteStore.IdentityRead,
                 FakeBusinessApplicationStore.Create,
+                FakeLegalAcceptanceStore.Record,
                 FakeBusinessMembershipWriteStore.Commit,
                 FakeBusinessMembershipWriteStore.Dispose,
             ],
@@ -139,6 +143,139 @@ public class ApplyForBusinessTests
 
     #endregion
 
+    #region Accepting the Terms of Use (issue #1259)
+
+    /// <summary>
+    /// The committed path records exactly one acceptance, and it is the whole of what the issue asks
+    /// to be able to show: which business, which Entra <c>(tid, oid)</c> pair, which version, when,
+    /// and which of the two acts it was.
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_application_records_one_acceptance_of_the_current_terms()
+    {
+        var world = new World();
+        world.Store.CreatedBusinessId = BusinessId.From(42);
+
+        await world.Apply(Submission());
+
+        var acceptance = Assert.Single(world.Acceptances.Recorded);
+        Assert.Equal(42, acceptance.BusinessId.Value);
+        Assert.Equal(world.Identity, acceptance.Identity);
+        Assert.Equal(LegalTerms.CurrentVersion, acceptance.Version);
+        Assert.Equal(LegalAcceptanceContext.BusinessApplication, acceptance.Context);
+        Assert.Equal(Now, acceptance.AcceptedAtUtc);
+    }
+
+    /// <summary>
+    /// And it happens <em>inside</em> the transaction, after the business whose id it names has been
+    /// created: an acceptance written outside it could survive an application that was rolled back,
+    /// which is exactly the state the record must not be able to reach.
+    /// </summary>
+    [Fact]
+    public async Task The_acceptance_is_written_inside_the_transaction_after_the_business()
+    {
+        var world = new World();
+
+        await world.Apply(Submission());
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.IdentityRead,
+                FakeBusinessApplicationStore.Create,
+                FakeLegalAcceptanceStore.Record,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            world.WriteStore.Operations);
+    }
+
+    /// <summary>
+    /// The agreement and the application describe one moment. A second clock read would record the
+    /// agreement at an instant the application it was given for never happened at.
+    /// </summary>
+    [Fact]
+    public async Task The_acceptance_records_the_instant_the_application_was_written_at()
+    {
+        var world = new World();
+        var waitedUntil = Now.AddMinutes(3);
+        world.WriteStore.WhileWaitingForTheWriteLock = () => world.Clock.UtcNow = waitedUntil;
+
+        await world.Apply(Submission());
+
+        Assert.Equal(waitedUntil, world.Store.CreatedAtUtc);
+        Assert.Equal(waitedUntil, Assert.Single(world.Acceptances.Recorded).AcceptedAtUtc);
+    }
+
+    /// <summary>
+    /// A submission with no version at all, and one with a version that is no longer current, are
+    /// both refused with the one sentence - and refused <em>early</em>: before the form's own rules,
+    /// before an allowance is claimed, before the membership read and before any write. A page
+    /// serving the previous documents has nothing to correct, so spending this applicant's allowance
+    /// on it would lock them out of an endpoint that was answering correctly.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2026-11-12")]
+    public async Task A_missing_or_stale_version_is_refused_before_anything_is_spent_or_written(
+        string? submitted)
+    {
+        var world = new World();
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(
+            () => world.Apply(Submission(submitted)));
+
+        Assert.Equal(LegalTerms.StaleVersionMessage, refusal.Message);
+        Assert.Equal(0, world.RateLimiter.TrackedIdentities);
+        Assert.Equal(0, world.Memberships.QueryCount);
+        Assert.Empty(world.Store.Operations);
+        Assert.Empty(world.WriteStore.Operations);
+        Assert.Empty(world.Acceptances.Recorded);
+        Assert.Empty(world.Audit.Entries);
+    }
+
+    /// <summary>
+    /// The version is judged before the form is, so a stale page gets the sentence that tells it
+    /// what to do rather than a complaint about a field it would have to send again anyway.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_version_is_refused_in_preference_to_the_forms_own_rules()
+    {
+        var world = new World();
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(
+            () => world.Apply(new BusinessApplicationSubmission(
+                null,
+                "not-an-address",
+                null,
+                null,
+                null,
+                null,
+                "2026-11-12")));
+
+        Assert.Equal(LegalTerms.StaleVersionMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// A resubmission writes no application, so it records no second acceptance: the agreement the
+    /// applicant gave is already recorded against the business that is waiting, and a second row
+    /// would claim they agreed twice to start one business.
+    /// </summary>
+    [Fact]
+    public async Task A_resubmission_records_no_second_acceptance()
+    {
+        var world = PendingApplicant(Validated());
+
+        var outcome = await world.Apply(Submission());
+
+        Assert.NotNull(outcome.Application);
+        Assert.Empty(world.Acceptances.Recorded);
+        Assert.Empty(world.WriteStore.Operations);
+    }
+
+    #endregion
+
     #region Validation
 
     /// <summary>
@@ -152,7 +289,14 @@ public class ApplyForBusinessTests
         var world = new World();
 
         await Assert.ThrowsAsync<DomainValidationException>(() => world.Apply(
-            new BusinessApplicationSubmission("Coastal Vending", "owner@", null, true, "Australia/Sydney", "NSW")));
+            new BusinessApplicationSubmission(
+                "Coastal Vending",
+                "owner@",
+                null,
+                true,
+                "Australia/Sydney",
+                "NSW",
+                LegalTerms.CurrentVersion)));
 
         Assert.Equal(0, world.RateLimiter.TrackedIdentities);
         Assert.Equal(0, world.Memberships.QueryCount);
@@ -336,7 +480,8 @@ public class ApplyForBusinessTests
                 "51 824 753 556",
                 true,
                 "Australia/Brisbane",
-                "QLD")));
+                "QLD",
+                LegalTerms.CurrentVersion)));
 
         Assert.Equal(1, world.RateLimiter.TrackedIdentities);
     }
@@ -467,8 +612,16 @@ public class ApplyForBusinessTests
         return actor!;
     }
 
-    private static BusinessApplicationSubmission Submission() =>
-        new("Coastal Vending", "owner@coastal.example.com", "51 824 753 556", true, "Australia/Brisbane", "QLD");
+    private static BusinessApplicationSubmission Submission(
+        string? acceptedLegalVersion = LegalTerms.CurrentVersion) =>
+        new(
+            "Coastal Vending",
+            "owner@coastal.example.com",
+            "51 824 753 556",
+            true,
+            "Australia/Brisbane",
+            "QLD",
+            acceptedLegalVersion);
 
     private static BusinessSettings Validated() =>
         new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD");
@@ -528,11 +681,19 @@ public class ApplyForBusinessTests
 
         public FakeBusinessApplicationAudit Audit { get; } = new();
 
+        /// <summary>
+        /// The acceptance record of issue #1259. It reports onto the same ordered log the creation
+        /// does, so "the agreement was written inside the transaction, after the business" is
+        /// assertable rather than assumed.
+        /// </summary>
+        public FakeLegalAcceptanceStore Acceptances { get; } = new();
+
         public Task<BusinessApplicationOutcome> Apply(BusinessApplicationSubmission submission)
         {
             // The creation is recorded on the write store's own ordered log, so one list shows
             // whether the write happened inside the transaction the guard opened.
             Store.WhileCreating = () => WriteStore.Record(FakeBusinessApplicationStore.Create);
+            Acceptances.Observer = WriteStore.Record;
 
             return new ApplyForBusiness(
                     Onboarding,
@@ -541,6 +702,7 @@ public class ApplyForBusinessTests
                     Store,
                     RateLimiter,
                     new MembershipWriteGuard(WriteStore),
+                    Acceptances,
                     Audit,
                     Clock)
                 .Handle(submission, CancellationToken.None);

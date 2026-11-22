@@ -3,14 +3,17 @@ import { BusinessNavigationContext, businessNavigationFor } from './business-nav
 
 const MEMBER: AccountStateAnswer = {
   status: 'known',
-  accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
+  accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
 };
 
 /** Every published state that is not `Member`, so a state added later is covered here too. */
 const NONMEMBER_STATES = ACCOUNT_STATES.filter((state) => state !== 'Member');
 
 function known(state: AccountStateName): AccountStateAnswer {
-  return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
+  return {
+    status: 'known',
+    accountState: { state, onboardingEnabled: false, rejectionReason: null, legalVersion: null }
+  };
 }
 
 /** A signed-in account in ordinary context, which is what each test varies one thing from. */

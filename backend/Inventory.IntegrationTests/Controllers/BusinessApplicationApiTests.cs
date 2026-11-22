@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Inventory.Application.Onboarding;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Xunit;
 
@@ -241,7 +242,141 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         Assert.Single(await _factory.BusinessesAsync());
         Assert.Empty(await _factory.MembershipsOfAsync(applicant));
         Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(applicant));
+        Assert.Empty(await _factory.LegalAcceptancesAsync());
     }
+
+    #region Accepting the Terms of Use (issue #1259)
+
+    /// <summary>
+    /// The version the page has to send back is the one this endpoint's own host publishes on
+    /// <c>GET /api/me/account-state</c>, so the two cannot drift: the frontend never holds a copy of
+    /// it.
+    /// </summary>
+    [Fact]
+    public async Task The_account_state_publishes_the_legal_version_the_application_must_carry()
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        Assert.Equal(LegalTerms.CurrentVersion, await _factory.LegalVersionOfAsync(applicant));
+    }
+
+    /// <summary>
+    /// A submission with no accepted version at all - which is what an open tab serving the
+    /// previous frontend sends during the few minutes between the API deploy and the frontend one -
+    /// and one carrying a version that is no longer current are both refused with the one sentence,
+    /// and neither writes a business, a membership or an acceptance.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2026-11-12")]
+    [InlineData("13 November 2026")]
+    public async Task An_application_without_the_current_legal_version_is_refused_and_writes_nothing(
+        string? submitted)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory.Authenticated(applicant)
+            .PostAsJsonAsync(Uri, Application() with { AcceptedLegalVersion = submitted });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            LegalTerms.StaleVersionMessage,
+            (await ReadJsonAsync(response)).GetProperty("detail").GetString());
+
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+        Assert.Empty(await _factory.LegalAcceptancesAsync());
+        Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(applicant));
+    }
+
+    /// <summary>
+    /// A recorded application writes exactly one acceptance, in the same transaction, naming the
+    /// business the application created - and carrying no display name and no email address, even
+    /// though the applicant's token reported both.
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_application_writes_exactly_one_acceptance_and_no_personal_data()
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory
+            .Authenticated(applicant, displayName: "Dana Doe", email: "dana@example.test")
+            .PostAsJsonAsync(Uri, Application());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var business = await _factory.BusinessAsync("Coastal Vending");
+        var acceptance = Assert.Single(await _factory.LegalAcceptancesAsync());
+
+        Assert.Equal(business.Id, acceptance.BusinessId);
+        Assert.Equal(LegalTerms.CurrentVersion, acceptance.Version);
+
+        // The same normalized Entra pair the membership the application created records, which is
+        // what makes the two rows describe one person rather than two spellings of one.
+        var membership = await _factory.MembershipAsync(applicant);
+        Assert.Equal(membership.DirectoryTenantId, acceptance.DirectoryTenantId);
+        Assert.Equal(membership.ObjectId, acceptance.ObjectId);
+        Assert.Equal(LegalAcceptanceContext.BusinessApplication, acceptance.Context);
+        Assert.Equal(business.AppliedAtUtc, acceptance.AcceptedAtUtc);
+
+        // The whole row, as text: neither display value the token carried is anywhere in it.
+        var row = string.Join(
+            '|',
+            acceptance.DirectoryTenantId,
+            acceptance.ObjectId,
+            acceptance.Version,
+            acceptance.Context.ToString());
+        Assert.DoesNotContain("Dana Doe", row, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dana@example.test", row, StringComparison.OrdinalIgnoreCase);
+
+        // And the acceptance is not in the log either, with or without the personal data.
+        Assert.DoesNotContain("dana@example.test", _factory.LoggedText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resubmitting the identical application answers with the one already waiting and writes
+    /// nothing - so it records no second acceptance either. One application is one agreement.
+    /// </summary>
+    [Fact]
+    public async Task A_resubmitted_application_records_no_second_acceptance()
+    {
+        await _factory.ResetAsync();
+        var client = _factory.Authenticated(BusinessApplicationApiFactory.NewApplicantObjectId());
+
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(Uri, Application())).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(Uri, Application())).StatusCode);
+
+        Assert.Single(await _factory.LegalAcceptancesAsync());
+    }
+
+    /// <summary>
+    /// An application refused inside its own transaction - by a time zone the host cannot resolve,
+    /// which the central enforcer rejects on the way into the database - leaves no business, no
+    /// membership and no acceptance. The acceptance is written in the same transaction and after the
+    /// business, so a refusal at or before the creation means it is never reached; the rollback of an
+    /// acceptance that <em>has</em> been written is proved directly in
+    /// <c>EfLegalAcceptanceStoreTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task An_application_refused_on_the_way_into_the_database_writes_no_acceptance()
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory.Authenticated(applicant)
+            .PostAsJsonAsync(Uri, Application() with { TimeZoneId = "Mars/Olympus_Mons" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+        Assert.Empty(await _factory.LegalAcceptancesAsync());
+    }
+
+    #endregion
 
     /// <summary>
     /// Each of the eight states and territories is accepted and stored on the pending business,
@@ -831,7 +966,14 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
     #endregion
 
     private static BusinessApplicationBody Application() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "NSW");
+        new(
+            "Coastal Vending",
+            "owner@coastal.example.com",
+            ValidAbn,
+            true,
+            "Australia/Brisbane",
+            "NSW",
+            LegalTerms.CurrentVersion);
 
     /// <summary>
     /// One of the ways an application can be incomplete or malformed. They are collected here so the
@@ -874,5 +1016,6 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         string? Abn,
         bool? GstRegistered,
         string? TimeZoneId,
-        string? State);
+        string? State,
+        string? AcceptedLegalVersion);
 }

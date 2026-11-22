@@ -87,6 +87,13 @@ public sealed class CrossBusinessAccessException : Exception
 /// business's Nayax sales - and nothing else, a delete of either included. See
 /// <see cref="EnforceNayaxSqsSenderWrite"/>.
 ///
+/// Since issue #1259 there is a sixth, and it is the narrowest of them all: while
+/// <c>AppDbContext.BeginLegalAcceptanceWrite</c> holds a lease, a denied scope may create
+/// <em>new <see cref="BusinessLegalAcceptance"/> rows of that one business</em> - the record that
+/// somebody agreed to the published Terms of Use and Privacy Policy while applying for a business or
+/// joining one - and nothing else, an update and a delete of one included. See
+/// <see cref="EnforceLegalAcceptanceWrite"/>.
+///
 /// Since issue #1282 the cost of all of it grows with the rows rather than with their square, and
 /// the rules themselves are untouched: the tracked graph is read <em>once</em> per save and handed to
 /// every rule below, the principal of a foreign key is found in an index built once per principal
@@ -162,14 +169,14 @@ internal static class BusinessOwnershipEnforcer
 
     /// <summary>
     /// The denied-scope branch of <see cref="Enforce"/>: a request that resolved no business writes
-    /// nothing tenant-owned, except through one of the five reviewed leases.
+    /// nothing tenant-owned, except through one of the six reviewed leases.
     /// </summary>
     private static void EnforceDeniedScope(
         AppDbContext context,
         IReadOnlyList<EntityEntry<IBusinessOwned>> entries)
     {
         // Denied scope. Reads already return nothing; writes must not be the way around it -
-        // with five reviewed exceptions, below, each narrower than this branch rather than a
+        // with six reviewed exceptions, below, each narrower than this branch rather than a
         // way out of it.
         if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
         {
@@ -198,6 +205,12 @@ internal static class BusinessOwnershipEnforcer
         if (context.NayaxSqsSenderWriteBusinessId is { } senderBusinessId)
         {
             EnforceNayaxSqsSenderWrite(context, entries, senderBusinessId);
+            return;
+        }
+
+        if (context.LegalAcceptanceWriteBusinessId is { } acceptingBusinessId)
+        {
+            EnforceLegalAcceptanceWrite(context, entries, acceptingBusinessId);
             return;
         }
 
@@ -477,6 +490,54 @@ internal static class BusinessOwnershipEnforcer
                             + "business's Nayax SQS sender: that path may only create or change that "
                             + "business's own sender row and append its audit row, and may delete "
                             + "neither.");
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, entries);
+    }
+
+    /// <summary>
+    /// The legal acceptance window of <c>AppDbContext.BeginLegalAcceptanceWrite</c> (issue #1259):
+    /// on a denied scope, <em>new <see cref="BusinessLegalAcceptance"/> rows of
+    /// <paramref name="businessId"/></em> are stamped and accepted, and every other tenant-owned
+    /// write is refused exactly as it is without a lease.
+    ///
+    /// <para>It is the sixth exception to "a denied scope writes nothing tenant-owned", reviewed on
+    /// its own issue, and it is the narrowest of them: <strong>one</strong> entity type,
+    /// <strong>one</strong> state - an insert, never an update and never a delete, because an
+    /// agreement that could be rewritten or withdrawn is not evidence of anything - and one business,
+    /// whose id is the key of the row the application's own write transaction created or the one the
+    /// redemption read off the invite, never a value a request supplied.</para>
+    ///
+    /// <para>Stamping goes through the same <see cref="StampOrVerifyNewRow"/> every ordinary insert
+    /// uses, so a row that arrives already carrying some <em>other</em> business's key is refused
+    /// here too rather than silently re-owned, and <see cref="EnforceRelationships"/> still
+    /// runs.</para>
+    /// </summary>
+    private static void EnforceLegalAcceptanceWrite(
+        AppDbContext context,
+        IReadOnlyList<EntityEntry<IBusinessOwned>> entries,
+        int businessId)
+    {
+        foreach (var entry in entries)
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added when entry.Entity is BusinessLegalAcceptance:
+                    StampOrVerifyNewRow(entry, businessId);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while recording an "
+                            + "acceptance of the Terms of Use: that path may only create that "
+                            + "business's own acceptance rows, and may neither change nor delete "
+                            + "one.");
 
                 default:
                     break;

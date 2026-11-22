@@ -1,6 +1,8 @@
+using Inventory.Application.Legal;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Members;
@@ -64,6 +66,16 @@ public sealed record RedeemedMemberInvite(BusinessRole Role);
 /// attempt decided from gets <see cref="MemberInviteRedemptionPolicy.MembershipChangedMessage"/>
 /// (issue #681), because the server has not established that such a caller is a member of anything.
 /// Nothing is written in any of these cases.</para>
+///
+/// <para><strong>Agreeing to the published Terms is a precondition, and the agreement is recorded
+/// with the redemption</strong> (issue #1259). The request has to carry
+/// <see cref="LegalTerms.CurrentVersion"/>, and that is checked first of all - before the token is
+/// even looked at - so a page serving the previous documents is told to refresh rather than told
+/// something about an invite it cannot act on. A missing or stale version writes nothing. On the
+/// committed path exactly one <see cref="LegalAcceptance"/> row is appended, for the business the
+/// invite named, inside the same transaction and at the instant the invite was consumed - so a
+/// refused or rolled-back redemption leaves no agreement behind and an admitted one is never missing
+/// its agreement.</para>
 /// </summary>
 public sealed class RedeemMemberInvite
 {
@@ -71,6 +83,7 @@ public sealed class RedeemMemberInvite
     private readonly IBusinessMembershipStore _membershipStore;
     private readonly IMemberInviteRedemptionStore _store;
     private readonly MembershipWriteGuard _guard;
+    private readonly ILegalAcceptanceStore _acceptances;
     private readonly IMemberInviteAudit _audit;
     private readonly IClock _clock;
 
@@ -79,6 +92,7 @@ public sealed class RedeemMemberInvite
         IBusinessMembershipStore membershipStore,
         IMemberInviteRedemptionStore store,
         MembershipWriteGuard guard,
+        ILegalAcceptanceStore acceptances,
         IMemberInviteAudit audit,
         IClock clock)
     {
@@ -86,6 +100,7 @@ public sealed class RedeemMemberInvite
         _membershipStore = membershipStore;
         _store = store;
         _guard = guard;
+        _acceptances = acceptances;
         _audit = audit;
         _clock = clock;
     }
@@ -100,10 +115,15 @@ public sealed class RedeemMemberInvite
     /// message rather than a different one, so the endpoint cannot be used to tell a malformed
     /// submission from an unknown token.
     /// </param>
+    /// <param name="acceptedLegalVersion">
+    /// The version of the Terms of Use and Privacy Policy the page the caller ticked the agreement on
+    /// showed (issue #1259). The only accepted value is <see cref="LegalTerms.CurrentVersion"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancellation for the whole operation, transaction included.</param>
     /// <returns>The role the caller now holds.</returns>
     /// <exception cref="DomainValidationException">
-    /// The invite cannot be used. Nothing is written.
+    /// The request carries no accepted legal version or a version that is not the current one (issue
+    /// #1259), or the invite cannot be used. Nothing is written.
     /// </exception>
     /// <exception cref="BusinessAccessDeniedException">
     /// The request carries no identifiable actor, so there is nobody to create a membership for.
@@ -112,8 +132,18 @@ public sealed class RedeemMemberInvite
     /// The caller already holds an active membership, or a membership rule refused the write.
     /// Nothing is committed.
     /// </exception>
-    public async Task<RedeemedMemberInvite> Handle(string? token, CancellationToken cancellationToken)
+    public async Task<RedeemedMemberInvite> Handle(
+        string? token,
+        string? acceptedLegalVersion,
+        CancellationToken cancellationToken)
     {
+        // First of all (issue #1259): a page serving the previous Terms has nothing to do about
+        // whatever is wrong with its invite, and the agreement it would record is not the agreement
+        // this person gave. Reloading is the whole remedy, and this refusal says only that. What is
+        // stored is the constant rather than the submitted string, so a row can only ever name the
+        // version this build published.
+        var acceptedVersion = LegalTerms.RequireCurrent(acceptedLegalVersion);
+
         // Before anything is read: a blank token identifies no invite, and hashing it would produce
         // a perfectly valid-looking lookup key for the empty string.
         if (string.IsNullOrWhiteSpace(token))
@@ -142,7 +172,7 @@ public sealed class RedeemMemberInvite
                 // itself. No business has to keep an Owner either - a redemption can only add
                 // access, never remove an Owner's.
                 new MembershipWriteIntent(IdentityGainingAnActiveMembership: actor.Identity),
-                writeToken => RedeemAsync(tokenHash, actor, writeToken),
+                writeToken => RedeemAsync(tokenHash, actor, acceptedVersion, writeToken),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -203,6 +233,7 @@ public sealed class RedeemMemberInvite
     private async Task<Redeemed> RedeemAsync(
         string tokenHash,
         ActorProfile actor,
+        string acceptedLegalVersion,
         CancellationToken cancellationToken)
     {
         var decisionAtUtc = _clock.UtcNow;
@@ -241,6 +272,21 @@ public sealed class RedeemMemberInvite
             // only one of them.
             throw new DomainValidationException(MemberInviteRedemptionPolicy.InvalidInviteMessage);
         }
+
+        // Last, and inside the same transaction (issue #1259): the agreement is recorded only once
+        // the invite has actually been spent, for the business the invite named - never a business a
+        // request chose - and at the instant it was spent, so the row describes the redemption that
+        // happened. A refusal above rolls it back with everything else.
+        await _acceptances
+            .RecordAsync(
+                new LegalAcceptance(
+                    invite.BusinessId,
+                    actor.Identity,
+                    acceptedLegalVersion,
+                    consumedAtUtc,
+                    LegalAcceptanceContext.InviteRedemption),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         return new Redeemed(invite.BusinessId, invite.InviteId, invite.Role, consumedAtUtc);
     }

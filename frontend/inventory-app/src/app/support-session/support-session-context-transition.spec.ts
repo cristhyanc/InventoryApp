@@ -195,7 +195,7 @@ async function render(options: { answer?: boolean; at?: string } = {}): Promise<
   };
   const accountState: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
+    accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
   };
   const msal = {
     instance: {

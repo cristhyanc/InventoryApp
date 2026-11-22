@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.Onboarding;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Onboarding;
 using InventoryApi.Tests.Application.Tenancy;
@@ -48,6 +49,49 @@ public class GetAccountStateTests
             accessor ?? FakeAuthenticatedActorAccessor.Identified(Actor()),
             store,
             onboarding ?? FakeSelfServiceOnboardingFlag.Disabled);
+
+    /// <summary>
+    /// The version of the published Terms of Use and Privacy Policy is reported for every state
+    /// (issue #1259), including the ones that may not apply or redeem anything: it describes the
+    /// documents rather than the caller, exactly as <c>onboardingEnabled</c> describes the
+    /// deployment. It is where the two pages that have to collect an agreement read it from, so a
+    /// state that omitted it would leave one of them with nothing to send back.
+    /// </summary>
+    [Theory]
+    [InlineData(AccountState.Member)]
+    [InlineData(AccountState.NoMembership)]
+    [InlineData(AccountState.ApplicationPending)]
+    public async Task Reports_the_current_legal_version_for_every_state(AccountState expected)
+    {
+        var store = expected switch
+        {
+            AccountState.Member => new FakeBusinessMembershipStore(Membership(7)),
+            AccountState.ApplicationPending => new FakeBusinessMembershipStore(
+                Membership(7, businessStatus: BusinessStatus.Pending)),
+            _ => new FakeBusinessMembershipStore(),
+        };
+
+        var result = await UseCase(store).Handle(CancellationToken.None);
+
+        Assert.Equal(expected, result.State);
+        Assert.Equal(LegalTerms.CurrentVersion, result.LegalVersion);
+    }
+
+    /// <summary>
+    /// Including for a caller whose token identifies nobody: the answer keeps the same shape, so the
+    /// endpoint cannot be used to tell one unusable token from another.
+    /// </summary>
+    [Fact]
+    public async Task Reports_the_current_legal_version_for_an_unidentifiable_caller()
+    {
+        var result = await UseCase(
+                new FakeBusinessMembershipStore(),
+                FakeAuthenticatedActorAccessor.Unidentifiable())
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(AccountState.NoMembership, result.State);
+        Assert.Equal(LegalTerms.CurrentVersion, result.LegalVersion);
+    }
 
     [Fact]
     public async Task Reports_the_state_the_precedence_gives_for_the_callers_own_memberships()

@@ -14,6 +14,7 @@ using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
+using Inventory.Application.Legal;
 using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
@@ -203,6 +204,12 @@ public static class InfrastructureServiceCollectionExtensions
         // applicant's own membership row supplied, and the business it creates is its own owner, so
         // no statement here names an id that came from a request.
         services.AddScoped<IBusinessApplicationStore, EfBusinessApplicationStore>();
+        // The recorded acceptance of the Terms of Use and Privacy Policy (issue #1259), which both
+        // of the two surfaces above write one row through. Scoped like every adapter here, so it
+        // runs on the request's own denied-scope context and inside the same write transaction the
+        // application or the redemption opened on it; the one tenant-owned insert it makes goes
+        // through AppDbContext.BeginLegalAcceptanceWrite's narrow window.
+        services.AddScoped<ILegalAcceptanceStore, EfLegalAcceptanceStore>();
         // The Super Admin's business directory and the two decisions on an application (issue
         // #544) - the first platform-admin surface that writes, and the only request path that
         // reads across every business through AppDbContext. A separate, deliberately tiny adapter

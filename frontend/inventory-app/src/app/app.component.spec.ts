@@ -106,7 +106,7 @@ interface Rendered {
 
 const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
   status: 'known',
-  accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
+  accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
 };
 
 const UNREAD_ACCOUNT_STATE: AccountStateAnswer = { status: 'unread' };
@@ -749,7 +749,15 @@ describe('AppComponent business context (issue #499)', () => {
    */
   it('asks for no business when the signed-in person has no usable membership', async () => {
     const { fixture, businessLoad } = await render({
-      accountState: { status: 'known', accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null } }
+      accountState: {
+        status: 'known',
+        accountState: {
+          state: 'NoMembership',
+          onboardingEnabled: false,
+          rejectionReason: null,
+          legalVersion: null
+        }
+      }
     });
 
     expect(businessLoad).not.toHaveBeenCalled();
@@ -908,7 +916,7 @@ describe('AppComponent active-account switch (issue #604)', () => {
 
   const NO_MEMBERSHIP: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
   };
 
   /** Answers A's state at once and holds B's read pending, so the waiting window is a test step. */
@@ -1159,7 +1167,7 @@ describe('AppComponent support session this tab cannot present (issue #668)', ()
 
   const NO_MEMBERSHIP: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
   };
 
   async function navigatedMain(fixture: ComponentFixture<AppComponent>): Promise<string> {
@@ -1321,11 +1329,11 @@ describe('AppComponent effective business context (issue #671)', () => {
 
   const NO_MEMBERSHIP: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
   };
   const APPLICATION_PENDING: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'ApplicationPending', onboardingEnabled: true, rejectionReason: null }
+    accountState: { state: 'ApplicationPending', onboardingEnabled: true, rejectionReason: null, legalVersion: null }
   };
 
   /** The sum of the growing delays between the lookup's retries. */
@@ -1543,7 +1551,10 @@ describe('AppComponent business navigation by account state (issue #676)', () =>
   const lee = { name: 'Lee', homeAccountId: 'lee-home-id' } as unknown as AccountInfo;
 
   function known(state: AccountStateName): AccountStateAnswer {
-    return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
+    return {
+      status: 'known',
+      accountState: { state, onboardingEnabled: false, rejectionReason: null, legalVersion: null }
+    };
   }
 
   /** Every ordinary business destination the rendered menu offers; `Super Admin` is not one. */

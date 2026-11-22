@@ -16,7 +16,10 @@ class WelcomePageComponent {}
 class UnavailablePageComponent {}
 
 function known(state: AccountStateName): AccountStateAnswer {
-  return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
+  return {
+    status: 'known',
+    accountState: { state, onboardingEnabled: false, rejectionReason: null, legalVersion: null }
+  };
 }
 
 const UNAVAILABLE: AccountStateAnswer = { status: 'unavailable' };

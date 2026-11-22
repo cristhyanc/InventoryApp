@@ -1,7 +1,9 @@
 using Inventory.Application.Members;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Legal;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
@@ -53,7 +55,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Manager);
 
-        var redeemed = await fixture.Redeem().Handle(Token, CancellationToken.None);
+        var redeemed = await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(BusinessRole.Manager, redeemed.Role);
 
@@ -77,7 +79,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Operator);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(
             [
@@ -87,6 +89,7 @@ public class RedeemMemberInviteTests
                 FakeMemberInviteRedemptionStore.FindMembership,
                 FakeMemberInviteRedemptionStore.CreateMembership,
                 FakeMemberInviteRedemptionStore.MarkUsed,
+                FakeLegalAcceptanceStore.Record,
                 FakeBusinessMembershipWriteStore.Commit,
                 FakeBusinessMembershipWriteStore.Dispose,
             ],
@@ -103,11 +106,101 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Manager);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.NotEmpty(fixture.Store.WrittenBusinessIds);
         Assert.All(fixture.Store.WrittenBusinessIds, written => Assert.Equal(InvitingBusinessId, written));
         Assert.False(fixture.Store.HasMembership(OtherBusinessId, fixture.Joiner));
+    }
+
+    /// <summary>
+    /// The committed redemption records exactly one acceptance (issue #1259), for the business the
+    /// <em>invite</em> named - never one a request chose - with the joining person's Entra pair, the
+    /// current version, and the instant the invite was really consumed at.
+    /// </summary>
+    [Fact]
+    public async Task A_committed_redemption_records_one_acceptance_for_the_invites_business()
+    {
+        var consumed = Now.AddMinutes(2);
+
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager, expiresAtUtc: ExpiresAt);
+        fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = consumed;
+
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
+
+        var acceptance = Assert.Single(fixture.Acceptances.Recorded);
+        Assert.Equal(InvitingBusinessId, acceptance.BusinessId.Value);
+        Assert.Equal(fixture.Joiner, acceptance.Identity);
+        Assert.Equal(LegalTerms.CurrentVersion, acceptance.Version);
+        Assert.Equal(LegalAcceptanceContext.InviteRedemption, acceptance.Context);
+        Assert.Equal(consumed, acceptance.AcceptedAtUtc);
+    }
+
+    /// <summary>
+    /// A missing or stale version is refused before the token is looked at at all (issue #1259): a
+    /// page serving the previous Terms cannot act on anything this endpoint could tell it about an
+    /// invite, and refusing first also means the refusal says nothing about one. Nothing is read,
+    /// written or audited.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2026-11-12")]
+    public async Task A_missing_or_stale_version_is_refused_before_the_invite_is_read(string? submitted)
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager);
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle(Token, submitted, CancellationToken.None));
+
+        Assert.Equal(LegalTerms.StaleVersionMessage, refusal.Message);
+        Assert.Empty(fixture.Operations);
+        Assert.Empty(fixture.Acceptances.Recorded);
+        Assert.Empty(fixture.Audit.Entries);
+        Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
+
+        // And the invite is untouched: still live, so the person can use it once they have
+        // reloaded.
+        Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
+    }
+
+    /// <summary>
+    /// The version is judged before the token's own shape is, so a stale page with no token at all
+    /// is told to refresh rather than told something about an invite. Both are <c>400</c>, and this
+    /// pins which sentence a caller gets.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_version_is_refused_in_preference_to_a_blank_token()
+    {
+        var fixture = new Fixture();
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle("   ", "2026-11-12", CancellationToken.None));
+
+        Assert.Equal(LegalTerms.StaleVersionMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// An invite that stopped being live between the authoritative read and the close takes the
+    /// acceptance back with it, exactly as it takes the membership: a refused redemption leaves no
+    /// record that anybody agreed to anything, because nobody joined anything.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_close_records_no_acceptance()
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager);
+        fixture.Store.OnceAfterLookup = () => fixture.Store.ChangeBehindTheCallersBack(
+            MemberInviteToken.Hash(Token),
+            invite => invite with { StoredStatus = MemberInviteStatus.Used, UsedByMembershipId = 500 });
+
+        await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
+
+        Assert.Empty(fixture.Acceptances.Recorded);
+        Assert.Empty(fixture.Audit.Entries);
     }
 
     /// <summary>
@@ -129,7 +222,7 @@ public class RedeemMemberInviteTests
             Now.AddDays(1));
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
     }
@@ -144,7 +237,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture(profile: MemberProfile.Create("Dana Doe", "dana@example.test"));
         fixture.SeedInvite(BusinessRole.Operator);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         var membership = fixture.Store.MembershipFor(InvitingBusinessId, fixture.Joiner);
         Assert.Equal("Dana Doe", membership.DisplayName);
@@ -161,7 +254,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Operator);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         var membership = fixture.Store.MembershipFor(InvitingBusinessId, fixture.Joiner);
         Assert.Null(membership.DisplayName);
@@ -184,7 +277,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Owner);
         fixture.Store.AddMembership(InvitingBusinessId, fixture.Joiner, membershipId: 77, isActive: false);
 
-        var redeemed = await fixture.Redeem().Handle(Token, CancellationToken.None);
+        var redeemed = await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(BusinessRole.Owner, redeemed.Role);
 
@@ -201,6 +294,7 @@ public class RedeemMemberInviteTests
                 FakeMemberInviteRedemptionStore.FindMembership,
                 FakeMemberInviteRedemptionStore.ReactivateMembership,
                 FakeMemberInviteRedemptionStore.MarkUsed,
+                FakeLegalAcceptanceStore.Record,
                 FakeBusinessMembershipWriteStore.Commit,
                 FakeBusinessMembershipWriteStore.Dispose,
             ],
@@ -226,7 +320,7 @@ public class RedeemMemberInviteTests
             fixture.Store.ActivateBehindTheCallersBack(InvitingBusinessId, fixture.Joiner);
 
         var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, refusal.Message);
         Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
@@ -257,7 +351,7 @@ public class RedeemMemberInviteTests
             fixture.Store.RemoveBehindTheCallersBack(InvitingBusinessId, fixture.Joiner);
 
         var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.MembershipChangedMessage, refusal.Message);
         Assert.NotEqual(MembershipEligibility.AlreadyAMemberMessage, refusal.Message);
@@ -282,7 +376,7 @@ public class RedeemMemberInviteTests
             fixture.Store.ActivateBehindTheCallersBack(InvitingBusinessId, fixture.Joiner);
 
         var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.MembershipChangedMessage, refusal.Message);
         Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
@@ -310,7 +404,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(submitted, CancellationToken.None));
+            fixture.Redeem().Handle(submitted, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -331,7 +425,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
 
         await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(submitted, CancellationToken.None));
+            fixture.Redeem().Handle(submitted, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Empty(fixture.Operations);
     }
@@ -346,7 +440,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager, status: status);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -361,7 +455,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager, expiresAtUtc: Now);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -382,7 +476,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager, businessStatus: businessStatus);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -401,7 +495,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite((BusinessRole)99);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -422,7 +516,7 @@ public class RedeemMemberInviteTests
             invite => invite with { StoredStatus = MemberInviteStatus.Used, UsedByMembershipId = 500 });
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
 
@@ -458,7 +552,7 @@ public class RedeemMemberInviteTests
             fixture.Clock.UtcNow = ExpiresAt.AddTicks(ticksPastExpiry);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
@@ -481,7 +575,7 @@ public class RedeemMemberInviteTests
         fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = ExpiresAt.AddTicks(ticksPastExpiry);
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         AssertTheInviteWasNotConsumed(fixture);
@@ -502,7 +596,7 @@ public class RedeemMemberInviteTests
         fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = ExpiresAt;
 
         var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
         Assert.Contains(FakeMemberInviteRedemptionStore.ReactivateMembership, fixture.Operations);
@@ -526,7 +620,7 @@ public class RedeemMemberInviteTests
         fixture.WriteStore.WhileWaitingForTheWriteLock = () => fixture.Clock.UtcNow = admitted;
         fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = consumed;
 
-        var redeemed = await fixture.Redeem().Handle(Token, CancellationToken.None);
+        var redeemed = await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(BusinessRole.Manager, redeemed.Role);
 
@@ -572,7 +666,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture(memberships: MembershipsFor(state));
         fixture.SeedInvite(BusinessRole.Manager);
 
-        var redeemed = await fixture.Redeem().Handle(Token, CancellationToken.None);
+        var redeemed = await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(BusinessRole.Manager, redeemed.Role);
         Assert.Single(fixture.Audit.Entries);
@@ -593,7 +687,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager);
 
         var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, refusal.Message);
         Assert.Empty(fixture.Operations);
@@ -613,7 +707,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager);
 
         var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Equal(MemberInviteRedemptionPolicy.ReleaseRequiredMessage, refusal.Message);
         Assert.Empty(fixture.Operations);
@@ -630,7 +724,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Manager);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         Assert.Equal(fixture.Joiner, fixture.Memberships.LastQueriedActor);
     }
@@ -646,7 +740,7 @@ public class RedeemMemberInviteTests
         fixture.SeedInvite(BusinessRole.Manager);
 
         await Assert.ThrowsAsync<BusinessAccessDeniedException>(() =>
-            fixture.Redeem().Handle(Token, CancellationToken.None));
+            fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None));
 
         Assert.Empty(fixture.Operations);
         Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
@@ -668,7 +762,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Manager);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         var entry = Assert.Single(fixture.Audit.Entries);
         Assert.Equal(Tid, entry.ActorDirectoryTenantId, ignoreCase: true);
@@ -691,7 +785,7 @@ public class RedeemMemberInviteTests
         var fixture = new Fixture();
         fixture.SeedInvite(BusinessRole.Manager);
 
-        await fixture.Redeem().Handle(Token, CancellationToken.None);
+        await fixture.Redeem().Handle(Token, LegalTerms.CurrentVersion, CancellationToken.None);
 
         var rendered = Assert.Single(fixture.Audit.Entries).ToString();
         Assert.DoesNotContain(Token, rendered, StringComparison.Ordinal);
@@ -753,6 +847,9 @@ public class RedeemMemberInviteTests
             // Both stores report into the guard's own ordered list, so the transaction's boundaries
             // and the redemption's reads and writes are one sequence a test can assert.
             Store = new FakeMemberInviteRedemptionStore { Observer = WriteStore.Record };
+            // And so does the acceptance record (issue #1259), for the same reason: "it was written
+            // inside the transaction, after the invite was closed" is the whole claim.
+            Acceptances = new FakeLegalAcceptanceStore { Observer = WriteStore.Record };
         }
 
         public ActorIdentity Joiner { get; }
@@ -762,6 +859,8 @@ public class RedeemMemberInviteTests
         public FakeBusinessMembershipWriteStore WriteStore { get; }
 
         public FakeBusinessMembershipStore Memberships { get; }
+
+        public FakeLegalAcceptanceStore Acceptances { get; }
 
         public FakeMemberInviteAudit Audit { get; } = new();
 
@@ -799,6 +898,7 @@ public class RedeemMemberInviteTests
                 Memberships,
                 Store,
                 new MembershipWriteGuard(WriteStore),
+                Acceptances,
                 Audit,
                 Clock);
 

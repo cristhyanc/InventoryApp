@@ -37,11 +37,12 @@ export const ACCOUNT_STATES = [
 
 export type AccountStateName = (typeof ACCOUNT_STATES)[number];
 
-/** The `GET /api/me/account-state` response body (issue #523). */
+/** The `GET /api/me/account-state` response body (issue #523, `legalVersion` from issue #1259). */
 interface MeAccountStateResponse {
   state: string;
   onboardingEnabled: boolean;
   rejectionReason: string | null;
+  legalVersion?: string | null;
 }
 
 /** Which state the signed-in person's account is in, as `GET /api/me/account-state` reports it. */
@@ -49,6 +50,18 @@ export interface AccountState {
   readonly state: AccountStateName;
   readonly onboardingEnabled: boolean;
   readonly rejectionReason: string | null;
+
+  /**
+   * The version of the published Terms of Use and Privacy Policy that is in force (issue #1259),
+   * straight from the backend's `Inventory.Domain.Legal.LegalTerms.CurrentVersion`, and `null` when
+   * an API too old to report it answered.
+   *
+   * **This build holds no copy of it.** The business application and invite acceptance pages send
+   * back exactly what they read here, so what a page offered and what the server accepts cannot
+   * drift; a page that read an older value is refused with the server's own "please refresh"
+   * sentence rather than silently recording an agreement to the wrong documents.
+   */
+  readonly legalVersion: string | null;
 }
 
 /**
@@ -211,7 +224,11 @@ export class AccountStateService implements OnDestroy {
             accountState: {
               state: toAccountStateName(response.state),
               onboardingEnabled: response.onboardingEnabled,
-              rejectionReason: response.rejectionReason
+              rejectionReason: response.rejectionReason,
+              // Reported as missing rather than guessed at: a page with no version to send is
+              // refused by the server with the sentence that tells the person what to do, which is
+              // the correct answer for an API that does not publish one.
+              legalVersion: response.legalVersion ?? null
             }
           })
         ),

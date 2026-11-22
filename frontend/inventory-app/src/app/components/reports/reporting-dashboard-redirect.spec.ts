@@ -7,7 +7,12 @@ import { AccessService } from '../../access/access.service';
 import { AccountState, AccountStateService } from '../../access/account-state.service';
 import { ACCESS_NOT_ALLOWED_PATH } from '../../access/capability.guard';
 
-const MEMBER: AccountState = { state: 'Member', onboardingEnabled: false, rejectionReason: null };
+const MEMBER: AccountState = {
+  state: 'Member',
+  onboardingEnabled: false,
+  rejectionReason: null,
+  legalVersion: null
+};
 
 /**
  * Drives the application's real route table (`routes`), with only `MsalGuard`, `AccountStateService`
