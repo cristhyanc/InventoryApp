@@ -1,7 +1,11 @@
 import { SimpleChange } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Observable, Subject, of, throwError } from 'rxjs';
-import { StockAdjustmentFormComponent } from './stock-adjustment-form.component';
+import {
+  MachineRefillDirection,
+  REFILL_MACHINE_REQUIRED_MESSAGE,
+  StockAdjustmentFormComponent
+} from './stock-adjustment-form.component';
 import { StockService } from '../../../services/stock.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { LocalMachine, RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
@@ -107,13 +111,15 @@ describe('StockAdjustmentFormComponent restock cost', () => {
 describe('StockAdjustmentFormComponent validation', () => {
   it('refuses a missing or zero quantity', () => {
     const { component, adjust } = createHarness();
-    // A machine refill is the one reason that keeps both directions, so a missing quantity is the
-    // only thing wrong with this submission.
+    // A machine and a direction are staged, so the quantity is the only thing wrong with this
+    // submission (issue #1331).
     component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.onAdjustmentInputsChanged();
+    component.form.machineId = 41;
 
     component.adjust();
     expect(adjust).not.toHaveBeenCalled();
-    expect(component.error).toContain('non-zero quantity');
+    expect(component.error).toContain('positive quantity');
 
     component.form.quantityChange = 0;
     component.adjust();
@@ -236,16 +242,26 @@ describe('StockAdjustmentFormComponent reason directions (issue #1242)', () => {
     expect(component.error).toBe('Enter a positive quantity to remove.');
   });
 
+  /**
+   * A machine refill is still the one reason that submits both signs; since issue #1331 the chosen
+   * direction decides which, rather than a sign the operator typed.
+   */
   it('keeps both directions of a machine refill', () => {
     const { component, adjust } = createHarness();
     component.form.reason = StockAdjustmentReason.MachineRefill;
-    component.form.quantityChange = -3;
+    component.onAdjustmentInputsChanged();
+    component.form.machineId = 41;
+    component.form.quantityChange = 3;
     component.onAdjustmentInputsChanged();
     component.adjust();
 
     expect(adjust).toHaveBeenLastCalledWith(7, expect.objectContaining({ quantityChange: -3 }));
 
+    // The successful submission cleared the form, so the return is staged from scratch.
     component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.onAdjustmentInputsChanged();
+    component.form.machineId = 41;
+    component.refillDirection = 'BackToStorage';
     component.form.quantityChange = 3;
     component.onAdjustmentInputsChanged();
     component.adjust();
@@ -314,6 +330,310 @@ describe('StockAdjustmentFormComponent reason directions (issue #1242)', () => {
   });
 });
 
+/**
+ * A Machine refill asks for its direction and its machine instead of a signed quantity (issue
+ * #1331). The stored sign stays storage's point of view - negative into the machine, positive back
+ * to storage - but the operator types a positive number of units and chooses which way they move,
+ * so "Machine refill 5" can no longer record a return that puts 5 units back into storage.
+ */
+describe('StockAdjustmentFormComponent machine refill direction (issue #1331)', () => {
+  /** A refill staged the way the form offers it: reason, then the machine and the units. */
+  function stageRefill(direction?: MachineRefillDirection): Harness {
+    const harness = createHarness();
+    harness.component.form.reason = StockAdjustmentReason.MachineRefill;
+    harness.component.onAdjustmentInputsChanged();
+    if (direction !== undefined) {
+      harness.component.refillDirection = direction;
+    }
+    harness.component.form.machineId = 41;
+    return harness;
+  }
+
+  it('sends a quantity of 5 as -5 under the default direction, into the machine', () => {
+    const { component, adjust } = stageRefill();
+    component.form.quantityChange = 5;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ quantityChange: -5, reason: StockAdjustmentReason.MachineRefill, machineId: 41 })
+    );
+  });
+
+  it('sends a quantity of 5 as 5 when the direction is back to storage', () => {
+    const { component, adjust } = stageRefill('BackToStorage');
+    component.form.quantityChange = 5;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ quantityChange: 5, reason: StockAdjustmentReason.MachineRefill, machineId: 41 })
+    );
+  });
+
+  it('defaults the direction to into the machine when the reason is chosen', () => {
+    const { component } = createHarness();
+
+    expect(component.refillDirection).toBeNull();
+
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.onAdjustmentInputsChanged();
+
+    expect(component.refillDirection).toBe('IntoMachine');
+  });
+
+  it('keeps a direction the operator chose while the reason stays Machine refill', () => {
+    const { component } = stageRefill('BackToStorage');
+
+    component.form.quantityChange = 2;
+    component.onAdjustmentInputsChanged();
+
+    expect(component.refillDirection).toBe('BackToStorage');
+  });
+
+  it('strips a typed minus sign, so the direction alone decides the sign', () => {
+    const { component, adjust } = stageRefill();
+    component.form.quantityChange = -5;
+    component.onAdjustmentInputsChanged();
+
+    // The field shows the units, not the sign the operator typed.
+    expect(component.form.quantityChange).toBe(5);
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -5 }));
+  });
+
+  it('strips a typed minus sign under the other direction too, with no double negative', () => {
+    const { component, adjust } = stageRefill('BackToStorage');
+    component.form.quantityChange = -5;
+    component.onAdjustmentInputsChanged();
+
+    expect(component.form.quantityChange).toBe(5);
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: 5 }));
+  });
+
+  it.each([
+    ['an empty', null],
+    ['a zero', 0]
+  ])('refuses %s quantity with a positive-quantity message and sends nothing', (_label, quantityChange) => {
+    const { component, adjust } = stageRefill();
+    component.form.quantityChange = quantityChange;
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toBe('Enter a positive quantity to move.');
+  });
+
+  it('clears the direction when the reason changes away from Machine refill', () => {
+    const { component } = stageRefill('BackToStorage');
+
+    component.form.reason = StockAdjustmentReason.Damaged;
+    component.onAdjustmentInputsChanged();
+
+    expect(component.refillDirection).toBeNull();
+  });
+
+  /** The direction signs the quantity and is never a field of the request itself. */
+  it('sends no direction with the movement, under either reason', () => {
+    const { component, adjust } = stageRefill();
+    component.form.quantityChange = 4;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalledWith(7, expect.not.objectContaining({ refillDirection: expect.anything() }));
+
+    component.form.reason = StockAdjustmentReason.Damaged;
+    component.onAdjustmentInputsChanged();
+    component.form.quantityChange = 4;
+    component.adjust();
+
+    expect(adjust).toHaveBeenLastCalledWith(7, expect.not.objectContaining({ refillDirection: expect.anything() }));
+  });
+
+  it('clears the direction after a successful submission', () => {
+    const { component } = stageRefill();
+    component.form.quantityChange = 4;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(component.refillDirection).toBeNull();
+  });
+
+  it('refuses a refill with no machine, asking for one, and sends nothing', () => {
+    const { component, adjust } = createHarness();
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.onAdjustmentInputsChanged();
+    component.form.quantityChange = 5;
+    component.onAdjustmentInputsChanged();
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(component.error).toBe(REFILL_MACHINE_REQUIRED_MESSAGE);
+    expect(component.error).toContain('machine');
+  });
+
+  it('states what each direction does to storage and to the machine', () => {
+    const { component } = stageRefill();
+    component.form.quantityChange = 5;
+
+    expect(component.refillDirectionHint).toBe('Storage goes down by 5 and the machine goes up by 5.');
+
+    component.refillDirection = 'BackToStorage';
+
+    expect(component.refillDirectionHint).toBe('Storage goes up by 5 and the machine goes down by 5.');
+  });
+
+  it('asks for a positive quantity of units, like every other reason', () => {
+    const { component } = stageRefill();
+
+    expect(component.quantityMinimum).toBe(1);
+  });
+
+  it('labels the machine as required only for a Machine refill', () => {
+    const { component } = createHarness();
+
+    expect(component.machineFieldLabel).toBe('Machine');
+
+    component.form.reason = StockAdjustmentReason.MachineRefill;
+
+    expect(component.machineFieldLabel).toBe('Machine *');
+  });
+
+  describe('rendered', () => {
+    async function render(): Promise<{
+      host: HTMLElement;
+      component: StockAdjustmentFormComponent;
+      detect: () => void;
+      stable: () => Promise<unknown>;
+    }> {
+      await TestBed.configureTestingModule({
+        imports: [StockAdjustmentFormComponent],
+        providers: [
+          { provide: StockService, useValue: { adjust: jest.fn(() => of({})), restockCostSuggestion: jest.fn(() => of({ unitCost: 1, source: 'LastPurchase', purchaseDate: null })) } },
+          { provide: SupportSessionService, useValue: { active$: of(false) } }
+        ]
+      }).compileComponents();
+
+      const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
+      fixture.componentRef.setInput('productId', 7);
+      fixture.componentRef.setInput('machines', [localMachine(41, 'Lobby')]);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return {
+        host: fixture.nativeElement as HTMLElement,
+        component: fixture.componentInstance,
+        detect: () => fixture.detectChanges(),
+        stable: () => fixture.whenStable()
+      };
+    }
+
+    afterEach(() => TestBed.resetTestingModule());
+
+    it('offers the direction only under Machine refill, with into the machine chosen', async () => {
+      const { host, component, detect, stable } = await render();
+
+      expect(host.querySelector('[data-testid="adjustment-direction"]')).toBeNull();
+
+      const reason = host.querySelector<HTMLSelectElement>('#adjustment-reason')!;
+      // Option 0 is the "Select a reason…" placeholder (issue #1242), so Machine refill is the sixth.
+      reason.value = reason.options[6].value;
+      reason.dispatchEvent(new Event('change'));
+      detect();
+      await stable();
+      detect();
+
+      expect(component.form.reason).toBe(StockAdjustmentReason.MachineRefill);
+      const directions = Array.from(
+        host.querySelectorAll<HTMLInputElement>('[data-testid="adjustment-direction"] input[type="radio"]')
+      );
+      expect(directions.map((radio) => radio.nextElementSibling?.textContent?.trim())).toEqual([
+        'Into the machine (from storage)',
+        'Back to storage (from the machine)'
+      ]);
+      expect(directions.map((radio) => radio.checked)).toEqual([true, false]);
+
+      reason.value = reason.options[1].value; // Restock
+      reason.dispatchEvent(new Event('change'));
+      detect();
+      await stable();
+      detect();
+
+      expect(host.querySelector('[data-testid="adjustment-direction"]')).toBeNull();
+      expect(component.refillDirection).toBeNull();
+    });
+
+    it('sends the quantity negative when the chosen direction is into the machine', async () => {
+      const { host, component, detect, stable } = await render();
+      const adjust = TestBed.inject(StockService).adjust as jest.Mock;
+
+      component.form.reason = StockAdjustmentReason.MachineRefill;
+      component.onAdjustmentInputsChanged();
+      detect();
+      await stable();
+      detect();
+
+      const quantity = host.querySelector<HTMLInputElement>('#adjustment-quantity-change')!;
+      quantity.value = '5';
+      quantity.dispatchEvent(new Event('input'));
+      const machine = host.querySelector<HTMLSelectElement>('#adjustment-machine')!;
+      machine.value = machine.options[1].value;
+      machine.dispatchEvent(new Event('change'));
+      detect();
+
+      host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')!.click();
+
+      expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -5, machineId: 41 }));
+    });
+
+    it('sends the quantity positive when the operator picks back to storage', async () => {
+      const { host, component, detect, stable } = await render();
+      const adjust = TestBed.inject(StockService).adjust as jest.Mock;
+
+      component.form.reason = StockAdjustmentReason.MachineRefill;
+      component.onAdjustmentInputsChanged();
+      component.form.machineId = 41;
+      component.form.quantityChange = 5;
+      detect();
+      await stable();
+      detect();
+
+      const back = host.querySelector<HTMLInputElement>('#adjustment-direction-BackToStorage')!;
+      back.click();
+      detect();
+
+      expect(component.refillDirection).toBe('BackToStorage');
+
+      host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')!.click();
+
+      expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: 5, machineId: 41 }));
+    });
+
+    it('no longer calls the machine field optional under Machine refill', async () => {
+      const { host, component, detect } = await render();
+      component.form.reason = StockAdjustmentReason.MachineRefill;
+      detect();
+
+      const label = host.querySelector('label[for="adjustment-machine"]')?.textContent?.trim();
+      expect(label).toBe('Machine *');
+      expect(label).not.toContain('optional');
+      expect(host.querySelector('[data-testid="adjustment-machine-hint"]')?.textContent).toContain('requires one');
+    });
+  });
+});
+
 describe('StockAdjustmentFormComponent apply outcome', () => {
   it('clears the form and notifies the page on success', () => {
     const { component, adjust, applied } = createHarness();
@@ -341,8 +661,9 @@ describe('StockAdjustmentFormComponent apply outcome', () => {
     const { component, applied } = createHarness({
       adjustResult: throwError(() => ({ error: { message: 'Not enough products in stock. Available stock: 2' } }))
     });
-    component.form.quantityChange = -5;
+    component.form.quantityChange = 5;
     component.form.reason = StockAdjustmentReason.MachineRefill;
+    component.form.machineId = 41;
 
     component.adjust();
 
@@ -659,14 +980,25 @@ describe('StockAdjustmentFormComponent machine applies only to a machine refill 
       expect(field().disabled).toBe(false);
     });
 
-    it('explains both directions of a machine refill', async () => {
+    /**
+     * Since issue #1331 the quantity is a positive number of units and the chosen direction says
+     * what happens, so the hint names the effect rather than a sign to type.
+     */
+    it('states the effect of the chosen refill direction on storage and on the machine', async () => {
       const { host, component, detect } = await render();
+      const hint = () => host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent ?? '';
       component.form.reason = StockAdjustmentReason.MachineRefill;
+      component.onAdjustmentInputsChanged();
+      component.form.quantityChange = 5;
       detect();
 
-      const hint = host.querySelector('[data-testid="adjustment-quantity-hint"]')?.textContent;
-      expect(hint).toContain('negative number moves units from storage into the machine');
-      expect(hint).toContain('positive number returns them to storage');
+      expect(hint()).toContain('Storage goes down by 5 and the machine goes up by 5.');
+      expect(hint()).not.toContain('negative');
+
+      component.refillDirection = 'BackToStorage';
+      detect();
+
+      expect(hint()).toContain('Storage goes up by 5 and the machine goes down by 5.');
     });
   });
 });

@@ -16,6 +16,9 @@ namespace Inventory.Application.Stock;
 /// so another business's machine - and a provider machine number that names no local machine - is
 /// simply not found. A deactivated machine is accepted: it is still a machine the business
 /// operated.</para>
+///
+/// <para>Since issue #1331 a <c>MachineRefill</c> must also name a machine at all: the policy
+/// refuses one that does not before the store is reached, so nothing is written.</para>
 /// </summary>
 public sealed class AdjustStock
 {
@@ -33,7 +36,8 @@ public sealed class AdjustStock
     {
         if (!await _store.ProductExistsAsync(productId, cancellationToken)) return null;
 
-        ManualStockAdjustmentPolicy.Validate(input.Reason, input.QuantityChange, input.UnitCost);
+        ManualStockAdjustmentPolicy.Validate(
+            input.Reason, input.QuantityChange, input.UnitCost, input.MachineId);
 
         // The foreign key refuses the same thing at the write, but a caller deserves the reason
         // rather than a constraint violation.

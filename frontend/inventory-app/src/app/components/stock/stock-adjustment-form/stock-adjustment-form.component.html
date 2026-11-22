@@ -30,14 +30,15 @@
         step="1"
         required
         aria-describedby="adjustment-quantity-hint"
-        [placeholder]="quantityPlaceholder" />
+        placeholder="e.g. 4" />
       <p id="adjustment-quantity-hint" class="field-hint" data-testid="adjustment-quantity-hint">
         @if (removesStock) {
           Enter the quantity to remove. It is recorded as a negative movement, so it leaves storage stock and inventory value.
         } @else if (addsStock) {
           Enter the quantity received. A Restock only adds stock - use Correction, Damaged or Expired to remove it.
-        } @else if (reasonChosen) {
-          A negative number moves units from storage into the machine (e.g. -3 records −3); a positive number returns them to storage.
+        } @else if (machineApplicable) {
+          <!-- The direction says which way the units move, so the hint states the effect (issue #1331). -->
+          Enter the number of units to move. {{ refillDirectionHint }}
         } @else {
           Enter the number of units, then choose the reason that says which way they move.
         }
@@ -67,6 +68,28 @@
       }
     </div>
 
+    @if (machineApplicable) {
+      <!--
+        Which way a refill moves stock, in words (issue #1331). Every reason now takes a positive
+        quantity, so the direction is chosen here instead of typed as a minus sign, and the stored
+        movement keeps its meaning: negative out of storage, positive back into it.
+      -->
+      <fieldset class="field" data-testid="adjustment-direction">
+        <legend class="field-label">Direction *</legend>
+        @for (direction of refillDirections; track direction.value) {
+          <label class="flex min-h-11 items-center gap-2" [attr.for]="'adjustment-direction-' + direction.value">
+            <input
+              type="radio"
+              name="refillDirection"
+              [id]="'adjustment-direction-' + direction.value"
+              [value]="direction.value"
+              [(ngModel)]="refillDirection" />
+            <span>{{ direction.label }}</span>
+          </label>
+        }
+      </fieldset>
+    }
+
     @if (requiresRestockCost) {
       <div class="field">
         <label for="adjustment-unit-cost" class="field-label">Unit cost *</label>
@@ -77,23 +100,24 @@
 
     @if (machinesError) {
       <div class="field">
-        <span class="field-label">Machine (optional)</span>
+        <span class="field-label">{{ machineFieldLabel }}</span>
         <p data-testid="adjustment-machine-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
       </div>
     } @else if (machinesLoading) {
       <div class="field">
-        <span class="field-label">Machine (optional)</span>
+        <span class="field-label">{{ machineFieldLabel }}</span>
         <output data-testid="adjustment-machine-loading" class="field-hint">Loading machines…</output>
       </div>
     } @else if (machineFieldShown) {
       <div class="field">
-        <label for="adjustment-machine" class="field-label">Machine (optional)</label>
+        <label for="adjustment-machine" class="field-label">{{ machineFieldLabel }}</label>
         <select
           id="adjustment-machine"
           class="min-h-11"
           [(ngModel)]="form.machineId"
           name="machineId"
           [disabled]="!machineApplicable"
+          [required]="machineApplicable"
           aria-describedby="adjustment-machine-hint">
           <option [ngValue]="null">— None —</option>
           @for (m of attributableMachines; track m.id) {
@@ -101,7 +125,8 @@
           }
         </select>
         <p id="adjustment-machine-hint" class="field-hint" data-testid="adjustment-machine-hint">
-          {{ machineApplicable ? 'The machine this stock was moved into.' : 'Only a Machine refill is recorded against a machine.' }}
+          <!-- A refill has to name its machine (issue #1331); no other reason records one (#1156). -->
+          {{ machineApplicable ? 'The machine this refill moves stock to or from. A Machine refill requires one.' : 'Only a Machine refill is recorded against a machine.' }}
         </p>
       </div>
     }

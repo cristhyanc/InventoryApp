@@ -4102,10 +4102,18 @@ machine list there was came from the fleet read.
   no error.
 - **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
   or disabled in a support session, exactly as before.
-- **Only a Machine refill names a machine (issue #1156).** On Stock History's **Adjust stock** panel
-  the Machine field is enabled only when the reason is **Machine refill**. Choosing another reason
-  clears a machine you had picked, so a Restock, Sale, Damaged, Expired or Correction movement is
-  recorded without one. Movements already recorded against a machine keep it.
+- **Only a Machine refill names a machine (issue #1156), and it must name one (issue #1331).** On
+  Stock History's **Adjust stock** panel the Machine field is enabled only when the reason is
+  **Machine refill**. Choosing another reason clears a machine you had picked, so a Restock, Sale,
+  Damaged, Expired or Correction movement is recorded without one. Movements already recorded against
+  a machine keep it. For a **Machine refill** the machine is now **required**: the field is labelled
+  `Machine *`, and applying without one is refused ("Choose the machine this refill moves stock to or
+  from.") and records nothing - a refill with no machine changed storage stock but never reached any
+  machine's stock. A Machine refill also asks for a **Direction** instead of a signed quantity:
+  **Into the machine (from storage)**, which is chosen for you, or **Back to storage (from the
+  machine)**. You type the number of units as a positive number for either one, and the hint says
+  what happens ("Storage goes down by 5 and the machine goes up by 5."), so "Machine refill 5" is a
+  refill and no longer a return. Choosing another reason clears the direction.
 
 #### Stock History layout (issue #1156)
 

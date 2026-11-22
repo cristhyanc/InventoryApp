@@ -25,6 +25,12 @@ public class ManualStockAdjustmentPolicyTests
     private const decimal UnitCost = 1.25m;
 
     /// <summary>
+    /// The machine a refill names, so a MachineRefill combination in the matrix is about the sign
+    /// and never about the machine issue #1331 now requires. Every other reason names none.
+    /// </summary>
+    private const long MachineId = 5;
+
+    /// <summary>
     /// Every reason against a positive, a zero and a negative quantity change, with the message the
     /// policy refuses it with or <c>null</c> when it is accepted.
     /// </summary>
@@ -67,15 +73,16 @@ public class ManualStockAdjustmentPolicyTests
         StockAdjustmentReason reason, int quantityChange, string? refusal)
     {
         var unitCost = reason == StockAdjustmentReason.Restock ? UnitCost : (decimal?)null;
+        var machineId = reason == StockAdjustmentReason.MachineRefill ? MachineId : (long?)null;
 
         if (refusal is null)
         {
-            ManualStockAdjustmentPolicy.Validate(reason, quantityChange, unitCost);
+            ManualStockAdjustmentPolicy.Validate(reason, quantityChange, unitCost, machineId);
             return;
         }
 
         var exception = Assert.Throws<DomainValidationException>(
-            () => ManualStockAdjustmentPolicy.Validate(reason, quantityChange, unitCost));
+            () => ManualStockAdjustmentPolicy.Validate(reason, quantityChange, unitCost, machineId));
 
         Assert.Equal(refusal, exception.Message);
     }
@@ -118,7 +125,7 @@ public class ManualStockAdjustmentPolicyTests
     public void Positive_restock_without_a_unit_cost_is_rejected()
     {
         var exception = Assert.Throws<DomainValidationException>(
-            () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 3, null));
+            () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 3, null, null));
 
         Assert.Equal("Unit cost is required for a positive Restock adjustment.", exception.Message);
     }
@@ -127,7 +134,7 @@ public class ManualStockAdjustmentPolicyTests
     public void Positive_restock_with_a_negative_unit_cost_is_rejected()
     {
         var exception = Assert.Throws<DomainValidationException>(
-            () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 3, -1m));
+            () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 3, -1m, null));
 
         Assert.Equal("Unit cost cannot be negative for a positive Restock adjustment.", exception.Message);
     }
@@ -137,7 +144,7 @@ public class ManualStockAdjustmentPolicyTests
     [InlineData(1.25)]
     public void Positive_restock_with_a_valid_unit_cost_is_accepted(decimal unitCost)
     {
-        ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 4, unitCost);
+        ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, 4, unitCost, null);
     }
 
     /// <summary>
@@ -150,10 +157,50 @@ public class ManualStockAdjustmentPolicyTests
         foreach (var unitCost in new decimal?[] { null, 1.25m })
         {
             var exception = Assert.Throws<DomainValidationException>(
-                () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, -4, unitCost));
+                () => ManualStockAdjustmentPolicy.Validate(StockAdjustmentReason.Restock, -4, unitCost, null));
 
             Assert.Equal(ManualStockAdjustmentPolicy.RestockAddsStockMessage, exception.Message);
         }
+    }
+
+    /// <summary>
+    /// A manual Machine refill must name its machine, in both directions (issue #1331): without one
+    /// the transfer moved storage stock and reached no machine's ledger.
+    /// </summary>
+    [Theory]
+    [InlineData(-5)]
+    [InlineData(5)]
+    [InlineData(0)]
+    public void A_machine_refill_without_a_machine_is_refused(int quantityChange)
+    {
+        var exception = Assert.Throws<DomainValidationException>(
+            () => ManualStockAdjustmentPolicy.Validate(
+                StockAdjustmentReason.MachineRefill, quantityChange, null, null));
+
+        Assert.Equal(ManualStockAdjustmentPolicy.MachineRequiredMessage, exception.Message);
+    }
+
+    /// <summary>The refusal has to say which field is missing, without naming a machine.</summary>
+    [Fact]
+    public void The_machine_refusal_asks_for_the_machine()
+    {
+        Assert.Contains("Machine refill", ManualStockAdjustmentPolicy.MachineRequiredMessage, StringComparison.Ordinal);
+        Assert.Contains("machine", ManualStockAdjustmentPolicy.MachineRequiredMessage, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every other reason is unaffected (issue #1331): it names no machine today and naming none is
+    /// still accepted. Only the refill's own half of the transfer made the machine necessary.
+    /// </summary>
+    [Theory]
+    [InlineData(StockAdjustmentReason.Damaged)]
+    [InlineData(StockAdjustmentReason.Expired)]
+    [InlineData(StockAdjustmentReason.Sale)]
+    [InlineData(StockAdjustmentReason.Correction)]
+    public void A_reason_other_than_a_refill_still_needs_no_machine(StockAdjustmentReason reason)
+    {
+        ManualStockAdjustmentPolicy.Validate(reason, -2, null, null);
+        ManualStockAdjustmentPolicy.Validate(reason, -2, null, MachineId);
     }
 
     /// <summary>
@@ -167,7 +214,7 @@ public class ManualStockAdjustmentPolicyTests
     [InlineData(StockAdjustmentReason.Correction)]
     public void A_unit_cost_on_a_removal_reason_is_neither_required_nor_refused(StockAdjustmentReason reason)
     {
-        ManualStockAdjustmentPolicy.Validate(reason, -2, null);
-        ManualStockAdjustmentPolicy.Validate(reason, -2, 1.25m);
+        ManualStockAdjustmentPolicy.Validate(reason, -2, null, null);
+        ManualStockAdjustmentPolicy.Validate(reason, -2, 1.25m, null);
     }
 }

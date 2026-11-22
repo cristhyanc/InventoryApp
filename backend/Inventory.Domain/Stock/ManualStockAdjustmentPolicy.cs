@@ -18,6 +18,11 @@ namespace Inventory.Domain.Stock;
 /// were. MachineRefill is deliberately unconstrained: it is an internal transfer whose sign is
 /// storage's point of view, negative out to a machine and positive back, and it is costing-neutral
 /// in both directions.</para>
+///
+/// <para><b>A manual Machine refill must name its machine</b> (issue #1331). The sign rules above
+/// are unchanged, but a refill with no machine changed storage stock and never reached any machine's
+/// stock ledger - the ledger reads only the refills that recorded a machine - so the transfer had
+/// one half and no other. The reasons that name no machine are unaffected.</para>
 /// </summary>
 public static class ManualStockAdjustmentPolicy
 {
@@ -30,6 +35,14 @@ public static class ManualStockAdjustmentPolicy
     /// </summary>
     public const string UnknownMachineMessage =
         "The selected machine is not a machine of this business.";
+
+    /// <summary>
+    /// What a caller is told when a manual Machine refill names no machine (issue #1331). It names
+    /// the field to fill rather than any machine: the refill is a transfer between storage and one
+    /// named machine, and without the machine only storage's half of it would be recorded.
+    /// </summary>
+    public const string MachineRequiredMessage =
+        "A Machine refill must name the machine it moves stock to or from: choose a machine.";
 
     /// <summary>
     /// What a caller is told when a Correction does not remove stock. The exact sentence the policy
@@ -54,8 +67,14 @@ public static class ManualStockAdjustmentPolicy
     public static string RemovesStockMessage(StockAdjustmentReason reason) =>
         $"A {reason} adjustment must remove stock: enter a negative quantity.";
 
-    public static void Validate(StockAdjustmentReason reason, int quantityChange, decimal? unitCost)
+    public static void Validate(
+        StockAdjustmentReason reason, int quantityChange, decimal? unitCost, long? machineId)
     {
+        // A refill keeps both signs, and both of them move stock between storage and one machine
+        // (issue #1331). Every other reason records no machine and is unaffected.
+        if (reason == StockAdjustmentReason.MachineRefill && machineId is null)
+            throw new DomainValidationException(MachineRequiredMessage);
+
         if (reason == StockAdjustmentReason.Correction && quantityChange >= 0)
             throw new DomainValidationException(CorrectionRemovesStockMessage);
 

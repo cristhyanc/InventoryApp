@@ -39,6 +39,10 @@ namespace InventoryApi.Tests.Controllers;
 /// database. The two recorded movements beside the refusals are the control - the same endpoint over
 /// the same database does record the sign each reason expects, so the empty tables are a fact about
 /// the refusal and not about the harness.</para>
+///
+/// <para>Since issue #1331 it also covers the refill's own refusal: a manual <c>MachineRefill</c>
+/// with no <c>machineId</c> is a <c>400</c> that writes nothing, while a refill that names one of
+/// the business's machines is still recorded in both directions.</para>
 /// </summary>
 public sealed class ManualStockAdjustmentSignApiTests : IClassFixture<ManualStockAdjustmentSignApiTests.ApiFactory>
 {
@@ -131,6 +135,91 @@ public sealed class ManualStockAdjustmentSignApiTests : IClassFixture<ManualStoc
         Assert.Equal((decimal?)((ApiFactory.StartingStock - 2) * ApiFactory.OpeningUnitCost), product.InventoryValue);
     }
 
+    /// <summary>
+    /// A manual Machine refill has to name its machine (issue #1331). Without one it changed storage
+    /// stock and never reached any machine's stock ledger, so the endpoint refuses it with a
+    /// <c>400</c> that names the machine and writes nothing: no <c>StockAdjustment</c>, no quantity
+    /// change and no costing change.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_refill_without_a_machine_is_refused_and_records_nothing()
+    {
+        await _factory.SeedAsync();
+        var (costingQuantityBefore, inventoryValueBefore) = await CostingPositionAsync(ApiFactory.RefillProductId);
+
+        var response = await _factory.Authenticated().PostAsJsonAsync(
+            ApiFactory.RefillProductStockUri,
+            new { quantityChange = -5, reason = (int)DomainReason.MachineRefill, notes = "Issue #1331" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(
+            ManualStockAdjustmentPolicy.MachineRequiredMessage,
+            problem.GetProperty("message").GetString());
+
+        await using var db = _factory.Database();
+        var movements = await db.StockAdjustments
+            .Where(movement => movement.ProductId == ApiFactory.RefillProductId)
+            .ToListAsync();
+        Assert.Equal(PersistedReason.Restock, Assert.Single(movements).Reason);
+        var product = await db.Products.SingleAsync(candidate => candidate.Id == ApiFactory.RefillProductId);
+        Assert.Equal(ApiFactory.StartingStock, product.QuantityInStock);
+        // No costing change either: the refusal happens before the adapter opens its transaction, so
+        // the product's costing position is the one it held before the request.
+        Assert.Equal(costingQuantityBefore, product.CostingQuantity);
+        Assert.Equal(inventoryValueBefore, product.InventoryValue);
+    }
+
+    private async Task<(int? CostingQuantity, decimal? InventoryValue)> CostingPositionAsync(long productId)
+    {
+        await using var db = _factory.Database();
+        var product = await db.Products.SingleAsync(candidate => candidate.Id == productId);
+        return (product.CostingQuantity, product.InventoryValue);
+    }
+
+    /// <summary>
+    /// The control for that refusal, and the sign rule issue #1331 leaves alone: with one of the
+    /// business's machines named, a refill out of storage (negative) and a return to storage
+    /// (positive) are both still recorded, and both are costing-neutral.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_refill_with_a_machine_is_recorded_in_both_directions()
+    {
+        await _factory.SeedAsync();
+        var client = _factory.Authenticated();
+
+        foreach (var quantityChange in new[] { -5, 5 })
+        {
+            var response = await client.PostAsJsonAsync(
+                ApiFactory.RefillWithMachineProductStockUri,
+                new
+                {
+                    quantityChange,
+                    reason = (int)DomainReason.MachineRefill,
+                    machineId = ApiFactory.MachineId,
+                });
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        await using var db = _factory.Database();
+        var recorded = await db.StockAdjustments
+            .Where(movement => movement.ProductId == ApiFactory.RefillWithMachineProductId
+                && movement.Reason == PersistedReason.MachineRefill)
+            .OrderBy(movement => movement.Id)
+            .ToListAsync();
+        Assert.Equal([-5, 5], recorded.Select(movement => movement.QuantityChange));
+        Assert.All(recorded, movement => Assert.Equal(ApiFactory.MachineId, movement.MachineId));
+
+        var product = await db.Products.SingleAsync(
+            candidate => candidate.Id == ApiFactory.RefillWithMachineProductId);
+        Assert.Equal(ApiFactory.StartingStock, product.QuantityInStock);
+        // An internal transfer is costing-neutral in either direction.
+        Assert.Equal((int?)ApiFactory.StartingStock, product.CostingQuantity);
+        Assert.Equal((decimal?)(ApiFactory.StartingStock * ApiFactory.OpeningUnitCost), product.InventoryValue);
+    }
+
     /// <summary>The control for the Restock refusals: a positive Restock with a cost still records.</summary>
     [Fact]
     public async Task A_positive_restock_with_a_cost_is_recorded()
@@ -164,12 +253,21 @@ public sealed class ManualStockAdjustmentSignApiTests : IClassFixture<ManualStoc
         public const long RefusedProductId = 100;
         public const long WriteOffProductId = 200;
         public const long RestockProductId = 300;
+        public const long RefillProductId = 400;
+        public const long RefillWithMachineProductId = 500;
         public const int StartingStock = 10;
         public const decimal OpeningUnitCost = 1.50m;
+
+        /// <summary>The business's own machine a refill names (issue #741's local machine id).</summary>
+        public const long MachineId = 9;
 
         public static readonly string RefusedProductStockUri = $"/api/products/{RefusedProductId}/stock";
         public static readonly string WriteOffProductStockUri = $"/api/products/{WriteOffProductId}/stock";
         public static readonly string RestockProductStockUri = $"/api/products/{RestockProductId}/stock";
+        public static readonly string RefillProductStockUri = $"/api/products/{RefillProductId}/stock";
+
+        public static readonly string RefillWithMachineProductStockUri =
+            $"/api/products/{RefillWithMachineProductId}/stock";
 
         private const string DirectoryTenantId = "88888888-8888-8888-8888-888888888888";
         private const string OwnerObjectId = "44444444-4444-4444-4444-444444444444";
@@ -229,16 +327,30 @@ public sealed class ManualStockAdjustmentSignApiTests : IClassFixture<ManualStoc
                 StatusChangedAtUtc = CreatedAt,
             });
 
+            db.Machines.Add(new LocalMachine
+            {
+                Id = MachineId,
+                BusinessId = BusinessId,
+                Name = "Lobby",
+                IsActive = true,
+            });
+
             db.Products.AddRange(
                 StockedProduct(RefusedProductId, "Coke"),
                 StockedProduct(WriteOffProductId, "Chips"),
-                StockedProduct(RestockProductId, "Water"));
+                StockedProduct(RestockProductId, "Water"),
+                StockedProduct(RefillProductId, "Muesli bars"),
+                StockedProduct(RefillWithMachineProductId, "Chocolate"));
 
             // The stock each product holds has to be the sum of its movements: every stock write
             // rebuilds the product's cost from its history, and a quantity with no history behind it
             // is the data quality failure that rebuild exists to report.
             db.StockAdjustments.AddRange(
-                OpeningStock(RefusedProductId), OpeningStock(WriteOffProductId), OpeningStock(RestockProductId));
+                OpeningStock(RefusedProductId),
+                OpeningStock(WriteOffProductId),
+                OpeningStock(RestockProductId),
+                OpeningStock(RefillProductId),
+                OpeningStock(RefillWithMachineProductId));
 
             await db.SaveChangesAsync();
             _seeded = true;

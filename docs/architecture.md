@@ -12222,7 +12222,7 @@ that records no movement and changes no quantity:
 | `Restock` | positive, with a non-negative unit cost | `RestockAddsStockMessage` - names the sign and points at Correction, Damaged or Expired for removing stock |
 | `Damaged`, `Expired`, `Sale` | negative | `RemovesStockMessage(reason)` - names the reason and the sign it expects |
 | `Correction` | negative, as it always had to | `CorrectionRemovesStockMessage`, the sentence this policy has always thrown |
-| `MachineRefill` | either sign, including zero | none; see below |
+| `MachineRefill` | either sign, including zero | a refill that names no machine, with `MachineRequiredMessage` (issue #1331); the sign itself is never refused, see below |
 
 `MachineRefill` is deliberately the one reason that keeps both signs: it is an internal transfer
 whose sign is storage's point of view - negative out to a machine, positive for units returned - and
@@ -12236,6 +12236,17 @@ mistyped sign. The replay's treatment of the rows already stored is **unchanged*
 historical negative `Restock` or positive write-off is a separate decision after a read-only count -
 and the rule binds only what is recorded from now on.
 
+**A manual `MachineRefill` must name its machine (issue #1331).** The sign rules above are
+unchanged, and this is the policy's only other refusal: `machineId` is required for a manual
+`MachineRefill`, refused with `ManualStockAdjustmentPolicy.MachineRequiredMessage` as a `400` that
+writes nothing. A refill is a transfer between storage and one named machine, and
+[the machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) reads only
+the refill movements that recorded a machine, so a refill without one moved storage stock and
+reached no machine's stock at all. Every other reason records no machine and is unaffected, and the
+refills written by a pick list refill and by machine Sync Restock already carry theirs. Existing rows
+- including any recorded with no machine - are left exactly as recorded; the rule binds what is
+written from now on.
+
 **The Adjust stock form applies the same direction** (`stock-adjustment-form.component.ts`). It
 opens with **no reason chosen** (`Select a reason…`, and Apply is disabled until one is picked), it
 takes a **positive** quantity for every reason that removes stock - Damaged, Expired, Sale and
@@ -12245,6 +12256,21 @@ would. The quantity hint follows the chosen reason and no longer offers a negati
 to remove stock: it names Correction, Damaged and Expired instead. The form still creates no
 movement of its own and the endpoint stays the sole authority (see [Page composition
 boundary](#page-composition-boundary-issue-191)).
+
+**A Machine refill asks for its direction, not for a sign (issue #1331).** It was the one reason
+left where the operator had to type a minus sign, and the most common one: "Machine refill 5" typed
+the natural way recorded a *return*, putting 5 units back into storage and taking 5 off the
+machine's expected stock. The form now shows a required **Direction** choice under that reason -
+*Into the machine (from storage)*, which it defaults to, or *Back to storage (from the machine)* -
+takes the quantity as a positive number of units (minimum 1) for both, strips a typed minus sign so
+the direction alone decides the sign, and submits the quantity **negative** into the machine and
+**positive** back to storage. The hint states the effect in words ("Storage goes down by 5 and the
+machine goes up by 5."). The direction is form state and never a field of the request: it is held
+outside the form object, is cleared when the reason changes away from Machine refill, and the
+movement that is posted is the same signed `quantityChange` the endpoint always took - the stored
+sign is still storage's point of view. The form also requires the machine for a refill (its label is
+`Machine *`), refusing an unnamed one before the request with "Choose the machine this refill moves
+stock to or from.", which is the endpoint's own refusal said in the form's words.
 
 **A manual adjustment's stock check runs inside the write lock** (issue #1241).
 `EfStockAdjustmentStore.ApplyAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) *before*
@@ -14454,9 +14480,10 @@ out on the Products list's `rr` scale and changes no request, rule or contract a
   adjustment is saving, and the form ignores a second Apply while the first is in flight. A failed
   save keeps everything entered and shows the server's message. Since this issue the **Machine field
   is enabled only for Machine refill**: changing the reason away from it drops the chosen machine,
-  and the form never submits a machine with another reason. Since issue #1242 the form opens with
-  **no reason chosen** and each reason moves stock in one direction only; see [Product purchase and
-  restock](#product-purchase-and-restock). After a successful save the panel closes, a status
+  and the form never submits a machine with another reason. Since issue #1331 a Machine refill
+  **requires** that machine and asks for a **Direction** rather than a signed quantity. Since issue
+  #1242 the form opens with **no reason chosen** and each reason moves stock in one direction only;
+  see [Product purchase and restock](#product-purchase-and-restock). After a successful save the panel closes, a status
   message is announced, and the product list and the history are re-read with the filters
   unchanged, so a new movement outside them stays outside the results.
 
@@ -16209,7 +16236,7 @@ a machine the provider does not know.
 | `StockAdjustment.MachineId`, `MachineStockCount.MachineId` | the raw Nayax machine number, no foreign key | `Machines.Id`, each with `(BusinessId, MachineId)` a foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on delete |
 | `api/machines/{id}` (detail, products, latest-sales, sync-restock and its apply/resolve routes, stock-ledger, counts) | the provider's number | the local machine id; an id that is not a machine of this business — including a provider number an older client sends — is a `404` |
 | `GET api/machines/{id}` | `localMachineId` always `null` | answers the route's local id beside `machineID` |
-| Stock adjustment body, stock history filter | the provider's number | the local machine id; a machine that is not one of this business's is refused with `ManualStockAdjustmentPolicy.UnknownMachineMessage` |
+| Stock adjustment body, stock history filter | the provider's number | the local machine id; a machine that is not one of this business's is refused with `ManualStockAdjustmentPolicy.UnknownMachineMessage`, and since issue #1331 a manual `MachineRefill` that names no machine at all is refused with `ManualStockAdjustmentPolicy.MachineRequiredMessage` |
 | `NayaxSales.MachineID`, `NayaxMachineStockEvent.MachineId`, `NayaxSaleTimestampRepair.MachineId`, `InventoryCostTransitionMachineStock.MachineId` | the provider's number | **unchanged** |
 | Pick list, report machine filters, admin cost-transition and timestamp-repair screens | the provider's number | **unchanged** |
 

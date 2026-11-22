@@ -34,13 +34,40 @@ export const RESTOCK_ADDS_STOCK_MESSAGE =
 export const REASON_REQUIRED_MESSAGE = 'Select a reason for this adjustment.';
 
 /**
+ * Which way a Machine refill moves stock (issue #1331). The stored movement is still signed from
+ * storage's point of view - negative out to a machine, positive for units returned - but the
+ * operator chooses the direction in words instead of typing the sign, because "Machine refill 5"
+ * typed the natural way recorded a *return*: storage went up by 5 and the machine's expected stock
+ * went down by 5.
+ */
+export type MachineRefillDirection = 'IntoMachine' | 'BackToStorage';
+
+/** The direction a Machine refill opens with: the common one, storage into the machine. */
+export const DEFAULT_MACHINE_REFILL_DIRECTION: MachineRefillDirection = 'IntoMachine';
+
+/** The two directions, in the order they are offered. */
+export const MACHINE_REFILL_DIRECTIONS: readonly { value: MachineRefillDirection; label: string }[] = [
+  { value: 'IntoMachine', label: 'Into the machine (from storage)' },
+  { value: 'BackToStorage', label: 'Back to storage (from the machine)' }
+];
+
+/**
+ * What the operator is told when a Machine refill names no machine (issue #1331). The endpoint
+ * refuses the same request through `ManualStockAdjustmentPolicy.MachineRequiredMessage`; this asks
+ * for the field by the name the form gives it.
+ */
+export const REFILL_MACHINE_REQUIRED_MESSAGE =
+  'Choose the machine this refill moves stock to or from.';
+
+/**
  * The manual stock-adjustment workflow for one selected product (issue #384), moved out of the
  * former `/products/:id/stock` page component unchanged.
  *
  * It is a dedicated feature component rather than markup on the Stock History page because it is a
  * distinct workflow with its own state, its own validation and its own API calls - the restock-cost
- * suggestion lookup, each reason's own sign handling (issue #1242), the required restock unit cost
- * and the server's validation errors (see docs/architecture.md § Page composition boundary). The
+ * suggestion lookup, each reason's own sign handling (issue #1242), a Machine refill's direction
+ * and required machine (issue #1331), the required restock unit cost and the server's validation
+ * errors (see docs/architecture.md § Page composition boundary). The
  * page supplies the product and the machine list through inputs and only learns that an adjustment
  * was applied, so it can refresh the history. Since issue #1156 it is shown inside `StockAdjustmentPanelComponent`, the
  * Adjust stock drawer (a full-screen form on a phone), and carries that panel's Cancel and Apply
@@ -130,6 +157,17 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     unitCost: null as number | null
   };
 
+  /**
+   * The chosen direction of a Machine refill, or `null` under every other reason (issue #1331).
+   *
+   * It is deliberately **not** a field of {@link form}: it decides the sign of the quantity that is
+   * submitted and is never part of the request itself, and keeping it out of the form object is what
+   * makes that true of every submission rather than of one hand-written payload.
+   */
+  refillDirection: MachineRefillDirection | null = null;
+
+  readonly refillDirections = MACHINE_REFILL_DIRECTIONS;
+
   reasonOptions = [
     { value: StockAdjustmentReason.Restock, label: 'Restock' },
     { value: StockAdjustmentReason.Sale, label: 'Sale' },
@@ -199,6 +237,29 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     return this.form.reason === StockAdjustmentReason.MachineRefill;
   }
 
+  /**
+   * The machine field's label. A Machine refill **requires** a machine (issue #1331): the refill is
+   * a transfer between storage and one named machine, and without the machine only storage's half of
+   * it was recorded - the machine stock ledger reads the refills that named one and never saw the
+   * others. Under every other reason the field records nothing and is disabled, so it is labelled
+   * neither required nor optional.
+   */
+  get machineFieldLabel(): string {
+    return this.machineApplicable ? 'Machine *' : 'Machine';
+  }
+
+  /**
+   * What each direction does, in words, for the quantity typed (issue #1331), so the operator reads
+   * the effect of the movement instead of inferring it from a sign.
+   */
+  get refillDirectionHint(): string {
+    const units = Math.abs(this.form.quantityChange ?? 0);
+    const amount = units > 0 ? `${units}` : 'that number';
+    return this.refillDirection === 'BackToStorage'
+      ? `Storage goes up by ${amount} and the machine goes down by ${amount}.`
+      : `Storage goes down by ${amount} and the machine goes up by ${amount}.`;
+  }
+
   get requiresRestockCost(): boolean {
     return this.form.reason === StockAdjustmentReason.Restock && (this.form.quantityChange ?? 0) > 0;
   }
@@ -216,13 +277,12 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     return this.form.reason === StockAdjustmentReason.Restock;
   }
 
-  /** `1` while the reason fixes the quantity's direction, so the field itself refuses a wrong sign. */
+  /**
+   * `1` once a reason is chosen, so the field itself refuses a wrong sign. Since issue #1331 a
+   * Machine refill is counted in positive units too, with {@link refillDirection} deciding the sign.
+   */
   get quantityMinimum(): number | null {
-    return this.removesStock || this.addsStock ? 1 : null;
-  }
-
-  get quantityPlaceholder(): string {
-    return this.removesStock || this.addsStock ? 'e.g. 4' : 'e.g. 12 or -3';
+    return this.removesStock || this.addsStock || this.machineApplicable ? 1 : null;
   }
 
   /**
@@ -237,7 +297,28 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     if (this.addsStock) {
       return 'Enter a positive quantity to add.';
     }
-    return 'Enter a non-zero quantity (a negative number moves stock into a machine).';
+    if (this.machineApplicable) {
+      return 'Enter a positive quantity to move.';
+    }
+    return 'Enter a non-zero quantity.';
+  }
+
+  /**
+   * The quantity change the request carries: the number of units typed, signed by the chosen
+   * reason. A removal reason submits it negative (issue #1242) and a Machine refill submits it
+   * negative into the machine and positive back to storage (issue #1331), which is the same stored
+   * meaning the movement always had - the sign is storage's point of view.
+   */
+  private get submittedQuantityChange(): number | null {
+    const typed = this.form.quantityChange;
+    if (this.removesStock) {
+      return -Math.abs(typed ?? 0);
+    }
+    if (this.machineApplicable) {
+      const units = Math.abs(typed ?? 0);
+      return this.refillDirection === 'BackToStorage' ? units : -units;
+    }
+    return typed;
   }
 
   /** A reason is required before anything can be saved (issue #1242). */
@@ -279,9 +360,19 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       this.form.machineId = null;
     }
 
-    // A reason that removes stock takes the quantity as a positive number of units, so the field
-    // shows what was typed without its sign and the submission applies the direction (issue #1242).
-    if (this.removesStock && this.form.quantityChange !== null) {
+    // The direction belongs to a Machine refill and to no other reason (issue #1331): choosing the
+    // reason offers it, already set to the common direction, and choosing another reason clears it
+    // so a stale choice cannot sign the next movement.
+    if (this.machineApplicable) {
+      this.refillDirection ??= DEFAULT_MACHINE_REFILL_DIRECTION;
+    } else {
+      this.refillDirection = null;
+    }
+
+    // A reason that removes stock, and a Machine refill, take the quantity as a positive number of
+    // units: the field shows what was typed without its sign and the submission applies the
+    // direction (issues #1242 and #1331), so a typed "-5" is never negated twice.
+    if ((this.removesStock || this.machineApplicable) && this.form.quantityChange !== null) {
       this.form.quantityChange = Math.abs(this.form.quantityChange);
     }
 
@@ -324,9 +415,7 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       this.error = REASON_REQUIRED_MESSAGE;
       return;
     }
-    const quantityChange = this.removesStock
-      ? -(Math.abs(this.form.quantityChange ?? 0))
-      : this.form.quantityChange;
+    const quantityChange = this.submittedQuantityChange;
     if (quantityChange === null || quantityChange === 0) {
       this.error = this.quantityRequiredMessage;
       return;
@@ -335,6 +424,12 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     // (issue #1242).
     if (this.addsStock && quantityChange < 0) {
       this.error = RESTOCK_ADDS_STOCK_MESSAGE;
+      return;
+    }
+    // A refill is a transfer between storage and one machine, so the machine is required and the
+    // endpoint refuses a refill without one (issue #1331).
+    if (this.machineApplicable && this.form.machineId === null) {
+      this.error = REFILL_MACHINE_REQUIRED_MESSAGE;
       return;
     }
     const restockCostError = this.restockCostError;
@@ -392,6 +487,7 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
       EatBefore: '',
       unitCost: null
     };
+    this.refillDirection = null;
     this.restockCostRequired = false;
     this.restockCostSuggestion = null;
     this.error = '';
