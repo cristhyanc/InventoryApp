@@ -42,7 +42,10 @@
          its bundled native SQLite is 3.53.3, the same engine the prerelease range this replaced
          ([2.1.12-pre20260709125052, )) resolved to. Keep it an exact stable version - never a range
          and never a prerelease - and keep SQLitePCLRaw.core in Inventory.Infrastructure in step
-         with it. NativeSqliteLibraryTests holds the engine-version floor. -->
+         with it. NativeSqliteLibraryTests holds the engine-version floor, and
+         SqlitePclRawPackageAlignmentTests fails if the restored project.assets.json of any project
+         in the solution puts the four family packages on more than one version, on a prerelease, or
+         loses one of them. -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
     <!-- Transitive security pin: the package graph otherwise resolves 10.0.10, which has high-severity

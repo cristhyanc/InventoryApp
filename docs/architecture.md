@@ -43,6 +43,15 @@ it as a version range or a prerelease; `NativeSqliteLibraryTests`
 (`backend/Inventory.IntegrationTests/Infrastructure/Sqlite/`) reports `SELECT sqlite_version()` and
 fails if a pin ever moves the engine below 3.53.3.
 
+Only two of those four packages are pinned directly and NuGet enforces no version equality between
+package ids, so the alignment itself is a checked invariant rather than a property of a green build:
+`SqlitePclRawPackageAlignmentTests`, beside the test above, reads the `obj/project.assets.json` that
+`dotnet restore` writes for every project of `backend/InventoryApi/InventoryApi.slnx` and fails if
+the family resolves to more than one version, to a prerelease, or without one of its four members —
+and if an assets file is missing, rather than passing vacuously. It reports the resolved
+package/version set to the test output, so every `scripts/validate.sh` run records which engine
+package the backend actually resolved.
+
 **Where the file lives and what persists.** Azure App Service keeps exactly one directory durable
 across process restarts and reboots, and shared across every instance if the plan ever scales to
 more than one: `/home` (Windows: `d:\home`), mounted from the platform's own storage rather than

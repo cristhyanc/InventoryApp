@@ -41,7 +41,8 @@
          Microsoft.EntityFrameworkCore.Sqlite and the native SQLitePCLRaw.lib.e_sqlite3 bundle.
          Both packages here are .Core variants, so no second native library is bundled.
          SQLitePCLRaw.core stays on the same stable version as the native SQLitePCLRaw.lib.e_sqlite3
-         package InventoryApi pins (issue #1290); bump the two together. -->
+         package InventoryApi pins (issue #1290); bump the two together, which
+         SqlitePclRawPackageAlignmentTests enforces against the restored project.assets.json. -->
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.15" />
     <PackageReference Include="SQLitePCLRaw.core" Version="2.1.13" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
