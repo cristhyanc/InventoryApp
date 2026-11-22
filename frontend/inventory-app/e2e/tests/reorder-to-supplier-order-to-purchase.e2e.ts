@@ -58,7 +58,8 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
   await expect(page).toHaveURL(new RegExp(String.raw`/purchases/new\?supplierOrderId=${orderId}$`));
   await expect(page.getByRole('heading', { name: `Receiving supplier order #${orderId}` })).toBeVisible();
 
-  await page.locator('input[type=file]').setInputFiles(receiptFile);
+  // Not `input[type=file]`: the receipt-scan input (issue #1166) is also a file input on this page.
+  await page.getByTestId('purchase-receipt-input').setInputFiles(receiptFile);
   await page.locator('input[name="title"]').fill('E2E received supplier order');
   await expect(
     page.getByTestId('purchase-item-quantity'),

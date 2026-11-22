@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
-import { actors, expect, productByName, seeded, test } from '../fixtures/harness';
+import { actors, expect, seeded, test } from '../fixtures/harness';
 
 /**
  * The rendered geometry of checkboxes the global `input, select, textarea` rule in `styles.scss`
@@ -8,7 +8,7 @@ import { actors, expect, productByName, seeded, test } from '../fixtures/harness
  * lists that the E2E fixture can reach without writing data and without a seeded Nayax machine
  * fleet, and covers each of them at both viewports the issue names, 1440x900 and 390x844: Nayax
  * sale timestamp repair's two always-visible checkboxes, the Pick List "Products" multi-select
- * dropdown, the Needs Ordering row-selection checkbox and the product form's Active checkbox.
+ * dropdown and the Needs Ordering row-selection checkbox.
  * `avco-transition-checkbox-layout.e2e.ts` already covers the AVCO baseline screen at both.
  *
  * The last test here is about the other half of the same change: that excluding checkboxes did not
@@ -16,7 +16,7 @@ import { actors, expect, productByName, seeded, test } from '../fixtures/harness
  * the same way - Take Inventory's counted-stock input carries the single-class `w-24` utility,
  * which has always overridden the global rule's `width: 100%` and must keep doing so.
  *
- * Four checkbox states the issue names are not covered here, for reasons this suite cannot change:
+ * Five checkbox states the issue names are not covered here, for reasons this suite cannot change:
  * - The supplier preset dialog lives behind `/super-admin/supplier-presets`, gated by
  *   `platformAdminGuard`'s own `GET /api/admin/diagnostics/access` check against a configured
  *   Entra `(tid, oid)` pair. None of the three synthetic E2E actors (`business-a-owner`,
@@ -36,6 +36,13 @@ import { actors, expect, productByName, seeded, test } from '../fixtures/harness
  *   are the same bare `<input type="checkbox" class="mt-1">` inside the same
  *   `flex items-start gap-2` label, so nothing about it is styled differently - but it was not
  *   measured, and this comment is not a claim that it was.
+ * - The product form's own Active control, covered here until issue #1111's New/Edit Product
+ *   redesign, is no longer the bare checkbox issue #874 fixed: it is a toggle switch whose
+ *   `<input type="checkbox" role="switch">` is `sr-only` - a 1x1px box issue #874's own ceiling
+ *   would fail - behind a fixed `h-6 w-11` visual span the global `input` rule cannot reach at all,
+ *   because that span is not an `input`. The bug this file guards against cannot recur on a control
+ *   the rule never styles, so there is nothing of issue #874's for a checkbox-sizing test to measure
+ *   here; `product-form.component.spec.ts` already pins the control as `role="switch"`.
  *
  * These are browser tests because jsdom computes no layout, and because jsdom resolves the cascade
  * by source order and ignores specificity altogether. The Jest spec
@@ -168,27 +175,6 @@ test('Needs Ordering row-selection checkbox stays its native size and inside its
       (await boxOf(nameCell)).x,
       `${where}: the product name cell starts after the checkbox`
     ).toBeGreaterThanOrEqual(checkboxBox.x + checkboxBox.width - tolerance);
-  }
-});
-
-test('Product form Active checkbox sits immediately before its label text', async ({ pageAs, apiAs }) => {
-  const page = await pageAs(actors.businessAOwner);
-  const api = await apiAs(actors.businessAOwner);
-  const product = await productByName(api, seeded.reorderProduct);
-
-  for (const viewport of viewports) {
-    await page.setViewportSize(viewport);
-    await page.goto(`/products/${product.id}/edit`);
-
-    const where = `product form Active at ${viewport.width}x${viewport.height}`;
-    const checkbox = page.locator('input[name="isActive"]');
-    await expect(checkbox).toBeVisible();
-
-    const checkboxBox = await boxOf(checkbox);
-    expectNativeSize(checkboxBox, where);
-
-    const label = page.locator('label').filter({ has: checkbox });
-    expectTextBeside(checkboxBox, await boxOf(label.getByText('Active product')), where);
   }
 });
 

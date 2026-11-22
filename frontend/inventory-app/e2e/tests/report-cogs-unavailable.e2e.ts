@@ -21,16 +21,16 @@ test('a report with an uncosted sale shows profit as unavailable, never as zero'
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
   // Sales are present, so this is not an empty report.
-  await expect(page.getByTestId('dashboard-total-sales')).toHaveText('$5.50');
+  await expect(page.getByTestId('gross-sales')).toHaveText('$5.50');
 
   // Gross profit cannot be calculated, and says so.
-  await expect(page.getByTestId('dashboard-gross-profit')).toHaveText('Profit unavailable');
-  await expect(page.getByTestId('dashboard-gross-profit')).not.toHaveText('$0.00');
-  await expect(page.getByTestId('dashboard-gross-margin')).toHaveText('COGS incomplete');
+  await expect(page.getByTestId('gross-profit')).toHaveText('Profit unavailable');
+  await expect(page.getByTestId('gross-profit')).not.toHaveText('$0.00');
+  await expect(page.getByTestId('gross-margin')).toHaveText('COGS incomplete');
 
   // Net profit is unavailable for the same reason, and is not reported as a loss of zero either.
-  await expect(page.getByTestId('dashboard-net-profit')).toHaveText('Profit unavailable');
+  await expect(page.getByTestId('net-profit')).toHaveText('Profit unavailable');
 
   // The COGS that is known is presented as partial, not as a complete zero.
-  await expect(page.getByTestId('dashboard-cost-of-goods')).toContainText('Partial');
+  await expect(page.getByTestId('cost-of-goods')).toContainText('Partial');
 });
