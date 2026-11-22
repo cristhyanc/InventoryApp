@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
-import { actors, expect, seeded, test } from '../fixtures/harness';
+import { actors, expect, productByName, seeded, test } from '../fixtures/harness';
 
 /**
  * The rendered geometry of checkboxes the global `input, select, textarea` rule in `styles.scss`
@@ -8,15 +8,24 @@ import { actors, expect, seeded, test } from '../fixtures/harness';
  * lists that the E2E fixture can reach without writing data and without a seeded Nayax machine
  * fleet, and covers each of them at both viewports the issue names, 1440x900 and 390x844: Nayax
  * sale timestamp repair's two always-visible checkboxes, the Pick List "Products" multi-select
- * dropdown and the Needs Ordering row-selection checkbox.
+ * dropdown, the Needs Ordering row-selection checkbox and the product form's Active control.
  * `avco-transition-checkbox-layout.e2e.ts` already covers the AVCO baseline screen at both.
+ *
+ * The Active control is the one of those that stopped being a bare checkbox: issue #1111's New/Edit
+ * Product redesign made it a toggle switch, whose `<input type="checkbox" role="switch">` is
+ * deliberately `sr-only` behind the visible `h-6 w-11` track. Its test below therefore measures the
+ * visible track rather than the sr-only input - the 1x1px box of an `sr-only` input is not what a
+ * user sees, and asserting a native checkbox's dimensions against it would assert the opposite of
+ * what the markup intends. What is asserted is unchanged in purpose: at both viewports the control
+ * a user actually sees is a bounded, correctly sized box beside its own label text and inside its
+ * container, never stretched to the full width of the form column.
  *
  * The last test here is about the other half of the same change: that excluding checkboxes did not
  * change what any ordinary input gets. It is in this file because it is the same cascade, measured
  * the same way - Take Inventory's counted-stock input carries the single-class `w-24` utility,
  * which has always overridden the global rule's `width: 100%` and must keep doing so.
  *
- * Five checkbox states the issue names are not covered here, for reasons this suite cannot change:
+ * Four checkbox states the issue names are not covered here, for reasons this suite cannot change:
  * - The supplier preset dialog lives behind `/super-admin/supplier-presets`, gated by
  *   `platformAdminGuard`'s own `GET /api/admin/diagnostics/access` check against a configured
  *   Entra `(tid, oid)` pair. None of the three synthetic E2E actors (`business-a-owner`,
@@ -36,13 +45,6 @@ import { actors, expect, seeded, test } from '../fixtures/harness';
  *   are the same bare `<input type="checkbox" class="mt-1">` inside the same
  *   `flex items-start gap-2` label, so nothing about it is styled differently - but it was not
  *   measured, and this comment is not a claim that it was.
- * - The product form's own Active control, covered here until issue #1111's New/Edit Product
- *   redesign, is no longer the bare checkbox issue #874 fixed: it is a toggle switch whose
- *   `<input type="checkbox" role="switch">` is `sr-only` - a 1x1px box issue #874's own ceiling
- *   would fail - behind a fixed `h-6 w-11` visual span the global `input` rule cannot reach at all,
- *   because that span is not an `input`. The bug this file guards against cannot recur on a control
- *   the rule never styles, so there is nothing of issue #874's for a checkbox-sizing test to measure
- *   here; `product-form.component.spec.ts` already pins the control as `role="switch"`.
  *
  * These are browser tests because jsdom computes no layout, and because jsdom resolves the cascade
  * by source order and ignores specificity altogether. The Jest spec
@@ -77,6 +79,38 @@ function expectTextBeside(
   expect(textBox.y, `${label}: same line`).toBeLessThan(checkboxBox.y + checkboxBox.height);
   expect(textBox.x, `${label}: text beside the box`).toBeGreaterThanOrEqual(
     checkboxBox.x + checkboxBox.width - tolerance
+  );
+}
+
+/**
+ * The mirror image of `expectTextBeside` for a control the label puts after its text rather than
+ * before it: the control shares the text's line and starts after the text's right edge.
+ */
+function expectControlBesideText(
+  textBox: { x: number; y: number; width: number; height: number },
+  controlBox: { x: number; y: number; width: number; height: number },
+  label: string
+) {
+  expect(textBox.y, `${label}: same line`).toBeLessThan(controlBox.y + controlBox.height);
+  expect(controlBox.y, `${label}: same line`).toBeLessThan(textBox.y + textBox.height);
+  expect(controlBox.x, `${label}: control beside the text`).toBeGreaterThanOrEqual(
+    textBox.x + textBox.width - tolerance
+  );
+}
+
+/** Every edge of `box` is inside `container`, within the one-pixel slack a laid-out edge carries. */
+function expectWithinContainer(
+  box: { x: number; y: number; width: number; height: number },
+  container: { x: number; y: number; width: number; height: number },
+  label: string
+) {
+  expect(box.x, `${label}: left edge inside its container`).toBeGreaterThanOrEqual(container.x - tolerance);
+  expect(box.x + box.width, `${label}: right edge inside its container`).toBeLessThanOrEqual(
+    container.x + container.width + tolerance
+  );
+  expect(box.y, `${label}: top edge inside its container`).toBeGreaterThanOrEqual(container.y - tolerance);
+  expect(box.y + box.height, `${label}: bottom edge inside its container`).toBeLessThanOrEqual(
+    container.y + container.height + tolerance
   );
 }
 
@@ -175,6 +209,47 @@ test('Needs Ordering row-selection checkbox stays its native size and inside its
       (await boxOf(nameCell)).x,
       `${where}: the product name cell starts after the checkbox`
     ).toBeGreaterThanOrEqual(checkboxBox.x + checkboxBox.width - tolerance);
+  }
+});
+
+test('Product form Active switch stays a bounded control beside its label text', async ({ pageAs, apiAs }) => {
+  const page = await pageAs(actors.businessAOwner);
+  const api = await apiAs(actors.businessAOwner);
+  const product = await productByName(api, seeded.reorderProduct);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto(`/products/${product.id}/edit`);
+
+    const where = `product form Active at ${viewport.width}x${viewport.height}`;
+    const statusCard = page.getByTestId('product-section-status');
+
+    // The accessible control: a switch, named by the label text it belongs to, which is what
+    // distinguishes it from the "Track supplier prices" switch in the same settings column. Its own
+    // input is `sr-only` by design, so it is located and asserted as a control, never measured.
+    const activeSwitch = statusCard.getByRole('switch', { name: /Active product/ });
+    await expect(activeSwitch, `${where}: the Active control is an enabled switch`).toBeEnabled();
+
+    // The visible control is the track the user sees and clicks through the label.
+    const track = page.getByTestId('product-active-switch');
+    await expect(track).toBeVisible();
+    const trackBox = await boxOf(track);
+
+    // `h-6 w-11` is 1.5rem by 2.75rem. Read the root font size rather than assuming 16px, so this
+    // measures the utility the control carries - and so a track stretched to the column width,
+    // which is the regression this file exists for, fails here.
+    const rootFontSize = await page.evaluate(() =>
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+    );
+    expect(trackBox.width, `${where}: still 2.75rem wide, not the full column`).toBeCloseTo(2.75 * rootFontSize, 0);
+    expect(trackBox.height, `${where}: still 1.5rem tall`).toBeCloseTo(1.5 * rootFontSize, 0);
+
+    // The label puts the switch after its text, so "beside its label" is measured in that order.
+    const textBox = await boxOf(statusCard.getByText('Active product', { exact: true }));
+    expectControlBesideText(textBox, trackBox, where);
+
+    // And the whole control stays inside the Product status card it belongs to.
+    expectWithinContainer(trackBox, await boxOf(statusCard), where);
   }
 });
 
