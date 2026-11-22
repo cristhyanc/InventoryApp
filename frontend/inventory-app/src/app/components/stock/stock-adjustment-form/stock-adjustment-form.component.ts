@@ -363,10 +363,10 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     // The direction belongs to a Machine refill and to no other reason (issue #1331): choosing the
     // reason offers it, already set to the common direction, and choosing another reason clears it
     // so a stale choice cannot sign the next movement.
-    if (!this.machineApplicable) {
+    if (this.machineApplicable) {
+      this.refillDirection ??= DEFAULT_MACHINE_REFILL_DIRECTION;
+    } else {
       this.refillDirection = null;
-    } else if (this.refillDirection === null) {
-      this.refillDirection = DEFAULT_MACHINE_REFILL_DIRECTION;
     }
 
     // A reason that removes stock, and a Machine refill, take the quantity as a positive number of
