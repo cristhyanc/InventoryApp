@@ -29,7 +29,9 @@ const MONTHS = [
 export function parseBackendLegalVersion(legalTermsSource: string): string {
   const match = CURRENT_VERSION_PATTERN.exec(legalTermsSource);
   if (match === null) {
-    throw new Error('Found no "public const string CurrentVersion = \\"...\\"" in LegalTerms.cs.');
+    throw new Error(
+      String.raw`Found no "public const string CurrentVersion = \"...\"" in LegalTerms.cs.`
+    );
   }
 
   return match[1];

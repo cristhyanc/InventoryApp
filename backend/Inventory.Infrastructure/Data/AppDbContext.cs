@@ -18,6 +18,13 @@ namespace Inventory.Infrastructure.Data;
 
 public class AppDbContext : DbContext
 {
+    /// <summary>
+    /// How every denied-scope write window below refuses a second lease. Each window names the
+    /// leases it is mutually exclusive with in its own order, but all six refusals end the same
+    /// way; saying that ending once keeps them from drifting apart as leases are added.
+    /// </summary>
+    private const string LeaseAlreadyOpenSuffix = " lease is already open on this context.";
+
     private readonly IBusinessScope _businessScope;
 
     /// <summary>
@@ -120,8 +127,8 @@ public class AppDbContext : DbContext
             || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A supplier provisioning, Nayax SQS sender write or legal acceptance write lease is "
-                    + "already open on this context.");
+                "A supplier provisioning, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         SupplierProvisioningBusinessId = businessId;
@@ -212,8 +219,8 @@ public class AppDbContext : DbContext
         {
             throw new InvalidOperationException(
                 "A price catalogue matching, price catalogue review, supplier provisioning, plan "
-                    + "grant write, Nayax SQS sender write or legal acceptance write lease is already "
-                    + "open on this context.");
+                    + "grant write, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PriceCatalogueMatchingLeased = true;
@@ -307,8 +314,8 @@ public class AppDbContext : DbContext
         {
             throw new InvalidOperationException(
                 "A price catalogue review, price catalogue matching, supplier provisioning, plan "
-                    + "grant write, Nayax SQS sender write or legal acceptance write lease is already "
-                    + "open on this context.");
+                    + "grant write, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PriceCatalogueReviewLeased = true;
@@ -404,8 +411,8 @@ public class AppDbContext : DbContext
         {
             throw new InvalidOperationException(
                 "A plan grant write, price catalogue matching, price catalogue review, supplier "
-                    + "provisioning, Nayax SQS sender write or legal acceptance write lease is already "
-                    + "open on this context.");
+                    + "provisioning, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PlanGrantWriteBusinessId = businessId;
@@ -503,8 +510,8 @@ public class AppDbContext : DbContext
         {
             throw new InvalidOperationException(
                 "A Nayax SQS sender write, plan grant write, price catalogue matching, price "
-                    + "catalogue review, supplier provisioning or legal acceptance write lease is "
-                    + "already open on this context.");
+                    + "catalogue review, supplier provisioning or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         NayaxSqsSenderWriteBusinessId = businessId;
@@ -601,8 +608,8 @@ public class AppDbContext : DbContext
         {
             throw new InvalidOperationException(
                 "A legal acceptance write, Nayax SQS sender write, plan grant write, price catalogue "
-                    + "matching, price catalogue review or supplier provisioning lease is already "
-                    + "open on this context.");
+                    + "matching, price catalogue review or supplier provisioning"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         LegalAcceptanceWriteBusinessId = businessId;
