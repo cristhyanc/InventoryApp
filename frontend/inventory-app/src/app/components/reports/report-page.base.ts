@@ -7,6 +7,8 @@ import { ReportAvailability, ReportProviderAvailability } from '../../features/r
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
 import { ReportingFilter, ReportingService } from '../../services/reporting.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { todaysBusinessDate } from '../../formatting/business-time-zone';
 import { availabilityBadge, countOrState, money, moneyOrState, moneyOrUnavailable, percentOrState, percentOrUnavailable } from './report-formatting';
 
 /**
@@ -34,8 +36,14 @@ export const REPORT_MACHINE_FILTER_ERROR =
 export abstract class ReportPageBase<T> implements OnInit, OnDestroy {
   loading = false;
   error = '';
-  from = this.isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  to = this.isoDate(new Date());
+
+  /**
+   * This month's start and today, both in the business's own time zone (issue #1273) - set in the
+   * constructor rather than here, since that needs `businessTimeZone`, which a field initializer
+   * runs before the constructor body assigns. See {@link selectPeriod}.
+   */
+  from: string;
+  to: string;
   machineId: number | null = null;
   machines: Machine[] = [];
 
@@ -58,7 +66,13 @@ export abstract class ReportPageBase<T> implements OnInit, OnDestroy {
     protected reports: ReportingService,
     protected machineService: MachineService,
     /** The shared provider-availability signal (issue #728). */
-    protected provider: ProviderAvailabilityService) {
+    protected provider: ProviderAvailabilityService,
+    /** Issue #1273: what today and this month mean for the period presets. */
+    protected businessTimeZone: BusinessTimeZoneService) {
+    const today = this.businessToday();
+    this.from = this.isoDate(new Date(today.getFullYear(), today.getMonth(), 1));
+    this.to = this.isoDate(today);
+
     // Every load goes through one stream so that `switchMap` can cancel the request in flight when
     // a new date range or machine scope is applied. Accepting every response let a slower earlier
     // request answer last and replace the report the page is now reporting - and, on Bookkeeping,
@@ -100,7 +114,7 @@ export abstract class ReportPageBase<T> implements OnInit, OnDestroy {
 
   selectPeriod(period: string): void {
     this.period = period;
-    const today = new Date();
+    const today = this.businessToday();
     if (period === 'thisMonth') {
       this.from = this.isoDate(new Date(today.getFullYear(), today.getMonth(), 1));
       this.to = this.isoDate(today);
@@ -236,5 +250,16 @@ export abstract class ReportPageBase<T> implements OnInit, OnDestroy {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  /**
+   * Today in the business's own time zone (issue #1273), as a local-midnight `Date` so the month
+   * and financial-year arithmetic below - which only ever reads calendar fields back off it - stays
+   * exactly as it was. Never the UTC date, which from midnight until the business's own UTC offset
+   * has elapsed is still yesterday in a zone ahead of UTC (e.g. Sydney).
+   */
+  private businessToday(): Date {
+    const { year, month, day } = todaysBusinessDate(this.businessTimeZone.timeZoneId);
+    return new Date(year, month - 1, day);
   }
 }

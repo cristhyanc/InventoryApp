@@ -9,6 +9,7 @@ import { NayaxConnectionService } from '../../../services/nayax-connection.servi
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../../services/nayax-settings.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 function rate(overrides: Partial<NayaxProcessingFeeRate> = {}): NayaxProcessingFeeRate {
   return { id: 1, effectiveFrom: '2026-01-01', feeExGst: 0.17, ...overrides };
@@ -17,7 +18,8 @@ function rate(overrides: Partial<NayaxProcessingFeeRate> = {}): NayaxProcessingF
 async function render(
   nayaxSettings: Partial<NayaxSettingsService>,
   toast?: Partial<ToastService>,
-  sessionActive: Observable<boolean> = of(false)
+  sessionActive: Observable<boolean> = of(false),
+  timeZoneId?: string | null
 ) {
   // The connection wizard (issue #538) is composed by this page and tested in its own spec; the
   // page only has to supply it, so its collaborators are stubbed at their narrowest here.
@@ -39,6 +41,10 @@ async function render(
       { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
+
+  if (timeZoneId !== undefined) {
+    TestBed.inject(BusinessTimeZoneService).publish(timeZoneId);
+  }
 
   const fixture = TestBed.createComponent(NayaxSettingsComponent);
   fixture.detectChanges();
@@ -173,5 +179,32 @@ describe('NayaxSettingsComponent write control during a support session (issue #
     const { host } = await render({ getRates: jest.fn(() => of([])), saveRate: jest.fn() }, undefined, of(false));
 
     expect((host.querySelector('[data-testid="save-fee-rate"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * "Effective from" defaults to today's date in the business's own time zone, never the UTC date
+ * (issue #1273).
+ */
+describe('NayaxSettingsComponent "Effective from" default date (issue #1273)', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it("opens on the business's own calendar date at 08:30 Sydney, when UTC has not yet crossed into it", async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-12T21:30:00Z')); // 08:30 AEDT on 13 Nov
+
+    const { fixture } = await render({ getRates: jest.fn(() => of([])), saveRate: jest.fn() }, undefined, of(false), 'Australia/Sydney');
+
+    expect(fixture.componentInstance.effectiveFrom).toBe('2026-11-13');
+  });
+
+  it("falls back to the browser's own local date, never the UTC date, while the time zone is still loading", async () => {
+    const instant = new Date('2026-11-12T21:30:00Z');
+    jest.useFakeTimers().setSystemTime(instant);
+
+    const { fixture } = await render({ getRates: jest.fn(() => of([])), saveRate: jest.fn() });
+
+    const pad = (value: number) => value.toString().padStart(2, '0');
+    const expected = `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`;
+    expect(fixture.componentInstance.effectiveFrom).toBe(expected);
   });
 });

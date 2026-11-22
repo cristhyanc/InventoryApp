@@ -5,6 +5,7 @@ import { Observable } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ProductReport, ProductRow, ReportingFilter, ReportingService } from '../../services/reporting.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
 import { IconComponent } from '../shared/icon.component';
@@ -40,7 +41,7 @@ export class ProductReportComponent extends ReportPageBase<ProductReport> {
   sortColumn: ProductSortColumn = 'sales';
   sortDirection: SortDirection = 'desc';
 
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService, businessTimeZone: BusinessTimeZoneService) { super(route, reports, machines, provider, businessTimeZone); }
   request(filter: ReportingFilter): Observable<ProductReport> { return this.reports.products(filter); }
 
   /**

@@ -6,6 +6,7 @@ import { ReportAvailability } from '../../features/reports/shared/models/reporti
 import { MachineService } from '../../services/machine.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, GstReport } from '../../services/reporting.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
 import { IconComponent } from '../shared/icon.component';
@@ -47,7 +48,7 @@ import { IconComponent } from '../shared/icon.component';
 </div>
 ` })
 export class GstReportComponent extends ReportPageBase<GstReport> {
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService, businessTimeZone: BusinessTimeZoneService) { super(route, reports, machines, provider, businessTimeZone); }
   request(filter: ReportingFilter): Observable<GstReport> { return this.reports.gst(filter); }
 
   /**

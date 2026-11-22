@@ -21,6 +21,8 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { AccessService } from '../../access/access.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { toDateValue, todaysBusinessDate } from '../../formatting/business-time-zone';
 import {
   CHEAPEST_SUPPLIERS_NOT_READ_YET,
   CheapestSuppliers,
@@ -98,7 +100,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   savingOrder = false;
   orderForm = {
     supplierId: null as number | null,
-    orderDate: new Date().toISOString().slice(0, 10),
+    orderDate: '',
     expectedDate: '',
     reference: '',
     notes: ''
@@ -195,6 +197,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
     private access: AccessService,
+    private businessTimeZone: BusinessTimeZoneService,
     supportSession: SupportSessionService
   ) {
     supportSession.active$.pipe(takeUntil(this.destroy$)).subscribe((active) => (this.sessionActive = active));
@@ -417,6 +420,11 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     // decision about this order. The selector stays required, so the order cannot be sent without
     // one.
     this.orderForm.supplierId = null;
+    // Today's date in the business's own time zone (issue #1273), set when the dialog opens rather
+    // than once at component construction, so a dialog opened long after the page loaded still gets
+    // today's date - never the UTC date, which from midnight until the business's own UTC offset has
+    // elapsed is still yesterday in a zone ahead of UTC (e.g. Sydney).
+    this.orderForm.orderDate = toDateValue(todaysBusinessDate(this.businessTimeZone.timeZoneId));
     this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.needToOrder]));
     this.addedProducts = [];
     this.resetAddProductSearch();
