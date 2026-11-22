@@ -76,6 +76,27 @@ public class AdjustStockTests
         Assert.False(store.ApplyCalled);
     }
 
+    /// <summary>
+    /// A manual Machine refill has to name the machine it moves stock to or from (issue #1331):
+    /// without one it changed storage stock and never reached any machine's stock ledger, so it is
+    /// refused before anything is written.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_refill_without_a_machine_is_refused_before_applying()
+    {
+        var store = new FakeStockAdjustmentStore();
+        var useCase = new AdjustStock(store, Machines());
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(
+            () => useCase.Handle(
+                1,
+                Input(quantityChange: -4, reason: StockAdjustmentReason.MachineRefill, machineId: null),
+                CancellationToken.None));
+
+        Assert.Equal(ManualStockAdjustmentPolicy.MachineRequiredMessage, exception.Message);
+        Assert.False(store.ApplyCalled);
+    }
+
     [Fact]
     public async Task An_adjustment_that_names_no_machine_needs_no_machine_lookup()
     {
