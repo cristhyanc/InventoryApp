@@ -92,6 +92,12 @@ public sealed class EfSupplierStore : ISupplierStore
             fields.Name,
             fields.Url);
 
+        // The free-text limits (issue #1286), judged against the row just read, so a supplier already
+        // holding a longer value is refused only for a new over-long value.
+        refusal ??= SupplierFieldLengthPolicy.ValidateUpdate(
+            entity.Name, entity.ContactName, entity.Phone, entity.Email, entity.Address,
+            fields.Name, fields.ContactName, fields.Phone, fields.Email, fields.Address);
+
         if (refusal is not null) return SupplierWriteResult.Invalid(refusal);
 
         entity.Name = fields.Name;

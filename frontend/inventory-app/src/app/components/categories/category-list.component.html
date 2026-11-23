@@ -21,11 +21,11 @@
       <form class="flex flex-col gap-4" (ngSubmit)="save()">
         <div class="field">
           <label class="field-label" for="categoryName">Name *</label>
-          <input id="categoryName" [(ngModel)]="form.name" name="name" required [readOnly]="nameLocked" placeholder="e.g. Drinks" />
+          <input id="categoryName" [(ngModel)]="form.name" name="name" [maxlength]="maxLength('name')" required [readOnly]="nameLocked" placeholder="e.g. Drinks" />
         </div>
         <div class="field">
           <label class="field-label" for="categoryDescription">Description</label>
-          <textarea id="categoryDescription" [(ngModel)]="form.description" name="description" rows="2" placeholder="Optional"></textarea>
+          <textarea id="categoryDescription" [(ngModel)]="form.description" name="description" [maxlength]="maxLength('description')" rows="2" placeholder="Optional"></textarea>
         </div>
         <div class="page-actions">
           <button type="submit" class="btn btn-primary" [disabled]="sessionActive || saving">{{ submitLabel }}</button>

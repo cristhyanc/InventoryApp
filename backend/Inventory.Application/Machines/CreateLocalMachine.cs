@@ -25,7 +25,9 @@ public sealed class CreateLocalMachine
     {
         ArgumentNullException.ThrowIfNull(fields);
 
-        var error = MachineCataloguePolicy.Validate(fields.Name);
+        // The blank-name rule first, then the name's length limit (issue #1286).
+        var error = MachineCataloguePolicy.Validate(fields.Name)
+            ?? MachineFieldLengthPolicy.ValidateCreate(fields.Name);
         return error is not null
             ? Task.FromResult(LocalMachineWriteAttempt.Refused(error))
             : _store.CreateAsync(fields, cancellationToken);

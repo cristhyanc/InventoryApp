@@ -14,6 +14,7 @@ import { catchError, switchMap, tap } from 'rxjs/operators';
 import { MasterProductSuggestion } from '../../../models/models';
 import { ProductService } from '../../../services/product.service';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/filter-request-trigger';
+import { FIELD_LENGTH_LIMITS } from '../../shared/field-length-limits';
 
 /**
  * The shortest term the lookup accepts (`MasterProductSuggestionPaging`, issue #1049). Below it the
@@ -63,6 +64,9 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
 
   /** The Name to display, which the parent owns: this control holds no Name of its own. */
   @Input() productName = '';
+
+  /** The server's product name limit (issue #1286); this input only ever names a new product. */
+  readonly nameMaxLength = FIELD_LENGTH_LIMITS.product.name;
 
   /** The typed Name, reported as it is typed. Free text, never a suggestion's value. */
   @Output() readonly productNameChange = new EventEmitter<string>();

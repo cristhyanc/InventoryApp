@@ -207,6 +207,13 @@ public sealed class EfProductStore : IProductStore
         if (ProductCataloguePolicy.UnitChangeRefusal(product.Unit, fields.Unit) is { } unitRefusal)
             return ProductWriteAttempt.Refused(unitRefusal);
 
+        // The free-text limits (issue #1286), judged against the row read in this transaction, so a
+        // product already holding a longer value is refused only for a new over-long value.
+        if (ProductFieldLengthPolicy.ValidateUpdate(
+                product.Name, product.Sku, product.Unit, product.Description,
+                fields.Name, fields.Sku, fields.Unit, fields.Description) is { } lengthRefusal)
+            return ProductWriteAttempt.Refused(lengthRefusal);
+
         if (product.ExternalProductId is not null)
         {
             var provider = await CurrentSalesProviderAsync(cancellationToken);

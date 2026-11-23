@@ -17,6 +17,7 @@
       [attr.aria-busy]="loading"
       placeholder="Search categories, or type a new name"
       [value]="query"
+      [attr.maxlength]="nameMaxLength"
       (input)="onInput($event)"
       (focus)="openPanel()"
       (click)="openPanel()"

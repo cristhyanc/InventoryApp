@@ -2,6 +2,7 @@ using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Machines;
 using Inventory.Domain.Attachments;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Expenses;
 
 namespace Inventory.Application.Expenses;
@@ -61,7 +62,18 @@ public sealed class UpdateOperatingExpense
 
         if (attachment is null)
         {
-            var updated = await _store.UpdateAsync(id, fields, null, null, cancellationToken);
+            OperatingExpenseRecord? updated;
+            try
+            {
+                updated = await _store.UpdateAsync(id, fields, null, null, cancellationToken);
+            }
+            catch (DomainValidationException refused)
+            {
+                // The store's free-text length refusal (issue #1286), decided against the stored
+                // row; nothing was written.
+                return UpdateOperatingExpenseResult.Invalid(refused.Message);
+            }
+
             return updated is null ? UpdateOperatingExpenseResult.NotFound() : UpdateOperatingExpenseResult.Success(updated);
         }
 
@@ -113,6 +125,13 @@ public sealed class UpdateOperatingExpense
                 await _documents.DeleteAsync(DocumentCategory.ExpenseAttachment, existing.AttachmentStoredFileName, cancellationToken);
 
             return UpdateOperatingExpenseResult.Success(updated);
+        }
+        catch (DomainValidationException refused)
+        {
+            // The store's free-text length refusal (issue #1286), decided against the stored row
+            // before the attachment was recorded, so its file and its reservation go too.
+            await CleanUpAsync(storedFileName, quota, cancellationToken);
+            return UpdateOperatingExpenseResult.Invalid(refused.Message);
         }
         catch (AttachmentReplacementConflictException)
         {

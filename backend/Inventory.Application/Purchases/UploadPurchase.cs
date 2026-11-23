@@ -115,6 +115,11 @@ public sealed class UploadPurchase
         if (file is null && string.IsNullOrWhiteSpace(fields.Title))
             throw new InvalidOperationException(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage);
 
+        // The free-text limits (issue #1286), judged on the submitted title and notes - a title that
+        // falls back to the document's file name is not a submitted title - before anything is written.
+        if (PurchaseFieldLengthPolicy.ValidateCreate(fields.Title, fields.Notes) is { } lengthError)
+            throw new InvalidOperationException(lengthError);
+
         if (fields.SupplierId.HasValue && !await _store.SupplierExistsAsync(fields.SupplierId.Value, cancellationToken))
             return null;
 

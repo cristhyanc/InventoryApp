@@ -773,3 +773,53 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
     }
   });
 });
+
+describe('PurchaseEditFormComponent field length limits (issue #1286)', () => {
+  const render = async (stored: Purchase) => {
+    await TestBed.configureTestingModule({ imports: [PurchaseEditFormComponent] }).compileComponents();
+
+    const fixture = TestBed.createComponent(PurchaseEditFormComponent);
+    fixture.componentInstance.products = PRODUCTS;
+    fixture.componentInstance.suppliers = [];
+    fixture.componentInstance.purchase = stored;
+    const saved: PurchaseUpdatePayload[] = [];
+    fixture.componentInstance.saveRequested.subscribe((payload) => saved.push(payload));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement, saved };
+  };
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('gives the title and notes inputs the server limits as their maxlength', async () => {
+    const { host } = await render(purchase({ notes: 'Price went up' }));
+
+    expect(host.querySelector('#editTitle')?.getAttribute('maxlength')).toBe('200');
+    expect(host.querySelector('#editNotes')?.getAttribute('maxlength')).toBe('2000');
+  });
+
+  it('opens and saves a purchase whose stored notes are already longer than the limit', async () => {
+    const legacyNotes = 'n'.repeat(2400);
+    const { component, host, saved } = await render(purchase({ notes: legacyNotes }));
+
+    const notes = host.querySelector<HTMLTextAreaElement>('#editNotes')!;
+    expect(notes.hasAttribute('maxlength')).toBe(false);
+    expect(notes.classList).not.toContain('ng-invalid');
+
+    component.editForm.title = 'Weekly restock (corrected)';
+    component.submit();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toEqual(expect.objectContaining({ title: 'Weekly restock (corrected)', notes: legacyNotes }));
+  });
+
+  it('applies the limit again once the over-long stored notes themselves are changed', async () => {
+    const { fixture, component, host } = await render(purchase({ notes: 'n'.repeat(2400) }));
+
+    component.editForm.notes = 'n'.repeat(2399);
+    fixture.detectChanges();
+
+    expect(host.querySelector('#editNotes')?.getAttribute('maxlength')).toBe('2000');
+  });
+});

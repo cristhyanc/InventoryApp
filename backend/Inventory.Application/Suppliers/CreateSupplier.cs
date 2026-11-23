@@ -1,3 +1,5 @@
+using Inventory.Domain.Suppliers;
+
 namespace Inventory.Application.Suppliers;
 
 public sealed class CreateSupplier
@@ -18,6 +20,11 @@ public sealed class CreateSupplier
     {
         if (!SupplierUrlPolicy.TryNormalize(fields.Url, out var normalizedUrl, out var urlError))
             return SupplierWriteResult.Invalid(urlError!);
+
+        // The free-text limits (issue #1286), checked before anything is stored.
+        if (SupplierFieldLengthPolicy.ValidateCreate(
+                fields.Name, fields.ContactName, fields.Phone, fields.Email, fields.Address) is { } lengthError)
+            return SupplierWriteResult.Invalid(lengthError);
 
         return SupplierWriteResult.Success(
             await _store.AddAsync(fields with { Url = normalizedUrl }, cancellationToken));

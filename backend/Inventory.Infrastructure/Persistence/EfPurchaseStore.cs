@@ -501,6 +501,13 @@ public sealed class EfPurchaseStore : IPurchaseStore
         // the correction it permits; the refusal still writes nothing.
         await EnsureNoCompletedSupplierOrderAsync(originalItems.Select(item => item.Id), cancellationToken);
 
+        // The free-text limits (issue #1286), judged against the row read under the write lock, so a
+        // purchase already holding a longer title or notes is refused only for a new over-long value.
+        // Thrown before anything is changed, so the transaction rolls back with nothing written.
+        if (PurchaseFieldLengthPolicy.ValidateUpdate(purchase.Title, purchase.Notes, fields.Title, fields.Notes)
+            is { } lengthRefusal)
+            throw new InvalidOperationException(lengthRefusal);
+
         var storedDeliveryGst = new GstClassificationState(
             purchase.DeliveryGstClassification, purchase.DeliveryGstClassificationSource);
         var storedPackageGst = new GstClassificationState(

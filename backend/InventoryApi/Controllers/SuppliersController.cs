@@ -319,16 +319,21 @@ public class SuppliersController : ControllerBase
     /// for a body that fails model binding - so a client puts the message back on the form field
     /// the operator typed in, rather than reading a bare string.
     ///
-    /// <para>Two fields can be refused: <c>url</c>, by the website rule of issue #847, and
-    /// <c>name</c>, by a linked copy's rename refusal of issue #934. Which one is decided by
+    /// <para>A refusal names its field: <c>url</c>, by the website rule of issue #847, and
+    /// <c>name</c>, by a linked copy's rename refusal of issue #934 - and, since issue #1286, any of
+    /// <c>name</c>, <c>contactName</c>, <c>phone</c>, <c>email</c> and <c>address</c> by
+    /// <c>SupplierFieldLengthPolicy</c>'s length limits. Which one is decided by
     /// comparing the message with the one policy constant that produces it, so there is still
     /// exactly one place each sentence is written.</para>
     /// </summary>
     private static ValidationProblemDetails FieldProblem(string message)
     {
-        var field = string.Equals(message, SupplierPresetLinkPolicy.RenameRefusedMessage, StringComparison.Ordinal)
-            ? "name"
-            : "url";
+        // The free-text length refusals of issue #1286 name their own field; every other refusal is
+        // decided exactly as before.
+        var field = SupplierFieldLengthPolicy.RefusedField(message)
+            ?? (string.Equals(message, SupplierPresetLinkPolicy.RenameRefusedMessage, StringComparison.Ordinal)
+                ? "name"
+                : "url");
 
         return new ValidationProblemDetails(
             new Dictionary<string, string[]>(StringComparer.Ordinal) { [field] = [message] })

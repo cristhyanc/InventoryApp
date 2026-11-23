@@ -10,6 +10,7 @@ import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.co
 import { handOffFocusFromRemovedOpener } from '../../shared/confirmation-focus';
 import { IconComponent } from '../../shared/icon.component';
 import { ListLoadState } from '../../shared/list-load-state';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../../shared/field-length-limits';
 
 /** What an operator is told when a write failed for a reason the server did not word itself. */
 export const GENERIC_MACHINE_WRITE_ERROR = 'That could not be saved. Try again, or reload the page.';
@@ -84,6 +85,17 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   editingId: number | null = null;
   editingName = '';
 
+  /** The server's machine name limit (issue #1286), for the add form's input. */
+  readonly nameMaxLength = FIELD_LENGTH_LIMITS.machine.name;
+
+  /** The stored name of the machine being renamed, so a longer legacy name is not limited (issue #1286). */
+  private editingLoadedName = '';
+
+  /** The rename input's `maxlength`: the limit, lifted only while the stored over-long name is unchanged. */
+  get renameMaxLength(): number | null {
+    return editableMaxLength(this.editingName, this.editingLoadedName, this.nameMaxLength);
+  }
+
   /** The machine whose deletion is awaiting confirmation, which is what renders the dialog. */
   confirmingMachine: LocalMachine | null = null;
 
@@ -143,12 +155,14 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
     if (machine.isProviderNamed) return;
     this.editingId = machine.id;
     this.editingName = machine.name;
+    this.editingLoadedName = machine.name;
     this.error = null;
   }
 
   cancelRename(): void {
     this.editingId = null;
     this.editingName = '';
+    this.editingLoadedName = '';
     this.error = null;
   }
 
