@@ -109,16 +109,7 @@ public sealed class UploadPurchase
         // The document's own rules, unchanged, and only when there is a document (issue #976).
         if (IsDocumentInvalid(file)) return null;
 
-        // Nothing stands in for the uploaded file's name when there is no uploaded file, so a
-        // purchase with no document has to be named. Refused before anything is validated further,
-        // because it is a property of the request rather than of the data it refers to.
-        if (file is null && string.IsNullOrWhiteSpace(fields.Title))
-            throw new InvalidOperationException(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage);
-
-        // The free-text limits (issue #1286), judged on the submitted title and notes - a title that
-        // falls back to the document's file name is not a submitted title - before anything is written.
-        if (PurchaseFieldLengthPolicy.ValidateCreate(fields.Title, fields.Notes) is { } lengthError)
-            throw new InvalidOperationException(lengthError);
+        EnsureTextIsAcceptable(file, fields);
 
         if (fields.SupplierId.HasValue && !await _store.SupplierExistsAsync(fields.SupplierId.Value, cancellationToken))
             return null;
@@ -288,6 +279,23 @@ public sealed class UploadPurchase
             supplierOrderCompletion?.DecisionFingerprint,
             [.. items.Select(item => new PurchaseFingerprintLine(
                 item.ProductId, item.Quantity, item.UnitCost, item.GstClassification))]);
+
+    /// <summary>
+    /// The request's own text rules, refused before anything is validated further because they are
+    /// properties of the request rather than of the data it refers to.
+    /// </summary>
+    private static void EnsureTextIsAcceptable(PurchaseFileInput? file, PurchaseFields fields)
+    {
+        // Nothing stands in for the uploaded file's name when there is no uploaded file, so a
+        // purchase with no document has to be named.
+        if (file is null && string.IsNullOrWhiteSpace(fields.Title))
+            throw new InvalidOperationException(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage);
+
+        // The free-text limits (issue #1286), judged on the submitted title and notes - a title that
+        // falls back to the document's file name is not a submitted title - before anything is written.
+        if (PurchaseFieldLengthPolicy.ValidateCreate(fields.Title, fields.Notes) is { } lengthError)
+            throw new InvalidOperationException(lengthError);
+    }
 
     private static bool IsDocumentInvalid(PurchaseFileInput? file) =>
         file is not null

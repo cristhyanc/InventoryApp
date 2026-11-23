@@ -60,22 +60,7 @@ public sealed class UpdateOperatingExpense
 
         fields = fields with { Description = details!.Description };
 
-        if (attachment is null)
-        {
-            OperatingExpenseRecord? updated;
-            try
-            {
-                updated = await _store.UpdateAsync(id, fields, null, null, cancellationToken);
-            }
-            catch (DomainValidationException refused)
-            {
-                // The store's free-text length refusal (issue #1286), decided against the stored
-                // row; nothing was written.
-                return UpdateOperatingExpenseResult.Invalid(refused.Message);
-            }
-
-            return updated is null ? UpdateOperatingExpenseResult.NotFound() : UpdateOperatingExpenseResult.Success(updated);
-        }
+        if (attachment is null) return await UpdateWithoutAttachmentAsync(id, fields, cancellationToken);
 
         // Existence is resolved before the attachment is validated, exactly as the retired
         // controller did: an unknown id answers not-found even when the request also carries an
@@ -153,6 +138,24 @@ public sealed class UpdateOperatingExpense
             await CleanUpAsync(storedFileName, quota, cancellationToken);
             throw;
         }
+    }
+
+    private async Task<UpdateOperatingExpenseResult> UpdateWithoutAttachmentAsync(
+        int id, OperatingExpenseFields fields, CancellationToken cancellationToken)
+    {
+        OperatingExpenseRecord? updated;
+        try
+        {
+            updated = await _store.UpdateAsync(id, fields, null, null, cancellationToken);
+        }
+        catch (DomainValidationException refused)
+        {
+            // The store's free-text length refusal (issue #1286), decided against the stored row;
+            // nothing was written.
+            return UpdateOperatingExpenseResult.Invalid(refused.Message);
+        }
+
+        return updated is null ? UpdateOperatingExpenseResult.NotFound() : UpdateOperatingExpenseResult.Success(updated);
     }
 
     private async Task CleanUpAsync(

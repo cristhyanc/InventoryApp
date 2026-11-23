@@ -83,7 +83,7 @@ public class ProductFieldLengthPolicyTests
     private static string? Create(int field, string? value)
     {
         var values = Values(field, value);
-        return ProductFieldLengthPolicy.ValidateCreate(values[0], values[1], values[2], values[3]);
+        return ProductFieldLengthPolicy.ValidateCreate(new ProductText(values[0], values[1], values[2], values[3]));
     }
 
     /// <summary>The update rule with one field stored and submitted as given, the others unchanged.</summary>
@@ -92,8 +92,8 @@ public class ProductFieldLengthPolicyTests
         var storedValues = Values(field, stored);
         var submittedValues = Values(field, submitted);
         return ProductFieldLengthPolicy.ValidateUpdate(
-            storedValues[0], storedValues[1], storedValues[2], storedValues[3],
-            submittedValues[0], submittedValues[1], submittedValues[2], submittedValues[3]);
+            new ProductText(storedValues[0], storedValues[1], storedValues[2], storedValues[3]),
+            new ProductText(submittedValues[0], submittedValues[1], submittedValues[2], submittedValues[3]));
     }
 
     private static string?[] Values(int field, string? value) =>

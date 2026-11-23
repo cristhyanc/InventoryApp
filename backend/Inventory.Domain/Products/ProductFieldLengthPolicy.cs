@@ -39,27 +39,23 @@ public static class ProductFieldLengthPolicy
     public const string DescriptionLabel = "Description";
 
     /// <summary>The first refusal for a new product's text, or <c>null</c> when every field fits.</summary>
-    public static string? ValidateCreate(string? name, string? sku, string? unit, string? description) =>
-        FieldLengthLimit.Refusal(NameLabel, name, MaxNameLength)
-        ?? FieldLengthLimit.Refusal(SkuLabel, sku, MaxSkuLength)
-        ?? FieldLengthLimit.Refusal(UnitLabel, unit, MaxUnitLength)
-        ?? FieldLengthLimit.Refusal(DescriptionLabel, description, MaxDescriptionLength);
+    public static string? ValidateCreate(ProductText submitted) =>
+        FieldLengthLimit.Refusal(NameLabel, submitted.Name, MaxNameLength)
+        ?? FieldLengthLimit.Refusal(SkuLabel, submitted.Sku, MaxSkuLength)
+        ?? FieldLengthLimit.Refusal(UnitLabel, submitted.Unit, MaxUnitLength)
+        ?? FieldLengthLimit.Refusal(DescriptionLabel, submitted.Description, MaxDescriptionLength);
 
     /// <summary>
     /// The first refusal for an update's text judged against the stored product, or <c>null</c>
     /// when every field either fits or is left as it is stored.
     /// </summary>
-    public static string? ValidateUpdate(
-        string? storedName,
-        string? storedSku,
-        string? storedUnit,
-        string? storedDescription,
-        string? name,
-        string? sku,
-        string? unit,
-        string? description) =>
-        FieldLengthLimit.ChangeRefusal(NameLabel, storedName, name, MaxNameLength)
-        ?? FieldLengthLimit.ChangeRefusal(SkuLabel, storedSku, sku, MaxSkuLength)
-        ?? FieldLengthLimit.ChangeRefusal(UnitLabel, storedUnit, unit, MaxUnitLength)
-        ?? FieldLengthLimit.ChangeRefusal(DescriptionLabel, storedDescription, description, MaxDescriptionLength);
+    public static string? ValidateUpdate(ProductText stored, ProductText submitted) =>
+        FieldLengthLimit.ChangeRefusal(NameLabel, stored.Name, submitted.Name, MaxNameLength)
+        ?? FieldLengthLimit.ChangeRefusal(SkuLabel, stored.Sku, submitted.Sku, MaxSkuLength)
+        ?? FieldLengthLimit.ChangeRefusal(UnitLabel, stored.Unit, submitted.Unit, MaxUnitLength)
+        ?? FieldLengthLimit.ChangeRefusal(
+            DescriptionLabel, stored.Description, submitted.Description, MaxDescriptionLength);
 }
+
+/// <summary>A product's free-text fields, as stored or as submitted (issue #1286).</summary>
+public readonly record struct ProductText(string? Name, string? Sku, string? Unit, string? Description);

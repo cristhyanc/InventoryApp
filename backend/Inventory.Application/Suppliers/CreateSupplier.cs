@@ -23,7 +23,8 @@ public sealed class CreateSupplier
 
         // The free-text limits (issue #1286), checked before anything is stored.
         if (SupplierFieldLengthPolicy.ValidateCreate(
-                fields.Name, fields.ContactName, fields.Phone, fields.Email, fields.Address) is { } lengthError)
+                new SupplierText(fields.Name, fields.ContactName, fields.Phone, fields.Email, fields.Address))
+            is { } lengthError)
             return SupplierWriteResult.Invalid(lengthError);
 
         return SupplierWriteResult.Success(

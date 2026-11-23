@@ -58,29 +58,22 @@ public static class SupplierFieldLengthPolicy
         };
 
     /// <summary>The first refusal for a new supplier's text, or <c>null</c> when every field fits.</summary>
-    public static string? ValidateCreate(
-        string? name, string? contactName, string? phone, string? email, string? address) =>
-        FieldLengthLimit.Refusal(NameLabel, name, MaxNameLength)
-        ?? FieldLengthLimit.Refusal(ContactNameLabel, contactName, MaxContactNameLength)
-        ?? FieldLengthLimit.Refusal(PhoneLabel, phone, MaxPhoneLength)
-        ?? FieldLengthLimit.Refusal(EmailLabel, email, MaxEmailLength)
-        ?? FieldLengthLimit.Refusal(AddressLabel, address, MaxAddressLength);
+    public static string? ValidateCreate(SupplierText submitted) =>
+        FieldLengthLimit.Refusal(NameLabel, submitted.Name, MaxNameLength)
+        ?? FieldLengthLimit.Refusal(ContactNameLabel, submitted.ContactName, MaxContactNameLength)
+        ?? FieldLengthLimit.Refusal(PhoneLabel, submitted.Phone, MaxPhoneLength)
+        ?? FieldLengthLimit.Refusal(EmailLabel, submitted.Email, MaxEmailLength)
+        ?? FieldLengthLimit.Refusal(AddressLabel, submitted.Address, MaxAddressLength);
 
     /// <summary>The first refusal for an update's text judged against the stored supplier.</summary>
-    public static string? ValidateUpdate(
-        string? storedName,
-        string? storedContactName,
-        string? storedPhone,
-        string? storedEmail,
-        string? storedAddress,
-        string? name,
-        string? contactName,
-        string? phone,
-        string? email,
-        string? address) =>
-        FieldLengthLimit.ChangeRefusal(NameLabel, storedName, name, MaxNameLength)
-        ?? FieldLengthLimit.ChangeRefusal(ContactNameLabel, storedContactName, contactName, MaxContactNameLength)
-        ?? FieldLengthLimit.ChangeRefusal(PhoneLabel, storedPhone, phone, MaxPhoneLength)
-        ?? FieldLengthLimit.ChangeRefusal(EmailLabel, storedEmail, email, MaxEmailLength)
-        ?? FieldLengthLimit.ChangeRefusal(AddressLabel, storedAddress, address, MaxAddressLength);
+    public static string? ValidateUpdate(SupplierText stored, SupplierText submitted) =>
+        FieldLengthLimit.ChangeRefusal(NameLabel, stored.Name, submitted.Name, MaxNameLength)
+        ?? FieldLengthLimit.ChangeRefusal(ContactNameLabel, stored.ContactName, submitted.ContactName, MaxContactNameLength)
+        ?? FieldLengthLimit.ChangeRefusal(PhoneLabel, stored.Phone, submitted.Phone, MaxPhoneLength)
+        ?? FieldLengthLimit.ChangeRefusal(EmailLabel, stored.Email, submitted.Email, MaxEmailLength)
+        ?? FieldLengthLimit.ChangeRefusal(AddressLabel, stored.Address, submitted.Address, MaxAddressLength);
 }
+
+/// <summary>A supplier's free-text fields judged by length, as stored or as submitted (issue #1286).</summary>
+public readonly record struct SupplierText(
+    string? Name, string? ContactName, string? Phone, string? Email, string? Address);

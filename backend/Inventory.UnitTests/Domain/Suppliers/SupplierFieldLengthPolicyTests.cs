@@ -84,7 +84,7 @@ public class SupplierFieldLengthPolicyTests
     private static string? Create(int field, string? value)
     {
         var values = Values(field, value);
-        return SupplierFieldLengthPolicy.ValidateCreate(values[0], values[1], values[2], values[3], values[4]);
+        return SupplierFieldLengthPolicy.ValidateCreate(new SupplierText(values[0], values[1], values[2], values[3], values[4]));
     }
 
     /// <summary>The update rule with one field stored and submitted as given, the others unchanged.</summary>
@@ -93,8 +93,8 @@ public class SupplierFieldLengthPolicyTests
         var storedValues = Values(field, stored);
         var submittedValues = Values(field, submitted);
         return SupplierFieldLengthPolicy.ValidateUpdate(
-            storedValues[0], storedValues[1], storedValues[2], storedValues[3], storedValues[4],
-            submittedValues[0], submittedValues[1], submittedValues[2], submittedValues[3], submittedValues[4]);
+            new SupplierText(storedValues[0], storedValues[1], storedValues[2], storedValues[3], storedValues[4]),
+            new SupplierText(submittedValues[0], submittedValues[1], submittedValues[2], submittedValues[3], submittedValues[4]));
     }
 
     private static string?[] Values(int field, string? value) =>

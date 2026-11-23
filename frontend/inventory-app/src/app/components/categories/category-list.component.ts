@@ -29,7 +29,10 @@ export class CategoryListComponent implements OnInit, OnDestroy {
    * while the input still holds the edited category's stored value that is already longer.
    */
   maxLength(field: 'name' | 'description'): number | null {
-    const loaded = this.editing ? (field === 'name' ? this.editing.name : (this.editing.description ?? '')) : '';
+    let loaded = '';
+    if (this.editing) {
+      loaded = field === 'name' ? this.editing.name : (this.editing.description ?? '');
+    }
     return editableMaxLength(this.form[field], loaded, FIELD_LENGTH_LIMITS.category[field]);
   }
 
