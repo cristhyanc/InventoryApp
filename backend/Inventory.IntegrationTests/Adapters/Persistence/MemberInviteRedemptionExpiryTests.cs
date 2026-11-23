@@ -1,6 +1,7 @@
 using Inventory.Application.Members;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Members;
@@ -211,10 +212,11 @@ public class MemberInviteRedemptionExpiryTests : IAsyncDisposable
                 new HookedMembershipWriteStore(
                     new EfBusinessMembershipWriteStore(db),
                     whileAcquiringTheWriteLock)),
+            new EfLegalAcceptanceStore(db),
             _audit,
             _clock);
 
-        await redeem.Handle(token, CancellationToken.None);
+        await redeem.Handle(token, LegalTerms.CurrentVersion, CancellationToken.None);
     }
 
     /// <summary>

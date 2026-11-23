@@ -7,6 +7,7 @@ import { AccountStateService } from './account-state.service';
 import { REDEEMABLE_ACCOUNT_STATES, nonRedeemableAccountStateDestination } from './account-state.guard';
 import { INVITE_ADDRESS_BAR_ROUTE } from './invite-address-bar.guard';
 import { InviteRedemptionService } from './invite-redemption.service';
+import { LegalAgreementComponent } from './legal-agreement.component';
 import { takePendingInviteToken } from './pending-invite-token';
 
 const GENERIC_ERROR_MESSAGE = "This invite link couldn't be accepted. Try again.";
@@ -69,6 +70,7 @@ function errorMessageFrom(error: unknown): string {
 @Component({
   selector: 'app-invite-acceptance',
   standalone: true,
+  imports: [LegalAgreementComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -81,11 +83,25 @@ function errorMessageFrom(error: unknown): string {
         <div class="card-body">
           @if (phase === 'eligible') {
             @if (errorMessage) {
-              <p class="mb-3 text-sm text-red-600">{{ errorMessage }}</p>
+              <p class="mb-3 text-sm text-red-600" data-testid="invite-error">{{ errorMessage }}</p>
             } @else {
               <p class="text-md-body">Accept this invite to join the business.</p>
             }
-            <button type="button" class="btn btn-primary mt-4" [disabled]="redeeming" (click)="accept()">
+
+            <div class="mt-4">
+              <app-legal-agreement
+                [accepted]="acceptedLegalTerms"
+                (acceptedChange)="acceptedLegalTerms = $event"
+              />
+            </div>
+
+            <button
+              type="button"
+              class="btn btn-primary mt-4"
+              [disabled]="redeeming || !acceptedLegalTerms"
+              (click)="accept()"
+              data-testid="accept-invite"
+            >
               {{ redeeming ? 'Joining...' : 'Accept' }}
             </button>
           }
@@ -99,7 +115,20 @@ export class InviteAcceptanceComponent implements OnInit, OnDestroy {
   redeeming = false;
   errorMessage: string | null = null;
 
+  /** Whether the person has ticked the agreement (issue #1259). Unticked until they tick it. */
+  acceptedLegalTerms = false;
+
   private token = '';
+
+  /**
+   * The version of the published documents this page is offering, taken from the account state it
+   * already reads and held from then on - so what is sent is the version the page showed when the
+   * box was ticked, not whatever is current by the time the request lands. `null` until the account
+   * state answers, and if it never does; the API refuses that with the sentence asking for a
+   * refresh, which this page shows exactly as it is written like every other refusal.
+   */
+  private legalVersion: string | null = null;
+
   private readonly destroying$ = new Subject<void>();
 
   constructor(
@@ -136,6 +165,10 @@ export class InviteAcceptanceComponent implements OnInit, OnDestroy {
           return;
         }
 
+        if (answer.status === 'known') {
+          this.legalVersion = answer.accountState.legalVersion;
+        }
+
         this.phase = 'eligible';
       });
   }
@@ -146,11 +179,17 @@ export class InviteAcceptanceComponent implements OnInit, OnDestroy {
   }
 
   accept(): void {
+    // The button is disabled until the box is ticked, so this is the belt to that brace: a click
+    // reaching here another way must not join a business nobody agreed to the Terms for.
+    if (!this.acceptedLegalTerms) {
+      return;
+    }
+
     this.errorMessage = null;
     this.redeeming = true;
 
     this.redemption
-      .redeem(this.token)
+      .redeem(this.token, this.legalVersion)
       .pipe(
         switchMap(() => this.accountState.refresh()),
         switchMap(() => this.access.refresh()),

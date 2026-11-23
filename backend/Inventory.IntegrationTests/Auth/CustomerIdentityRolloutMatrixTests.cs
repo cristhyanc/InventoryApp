@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -84,7 +85,7 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
         // A Google or email/password account that belongs nowhere joins the workforce Owner's
         // business through the invite alone.
         var joiner = _factory.CustomerIdentity(ApiFactory.CustomerIdentityStrangerObjectId);
-        var joined = await joiner.PostAsJsonAsync("/api/invites/redeem", new { token = workforceInvite });
+        var joined = await joiner.PostAsJsonAsync("/api/invites/redeem", new { token = workforceInvite, acceptedLegalVersion = LegalTerms.CurrentVersion });
 
         Assert.Equal(HttpStatusCode.OK, joined.StatusCode);
         Assert.Equal(nameof(BusinessRole.Manager), (await Json(joined)).GetProperty("role").GetString());
@@ -106,7 +107,7 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
         // customer identity tenant.
         var workforceJoiner = _factory.Workforce(ApiFactory.WorkforceStrangerObjectId);
         var workforceJoined = await workforceJoiner.PostAsJsonAsync(
-            "/api/invites/redeem", new { token = customerIdentityInvite });
+            "/api/invites/redeem", new { token = customerIdentityInvite, acceptedLegalVersion = LegalTerms.CurrentVersion });
 
         Assert.Equal(HttpStatusCode.OK, workforceJoined.StatusCode);
         Assert.Equal(
@@ -148,10 +149,10 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
 
         Assert.Equal(
             HttpStatusCode.OK,
-            (await google.PostAsJsonAsync("/api/invites/redeem", new { token = forGoogle })).StatusCode);
+            (await google.PostAsJsonAsync("/api/invites/redeem", new { token = forGoogle, acceptedLegalVersion = LegalTerms.CurrentVersion })).StatusCode);
         Assert.Equal(
             HttpStatusCode.OK,
-            (await localAccount.PostAsJsonAsync("/api/invites/redeem", new { token = forLocalAccount })).StatusCode);
+            (await localAccount.PostAsJsonAsync("/api/invites/redeem", new { token = forLocalAccount, acceptedLegalVersion = LegalTerms.CurrentVersion })).StatusCode);
 
         Assert.Equal(
             (ApiFactory.WorkforceBusinessName, nameof(BusinessRole.Manager)),
@@ -199,9 +200,9 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
         var workforceMember = _factory.Workforce(ApiFactory.WorkforceOperatorObjectId);
 
         var refusedCustomerIdentity = await customerIdentityMember.PostAsJsonAsync(
-            "/api/invites/redeem", new { token = workforceInvite });
+            "/api/invites/redeem", new { token = workforceInvite, acceptedLegalVersion = LegalTerms.CurrentVersion });
         var refusedWorkforce = await workforceMember.PostAsJsonAsync(
-            "/api/invites/redeem", new { token = customerIdentityInvite });
+            "/api/invites/redeem", new { token = customerIdentityInvite, acceptedLegalVersion = LegalTerms.CurrentVersion });
 
         Assert.Equal(HttpStatusCode.Conflict, refusedCustomerIdentity.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, refusedWorkforce.StatusCode);
@@ -335,7 +336,7 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
         var stranger = _factory.CustomerIdentity(ApiFactory.CustomerIdentityStrangerObjectId);
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (await stranger.PostAsJsonAsync("/api/invites/redeem", new { token = invite })).StatusCode);
+            (await stranger.PostAsJsonAsync("/api/invites/redeem", new { token = invite, acceptedLegalVersion = LegalTerms.CurrentVersion })).StatusCode);
 
         var reactivated = await administrator.PostAsync(
             $"/api/super-admin/businesses/{ApiFactory.CustomerIdentityBusinessId}/reactivate", content: null);

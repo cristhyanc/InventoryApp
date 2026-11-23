@@ -2,6 +2,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Members;
@@ -282,7 +283,14 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
     }
 
     private static BusinessApplicationSubmission Submission() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD");
+        new(
+            "Coastal Vending",
+            "owner@coastal.example.com",
+            ValidAbn,
+            true,
+            "Australia/Brisbane",
+            "QLD",
+            LegalTerms.CurrentVersion);
 
     /// <summary>
     /// Runs one real application on its own connection, as a request would: a denied business scope,
@@ -314,6 +322,7 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
             new EfBusinessApplicationStore(db),
             new BusinessApplicationRateLimiter(new FakeClock(Now)),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
+            new EfLegalAcceptanceStore(db),
             new FakeBusinessApplicationAudit(),
             new FakeClock(Now));
 
@@ -339,10 +348,11 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
             new EfBusinessMembershipStore(db),
             new EfMemberInviteRedemptionStore(db),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
+            new EfLegalAcceptanceStore(db),
             new FakeMemberInviteAudit(),
             new FakeClock(Now));
 
-        await redeem.Handle(token, cancellationToken);
+        await redeem.Handle(token, LegalTerms.CurrentVersion, cancellationToken);
     }
 
     /// <summary>

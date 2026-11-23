@@ -180,7 +180,7 @@ async function render(options: { at?: string; answer?: boolean } = {}): Promise<
   };
   const accountState: AccountStateAnswer = {
     status: 'known',
-    accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
+    accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
   };
   const accessRefresh = jest.fn(() => of(access));
   const businessReset = jest.fn();

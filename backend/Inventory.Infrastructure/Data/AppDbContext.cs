@@ -18,6 +18,13 @@ namespace Inventory.Infrastructure.Data;
 
 public class AppDbContext : DbContext
 {
+    /// <summary>
+    /// How every denied-scope write window below refuses a second lease. Each window names the
+    /// leases it is mutually exclusive with in its own order, but all six refusals end the same
+    /// way; saying that ending once keeps them from drifting apart as leases are added.
+    /// </summary>
+    private const string LeaseAlreadyOpenSuffix = " lease is already open on this context.";
+
     private readonly IBusinessScope _businessScope;
 
     /// <summary>
@@ -116,11 +123,12 @@ public class AppDbContext : DbContext
         }
 
         if (SupplierProvisioningBusinessId is not null
-            || NayaxSqsSenderWriteBusinessId is not null)
+            || NayaxSqsSenderWriteBusinessId is not null
+            || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A supplier provisioning or Nayax SQS sender write lease is already open on this "
-                    + "context.");
+                "A supplier provisioning, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         SupplierProvisioningBusinessId = businessId;
@@ -206,11 +214,13 @@ public class AppDbContext : DbContext
             || PriceCatalogueReviewLeased
             || SupplierProvisioningBusinessId is not null
             || PlanGrantWriteBusinessId is not null
-            || NayaxSqsSenderWriteBusinessId is not null)
+            || NayaxSqsSenderWriteBusinessId is not null
+            || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
                 "A price catalogue matching, price catalogue review, supplier provisioning, plan "
-                    + "grant write or Nayax SQS sender write lease is already open on this context.");
+                    + "grant write, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PriceCatalogueMatchingLeased = true;
@@ -299,11 +309,13 @@ public class AppDbContext : DbContext
             || PriceCatalogueMatchingLeased
             || SupplierProvisioningBusinessId is not null
             || PlanGrantWriteBusinessId is not null
-            || NayaxSqsSenderWriteBusinessId is not null)
+            || NayaxSqsSenderWriteBusinessId is not null
+            || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
                 "A price catalogue review, price catalogue matching, supplier provisioning, plan "
-                    + "grant write or Nayax SQS sender write lease is already open on this context.");
+                    + "grant write, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PriceCatalogueReviewLeased = true;
@@ -394,11 +406,13 @@ public class AppDbContext : DbContext
             || PriceCatalogueMatchingLeased
             || PriceCatalogueReviewLeased
             || SupplierProvisioningBusinessId is not null
-            || NayaxSqsSenderWriteBusinessId is not null)
+            || NayaxSqsSenderWriteBusinessId is not null
+            || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
                 "A plan grant write, price catalogue matching, price catalogue review, supplier "
-                    + "provisioning or Nayax SQS sender write lease is already open on this context.");
+                    + "provisioning, Nayax SQS sender write or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         PlanGrantWriteBusinessId = businessId;
@@ -491,12 +505,13 @@ public class AppDbContext : DbContext
             || PlanGrantWriteBusinessId is not null
             || PriceCatalogueMatchingLeased
             || PriceCatalogueReviewLeased
-            || SupplierProvisioningBusinessId is not null)
+            || SupplierProvisioningBusinessId is not null
+            || LegalAcceptanceWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
                 "A Nayax SQS sender write, plan grant write, price catalogue matching, price "
-                    + "catalogue review or supplier provisioning lease is already open on this "
-                    + "context.");
+                    + "catalogue review, supplier provisioning or legal acceptance write"
+                    + LeaseAlreadyOpenSuffix);
         }
 
         NayaxSqsSenderWriteBusinessId = businessId;
@@ -529,6 +544,104 @@ public class AppDbContext : DbContext
         }
     }
 
+    /// <summary>
+    /// The business a <see cref="BeginLegalAcceptanceWrite"/> lease is currently open for, and
+    /// <c>null</c> - which is every other moment of this context's life - when none is (issue #1259).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. Like the five leases above it is deliberately not read by
+    /// <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/>: a lease grants a
+    /// write and never a read, so while one is open every tenant-owned query still matches nothing -
+    /// and nothing reads an acceptance row back at all, from any scope.</para>
+    /// </summary>
+    internal int? LegalAcceptanceWriteBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the legal acceptance window: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>new
+    /// <see cref="BusinessLegalAcceptance"/> rows of that one business, and nothing else</em>, on an
+    /// otherwise denied scope (issue #1259).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> The published Terms of Use are agreed to
+    /// "when registering or joining a business", and both of those requests are made by somebody who
+    /// has no membership yet: the self-service application creates the business it is about, and the
+    /// invite redemption is the one path reached with a token and nothing else. Both therefore carry
+    /// a denied <see cref="BusinessScope"/>, and the enforcer refuses every tenant-owned write. The
+    /// acceptance is nevertheless a fact about one business and is therefore tenant-owned. This is
+    /// the narrow, reviewed exception rather than a relaxation of the rule: see
+    /// docs/architecture.md § Recorded acceptance of the Terms of Use.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfLegalAcceptanceStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; <strong>one entity type and one state</strong> - an insert, never an
+    /// update and never a delete, because an agreement that could be rewritten or withdrawn is not
+    /// evidence; one business, whose id is the key of the row the operation's own write transaction
+    /// created or the invite row it read, never a value a request supplied; a lease may be taken only
+    /// while this context's own scope is <see cref="BusinessScopeState.Denied"/>, so neither an
+    /// ordinary member's request nor a support session can open one; and only one lease may be open
+    /// at a time, never beside a provisioning, matching, review, plan-grant or sender lease.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose new acceptance rows may be stamped.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginLegalAcceptanceWrite(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "A legal acceptance is only recorded by a request that resolved no business of its "
+                    + "own - somebody applying for a business or joining one. A scope that already "
+                    + "names a business is not in either of those two moments and must not record an "
+                    + "acceptance at all.");
+        }
+
+        if (LegalAcceptanceWriteBusinessId is not null
+            || NayaxSqsSenderWriteBusinessId is not null
+            || PlanGrantWriteBusinessId is not null
+            || PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
+            || SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A legal acceptance write, Nayax SQS sender write, plan grant write, price catalogue "
+                    + "matching, price catalogue review or supplier provisioning"
+                    + LeaseAlreadyOpenSuffix);
+        }
+
+        LegalAcceptanceWriteBusinessId = businessId;
+        return new LegalAcceptanceWriteLease(this);
+    }
+
+    /// <summary>
+    /// Closes the window of <see cref="BeginLegalAcceptanceWrite"/>. A sealed class with one field,
+    /// for the reason <see cref="NayaxSqsSenderWriteLease"/> is one: a struct would be copied by the
+    /// <c>using</c> statement.
+    /// </summary>
+    private sealed class LegalAcceptanceWriteLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public LegalAcceptanceWriteLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.LegalAcceptanceWriteBusinessId = null;
+            _context = null;
+        }
+    }
+
     public DbSet<Business> Businesses => Set<Business>();
 
     /// <summary>
@@ -545,6 +658,15 @@ public class AppDbContext : DbContext
     /// hash; see <see cref="MemberInvite"/>.
     /// </summary>
     public DbSet<MemberInvite> MemberInvites => Set<MemberInvite>();
+
+    /// <summary>
+    /// The recorded acceptances of the published Terms of Use and Privacy Policy (issue #1259): one
+    /// append-only row per business application and per invite redemption, written in that
+    /// operation's own transaction. Tenant-owned with nothing added, and written only through
+    /// <see cref="BeginLegalAcceptanceWrite"/>'s narrow window; see
+    /// <see cref="BusinessLegalAcceptance"/>.
+    /// </summary>
+    public DbSet<BusinessLegalAcceptance> BusinessLegalAcceptances => Set<BusinessLegalAcceptance>();
 
     /// <summary>
     /// The platform administrator's time-limited, audited read-only support sessions (issue #550).
@@ -980,6 +1102,7 @@ public class AppDbContext : DbContext
     {
         ConfigureTenancy(modelBuilder);
         ConfigureMemberInvites(modelBuilder);
+        ConfigureLegalAcceptances(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
@@ -1817,6 +1940,51 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the recorded acceptances of the Terms of Use and the Privacy Policy (issue #1259).
+    ///
+    /// <para>Unlike the invite above, this table <em>is</em> tenant-owned, so
+    /// <see cref="ConfigureBusinessOwnership"/> gives it the business key, the <c>BusinessId</c>
+    /// index, the global query filter and the ownership stamp. Everything this method adds is
+    /// specific to an acceptance: the bounds on its columns and the one index the evidence is read
+    /// in order by.</para>
+    ///
+    /// <para>There is deliberately <strong>no unique index</strong>. One person may legitimately
+    /// accept more than once for one business - a revoked member who rejoins on a new invite agreed
+    /// again, and that second agreement is a separate fact rather than a duplicate of the first -
+    /// so a uniqueness constraint over the actor pair would turn a correct redemption into a
+    /// database error. What keeps the count right is the use cases: an application or a redemption
+    /// writes exactly one row, and a resubmission that writes no application writes no acceptance
+    /// either.</para>
+    /// </summary>
+    private static void ConfigureLegalAcceptances(ModelBuilder modelBuilder)
+    {
+        var acceptance = modelBuilder.Entity<BusinessLegalAcceptance>();
+
+        // The agreeing person's Entra pair, sized like every other stored (tid, oid). Required: a
+        // row that recorded no actor would be evidence that somebody agreed, which is not evidence.
+        acceptance.Property(x => x.DirectoryTenantId).IsRequired().HasMaxLength(100);
+        acceptance.Property(x => x.ObjectId).IsRequired().HasMaxLength(100);
+
+        // The published version, as the document's own effective date. Bounded well above the ten
+        // characters an ISO date takes, so a future version naming itself differently still fits,
+        // and required for the same reason the actor pair is.
+        acceptance.Property(x => x.Version).IsRequired().HasMaxLength(40);
+
+        // Which act it was, as a required integer column holding a declared value and with no CHECK
+        // constraint, for the reason BusinessMembership.Role carries none: SQLite cannot add one to
+        // an existing table without rebuilding it, and the write side is the only writer anyway.
+        acceptance.Property(x => x.Context).IsRequired();
+
+        // The one index this table needs: a business's acceptances in the order they happened, which
+        // is how the evidence is read. The business key alone is already indexed centrally.
+        acceptance.HasIndex(x => new { x.BusinessId, x.AcceptedAtUtc });
+
+        acceptance.Property(x => x.AcceptedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>

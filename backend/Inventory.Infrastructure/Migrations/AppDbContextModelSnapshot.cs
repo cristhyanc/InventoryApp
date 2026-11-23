@@ -223,6 +223,45 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("BusinessConnectedMachineSnapshots");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessLegalAcceptance", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("AcceptedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Context")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DirectoryTenantId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ObjectId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "AcceptedAtUtc");
+
+                    b.ToTable("BusinessLegalAcceptances");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
                 {
                     b.Property<int>("Id")

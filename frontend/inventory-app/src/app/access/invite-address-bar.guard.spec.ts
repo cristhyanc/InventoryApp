@@ -90,7 +90,7 @@ describe('inviteTokenAddressBarGuard (issue #681)', () => {
     const redeem = jest.fn(() => of({ role: 'Manager' }));
     const noMembership: AccountStateAnswer = {
       status: 'known',
-      accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+      accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null, legalVersion: null }
     };
     TestBed.configureTestingModule({
       providers: [
@@ -104,10 +104,13 @@ describe('inviteTokenAddressBarGuard (issue #681)', () => {
 
     const harness = await RouterTestingHarness.create();
     const page = await harness.navigateByUrl(loginRedirect.redirectStartPage, InviteAcceptanceComponent);
+    // The agreement of issue #1259 is ticked first, as the person does: the Accept button is
+    // disabled until it is, and the page redeems nothing without it.
+    page.acceptedLegalTerms = true;
     page.accept();
 
     expect(window.location.pathname).toBe('/invite');
-    expect(redeem).toHaveBeenCalledWith('super-secret');
+    expect(redeem).toHaveBeenCalledWith('super-secret', null);
     expect(sessionStorage.getItem(PENDING_INVITE_TOKEN_KEY)).toBeNull();
   });
 

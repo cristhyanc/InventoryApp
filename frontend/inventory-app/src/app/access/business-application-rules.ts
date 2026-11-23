@@ -52,7 +52,14 @@ export interface BusinessApplicationDraft {
   state: string;
 }
 
-/** The body `POST /api/onboarding/business-applications` accepts (`BusinessApplicationRequest`). */
+/**
+ * The six settings an application submits, which are also the six an Owner later edits through
+ * `PUT /api/business/settings` - which is why this shape deliberately carries nothing else. The
+ * accepted legal version the application endpoint also requires (issue #1259) is not a setting: it
+ * is evidence about the person rather than about the business, it is added by
+ * `BusinessApplicationService` on the one request that records it, and the settings form must not
+ * send it at all.
+ */
 export interface BusinessApplicationRequest {
   readonly name: string;
   readonly contactEmail: string;

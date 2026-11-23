@@ -28,10 +28,23 @@ export class BusinessApplicationService {
     private readonly config: ConfigService
   ) {}
 
-  submit(request: BusinessApplicationRequest): Observable<SubmittedBusinessApplication> {
+  /**
+   * @param request The six settings the application records.
+   * @param acceptedLegalVersion
+   * The version of the Terms of Use and Privacy Policy the page showed when the agreement was
+   * ticked (issue #1259), exactly as `GET /api/me/account-state` published it. It is added here
+   * rather than carried on {@link BusinessApplicationRequest} because it is not a business setting:
+   * the same six settings are sent to `PUT /api/business/settings`, which must not carry it.
+   * `null` when the account state could not be read, which the API refuses with its own "please
+   * refresh" sentence - the right answer, rather than this service inventing a version.
+   */
+  submit(
+    request: BusinessApplicationRequest,
+    acceptedLegalVersion: string | null
+  ): Observable<SubmittedBusinessApplication> {
     return this.http.post<SubmittedBusinessApplication>(
       `${this.config.apiBaseUrl.replace(/\/$/, '')}/onboarding/business-applications`,
-      request
+      { ...request, acceptedLegalVersion }
     );
   }
 }

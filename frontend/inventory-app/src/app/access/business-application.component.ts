@@ -19,6 +19,7 @@ import {
   validateBusinessApplication
 } from './business-application-rules';
 import { BusinessApplicationService } from './business-application.service';
+import { LegalAgreementComponent } from './legal-agreement.component';
 
 export const ONBOARDING_DISABLED_MESSAGE = "Starting a new business isn't available right now.";
 export const RATE_LIMITED_MESSAGE =
@@ -82,7 +83,7 @@ function submitErrorMessage(error: unknown): string {
 @Component({
   selector: 'app-business-application',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, LegalAgreementComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -213,8 +214,15 @@ function submitErrorMessage(error: unknown): string {
                 }
               </div>
 
+              <app-legal-agreement [accepted]="acceptedLegalTerms" (acceptedChange)="acceptedLegalTerms = $event" />
+
               <div class="page-actions">
-                <button type="submit" class="btn btn-primary" [disabled]="submitting">
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  [disabled]="submitting || !acceptedLegalTerms"
+                  data-testid="submit-application"
+                >
                   {{ submitting ? 'Submitting...' : 'Submit application' }}
                 </button>
               </div>
@@ -233,6 +241,18 @@ export class BusinessApplicationComponent implements OnInit, OnDestroy {
   phase: 'checking' | 'form' = 'checking';
   submitting = false;
   submitError: string | null = null;
+
+  /** Whether the person has ticked the agreement (issue #1259). Unticked until they tick it. */
+  acceptedLegalTerms = false;
+
+  /**
+   * The version of the published documents this page is offering, taken from the account state it
+   * already reads and held from then on - so what is sent is the version the page showed when the
+   * box was ticked, not whatever is current by the time the request lands. `null` until the account
+   * state answers, and if it never does; the API refuses that with the sentence asking for a
+   * refresh, which is shown exactly as it is written.
+   */
+  private legalVersion: string | null = null;
 
   draft: BusinessApplicationDraft = {
     name: '',
@@ -276,6 +296,10 @@ export class BusinessApplicationComponent implements OnInit, OnDestroy {
           return;
         }
 
+        if (answer.status === 'known') {
+          this.legalVersion = answer.accountState.legalVersion;
+        }
+
         this.phase = 'form';
       });
   }
@@ -307,13 +331,15 @@ export class BusinessApplicationComponent implements OnInit, OnDestroy {
     this.submitAttempted = true;
     this.submitError = null;
 
-    if (Object.keys(this.errors).length > 0) {
+    // The button is disabled until the box is ticked, so this is the belt to that brace: a submit
+    // reached another way must not send an application nobody agreed to the Terms for.
+    if (!this.acceptedLegalTerms || Object.keys(this.errors).length > 0) {
       return;
     }
 
     this.submitting = true;
     this.applications
-      .submit(toBusinessApplicationRequest(this.draft))
+      .submit(toBusinessApplicationRequest(this.draft), this.legalVersion)
       .pipe(
         switchMap(() => this.accountState.refresh()),
         takeUntil(this.destroying$)

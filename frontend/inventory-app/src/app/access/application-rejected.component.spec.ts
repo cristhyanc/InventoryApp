@@ -9,7 +9,10 @@ import { AccountStateAnswer, AccountStateService } from './account-state.service
 class InvitePageComponent {}
 
 function known(rejectionReason: string | null, onboardingEnabled = false): AccountStateAnswer {
-  return { status: 'known', accountState: { state: 'ApplicationRejected', onboardingEnabled, rejectionReason } };
+  return {
+    status: 'known',
+    accountState: { state: 'ApplicationRejected', onboardingEnabled, rejectionReason, legalVersion: null }
+  };
 }
 
 async function render(accountState$: Observable<AccountStateAnswer>): Promise<{

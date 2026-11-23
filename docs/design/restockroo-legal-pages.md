@@ -66,6 +66,37 @@ issue #1183) in the Terms of Use.
 The homepage footer gained a **Legal** list linking to both pages. The legal pages' own header and
 footer stay the minimal chrome described above; nothing else about the layouts changed.
 
+## Where the two pages are linked from (issue #1259)
+
+Both documents are reachable from every state of the application, and every link opens in a **new
+tab** so reading one never costs a half-filled form or whatever somebody was in the middle of:
+
+| From | Where | Added by |
+| --- | --- | --- |
+| Signed out | The public landing page footer's **Legal** list (`public/landing/landing-page.component.html`) | issue #1214 |
+| Applying for a business | The agreement checkbox on `/apply` (`access/legal-agreement.component.ts`, composed into `access/business-application.component.ts`) | issue #1259 |
+| Accepting an invite | The same checkbox on `/invite` (composed into `access/invite-acceptance.component.ts`) | issue #1259 |
+| Signed in | The account menu in the header (`layout/user-menu.component.ts`), which is on every signed-in page | issue #1259 |
+
+The sign-in page itself is deliberately untouched: it is the Microsoft-hosted flow, and issue #1259
+excludes it.
+
+**One component owns the agreement wording.** `LegalAgreementComponent` is the unticked, required
+checkbox reading "I agree to the Terms of Use and the Privacy Policy" with both documents linked,
+and both pages that collect an agreement compose it rather than copying it - the wording is a
+published commitment, and two copies of it would be two things to change when the documents are
+republished. It owns no state and makes no request: the page keeps whether the box is ticked and
+sends the version it read from `GET /api/me/account-state`.
+
+**The effective date these pages show is checked against the backend's version constant.** What
+somebody agrees to is defined once, in `Inventory.Domain.Legal.LegalTerms.CurrentVersion`
+(`2026-11-13`), and the frontend reads it at runtime rather than holding a copy. The one thing that
+*is* duplicated by necessity is the human-readable effective date in `legal/legal-effective-date.ts`
+("13 November 2026"), so `architecture/legal-version-contract.guard.spec.ts` reads the real
+`LegalTerms.cs` and fails if the two ever name different dates - a republished document whose pages
+said one date while the recorded acceptances named another would make every stored acceptance
+ambiguous. See [docs/architecture.md § Recorded acceptance of the Terms of Use](../architecture.md#recorded-acceptance-of-the-terms-of-use-issue-1259).
+
 What changed from the #1190 layout and from the owner's draft, deliberately:
 
 | Change | Why |
@@ -81,5 +112,10 @@ What changed from the #1190 layout and from the owner's draft, deliberately:
 
 ## Follow-up
 
-- **Legal review and consent tracking** remain outside the application's scope (issue #1214's
-  exclusions): the pages publish the owner's copy as supplied.
+- **Legal review** remains outside the application's scope (issue #1214's exclusions): the pages
+  publish the owner's copy as supplied, and the checkbox wording issue #1259 added is not legal
+  advice either - the owner may want it reviewed.
+- **Consent tracking is no longer absent**, but it is deliberately partial. Issue #1259 records an
+  acceptance when somebody applies for a business or accepts an invite. Asking **existing** members
+  to accept, re-acceptance when the version changes, and a Super Admin view of the recorded
+  acceptances are each explicitly out of its scope and are follow-up work.

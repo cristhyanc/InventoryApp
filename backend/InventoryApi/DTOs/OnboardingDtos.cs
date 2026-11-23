@@ -6,8 +6,11 @@ namespace InventoryApi.DTOs;
 /// The business application a person submits to <c>POST /api/onboarding/business-applications</c>
 /// (issue #541).
 ///
-/// <para>These six fields are the whole contract, and they are the same six an Owner can later
-/// edit through <c>PUT /api/business/settings</c>, under the same rules. The request deliberately
+/// <para>Six of these fields are the business's own settings, and they are the same six an Owner can
+/// later edit through <c>PUT /api/business/settings</c>, under the same rules. The seventh is the
+/// accepted legal version of issue #1259, which is not a setting at all: it is the evidence the
+/// applicant agreed to the published documents, and it is recorded rather than stored on the
+/// business. The request deliberately
 /// carries <strong>no</strong> business identifier, no status, no role and no applicant: which
 /// business this becomes, that it starts as <c>Pending</c>, that the applicant becomes its Owner,
 /// and who the applicant is are all decided by the server - the last from the validated
@@ -43,13 +46,23 @@ namespace InventoryApi.DTOs;
 /// <paramref name="TimeZoneId"/> cannot answer that question - <c>Australia/Sydney</c> is both New
 /// South Wales and the Australian Capital Territory.
 /// </param>
+/// <param name="AcceptedLegalVersion">
+/// The version of the Terms of Use and Privacy Policy the page showed when the applicant ticked the
+/// agreement (issue #1259), as the effective date string
+/// <c>GET /api/me/account-state</c> published - for example <c>2026-11-13</c>. Required: a
+/// submission with none, or with a version that is no longer the current one, is refused with
+/// <c>400</c> and <c>Inventory.Domain.Legal.LegalTerms.StaleVersionMessage</c>, and nothing is
+/// written. It is nullable here for the reason the others are - "not sent" has to be refusable
+/// rather than defaulted - and no value in the body chooses which version is current.
+/// </param>
 public sealed record BusinessApplicationRequest(
     string? Name,
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
     string? TimeZoneId,
-    string? State);
+    string? State,
+    string? AcceptedLegalVersion);
 
 /// <summary>
 /// The application as it now stands, as that endpoint returns it (issue #541).

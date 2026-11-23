@@ -29,8 +29,19 @@ class PendingPageComponent {}
 @Component({ standalone: true, template: 'unavailable' })
 class UnavailablePageComponent {}
 
-function known(state: AccountStateName, onboardingEnabled = true): AccountStateAnswer {
-  return { status: 'known', accountState: { state, onboardingEnabled, rejectionReason: null } };
+/**
+ * The version the account state publishes in these tests. Deliberately *not* the version in force:
+ * all this page does with it is carry it back unchanged, and a value that happened to equal the
+ * real constant would pass whether it was carried back or re-derived here.
+ */
+const LEGAL_VERSION = '2020-01-02';
+
+function known(
+  state: AccountStateName,
+  onboardingEnabled = true,
+  legalVersion: string | null = LEGAL_VERSION
+): AccountStateAnswer {
+  return { status: 'known', accountState: { state, onboardingEnabled, rejectionReason: null, legalVersion } };
 }
 
 interface SignedInAccount {
@@ -103,6 +114,20 @@ function fillValid(fixture: ComponentFixture<BusinessApplicationComponent>): voi
   draft.gstRegistered = true;
   draft.timeZoneId = 'Australia/Sydney';
   draft.state = 'NSW';
+}
+
+/**
+ * Ticks the agreement to the Terms of Use and Privacy Policy through the checkbox itself (issue
+ * #1259), rather than by setting the field - so the control, its two-way binding and the page's own
+ * state are what is exercised.
+ */
+function acceptLegalTerms(fixture: ComponentFixture<BusinessApplicationComponent>): void {
+  const checkbox = (fixture.nativeElement as HTMLElement).querySelector(
+    '[data-testid="legal-agreement"]'
+  ) as HTMLInputElement;
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new Event('change'));
+  fixture.detectChanges();
 }
 
 async function submitForm(harness: Harness): Promise<void> {
@@ -209,19 +234,94 @@ describe('BusinessApplicationComponent (issue #543)', () => {
   it('submits the normalized request, re-reads the account state and lands on the pending page', async () => {
     const harness = await render({});
     fillValid(harness.fixture);
+    acceptLegalTerms(harness.fixture);
 
     await submitForm(harness);
 
-    expect(harness.submit).toHaveBeenCalledWith({
-      name: 'Corner Store',
-      contactEmail: 'owner@example.com',
-      abn: '51824753556',
-      gstRegistered: true,
-      timeZoneId: 'Australia/Sydney',
-      state: 'NSW'
-    });
+    expect(harness.submit).toHaveBeenCalledWith(
+      {
+        name: 'Corner Store',
+        contactEmail: 'owner@example.com',
+        abn: '51824753556',
+        gstRegistered: true,
+        timeZoneId: 'Australia/Sydney',
+        state: 'NSW'
+      },
+      // The version the page showed, carried back unchanged (issue #1259).
+      LEGAL_VERSION
+    );
     expect(harness.refresh).toHaveBeenCalledTimes(1);
     expect(harness.router.url).toBe('/application-pending');
+  });
+
+  describe('agreeing to the Terms of Use and Privacy Policy (issue #1259)', () => {
+    it('shows an unticked required checkbox linking both documents, opening in a new tab', async () => {
+      const { host } = await render({});
+
+      const checkbox = byTestId(host, 'legal-agreement') as HTMLInputElement;
+      expect(checkbox).not.toBeNull();
+      expect(checkbox.checked).toBe(false);
+      expect(checkbox.required).toBe(true);
+
+      const label = checkbox.closest('label');
+      expect(label?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+        'I agree to the Terms of Use and the Privacy Policy'
+      );
+
+      for (const [testId, href] of [
+        ['terms-of-use-link', '/terms-of-use'],
+        ['privacy-policy-link', '/privacy-policy']
+      ]) {
+        const link = byTestId(host, testId) as HTMLAnchorElement;
+        expect(link.getAttribute('href')).toBe(href);
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toContain('noopener');
+      }
+    });
+
+    it('disables the submit button until the agreement is ticked', async () => {
+      const harness = await render({});
+      fillValid(harness.fixture);
+      harness.fixture.detectChanges();
+
+      const button = byTestId(harness.host, 'submit-application') as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+
+      acceptLegalTerms(harness.fixture);
+
+      expect(button.disabled).toBe(false);
+    });
+
+    it('sends nothing when a submit is reached with the agreement unticked', async () => {
+      const harness = await render({});
+      fillValid(harness.fixture);
+
+      await submitForm(harness);
+
+      expect(harness.submit).not.toHaveBeenCalled();
+    });
+
+    it('shows the refresh message exactly as the API writes it when the version is no longer current', async () => {
+      const refreshMessage = 'Our Terms of Use have been updated. Please refresh the page and try again.';
+      const harness = await render({ submit: jest.fn(() => refusal(400, { message: refreshMessage })) });
+      fillValid(harness.fixture);
+      acceptLegalTerms(harness.fixture);
+
+      await submitForm(harness);
+
+      expect(byTestId(harness.host, 'submit-error')?.textContent).toContain(refreshMessage);
+      expect(harness.router.url).toBe('/apply');
+    });
+
+    it('sends no version at all when the account state could not be read, leaving the refusal to the API', async () => {
+      const harness = await render({ accountState$: of({ status: 'unavailable' }) });
+      fillValid(harness.fixture);
+      acceptLegalTerms(harness.fixture);
+
+      await submitForm(harness);
+
+      expect(harness.submit).toHaveBeenCalledWith(expect.anything(), null);
+    });
   });
 
   /**
@@ -232,6 +332,7 @@ describe('BusinessApplicationComponent (issue #543)', () => {
   it('asks for the state or territory and sends nothing until one is chosen', async () => {
     const harness = await render({});
     fillValid(harness.fixture);
+    acceptLegalTerms(harness.fixture);
     harness.fixture.componentInstance.draft.state = '';
 
     await submitForm(harness);
@@ -254,6 +355,7 @@ describe('BusinessApplicationComponent (issue #543)', () => {
   it('lets a revoked member submit an application', async () => {
     const harness = await render({ accountState$: of(known('MembershipRevoked')) });
     fillValid(harness.fixture);
+    acceptLegalTerms(harness.fixture);
 
     await submitForm(harness);
 
@@ -271,6 +373,7 @@ describe('BusinessApplicationComponent (issue #543)', () => {
   ])('shows %s and stays on the form', async (_case, status, body, expected) => {
     const harness = await render({ submit: jest.fn(() => refusal(status, body)) });
     fillValid(harness.fixture);
+    acceptLegalTerms(harness.fixture);
 
     await submitForm(harness);
 

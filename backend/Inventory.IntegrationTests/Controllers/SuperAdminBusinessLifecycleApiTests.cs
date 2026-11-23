@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Xunit;
 
@@ -453,14 +454,14 @@ public class SuperAdminBusinessLifecycleApiTests
         // this one.
         (await _factory.AsAdministrator().PostAsync(DeactivateUrl(_factory.TradingBusinessId), null))
             .EnsureSuccessStatusCode();
-        var refused = await manager.PostAsJsonAsync("/api/invites/redeem", new { token = Token });
+        var refused = await manager.PostAsJsonAsync("/api/invites/redeem", new { token = Token, acceptedLegalVersion = LegalTerms.CurrentVersion });
         Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
         Assert.Equal(MemberInviteRedemptionPolicy.ReleaseRequiredMessage, await DetailAsync(refused));
 
         (await ReleaseAsync(_factory.TradingBusinessId, _factory.TradingManagerMembershipId))
             .EnsureSuccessStatusCode();
 
-        var redeemed = await manager.PostAsJsonAsync("/api/invites/redeem", new { token = Token });
+        var redeemed = await manager.PostAsJsonAsync("/api/invites/redeem", new { token = Token, acceptedLegalVersion = LegalTerms.CurrentVersion });
         Assert.Equal(HttpStatusCode.OK, redeemed.StatusCode);
         Assert.Equal(
             nameof(BusinessRole.Manager),

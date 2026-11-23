@@ -80,18 +80,28 @@ public sealed record CreateMemberInviteRequest(string? Role, string? Note);
 /// <summary>
 /// The body of <c>POST /api/invites/redeem</c> (issue #532).
 ///
-/// One field, the token from the link, and deliberately nothing else. There is no business id, no
-/// business name, no role and no email address: the business comes from the invite row the token
-/// identifies, the role from that same row, and the person from the validated token the request is
-/// authenticated with. A redemption request that named any of them would be a request choosing
-/// which business it joins, or what it may do there.
+/// Two fields - the token from the link and the accepted legal version of issue #1259 - and
+/// deliberately nothing else. There is no business id, no business name, no role and no email
+/// address: the business comes from the invite row the token identifies, the role from that same
+/// row, and the person from the validated token the request is authenticated with. A redemption
+/// request that named any of them would be a request choosing which business it joins, or what it
+/// may do there.
 /// </summary>
 /// <param name="Token">
 /// The invite token, exactly as the creation response produced it. A missing, blank or unknown
 /// token is answered with the same <c>400</c> and the same sentence as an expired, used or
 /// withdrawn one, so no submission can be told apart from another.
 /// </param>
-public sealed record RedeemMemberInviteRequest(string? Token);
+/// <param name="AcceptedLegalVersion">
+/// The version of the Terms of Use and Privacy Policy the page showed when the joining person ticked
+/// the agreement (issue #1259), as the effective date string <c>GET /api/me/account-state</c>
+/// published - for example <c>2026-11-13</c>. Required: a submission with none, or with a version
+/// that is no longer the current one, is refused with <c>400</c> and
+/// <c>Inventory.Domain.Legal.LegalTerms.StaleVersionMessage</c>, and nothing is written. That
+/// refusal is deliberately a <em>different</em> sentence from the generic invalid-invite one, and it
+/// is chosen before the token is looked at, so it reveals nothing about any invite.
+/// </param>
+public sealed record RedeemMemberInviteRequest(string? Token, string? AcceptedLegalVersion);
 
 /// <summary>
 /// The body of a successful redemption (issue #532): the role the caller now holds.

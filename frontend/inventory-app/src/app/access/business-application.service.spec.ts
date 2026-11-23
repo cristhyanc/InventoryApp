@@ -23,20 +23,49 @@ function createService(apiBaseUrl = '/api'): { service: BusinessApplicationServi
 
 /** `BusinessApplicationService` (issue #543): the form's one call, `POST /api/onboarding/business-applications`. */
 describe('BusinessApplicationService (issue #543)', () => {
-  it('posts the six settings to the onboarding endpoint', (done) => {
+  it('posts the six settings and the accepted legal version to the onboarding endpoint', (done) => {
     const { service, http } = createService();
 
-    service.submit(REQUEST).subscribe((submitted) => {
-      expect(http.post).toHaveBeenCalledWith('/api/onboarding/business-applications', REQUEST);
+    service.submit(REQUEST, '2026-11-13').subscribe((submitted) => {
+      expect(http.post).toHaveBeenCalledWith('/api/onboarding/business-applications', {
+        ...REQUEST,
+        acceptedLegalVersion: '2026-11-13'
+      });
       expect(submitted).toEqual(SUBMITTED);
       done();
     });
   });
 
+  /**
+   * Issue #1259: the page sends whatever version it read, including none. The API refuses a request
+   * with no version, which is the right answer for a page that could not read one - and much better
+   * than this service inventing a version somebody never agreed to.
+   */
+  it('sends an unread version as null rather than inventing one', (done) => {
+    const { service, http } = createService();
+
+    service.submit(REQUEST, null).subscribe(() => {
+      expect(http.post).toHaveBeenCalledWith('/api/onboarding/business-applications', {
+        ...REQUEST,
+        acceptedLegalVersion: null
+      });
+      done();
+    });
+  });
+
+  /**
+   * The accepted version is not a business setting: the same six settings go to
+   * `PUT /api/business/settings`, which must not carry it - so it is added here rather than put on
+   * `BusinessApplicationRequest`.
+   */
+  it('leaves the request shape itself free of the legal version', () => {
+    expect(Object.keys(REQUEST)).not.toContain('acceptedLegalVersion');
+  });
+
   it('builds the URL from the configured API base, trimming a trailing slash', (done) => {
     const { service, http } = createService('/api/');
 
-    service.submit(REQUEST).subscribe(() => {
+    service.submit(REQUEST, '2026-11-13').subscribe(() => {
       expect(http.post.mock.calls[0][0]).toBe('/api/onboarding/business-applications');
       done();
     });

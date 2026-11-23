@@ -1,4 +1,5 @@
 import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewChild } from '@angular/core';
+import { PRIVACY_POLICY_ROUTE, TERMS_OF_USE_ROUTE } from '../public/legal/legal-routes';
 
 /**
  * The signed-in user control in the top-right of the application header (issue #391).
@@ -6,6 +7,11 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
  * It is presentation only: the shell keeps the MSAL identity and the redirect calls, and this
  * component shows the active account and reports the two intents the application actually has.
  * There is deliberately no profile or account destination here, because no such page exists.
+ *
+ * The one thing it links rather than reports is the published Terms of Use and Privacy Policy
+ * (issue #1259): signed-in pages have to offer both, and this menu is the one control on every one
+ * of them. Both links are static destinations, so they need no access answer and nothing is
+ * projected for them.
  *
  * An entry that needs an access answer is **projected** into the panel rather than built here, so
  * that stays true: `RolePreviewMenuComponent`'s **View as** section (issue #721) decides for itself
@@ -56,6 +62,29 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
             -->
             <ng-content />
             <div class="my-1 border-t border-md-gray-200"></div>
+            <!--
+              The published Terms of Use and Privacy Policy (issue #1259). Signed-in pages have to
+              link both, and this menu is on every one of them. Both open in a new tab, so reading
+              them never costs whatever the person was in the middle of, and both are ordinary
+              href links rather than router links because a new tab is a fresh document load anyway.
+            -->
+            <a
+              [href]="termsOfUseUrl"
+              target="_blank"
+              rel="noopener"
+              class="block rounded-md-control px-3 py-2 text-md-gray-800 no-underline transition hover:bg-md-gray-100"
+              data-testid="user-menu-terms-of-use"
+              >Terms of Use</a
+            >
+            <a
+              [href]="privacyPolicyUrl"
+              target="_blank"
+              rel="noopener"
+              class="block rounded-md-control px-3 py-2 text-md-gray-800 no-underline transition hover:bg-md-gray-100"
+              data-testid="user-menu-privacy-policy"
+              >Privacy Policy</a
+            >
+            <div class="my-1 border-t border-md-gray-200"></div>
             <button
               type="button"
               class="w-full rounded-md-control px-3 py-2 text-left text-md-gray-800 transition hover:bg-md-gray-100"
@@ -81,6 +110,9 @@ export class UserMenuComponent {
   @Output() readonly signOutRequested = new EventEmitter<void>();
 
   readonly panelId = 'user-menu-panel';
+
+  readonly termsOfUseUrl = `/${TERMS_OF_USE_ROUTE}`;
+  readonly privacyPolicyUrl = `/${PRIVACY_POLICY_ROUTE}`;
 
   isOpen = false;
 

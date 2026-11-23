@@ -24,13 +24,17 @@ namespace InventoryApi.Controllers;
 /// <c>access_as_user</c> scope - "membership not required" is not "anonymous" - and it still runs
 /// with a <em>denied</em> <c>BusinessScope</c>: nothing resolves a business for the request, the
 /// tenant query filters and <c>BusinessOwnershipEnforcer</c> stay fully in force, and it reads no
-/// business data. The two tables it does reach, invites and memberships, are structurally
-/// non-tenant-owned, and the business id in every statement comes from the invite row the presented
-/// token identified (docs/architecture.md § Invite redemption).</para>
+/// business data. Two of the three tables it does reach, invites and memberships, are structurally
+/// non-tenant-owned; the third is the acceptance record of issue #1259, which is tenant-owned and
+/// written through the narrow, reviewed window of <c>AppDbContext.BeginLegalAcceptanceWrite</c>. The
+/// business id in every statement comes from the invite row the presented token identified
+/// (docs/architecture.md § Invite redemption).</para>
 ///
 /// <para><strong>Nothing in the request chooses anything.</strong> The body carries the token and
-/// nothing else: the business, the role and the person are all decided by the server, from the
-/// invite row and the validated token the request authenticated with.</para>
+/// the version of the Terms the page showed, and nothing else: the business, the role and the person
+/// are all decided by the server, from the invite row and the validated token the request
+/// authenticated with, and which version of the Terms is <em>current</em> is the server's constant -
+/// the body's version is only compared against it (issue #1259).</para>
 ///
 /// <para><strong>Refusals are mapped centrally and are two sentences.</strong> An unusable invite -
 /// expired, used, cancelled, unknown, of a business that is not active, or granting an undeclared
@@ -54,9 +58,10 @@ public sealed class InviteRedemptionController : ControllerBase
     }
 
     /// <summary>
-    /// Joins the business that issued the submitted invite, with the invite's role, and closes the
-    /// invite - both in one transaction, so a redemption either grants the membership and records
-    /// the link as used or does neither.
+    /// Joins the business that issued the submitted invite, with the invite's role, closes the
+    /// invite, and records the joining person's acceptance of the published Terms of Use and Privacy
+    /// Policy (issue #1259) - all in one transaction, so a redemption either grants the membership,
+    /// records the link as used and records the agreement, or does none of them.
     /// </summary>
     [HttpPost("redeem")]
     [MembershipNotRequiredEndpoint]
@@ -66,7 +71,10 @@ public sealed class InviteRedemptionController : ControllerBase
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var redeemed = await _redeemInvite.Handle(request.Token, cancellationToken);
+        var redeemed = await _redeemInvite.Handle(
+            request.Token,
+            request.AcceptedLegalVersion,
+            cancellationToken);
 
         return Ok(new RedeemedMemberInviteResponse(redeemed.Role.ToString()));
     }

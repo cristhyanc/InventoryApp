@@ -145,8 +145,8 @@ public sealed class MeController : ControllerBase
     ///
     /// It takes no parameter, describes the caller alone, and names no business: the states are
     /// about the caller's membership, and the middleware's public 403 body is unchanged by this
-    /// endpoint existing. The state is reported as its published name; <c>onboardingEnabled</c>
-    /// and <c>rejectionReason</c> are decided by the use case.
+    /// endpoint existing. The state is reported as its published name; <c>onboardingEnabled</c>,
+    /// <c>rejectionReason</c> and <c>legalVersion</c> are decided by the use case.
     /// </summary>
     [HttpGet("account-state")]
     [MembershipNotRequiredEndpoint]
@@ -157,6 +157,7 @@ public sealed class MeController : ControllerBase
         return Ok(new MeAccountStateResponse(
             accountState.State.ToString(),
             accountState.OnboardingEnabled,
-            accountState.RejectionReason));
+            accountState.RejectionReason,
+            accountState.LegalVersion));
     }
 }

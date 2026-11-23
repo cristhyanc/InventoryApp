@@ -1,5 +1,6 @@
 using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Access;
@@ -72,6 +73,12 @@ public sealed class GetAccountState
     // caller's own eligibility is decided. The rejection reason is not decided here at all: it
     // comes from the precedence together with the state it belongs to (issue #540), so the two
     // cannot be reported independently.
+    //
+    // The legal version is a published constant rather than a port (issue #1259): which version of
+    // the Terms of Use is in force is a fact about the documents this build shipped, not a
+    // deployment setting, and a deployment that could configure its own would be able to record an
+    // agreement to something nobody published. It is reported for every state, for the same reason
+    // onboardingEnabled is: it describes the documents, not the caller.
     private AccountStateResult Result(AccountStateDecision decision) =>
-        new(decision.State, _onboarding.IsEnabled, decision.RejectionReason);
+        new(decision.State, _onboarding.IsEnabled, decision.RejectionReason, LegalTerms.CurrentVersion);
 }

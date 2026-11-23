@@ -76,11 +76,44 @@ describe('UserMenuComponent signed in (issue #391)', () => {
     host.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.click();
     fixture.detectChanges();
 
-    expect(host.querySelectorAll('a')).toHaveLength(0);
+    // The two published legal documents (issue #1259) and nothing else: no profile page, no
+    // account page, no destination this application does not have.
+    expect(Array.from(host.querySelectorAll('a')).map((link) => (link.textContent ?? '').trim())).toEqual([
+      'Terms of Use',
+      'Privacy Policy'
+    ]);
     expect(Array.from(host.querySelectorAll('button')).map((candidate) => (candidate.textContent ?? '').trim())).toEqual([
       expect.stringContaining('Dana Operator'),
       'Sign out'
     ]);
+  });
+
+  /**
+   * Issue #1259: every signed-in page has to link the published Terms of Use and Privacy Policy,
+   * and this menu is the one control on all of them. Both open in a new tab, so reading them never
+   * costs whatever the person was in the middle of.
+   */
+  it('links the Terms of Use and the Privacy Policy, each opening in a new tab', async () => {
+    const { fixture, host } = await render({ isSignedIn: true, userName: 'Dana Operator' });
+    host.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.click();
+    fixture.detectChanges();
+
+    for (const [testId, href] of [
+      ['user-menu-terms-of-use', '/terms-of-use'],
+      ['user-menu-privacy-policy', '/privacy-policy']
+    ]) {
+      const link = host.querySelector(`[data-testid="${testId}"]`) as HTMLAnchorElement;
+      expect(link.getAttribute('href')).toBe(href);
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toContain('noopener');
+    }
+  });
+
+  it('offers neither legal link while nobody is signed in, where the public footer carries them', async () => {
+    const { host } = await render({ isSignedIn: false });
+
+    expect(host.querySelector('[data-testid="user-menu-terms-of-use"]')).toBeNull();
+    expect(host.querySelector('[data-testid="user-menu-privacy-policy"]')).toBeNull();
   });
 
   it('closes the popover on Escape and returns focus to its trigger', async () => {

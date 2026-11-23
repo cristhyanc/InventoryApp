@@ -1,6 +1,8 @@
+using Inventory.Application.Legal;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Onboarding;
@@ -16,13 +18,26 @@ namespace Inventory.Application.Onboarding;
 /// identifier and no status: which business this becomes and which status it starts in are the
 /// server's to decide, not a value a request may name.
 /// </summary>
+/// <param name="Name">The business's display name, exactly as submitted.</param>
+/// <param name="ContactEmail">The business's own contact address, exactly as submitted.</param>
+/// <param name="Abn">The submitted ABN, which may still carry the spaces a person typed.</param>
+/// <param name="GstRegistered">Whether the business is registered for GST, as stated.</param>
+/// <param name="TimeZoneId">The submitted IANA time zone id.</param>
+/// <param name="State">The submitted Australian state or territory.</param>
+/// <param name="AcceptedLegalVersion">
+/// The version of the Terms of Use and Privacy Policy the page the applicant ticked the agreement on
+/// showed (issue #1259). Nullable for the same reason as everything else here - a page old enough
+/// not to send one has to be distinguishable and refused rather than defaulted - and the only value
+/// accepted is <see cref="LegalTerms.CurrentVersion"/>.
+/// </param>
 public sealed record BusinessApplicationSubmission(
     string? Name,
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
     string? TimeZoneId,
-    string? State);
+    string? State,
+    string? AcceptedLegalVersion);
 
 /// <summary>
 /// The outcome of submitting a business application (issue #541): it was recorded, this deployment
@@ -135,8 +150,20 @@ public sealed record BusinessApplicationOutcome
 /// <see cref="AccountState.ApplicationPending"/>.</para>
 ///
 /// <para><strong>Nothing about the existing businesses is touched.</strong> This use case reads no
-/// other business, changes no membership but the applicant's own new one, and cannot reach a
-/// tenant-owned row at all.</para>
+/// other business, changes no membership but the applicant's own new one, and reaches exactly one
+/// tenant-owned row: the acceptance below.</para>
+///
+/// <para><strong>Agreeing to the published Terms is a precondition, and the agreement is recorded
+/// with the application</strong> (issue #1259). The submission has to carry
+/// <see cref="Inventory.Domain.Legal.LegalTerms.CurrentVersion"/>, and that is checked before the
+/// form itself is validated and before the allowance is claimed, so a page serving the previous
+/// documents is told to refresh rather than told what is wrong with a form it would have to send
+/// again anyway. A missing or stale version writes nothing at all. On the committed path exactly one
+/// <see cref="Legal.LegalAcceptance"/> row is appended, inside the same transaction as the business
+/// and the membership and stamped with the same instant, so a rolled-back application leaves no
+/// agreement behind and a recorded one is never missing its agreement. The resubmission branch
+/// appends none: it writes no application either, and the agreement the applicant gave the first
+/// time is already recorded.</para>
 /// </summary>
 public sealed class ApplyForBusiness
 {
@@ -146,6 +173,7 @@ public sealed class ApplyForBusiness
     private readonly IBusinessApplicationStore _store;
     private readonly BusinessApplicationRateLimiter _rateLimiter;
     private readonly MembershipWriteGuard _guard;
+    private readonly ILegalAcceptanceStore _acceptances;
     private readonly IBusinessApplicationAudit _audit;
     private readonly IClock _clock;
 
@@ -156,6 +184,7 @@ public sealed class ApplyForBusiness
         IBusinessApplicationStore store,
         BusinessApplicationRateLimiter rateLimiter,
         MembershipWriteGuard guard,
+        ILegalAcceptanceStore acceptances,
         IBusinessApplicationAudit audit,
         IClock clock)
     {
@@ -165,6 +194,7 @@ public sealed class ApplyForBusiness
         _store = store;
         _rateLimiter = rateLimiter;
         _guard = guard;
+        _acceptances = acceptances;
         _audit = audit;
         _clock = clock;
     }
@@ -174,9 +204,10 @@ public sealed class ApplyForBusiness
     /// application.
     /// </summary>
     /// <exception cref="DomainValidationException">
-    /// The submission breaks one of <see cref="BusinessApplicationPolicy"/>'s rules, or - from the
-    /// central enforcer on the way into the database - names a time zone the host cannot resolve.
-    /// Nothing is written.
+    /// The submission carries no accepted legal version or a version that is not the current one
+    /// (issue #1259), or it breaks one of <see cref="BusinessApplicationPolicy"/>'s rules, or - from
+    /// the central enforcer on the way into the database - names a time zone the host cannot
+    /// resolve. Nothing is written.
     /// </exception>
     /// <exception cref="BusinessAccessDeniedException">
     /// The request carries no identifiable actor, so there is nobody to record an application for.
@@ -204,6 +235,14 @@ public sealed class ApplyForBusiness
         // (issue #524).
         var actor = _actorProfileAccessor.GetCurrentActorProfile()
             ?? throw new BusinessAccessDeniedException(BusinessAccessDenialReason.NotAuthenticated);
+
+        // Before the form's own rules, and before the allowance (issue #1259): a page serving the
+        // previous Terms has nothing to correct, so telling it what is wrong with the form would send
+        // the person back to a screen whose submission is refused whatever they type. The remedy is
+        // to reload, and that is the one sentence this refusal carries. What is stored is the
+        // constant rather than the submitted string, so a row can only ever name the version this
+        // build published.
+        var acceptedLegalVersion = LegalTerms.RequireCurrent(submission.AcceptedLegalVersion);
 
         // Validation before the allowance is claimed: a refused form writes nothing and takes no
         // write lock, so a person correcting a typo must not be the one who runs out of attempts.
@@ -247,15 +286,10 @@ public sealed class ApplyForBusiness
                 // business this creates has one, and the write cannot remove anybody else's.
                 new MembershipWriteIntent(IdentityGainingAnActiveMembership: actor.Identity),
                 // The instant is sampled inside the transaction, after the write lock was granted
-                // (issue #608's lesson): it is stamped on the business and the membership alike, so
-                // the rows record when the application really happened rather than when the request
-                // arrived and started waiting.
-                writeToken => _store.CreateAsync(
-                    submitted,
-                    actor.Identity,
-                    actor.Profile,
-                    _clock.UtcNow,
-                    writeToken),
+                // (issue #608's lesson): it is stamped on the business, the membership and the
+                // acceptance alike, so the rows record when the application really happened rather
+                // than when the request arrived and started waiting.
+                writeToken => CreateAsync(submitted, actor, acceptedLegalVersion, writeToken),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -269,6 +303,42 @@ public sealed class ApplyForBusiness
             created.AppliedAtUtc ?? _clock.UtcNow));
 
         return BusinessApplicationOutcome.Recorded(created);
+    }
+
+    /// <summary>
+    /// The in-transaction half: the business and the applicant's Owner membership, and then the one
+    /// row recording the agreement they gave (issue #1259).
+    ///
+    /// <para>The acceptance is written <em>after</em> the business, because the business id it names
+    /// is the key the database assigns to that row - never a value a request supplied - and it is
+    /// written inside the same transaction, so the two commit together or not at all. One instant
+    /// serves all three rows: a separate clock read here would record the agreement at a different
+    /// moment from the application it was given for.</para>
+    /// </summary>
+    private async Task<BusinessApplication> CreateAsync(
+        BusinessSettings submitted,
+        ActorProfile actor,
+        string acceptedLegalVersion,
+        CancellationToken cancellationToken)
+    {
+        var appliedAtUtc = _clock.UtcNow;
+
+        var created = await _store
+            .CreateAsync(submitted, actor.Identity, actor.Profile, appliedAtUtc, cancellationToken)
+            .ConfigureAwait(false);
+
+        await _acceptances
+            .RecordAsync(
+                new LegalAcceptance(
+                    created.BusinessId,
+                    actor.Identity,
+                    acceptedLegalVersion,
+                    appliedAtUtc,
+                    LegalAcceptanceContext.BusinessApplication),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return created;
     }
 
     /// <summary>

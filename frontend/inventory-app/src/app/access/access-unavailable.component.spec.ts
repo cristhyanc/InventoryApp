@@ -19,7 +19,10 @@ function known(
   state: 'BusinessDeactivated' | 'MembershipAmbiguous' | 'MembershipRevoked',
   onboardingEnabled = false
 ): AccountStateAnswer {
-  return { status: 'known', accountState: { state, onboardingEnabled, rejectionReason: null } };
+  return {
+    status: 'known',
+    accountState: { state, onboardingEnabled, rejectionReason: null, legalVersion: null }
+  };
 }
 
 /**

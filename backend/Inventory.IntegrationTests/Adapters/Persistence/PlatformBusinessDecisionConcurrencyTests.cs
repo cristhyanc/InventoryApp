@@ -553,9 +553,10 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
             new EfBusinessMembershipStore(db),
             new EfMemberInviteRedemptionStore(db),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
+            new EfLegalAcceptanceStore(db),
             new InventoryApi.Tests.Application.Members.FakeMemberInviteAudit(),
             new FakeClock(Now));
 
-        await redeem.Handle(token, cancellationToken);
+        await redeem.Handle(token, Inventory.Domain.Legal.LegalTerms.CurrentVersion, cancellationToken);
     }
 }

@@ -23,11 +23,35 @@ class UnavailablePageComponent {}
 @Component({ standalone: true, template: 'reopen' })
 class ReopenPageComponent {}
 
-function known(state: AccountStateName): AccountStateAnswer {
-  return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
+/**
+ * The version the account state publishes in these tests. Deliberately *not* the version in force:
+ * all this page does with it is carry it back unchanged, and a value that happened to equal the
+ * real constant would pass whether it was carried back or re-derived here.
+ */
+const LEGAL_VERSION = '2020-01-02';
+
+function known(state: AccountStateName, legalVersion: string | null = LEGAL_VERSION): AccountStateAnswer {
+  return {
+    status: 'known',
+    accountState: { state, onboardingEnabled: false, rejectionReason: null, legalVersion }
+  };
 }
 
 const UNAVAILABLE: AccountStateAnswer = { status: 'unavailable' };
+
+/**
+ * Ticks the agreement to the Terms of Use and Privacy Policy through the checkbox itself (issue
+ * #1259), rather than by setting the field - so the control, its two-way binding and the page's own
+ * state are what is exercised. The page has to have been rendered first.
+ */
+function acceptLegalTerms(fixture: ComponentFixture<InviteAcceptanceComponent>): void {
+  const checkbox = (fixture.nativeElement as HTMLElement).querySelector(
+    '[data-testid="legal-agreement"]'
+  ) as HTMLInputElement;
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new Event('change'));
+  fixture.detectChanges();
+}
 
 interface Harness {
   fixture: ComponentFixture<InviteAcceptanceComponent>;
@@ -97,6 +121,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     const cookie = jest.spyOn(document, 'cookie', 'set');
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
 
     expect(setItem).not.toHaveBeenCalled();
@@ -112,9 +137,11 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     const { fixture } = await createHarness({ token: 'route-token', redeem });
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
 
-    expect(redeem).toHaveBeenCalledWith('route-token');
+    // With the version the page showed beside it (issue #1259), carried back unchanged.
+    expect(redeem).toHaveBeenCalledWith('route-token', LEGAL_VERSION);
   });
 
   it('sends a caller with no pending invite to the open-your-link-again page instead of offering Accept', async () => {
@@ -150,6 +177,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
       });
 
       fixture.detectChanges();
+      acceptLegalTerms(fixture);
       fixture.componentInstance.accept();
       await fixture.whenStable();
 
@@ -183,6 +211,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     });
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
     await fixture.whenStable();
 
@@ -228,6 +257,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     const { fixture } = await createHarness({ redeem });
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
     await fixture.whenStable();
     fixture.detectChanges();
@@ -240,6 +270,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     const { fixture } = await createHarness({ redeem });
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
     await fixture.whenStable();
     fixture.detectChanges();
@@ -252,10 +283,97 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     const { fixture } = await createHarness({ redeem });
 
     fixture.detectChanges();
+    acceptLegalTerms(fixture);
     fixture.componentInstance.accept();
     await fixture.whenStable();
 
     expect(fixture.componentInstance.redeeming).toBe(false);
+  });
+
+  describe('agreeing to the Terms of Use and Privacy Policy (issue #1259)', () => {
+    it('shows an unticked required checkbox linking both documents, opening in a new tab', async () => {
+      const { fixture } = await createHarness({});
+
+      fixture.detectChanges();
+      const host = fixture.nativeElement as HTMLElement;
+
+      const checkbox = host.querySelector('[data-testid="legal-agreement"]') as HTMLInputElement;
+      expect(checkbox).not.toBeNull();
+      expect(checkbox.checked).toBe(false);
+      expect(checkbox.required).toBe(true);
+
+      const label = checkbox.closest('label');
+      expect(label?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+        'I agree to the Terms of Use and the Privacy Policy'
+      );
+
+      for (const [testId, href] of [
+        ['terms-of-use-link', '/terms-of-use'],
+        ['privacy-policy-link', '/privacy-policy']
+      ]) {
+        const link = host.querySelector(`[data-testid="${testId}"]`) as HTMLAnchorElement;
+        expect(link.getAttribute('href')).toBe(href);
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toContain('noopener');
+      }
+    });
+
+    it('disables the Accept button until the agreement is ticked', async () => {
+      const { fixture } = await createHarness({});
+
+      fixture.detectChanges();
+      const button = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="accept-invite"]'
+      ) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+
+      acceptLegalTerms(fixture);
+
+      expect(button.disabled).toBe(false);
+    });
+
+    it('redeems nothing when an accept is reached with the agreement unticked', async () => {
+      const redeem = jest.fn(() => of({ role: 'Manager' }));
+      const { fixture } = await createHarness({ redeem });
+
+      fixture.detectChanges();
+      fixture.componentInstance.accept();
+
+      expect(redeem).not.toHaveBeenCalled();
+    });
+
+    it('shows the refresh message exactly as the API writes it when the version is no longer current', async () => {
+      const refreshMessage = 'Our Terms of Use have been updated. Please refresh the page and try again.';
+      const redeem = jest.fn(() =>
+        throwError(() => new HttpErrorResponse({ status: 400, error: { message: refreshMessage } }))
+      );
+      const { fixture } = await createHarness({ redeem });
+
+      fixture.detectChanges();
+      acceptLegalTerms(fixture);
+      fixture.componentInstance.accept();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(
+        (fixture.nativeElement as HTMLElement).querySelector('[data-testid="invite-error"]')?.textContent
+      ).toContain(refreshMessage);
+
+      // And the page stays usable: the person reloads and accepts again rather than being left
+      // with a button that can never be pressed.
+      expect(fixture.componentInstance.redeeming).toBe(false);
+    });
+
+    it('sends no version at all when the account state could not be read, leaving the refusal to the API', async () => {
+      const redeem = jest.fn(() => of({ role: 'Manager' }));
+      const { fixture } = await createHarness({ accountState$: of(UNAVAILABLE), redeem });
+
+      fixture.detectChanges();
+      acceptLegalTerms(fixture);
+      fixture.componentInstance.accept();
+
+      expect(redeem).toHaveBeenCalledWith('secret-token', null);
+    });
   });
 
   it('waits for the account state rather than deciding from an unread one', async () => {

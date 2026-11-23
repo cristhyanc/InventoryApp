@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Inventory.Domain.Legal;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -128,7 +129,7 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
             Assert.Equal(
                 HttpStatusCode.Unauthorized,
                 (await CustomerIdentity(rolledBack, CustomerIdentityJoinerObjectId)
-                    .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken })).StatusCode);
+                    .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken, acceptedLegalVersion = LegalTerms.CurrentVersion })).StatusCode);
 
             // The row the rollback must not touch, read from outside the request boundary.
             var membership = await MembershipAsync(Tokens.ExternalIdTenantId, CustomerIdentityOwnerObjectId);
@@ -152,7 +153,7 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
             await AccessAsync(CustomerIdentity(restored, CustomerIdentityOwnerObjectId)));
 
         var redeemed = await CustomerIdentity(restored, CustomerIdentityJoinerObjectId)
-            .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken });
+            .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken, acceptedLegalVersion = LegalTerms.CurrentVersion });
         Assert.Equal(HttpStatusCode.OK, redeemed.StatusCode);
         Assert.Equal(
             (CustomerIdentityBusinessName, nameof(BusinessRole.Manager)),
@@ -232,7 +233,7 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
             Assert.Equal(
                 HttpStatusCode.OK,
                 (await Bearer(configured, acceptedBearerToken)
-                    .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken })).StatusCode);
+                    .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken, acceptedLegalVersion = LegalTerms.CurrentVersion })).StatusCode);
 
             // And an expired token, which is the ordinary end of a session.
             expiredBearerToken = Tokens.Token(
