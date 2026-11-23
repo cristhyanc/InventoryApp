@@ -19,6 +19,9 @@ test('a positive correction quantity is persisted as a negative stock movement',
   await page.goto(`/products/${before.id}/stock`);
   await expect(page.getByTestId('selected-product-summary')).toContainText(seeded.correctionProduct);
 
+  // The adjustment form lives in the Adjust stock panel (issue #1156), not inline on the page.
+  await page.getByTestId('open-adjustment').click();
+
   // The operator chooses Correction and types the quantity to remove as a positive number; the
   // form says so, and must not require a minus sign.
   await page.locator('#adjustment-reason').selectOption({ label: 'Correction' });

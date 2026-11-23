@@ -22,7 +22,8 @@ test('creating, editing and deleting a purchase moves inventory and costing with
 
   // Create.
   await page.goto('/purchases/new');
-  await page.locator('input[type=file]').setInputFiles(receiptFile);
+  // Not `input[type=file]`: the receipt-scan input (issue #1166) is also a file input on this page.
+  await page.getByTestId('purchase-receipt-input').setInputFiles(receiptFile);
   await page.locator('input[name="title"]').fill(title);
   await page.locator('select[name="supplierId"]').selectOption({ label: seeded.supplierA });
   await page.getByRole('button', { name: 'Add product' }).click();

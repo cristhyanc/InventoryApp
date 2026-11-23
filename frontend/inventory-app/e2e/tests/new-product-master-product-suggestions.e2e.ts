@@ -119,6 +119,16 @@ function trackingOptOut(page: Page): Locator {
   return page.locator('input[name="trackSupplierPrices"]');
 }
 
+/**
+ * The tracking opt-out's own label. The input itself is `sr-only` behind a fixed-size visual
+ * switch span (issue #1111's product form redesign), so a native click or `.uncheck()` aimed at
+ * the input is obstructed by that span; clicking the label it is wrapped in toggles it exactly as
+ * clicking any part of a labelled control does.
+ */
+function trackingOptOutLabel(page: Page): Locator {
+  return page.locator('label').filter({ hasText: 'Track supplier prices' });
+}
+
 async function expectNoHorizontalOverflow(page: Page, label: string): Promise<void> {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -230,7 +240,8 @@ for (const viewport of [desktopViewport, mobileViewport]) {
 
     // Taking the other variant starts a fresh selection, with the opt-out back on, and the two
     // fields now hold the 45 g variant's own values.
-    await trackingOptOut(page).uncheck();
+    await trackingOptOutLabel(page).click();
+    await expect(trackingOptOut(page), `${at}: the opt-out is unticked`).not.toBeChecked();
     await searchFor(page, matchingTerm);
     await suggestionRows(page).first().click();
     await expectPrefilledFrom(page, smallVariant, `pressed row at ${at}`);
@@ -261,7 +272,7 @@ for (const viewport of [desktopViewport, mobileViewport]) {
 
     // The opt-out is the only thing the note offers, it unticks, and it takes neither the note nor
     // either filled-in value with it.
-    await trackingOptOut(page).uncheck();
+    await trackingOptOutLabel(page).click();
     await expect(trackingOptOut(page), `${at}: the opt-out is unticked`).not.toBeChecked();
     await expect(selectionNote(page), `${at}: the note stays`).toBeVisible();
     await expect(nameField(page)).toHaveValue(largeVariant.productName);
