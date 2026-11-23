@@ -458,6 +458,13 @@ if (E2ETestEnvironment.IsEnabled(builder.Environment))
     // comes from AddNayaxLynxClient, which hands the reader the inner typed client rather than the
     // port it decorates.
     builder.Services.AddScoped<IConnectedMachineFleetReader, NayaxConnectedMachineFleetReader>();
+
+    // The connection-test check runner (issue #536) is the other half of what AddNayaxLynxClient
+    // would otherwise register, and NayaxConnectionController's constructor needs it to resolve at
+    // all - including for its one read-only status action, which touches no Nayax port itself
+    // (issue #1276). Registering no real HTTP client for it here is what keeps this host unable to
+    // reach a live operator account with a pasted test pair, same as the fleet client above.
+    builder.Services.AddScoped<INayaxConnectionCheckRunner, E2ETestNayaxConnectionCheckRunner>();
 }
 else
 {
