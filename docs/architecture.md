@@ -115,6 +115,26 @@ App Service plan for this app must stay pinned to a single instance: scaling out
 exceed SQLite's single-writer model, it would put WAL's own coordination mechanism on storage it
 does not support.
 
+**Reads that must not grow with the whole sales table.** About fourteen queries in
+`Inventory.Infrastructure` — the dashboards, the money reports and reconciliation — select sales by a
+`MachineAuthorizationTime` range, and no index held that instant, so each of them read every sale the
+business had ever stored: 145–226 ms for a one-day or one-month total on a synthetic database of
+500,000 sales per business (audit #1226, finding DB-02). Migration
+`20261123120000_AddNayaxSalesDateRangeIndex` adds `IX_NayaxSales_BusinessId_MachineAuthorizationTime`
+(issue #1287), which leads with the business like every other tenant-owned index here and cost 21.4%
+of the file (131.9 MB → 160.2 MB) and 0.67 s to build at that size
+(`NayaxSalesDateRangeIndexSizeBenchmark`, the opt-in measurement). What guards it is
+`NayaxSalesDateRangeIndexMigrationTests`, which runs `EXPLAIN QUERY PLAN` on the SQL EF actually
+generates for the shared business-date sales selection (issue #1250) and for the Dashboard summary
+card, on a real database file: a date range that names its business searches the index, but those two
+reads do **not** name it — the tenant query filter is translated as
+`(@unrestricted OR "BusinessId" = @business)`, which constrains the index's leading column not at all,
+the same `OR` that made issue #1304 index `ProductId` on its own. SQLite still reaches the index for
+them by *skip-scan*, but only on a database that has statistics, and nothing here runs `ANALYZE`, so a
+deployed database has none and the planner keeps choosing the table scan. The test asserts both
+states, so whichever way that is resolved — collecting statistics, or making the tenant predicate a
+constant — shows up as a failing assertion rather than as silence.
+
 **Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
 alerting today (that is future work, not part of this change), but are the observable evidence
 worth watching for:

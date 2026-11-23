@@ -1256,6 +1256,28 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxSales>()
             .HasIndex(s => s.ProductId);
 
+        // Every dashboard card, money report and reconciliation figure selects its sales by a
+        // MachineAuthorizationTime range - the business-date window of issue #1250 for the money
+        // reports, a period for the dashboard - and about fourteen queries in this assembly do it.
+        // Without an index that holds that instant, each of them read every sale the business has
+        // ever stored and then filtered: measured on a synthetic 500,000-sales-per-business database
+        // (audit #1226, finding DB-02), a one-day or one-month total took 145-226 ms and became
+        // slower with every year of trading. The index leads with BusinessId, like every other
+        // tenant-owned index here, so one business's window is a contiguous range of it
+        // (AGENTS.md § Tenant ownership and data isolation); at that size it cost 21.4% of the file
+        // and 0.67 s to build (NayaxSalesDateRangeIndexSizeBenchmark).
+        //
+        // NayaxSalesDateRangeIndexMigrationTests pins what the planner actually does with it, which
+        // is not yet the whole gain: a date range that names its business searches this index, but
+        // the reports and dashboards do not name it - the business filter is translated as
+        // "(@unrestricted OR BusinessId = @business)", exactly the OR that made issue #1304 index
+        // ProductId on its own - so they reach it only by skip-scan, and only on a database that has
+        // run ANALYZE, which nothing here does. See docs/architecture.md § SQLite operating
+        // assumptions and scale strategy: collecting statistics, or making the tenant predicate a
+        // constant, is the open decision, and that test fails the moment either changes this.
+        modelBuilder.Entity<NayaxSales>()
+            .HasIndex(s => new { s.BusinessId, s.MachineAuthorizationTime });
+
         // MachineAuthorizationTime is a persisted true UTC instant (see docs/architecture.md
         // § Nayax sale timestamps for where that instant is established - the latest-sales
         // synchronization writes it from the Nayax payload's authoritative AuthorizationDateTimeGMT
