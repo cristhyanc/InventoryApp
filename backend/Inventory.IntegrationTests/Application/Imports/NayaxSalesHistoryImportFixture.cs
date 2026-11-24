@@ -1,6 +1,7 @@
 using System.Text;
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
+using Inventory.Application.Maintenance;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
@@ -174,12 +175,16 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
     /// interrupted-attempt cases get at the transaction from outside; left unset, it is the real
     /// one. <paramref name="saleCosting"/> is the same opening on the one per-row collaboration that
     /// can fail with part of a batch already staged; given, every batch is costed by it, and left
-    /// unset, it is the real per-batch costing.</para>
+    /// unset, it is the real per-batch costing. <paramref name="statistics"/> is the sales
+    /// date-range statistics refresh a finished job asks for (issue #1287); left unset, it is the
+    /// real SQLite one over the same context, which on these small fixtures decides there is too
+    /// little history to be worth collecting.</para>
     /// </summary>
     public ProcessNayaxSalesHistoryImportJob Process(
         AppDbContext db,
         INayaxSalesImportTransactions? transactions = null,
-        ICostSale? saleCosting = null)
+        ICostSale? saleCosting = null,
+        ISalesDateRangeStatistics? statistics = null)
     {
         INayaxSalesHistoryBatchCosting costing = saleCosting is null
             ? new NayaxSalesHistoryBatchCosting(
@@ -194,6 +199,7 @@ internal sealed class NayaxSalesHistoryImportFixture : IAsyncDisposable
             new EfNayaxProductLinkStore(db),
             new EfPendingInventoryCostRebuildStore(db, Clock),
             transactions ?? new EfNayaxSalesImportTransactions(db),
+            statistics ?? new SqliteSalesDateRangeStatistics(db),
             Clock);
     }
 

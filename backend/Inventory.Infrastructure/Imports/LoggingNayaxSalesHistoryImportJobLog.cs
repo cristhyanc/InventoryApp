@@ -46,7 +46,8 @@ public sealed class LoggingNayaxSalesHistoryImportJobLog : INayaxSalesHistoryImp
         _logger.LogInformation(
             "Nayax sales history import job {JobId} of business {BusinessId}: {Outcome}, "
                 + "rowsRead={RowsRead}, created={Created}, updated={Updated}, skipped={Skipped}, "
-                + "invalid={Invalid}, rowsNow={RowsNow}, batchesNow={BatchesNow}.",
+                + "invalid={Invalid}, rowsNow={RowsNow}, batchesNow={BatchesNow}, "
+                + "salesDateRangeStatistics={StatisticsRefresh}.",
             jobId,
             businessId,
             result.Outcome,
@@ -56,7 +57,9 @@ public sealed class LoggingNayaxSalesHistoryImportJobLog : INayaxSalesHistoryImp
             result.Progress.Skipped,
             result.Progress.Invalid,
             result.RowsProcessedNow,
-            result.BatchesCommittedNow);
+            result.BatchesCommittedNow,
+            // Issue #1287: what the finished job's statistics refresh did, or that it was not asked.
+            result.StatisticsRefresh?.ToString() ?? "notAsked");
     }
 
     /// <inheritdoc />

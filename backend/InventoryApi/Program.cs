@@ -4,6 +4,7 @@ using Inventory.Application.Access;
 using Inventory.Application.Commissions;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Imports;
+using Inventory.Application.Maintenance;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxReconciliation;
@@ -664,6 +665,18 @@ using (var scope = app.Services.CreateScope())
     await SubscriptionEnforcementStartup.ReportAsync(
         app.Services.GetRequiredService<ISubscriptionEnforcementFlag>(),
         scope.ServiceProvider.GetRequiredService<ISubscriptionGrandfatheringStore>(),
+        loggerFactory,
+        CancellationToken.None);
+
+    // The sales date-range index's planner statistics (issue #1287), last in this block because it
+    // has to run after the schema step that may just have created the index. It collects only when
+    // the policy says the recorded statistics are missing or stale, so the usual cost of this line
+    // is one COUNT(*) over the sales table and no write lock; it never stops startup, because a
+    // slower query plan is not a reason to refuse to serve requests. See
+    // SalesDateRangeStatisticsStartup for the trigger, the bounds and what a finished sales history
+    // import does instead.
+    await SalesDateRangeStatisticsStartup.CollectAsync(
+        scope.ServiceProvider.GetRequiredService<ISalesDateRangeStatistics>(),
         loggerFactory,
         CancellationToken.None);
 }
