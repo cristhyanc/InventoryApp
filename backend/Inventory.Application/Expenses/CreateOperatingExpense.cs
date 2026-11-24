@@ -44,6 +44,10 @@ public sealed class CreateOperatingExpense
                 fields.ServicePeriodStart, fields.ServicePeriodEnd, out var details, out var validationError))
             return CreateOperatingExpenseResult.Invalid(validationError!);
 
+        // The free-text limits (issue #1286), before the machine is looked up or anything is stored.
+        if (OperatingExpenseFieldLengthPolicy.ValidateCreate(fields.Description, fields.Notes) is { } lengthError)
+            return CreateOperatingExpenseResult.Invalid(lengthError);
+
         // The machine is this business's own machine row (issue #780), so it is checked against the
         // business's machines before anything is stored or any attachment is written. The machine
         // store reads through the ordinary tenant filters, so another business's machine is simply

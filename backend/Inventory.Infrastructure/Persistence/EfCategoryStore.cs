@@ -96,6 +96,12 @@ public sealed class EfCategoryStore : ICategoryStore
         if (CategoryCataloguePolicy.Validate(fields.Name) is { } invalid)
             return CategoryWriteAttempt.Refused(invalid);
 
+        // The free-text limits (issue #1286), judged against the row read in this transaction, so a
+        // category already holding a longer value is refused only for a new over-long value.
+        if (CategoryFieldLengthPolicy.ValidateUpdate(
+                category.Name, category.Description, fields.Name, fields.Description) is { } lengthRefusal)
+            return CategoryWriteAttempt.Refused(lengthRefusal);
+
         var name = CategoryCataloguePolicy.Normalize(fields.Name!);
         var renaming = !string.Equals(category.Name, name, StringComparison.Ordinal);
 

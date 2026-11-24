@@ -459,3 +459,38 @@ describe('SupplierFormDialogComponent payload (issue #1174)', () => {
     expect(fixture.componentInstance.error).toBeNull();
   });
 });
+
+describe('SupplierFormDialogComponent field length limits (issue #1286)', () => {
+  it('gives each text input the server limit as its maxlength', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[name="name"]')?.getAttribute('maxlength')).toBe('200');
+    expect(host.querySelector('[name="contactName"]')?.getAttribute('maxlength')).toBe('200');
+    expect(host.querySelector('[name="phone"]')?.getAttribute('maxlength')).toBe('50');
+    expect(host.querySelector('[name="email"]')?.getAttribute('maxlength')).toBe('254');
+    expect(host.querySelector('[name="address"]')?.getAttribute('maxlength')).toBe('500');
+  });
+
+  it('edits and saves a supplier whose stored address is already longer than the limit', async () => {
+    const legacyAddress = 'a'.repeat(800);
+    const { host, component, update } = await render({ supplier: supplier({ id: 4, address: legacyAddress }) });
+
+    const address = host.querySelector<HTMLElement>('[name="address"]')!;
+    expect(address.hasAttribute('maxlength')).toBe(false);
+    expect(address.classList).not.toContain('ng-invalid');
+
+    component.form.phone = '0400 000 000';
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(4, expect.objectContaining({ phone: '0400 000 000', address: legacyAddress }));
+  });
+
+  it('applies the limit again once the over-long stored address itself is changed', async () => {
+    const { fixture, host, component } = await render({ supplier: supplier({ id: 4, address: 'a'.repeat(800) }) });
+
+    component.form.address = 'a'.repeat(799);
+    fixture.detectChanges();
+
+    expect(host.querySelector('[name="address"]')?.getAttribute('maxlength')).toBe('500');
+  });
+});

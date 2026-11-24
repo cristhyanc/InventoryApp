@@ -769,3 +769,47 @@ describe('ExpenseFormComponent unsaved work (issue #1167)', () => {
     expect(component.dirty).toBe(false);
   });
 });
+
+describe('ExpenseFormComponent field length limits (issue #1286)', () => {
+  it('gives the description and notes inputs the server limits as their maxlength', async () => {
+    const { fixture, host } = await render();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(host.querySelector('#expense-description')?.getAttribute('maxlength')).toBe('500');
+    expect(host.querySelector('#expense-notes')?.getAttribute('maxlength')).toBe('2000');
+  });
+
+  it('opens and saves an expense whose stored description is already longer than the limit', async () => {
+    const legacyDescription = 'e'.repeat(700);
+    const { fixture, component, host, saved } = await render({
+      mode: 'edit',
+      value: storedValue({ description: legacyDescription })
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const description = host.querySelector<HTMLInputElement>('#expense-description')!;
+    expect(description.hasAttribute('maxlength')).toBe(false);
+    expect(description.classList).not.toContain('ng-invalid');
+
+    component.form.notes = 'Paid by card';
+    component.submit();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].payload.description).toBe(legacyDescription);
+    expect(saved[0].payload.notes).toBe('Paid by card');
+  });
+
+  it('applies the limit again once the over-long stored description itself is changed', async () => {
+    const { fixture, component, host } = await render({
+      mode: 'edit',
+      value: storedValue({ description: 'e'.repeat(700) })
+    });
+
+    component.form.description = 'e'.repeat(699);
+    fixture.detectChanges();
+
+    expect(host.querySelector('#expense-description')?.getAttribute('maxlength')).toBe('500');
+  });
+});

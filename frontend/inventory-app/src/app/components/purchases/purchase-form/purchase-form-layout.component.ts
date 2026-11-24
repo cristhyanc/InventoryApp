@@ -19,6 +19,7 @@ import { PurchaseProductPickerComponent } from './purchase-product-picker.compon
 import { PurchaseReceiptFieldComponent, StoredReceipt } from './purchase-receipt-field.component';
 import { PurchaseReceiptPreviewComponent } from './purchase-receipt-preview.component';
 import { ReceiptTotalComparison, compareReceiptTotal, purchaseTotal } from './purchase-receipt-comparison';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../../shared/field-length-limits';
 import {
   NOT_STOCK_SKIP_LABEL,
   PACK_SIZE_FROM_LAST_PURCHASE_LABEL,
@@ -230,7 +231,24 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   private touchedLines = new WeakSet<PurchaseFormLine>();
 
+  /**
+   * The title and notes as the form object arrived - the stored purchase on Edit - so an input
+   * still holding a value stored before the length limits existed is not limited (issue #1286).
+   */
+  private loadedText = { title: '', notes: '' };
+
+  /**
+   * The `maxlength` for the title or notes input (issue #1286): the server limit, lifted only while
+   * the input still holds the over-long value the form was opened with.
+   */
+  maxLength(field: 'title' | 'notes'): number | null {
+    return editableMaxLength(this.form[field], this.loadedText[field], FIELD_LENGTH_LIMITS.purchase[field]);
+  }
+
   ngOnChanges(changes: SimpleChanges): void {
+    if (changes['form']) {
+      this.loadedText = { title: this.form?.title ?? '', notes: this.form?.notes ?? '' };
+    }
     // A new form object is a newly opened purchase (a route change or a reset), so its own
     // validation and section state start again.
     if (changes['form'] && !changes['form'].firstChange) {

@@ -1968,6 +1968,8 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ProductId");
 
+                    b.HasIndex("BusinessId", "MachineAuthorizationTime");
+
                     b.HasIndex("BusinessId", "ProductId");
 
                     b.HasIndex("BusinessId", "TransactionID")

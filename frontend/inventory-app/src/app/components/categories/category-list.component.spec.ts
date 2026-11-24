@@ -429,3 +429,46 @@ describe('CategoryListComponent duplicate-submit guard (issue #1280)', () => {
     expect(component.error).toBe('This business already has a category called "Drinks".');
   });
 });
+
+describe('CategoryListComponent field length limits (issue #1286)', () => {
+  it('gives the name and description inputs the server limits as their maxlength', async () => {
+    const { fixture, host } = await render();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(host.querySelector('#categoryName')?.getAttribute('maxlength')).toBe('200');
+    expect(host.querySelector('#categoryDescription')?.getAttribute('maxlength')).toBe('2000');
+  });
+
+  it('edits and saves a category whose stored name is already longer than the limit', async () => {
+    const legacyName = 'n'.repeat(300);
+    const legacy = category({ id: 5, name: legacyName, description: 'Cold' });
+    const { fixture, host, component, update } = await render({ categories: [legacy] });
+
+    component.startEdit(legacy);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const name = host.querySelector<HTMLInputElement>('#categoryName')!;
+    expect(name.hasAttribute('maxlength')).toBe(false);
+    expect(name.classList).not.toContain('ng-invalid');
+
+    component.form.description = 'Cold drinks';
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(5, { name: legacyName, description: 'Cold drinks' });
+  });
+
+  it('applies the limit again once the over-long stored name itself is changed', async () => {
+    const legacy = category({ id: 5, name: 'n'.repeat(300) });
+    const { fixture, host, component } = await render({ categories: [legacy] });
+
+    component.startEdit(legacy);
+    fixture.detectChanges();
+    component.form.name = 'n'.repeat(299);
+    fixture.detectChanges();
+
+    expect(host.querySelector('#categoryName')?.getAttribute('maxlength')).toBe('200');
+  });
+});

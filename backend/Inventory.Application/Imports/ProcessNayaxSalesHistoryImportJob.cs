@@ -1,4 +1,5 @@
 using Inventory.Application.Costing;
+using Inventory.Application.Maintenance;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.Imports;
@@ -36,11 +37,18 @@ public enum NayaxSalesHistoryImportJobRunOutcome
 /// </param>
 /// <param name="RowsProcessedNow">How many rows this attempt itself applied.</param>
 /// <param name="BatchesCommittedNow">How many batches this attempt itself committed.</param>
+/// <param name="StatisticsRefresh">
+/// What the sales date-range statistics refresh did after the job finished (issue #1287), or
+/// <see langword="null"/> when the attempt did not finish the job and so did not ask. It is reported
+/// rather than acted on: every outcome of it, the failed one included, leaves the import exactly as
+/// it was.
+/// </param>
 public sealed record NayaxSalesHistoryImportJobRunResult(
     NayaxSalesHistoryImportJobRunOutcome Outcome,
     NayaxSalesHistoryImportProgress Progress,
     int RowsProcessedNow,
-    int BatchesCommittedNow);
+    int BatchesCommittedNow,
+    SalesDateRangeStatisticsOutcome? StatisticsRefresh = null);
 
 /// <summary>
 /// Imports one uploaded Nayax sales history (issue #1304), in a service scope already resolved to
@@ -76,6 +84,19 @@ public sealed record NayaxSalesHistoryImportJobRunResult(
 /// reader). Replaying inside the job would mean replaying the same product's whole history once per
 /// batch, which is the opposite of what the batching is for.</para>
 ///
+/// <para><strong>A finished job asks for the sales date-range statistics to be refreshed</strong>
+/// (issue #1287, the repository owner's decision of 24 November 2026). This is the one path in the
+/// application that can add a quarter of a million sales at once, so it is the one place besides
+/// startup where the planner statistics that let the money reports and dashboards reach
+/// <c>IX_NayaxSales_BusinessId_MachineAuthorizationTime</c> can go badly out of date without anybody
+/// restarting the process. The ask is made <em>after</em> the job is recorded Completed and outside
+/// every batch transaction, it is bounded by
+/// <see cref="Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy"/> rather than by this job
+/// (so most imports collect nothing at all), and it cannot fail the import: whatever it answers -
+/// including that the database was unavailable - the job stays Completed and the rows stay imported.
+/// Nothing is asked for an attempt that was requeued or stopped, because the file is not finished and
+/// the next attempt will ask.</para>
+///
 /// <para><strong>Nothing here decides which job to do, or when.</strong> That is
 /// <see cref="NayaxSalesHistoryImportJobRunner"/>'s, over
 /// <see cref="INayaxSalesHistoryImportJobQueue"/>'s one cross-business read.</para>
@@ -93,6 +114,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
     private readonly INayaxProductLinkStore _productLinks;
     private readonly IPendingInventoryCostRebuildStore _rebuilds;
     private readonly INayaxSalesImportTransactions _transactions;
+    private readonly ISalesDateRangeStatistics _statistics;
     private readonly IClock _clock;
 
     public ProcessNayaxSalesHistoryImportJob(
@@ -103,6 +125,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         INayaxProductLinkStore productLinks,
         IPendingInventoryCostRebuildStore rebuilds,
         INayaxSalesImportTransactions transactions,
+        ISalesDateRangeStatistics statistics,
         IClock clock)
     {
         _jobs = jobs;
@@ -112,6 +135,7 @@ public sealed class ProcessNayaxSalesHistoryImportJob
         _productLinks = productLinks;
         _rebuilds = rebuilds;
         _transactions = transactions;
+        _statistics = statistics;
         _clock = clock;
     }
 
@@ -190,8 +214,16 @@ public sealed class ProcessNayaxSalesHistoryImportJob
 
         await _jobs.CompleteAsync(claim.JobId, _clock.UtcNow, cancellationToken);
 
+        // The history is imported and recorded as such before this, and nothing below can change
+        // either (issue #1287). See the refresh paragraph on this type.
+        var statistics = await _statistics.CollectIfStaleAsync(cancellationToken);
+
         return new NayaxSalesHistoryImportJobRunResult(
-            NayaxSalesHistoryImportJobRunOutcome.Finished, progress, rowsNow, batchesNow);
+            NayaxSalesHistoryImportJobRunOutcome.Finished,
+            progress,
+            rowsNow,
+            batchesNow,
+            statistics.Outcome);
     }
 
     /// <summary>

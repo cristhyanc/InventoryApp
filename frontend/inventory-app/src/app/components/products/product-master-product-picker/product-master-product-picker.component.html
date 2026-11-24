@@ -17,6 +17,7 @@
       [attr.aria-describedby]="hintId"
       [attr.aria-busy]="state === 'loading'"
       [value]="productName"
+      [attr.maxlength]="nameMaxLength"
       (input)="onInput($event)"
       (keydown)="onKeydown($event)"
     />

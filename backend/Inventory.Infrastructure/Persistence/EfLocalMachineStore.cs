@@ -127,7 +127,10 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
             id,
             machine => machine.Name = MachineCataloguePolicy.Normalize(fields.Name!),
             MachineCataloguePolicy.ProviderMachineRenameRefusal,
-            cancellationToken);
+            cancellationToken,
+            // The name's length limit (issue #1286), judged against the row read in the write's
+            // transaction, so resubmitting a longer stored name is not refused.
+            machine => MachineFieldLengthPolicy.ValidateRename(machine.Name, fields.Name));
     }
 
     /// <summary>
@@ -152,7 +155,8 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
         long id,
         Action<LocalMachine> change,
         Func<ExternalProvider?, string>? providerMachineRefusal,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<LocalMachine, string?>? rowRefusal = null)
     {
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
@@ -168,6 +172,9 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
             return LocalMachineWriteAttempt.Refused(providerMachineRefusal(
                 await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken)));
         }
+
+        if (rowRefusal?.Invoke(machine) is { } refusal)
+            return LocalMachineWriteAttempt.Refused(refusal);
 
         change(machine);
         await _db.SaveChangesAsync(cancellationToken);

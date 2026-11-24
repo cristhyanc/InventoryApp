@@ -18,6 +18,7 @@ import { apiErrorMessage } from '../shared/api-error-message';
 import { IconComponent } from '../shared/icon.component';
 import { PendingWorkGuarded } from '../pick-list/pick-list-leave.guard';
 import { reorderGuidance } from './product-reorder-guidance';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../shared/field-length-limits';
 
 /** The one sentence a departure asks while there is unsaved work (issue #1111). */
 export const PRODUCT_UNSAVED_LEAVE_WARNING = 'You have unsaved changes to this product. Leave this page and discard them?';
@@ -197,6 +198,23 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
    */
   private storedFields: string = this.serialise(this.form);
 
+  /**
+   * The text fields as the server returned them on Edit (empty on New Product), so an input still
+   * holding a value stored before the length limits existed is not marked invalid (issue #1286).
+   */
+  private loadedText = { name: '', sku: '', unit: '', description: '' };
+
+  /** The server's length limits for this form's text inputs (issue #1286). */
+  readonly lengthLimits = FIELD_LENGTH_LIMITS.product;
+
+  /**
+   * The `maxlength` for one text input: the server limit, lifted only while the input still holds
+   * an over-long value loaded from the server (see `editableMaxLength`).
+   */
+  maxLength(field: 'name' | 'sku' | 'unit' | 'description'): number | null {
+    return editableMaxLength(this.form[field], this.loadedText[field], this.lengthLimits[field]);
+  }
+
   constructor(
     private readonly productService: ProductService,
     private readonly categoryService: CategoryService,
@@ -241,6 +259,12 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
           isActive: p.isActive
         };
         this.storedFields = this.serialise(this.form);
+        this.loadedText = {
+          name: this.form.name,
+          sku: this.form.sku,
+          unit: this.form.unit,
+          description: this.form.description
+        };
       });
     }
   }

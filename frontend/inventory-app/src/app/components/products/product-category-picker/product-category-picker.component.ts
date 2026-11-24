@@ -16,6 +16,7 @@ import { Category } from '../../../models/models';
 import { CategoryService } from '../../../services/category.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { apiErrorMessage } from '../../shared/api-error-message';
+import { FIELD_LENGTH_LIMITS } from '../../shared/field-length-limits';
 
 /**
  * One row of the open list. "No category" is the optional-category semantics the replaced `<select>`
@@ -82,6 +83,9 @@ export class ProductCategoryPickerComponent implements OnInit, OnChanges, OnDest
 
   /** The text in the box: a search term while the list is open, the selection's name once closed. */
   query = '';
+
+  /** The server's category name limit (issue #1286): a typed new category is created from this input. */
+  readonly nameMaxLength = FIELD_LENGTH_LIMITS.category.name;
 
   /** Whether the option list is open. */
   open = false;

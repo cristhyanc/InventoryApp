@@ -441,3 +441,42 @@ describe('LocalMachineListComponent in a support session (issue #658)', () => {
     expect(service.delete).not.toHaveBeenCalled();
   });
 });
+
+describe('LocalMachineListComponent field length limits (issue #1286)', () => {
+  it('gives the add input the server name limit as its maxlength', async () => {
+    const { fixture, host } = await render();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(addForm(host)?.getAttribute('maxlength')).toBe('200');
+  });
+
+  it('opens the rename of a machine whose stored name is already longer than the limit without blocking it', async () => {
+    const legacyName = 'm'.repeat(260);
+    const machine = localMachine({ id: 3, name: legacyName });
+    const { fixture, component, host, service } = await render({ machines: [machine] });
+
+    component.startRename(machine);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const rename = host.querySelector<HTMLInputElement>('#machineName3')!;
+    expect(rename.hasAttribute('maxlength')).toBe(false);
+    expect(rename.classList).not.toContain('ng-invalid');
+
+    component.saveRename();
+    expect(service.rename).toHaveBeenCalledWith(3, legacyName);
+  });
+
+  it('applies the limit again once the over-long stored name itself is changed', async () => {
+    const machine = localMachine({ id: 3, name: 'm'.repeat(260) });
+    const { fixture, component, host } = await render({ machines: [machine] });
+
+    component.startRename(machine);
+    component.editingName = 'm'.repeat(259);
+    fixture.detectChanges();
+
+    expect(host.querySelector('#machineName3')?.getAttribute('maxlength')).toBe('200');
+  });
+});

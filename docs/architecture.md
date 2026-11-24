@@ -115,6 +115,73 @@ App Service plan for this app must stay pinned to a single instance: scaling out
 exceed SQLite's single-writer model, it would put WAL's own coordination mechanism on storage it
 does not support.
 
+**Reads that must not grow with the whole sales table.** About fourteen queries in
+`Inventory.Infrastructure` — the dashboards, the money reports and reconciliation — select sales by a
+`MachineAuthorizationTime` range, and no index held that instant, so each of them read every sale the
+business had ever stored: 145–226 ms for a one-day or one-month total on a synthetic database of
+500,000 sales per business (audit #1226, finding DB-02). Migration
+`20261123120000_AddNayaxSalesDateRangeIndex` adds `IX_NayaxSales_BusinessId_MachineAuthorizationTime`
+(issue #1287), which leads with the business like every other tenant-owned index here and cost 21.4%
+of the file (131.9 MB → 160.2 MB) and 0.80 s to build at that size
+(`NayaxSalesDateRangeIndexSizeBenchmark`, the opt-in measurement).
+
+The index alone was not enough, and this is the part worth understanding. A date range that *names*
+its business searches the index outright, but the reports and dashboards do not name it: the tenant
+query filter is translated as `(@unrestricted OR "BusinessId" = @business)`, which constrains the
+index's leading column not at all — the same `OR` that made issue #1304 index `ProductId` on its own.
+SQLite reaches the index for those reads by *skip-scan*, and it enables a skip-scan only for an index
+that carries planner statistics, so on a database that has never run `ANALYZE` the planner keeps
+choosing the full table scan. **The application therefore collects those statistics itself** (the
+repository owner's decision of 24 November 2026 on issue #1287), and the policy is deliberately small:
+
+- **What is collected.** `ANALYZE "IX_NayaxSales_BusinessId_MachineAuthorizationTime"` — that one
+  index and nothing else, which is the narrowest scope SQLite offers. One `sqlite_stat1` row is
+  written. `Inventory.Infrastructure.Persistence.SqliteSalesDateRangeStatistics` is the only thing
+  that issues it, behind the Application port `ISalesDateRangeStatistics`; its three statements are
+  raw SQL that names no business, no entity and no tenant column, and it is unreachable from a request
+  path.
+- **The two triggers.** API startup, immediately after the schema step that may just have applied the
+  index migration (`InventoryApi.Bootstrap.SalesDateRangeStatisticsStartup`); and a *finished*
+  background sales history import, which is the one path that can add 250,000 sales between two
+  restarts (`Inventory.Application.Imports.ProcessNayaxSalesHistoryImportJob`, after the job is
+  recorded Completed and outside every batch transaction). There is no timer, no cron entry, no new
+  scheduler and no request path that collects anything, and sales trickling in from the Nayax queue
+  reader deliberately trigger nothing.
+- **The bounds.** `Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy` decides from two
+  numbers — what the recorded statistics say the table holds, and what it holds now. It collects when
+  there are no statistics and the table holds at least 1,000 sales, or when the table has grown or
+  shrunk by a factor of four since the last collection; otherwise it collects nothing and takes no
+  write lock. So the number of collections over the life of a database is about `log₄(sales / 1,000)`
+  — nine of them between the floor and 250 million sales — and an ordinary restart pays one
+  `COUNT(*)`.
+- **An initial database collects nothing.** A brand-new deployment with no sales is below the floor,
+  at this startup and every later one, until the business has actually traded.
+- **Cancellation and failure.** A host that is stopping stops: cancellation propagates. A database
+  failure does not — a write lock held past the 30-second busy timeout is reported as `Unavailable`
+  and logged, never raised, because a slower query plan must not stop the API from starting or turn a
+  completed import into a failed one. The next trigger decides again from the state it finds.
+- **Write lock and storage.** Measured at the audit's size (1,000,000 sales): the initial collection
+  holds the write lock 0.10 s and adds one 4 KB page; a refresh holds it 0.11 s and adds nothing,
+  overwriting the row it already had; deciding the statistics are current takes no write lock at all.
+  Index creation, initial collection and refresh are measured and reported separately by
+  `NayaxSalesDateRangeIndexSizeBenchmark`.
+- **The one wider planner effect.** Loading an index's statistics also sets SQLite's row estimate for
+  the *table* that index is on, so every query over `NayaxSales` now costs its alternatives against a
+  true row count instead of SQLite's built-in guess. No other table is described at all, and the other
+  three `NayaxSales` indexes gain no statistics and therefore no skip-scan of their own.
+- **It cannot change a row or a figure.** `ANALYZE` reads index keys and writes aggregate counts, and
+  SQLite's results do not depend on which plan produced them. No query, report, dashboard, tenant
+  predicate, authorization rule or existing index changed for any of this.
+
+What guards all of it is `NayaxSalesDateRangeIndexMigrationTests`, on a real database file: it starts
+from a populated database with no statistics whatsoever, exercises the real collection path — no test
+runs `ANALYZE` — and then runs `EXPLAIN QUERY PLAN` on the SQL EF actually generates for the shared
+business-date sales selection (issue #1250) and for the Dashboard summary card, asserting that both
+search the index. Beside it, the bounded refresh is exercised as history grows, a brand-new database is
+asserted to collect nothing, and both businesses' rows and money-report figures are asserted identical
+either side of a collection. No operator-facing step or configuration setting is introduced: there is
+nothing for a human to run, which is why `README.md` and the operator documentation are unaffected.
+
 **Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
 alerting today (that is future work, not part of this change), but are the observable evidence
 worth watching for:
@@ -9078,6 +9145,8 @@ so nothing held them to the total beside them. Issue #1257 (audit #1223, finding
 closed both. Neither half changes the schema, and neither repairs data that already exists —
 listing existing inconsistent expenses is explicitly a person's job, out of scope here.
 
+**Length limits (issue #1286).** An operating expense's description is at most 500 characters and its notes 2,000, after trimming (`OperatingExpenseFieldLengthPolicy`); `POST` and `PUT api/operating-expenses` refuse a longer value with `400` naming the field and the limit and store nothing (an attachment uploaded with a refused edit is removed again), while an edit that sends back a longer stored value unchanged is accepted. See [Free-text length limits on the main records](#free-text-length-limits-on-the-main-records-issue-1286).
+
 **An expense's three amounts have to describe one expense.**
 `Inventory.Domain.Expenses.OperatingExpenseDetails.TryCreate` — the one rule create and update
 share — refuses a submission whose ex GST plus GST is more than `$0.01` from its total, with
@@ -12146,6 +12215,8 @@ client-side filter/paging.
    same transaction and without recording anything for the goods that never arrived (see
    [Completing a partially delivered supplier order](#completing-a-partially-delivered-supplier-order-issue-974)).
 
+**Length limits (issue #1286).** A purchase's submitted title is at most 200 characters and its notes 2,000, after trimming (`PurchaseFieldLengthPolicy`); create and edit refuse a longer value with `400` naming the field and the limit and write nothing, an edit that sends back longer stored text unchanged is accepted, and a title that falls back to the uploaded document's file name is not judged. See [Free-text length limits on the main records](#free-text-length-limits-on-the-main-records-issue-1286).
+
 **A purchase create may carry an idempotency key, and a retry under one saves nothing twice (issue
 #1247).** Create records the purchase, its lines, one restock movement per line and the cost rebuild
 those movements cause, so a phone that lost the response and retried - or an operator who pressed
@@ -15091,6 +15162,19 @@ instead of files.
   those rows. An attempt that fails is queued again with a safe reason (the exception's *type* name,
   never its message, which can quote a statement's parameter values - and those are a business's
   sales); after `MaxAttempts` the job is `Failed`, keeps every batch it committed, and says so.
+- **A finished job asks for the sales date-range statistics to be refreshed** (issue #1287, the
+  repository owner's decision of 24 November 2026). This is the one path that can add 250,000 sales
+  between two restarts, so it is the second of that policy's two triggers — the other being startup —
+  and the only one inside a feature. The ask is made through the Application port
+  `ISalesDateRangeStatistics` *after* the job is recorded Completed and outside every batch
+  transaction; whether anything is collected is
+  `Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy`'s decision, so most imports collect
+  nothing at all and the usual cost is one `COUNT(*)`. Nothing it answers can change the import: an
+  attempt that was requeued or stopped asks for nothing, and a refresh that could not be made —
+  including a write lock held past the busy timeout — leaves the job Completed with every row
+  imported and is reported on the attempt's result and in its log line. See [SQLite operating
+  assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) for the
+  policy, the bounds and the measured write-lock cost.
 - **The worker is the fifth hosted background service**, and is
   `ReimbursementImportJobRunner`'s shape exactly: `NayaxSalesHistoryImportJobRunner` takes the oldest
   unfinished job across every business, one at a time, each in a service scope resolved to that one
@@ -16021,6 +16105,8 @@ event's, a timestamp repair's, an inventory-cost transition's — was Nayax's ow
 with no sales provider therefore had no machines, in an application whose whole purpose is the
 machines it refills.
 
+**Length limit (issue #1286).** A machine name a person creates or renames is at most 200 characters after trimming (`MachineFieldLengthPolicy`); a longer one is refused with `400` naming the field and the limit, and a rename that sends back a longer stored name is not refused. See [Free-text length limits on the main records](#free-text-length-limits-on-the-main-records-issue-1286).
+
 **The table.** `Machines`, mapped by `Inventory.Infrastructure.Models.LocalMachine`:
 
 | Column | What it is |
@@ -16855,6 +16941,8 @@ must not have the provider's values quietly overwritten locally. Issue #736 (par
 P2) settles both with one idea: **a local row's fields are this business's, except the ones the
 provider's import rewrites on every run.**
 
+**Length limits (issue #1286).** A product's name is at most 200 characters, its SKU and unit label 100 and its description 2,000 (`ProductFieldLengthPolicy`), and a category's name 200 and description 2,000 (`CategoryFieldLengthPolicy`), all after trimming; `POST` and `PUT` refuse a longer value with `400` naming the field and the limit and save nothing, while an update that sends back a longer stored value unchanged is accepted. See [Free-text length limits on the main records](#free-text-length-limits-on-the-main-records-issue-1286).
+
 **The write surface.** `POST api/products`, `PUT api/products/{id}` and `DELETE api/products/{id}`
 on `ProductsController`, and `POST api/categories`, `PUT api/categories/{id}` and
 `DELETE api/categories/{id}` on `CategoriesController`. They declare the same `Inventory.Operate`
@@ -17268,11 +17356,84 @@ and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below.
 this section changed: the provider still owns a linked row's name and category, the price is still
 local and still editable, and a row with no external id is still the business's own in full.
 
+### Free-text length limits on the main records (issue #1286)
+
+Audit #1226 (finding DB-03) saved a category whose name and description were each 5,000,000
+characters: SQLite ignores a declared column length, EF Core does not check `HasMaxLength` on save,
+and these columns declare none, so nothing bounded the text a person could store. Every business
+shares one database file, one daily backup and one storage quota, so issue #1286 bounds the free
+text of the records people maintain by hand. The limits are the repository owner's decision of 14
+November 2026, as written in the issue:
+
+| Record | Field | Maximum characters (after trimming) | Domain policy |
+|---|---|---|---|
+| Product | Name | 200 | `Inventory.Domain.Products.ProductFieldLengthPolicy` |
+| Product | Sku, Unit | 100 | |
+| Product | Description | 2,000 | |
+| Category | Name | 200 | `Inventory.Domain.Categories.CategoryFieldLengthPolicy` |
+| Category | Description | 2,000 | |
+| Supplier | Name, ContactName | 200 | `Inventory.Domain.Suppliers.SupplierFieldLengthPolicy` |
+| Supplier | Phone | 50 | |
+| Supplier | Email | 254 | |
+| Supplier | Address | 500 | |
+| Purchase | Title | 200 | `Inventory.Domain.Purchases.PurchaseFieldLengthPolicy` |
+| Purchase | Notes | 2,000 | |
+| Operating expense | Description | 500 | `Inventory.Domain.Expenses.OperatingExpenseFieldLengthPolicy` |
+| Operating expense | Notes | 2,000 | |
+| Machine (local) | Name | 200 | `Inventory.Domain.Machines.MachineFieldLengthPolicy` |
+
+**One rule, measured one way.** Each limit is a named constant in its record's policy, and the
+arithmetic they share is `Inventory.Domain.FieldLengths.FieldLengthLimit`: a value is measured after
+trimming (nothing stored is changed by it — each record keeps its own normalisation), a value exactly
+at the limit is accepted, a blank value is never too long, and a longer one is refused with the
+sentence "*Field* must be *N* characters or fewer." (for example "Notes must be 2,000 characters or
+fewer."). The blank-name and required-description rules that already existed run first and are
+unchanged.
+
+**Create is judged on the request; update against the stored row.** A create use case
+(`CreateProduct`, `CreateCategory`, `CreateSupplier`, `UploadPurchase`, `CreateOperatingExpense`,
+`CreateLocalMachine`) applies the policy before anything is written. An update is judged against
+the row it changes, because rows saved before the limits may already hold a longer value and **no
+stored value is shortened or migrated**: `FieldLengthLimit.ChangeRefusal` accepts a field whose
+submitted value is the stored one (compared trimmed, blank and none being one state) — the edit
+forms send every field back, changed or not — and refuses only a new over-long value. That
+comparison reads a stored value, so it is made inside the store's own write, on the row the write
+read (`EfProductStore`, `EfCategoryStore`, `EfSupplierStore`, `EfPurchaseStore` under its write lock,
+`EfOperatingExpenseStore`, `EfLocalMachineStore.RenameAsync`), the same reason the provider-managed
+and unit-label refusals are decided there: the read, the comparison and the write are one operation.
+
+**The answer is the record's existing `400`.** Each endpoint returns the refusal through the channel
+it already uses for validation: a plain-text `400` for products, categories, purchases, operating
+expenses and local machines, and for suppliers the `ValidationProblemDetails` of issue #847 with the
+message against the refused field (`name`, `contactName`, `phone`, `email` or `address`,
+`SupplierFieldLengthPolicy.RefusedField`). Nothing is written when a value is refused; an operating
+expense edit that also uploaded an attachment removes that file and releases its quota reservation.
+
+**The forms match.** Each matching Angular input carries a `maxlength` equal to the server limit,
+from `components/shared/field-length-limits.ts`. Angular's `maxlength` validator would mark a loaded
+over-long value invalid, so `editableMaxLength` lifts the limit while an input still holds a value
+the server returned longer than it, and applies it again as soon as that field is changed — the form
+allows exactly the edit the API allows.
+
+**Out of scope.** No column, `HasMaxLength` or migration changes; no global request-body cap for
+JSON endpoints; Nayax-imported names, price-collector data, platform records and the upload
+file-name fields are not judged by these policies; category-name uniqueness is unchanged.
+
+**What proves it.** `FieldLengthLimitTests` and one `*FieldLengthPolicyTests` class per policy
+(at the limit, one over, trailing whitespace, blank, and the stored-value-unchanged and new-value
+update cases); `FieldLengthLimitsApiTests` shows, per record type over the real HTTP pipeline and
+SQLite, the `400` and that nothing was written on create and on update, a value at the limit being
+accepted, and a row holding a longer value (written straight to the database) saved with another
+field changed; and a component test per form shows the loaded over-long value is neither limited nor
+invalid until it is changed.
+
 ### A supplier's optional website (issue #847)
 
 A supplier record carries an optional website, `Supplier.Url`, so a buyer can open the supplier's
 own ordering page from the Suppliers list. It is child A of #835 and independent of that issue's
 other children.
+
+**Length limits (issue #1286).** Beside the website's own 2048-character rule, a supplier's name and contact name are at most 200 characters, its phone 50, its email 254 and its address 500, after trimming (`SupplierFieldLengthPolicy`); a longer value is refused with `400` as a `ValidationProblemDetails` against that field, and an update that sends back a longer stored value unchanged is accepted. See [Free-text length limits on the main records](#free-text-length-limits-on-the-main-records-issue-1286).
 
 **The schema.** `AddSupplierUrl` adds one nullable `Url` column of at most 2048 characters to
 `Suppliers`. It is purely additive: no backfill, no table rebuild, no index and no other table.

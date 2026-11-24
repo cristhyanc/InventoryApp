@@ -6,6 +6,7 @@ import { SupplierService } from '../../../services/supplier.service';
 import { ModalDialogComponent } from '../../shared/modal-dialog/modal-dialog.component';
 import { SUPPLIER_URL_MAX_LENGTH, normalizeSupplierUrl } from '../supplier-url';
 import { supplierRefusal } from '../supplier-refusal';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../../shared/field-length-limits';
 
 /** The form's own message for the one field the API requires; the server refuses a blank name too. */
 export const SUPPLIER_NAME_REQUIRED_MESSAGE = 'A supplier needs a name.';
@@ -77,6 +78,14 @@ export class SupplierFormDialogComponent implements OnInit {
 
   /** Mirrors the stored column's limit, so the input stops the operator at the same place. */
   readonly urlMaxLength = SUPPLIER_URL_MAX_LENGTH;
+
+  /**
+   * The `maxlength` for one text input (issue #1286): the server limit, lifted only while the input
+   * still holds the edited supplier's stored value that is already longer.
+   */
+  maxLength(field: 'name' | 'contactName' | 'phone' | 'email' | 'address'): number | null {
+    return editableMaxLength(this.form[field], this.opened[field], FIELD_LENGTH_LIMITS.supplier[field]);
+  }
 
   /** The name field's refusal, or `null` while it is acceptable. */
   nameError: string | null = null;

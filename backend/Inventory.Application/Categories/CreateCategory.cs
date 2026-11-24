@@ -22,7 +22,9 @@ public sealed class CreateCategory
     {
         ArgumentNullException.ThrowIfNull(fields);
 
-        var error = CategoryCataloguePolicy.Validate(fields.Name);
+        // The blank-name rule first, then the free-text limits (issue #1286).
+        var error = CategoryCataloguePolicy.Validate(fields.Name)
+            ?? CategoryFieldLengthPolicy.ValidateCreate(fields.Name, fields.Description);
         return error is not null
             ? Task.FromResult(CategoryWriteAttempt.Refused(error))
             : _store.CreateAsync(fields, cancellationToken);

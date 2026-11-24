@@ -1,6 +1,7 @@
 using Inventory.Application.Attachments;
 using Inventory.Application.Expenses;
 using Inventory.Application.Time;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Expenses;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -105,6 +106,13 @@ public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
 
         var entity = await _db.OperatingExpenses.FindAsync(new object[] { id }, cancellationToken);
         if (entity is null) return null;
+
+        // The free-text limits (issue #1286), judged against the row just read, so an expense already
+        // holding a longer value is refused only for a new over-long value. Thrown before the
+        // attachment quota is consumed or anything is changed, so nothing is written.
+        if (OperatingExpenseFieldLengthPolicy.ValidateUpdate(
+                entity.Description, entity.Notes, fields.Description, fields.Notes) is { } lengthRefusal)
+            throw new DomainValidationException(lengthRefusal);
 
         if (attachmentReservation is not null)
         {

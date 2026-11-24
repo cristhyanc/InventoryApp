@@ -9,6 +9,7 @@ import { ToastService } from '../../services/toast.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { handOffFocusFromRemovedOpener } from '../shared/confirmation-focus';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../shared/field-length-limits';
 
 @Component({
   selector: 'app-category-list',
@@ -22,6 +23,18 @@ export class CategoryListComponent implements OnInit, OnDestroy {
   error = '';
   confirmingCategory: Category | null = null;
   form = { name: '', description: '' };
+
+  /**
+   * The `maxlength` for the name or description input (issue #1286): the server limit, lifted only
+   * while the input still holds the edited category's stored value that is already longer.
+   */
+  maxLength(field: 'name' | 'description'): number | null {
+    let loaded = '';
+    if (this.editing) {
+      loaded = field === 'name' ? this.editing.name : (this.editing.description ?? '');
+    }
+    return editableMaxLength(this.form[field], loaded, FIELD_LENGTH_LIMITS.category[field]);
+  }
 
   /** Whether a create or update request is in flight, so a second submit before it answers is ignored (issue #1280). */
   saving = false;
