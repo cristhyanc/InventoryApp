@@ -7,6 +7,7 @@ import { OperatingExpenseCategory, OperatingExpensePayload } from '../../service
 import { prepareImageForUpload } from '../shared/image-upload-preparation';
 import { currentDateInTimeZone } from '../../formatting/business-time-zone';
 import { OPERATING_EXPENSE_CATEGORIES, expenseCategoryLabel } from './expense-categories';
+import { editableMaxLength, FIELD_LENGTH_LIMITS } from '../shared/field-length-limits';
 
 /** The `accept` list the supporting-document input has always offered. */
 export const EXPENSE_ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf';
@@ -245,6 +246,12 @@ export class ExpenseFormComponent {
 
   form: OperatingExpensePayload = newExpenseFormValue().payload;
 
+  /**
+   * The description and notes as the form was opened - the stored expense on Edit - so an input
+   * still holding a value stored before the length limits existed is not limited (issue #1286).
+   */
+  private loadedText = { description: '', notes: '' };
+
   /** The document chosen on this form, already prepared for upload, or `null`. */
   selectedAttachment: File | null = null;
 
@@ -389,9 +396,18 @@ export class ExpenseFormComponent {
     }
   }
 
+  /**
+   * The `maxlength` for the description or notes input (issue #1286): the server limit, lifted only
+   * while the input still holds the over-long value the form was opened with.
+   */
+  maxLength(field: 'description' | 'notes'): number | null {
+    return editableMaxLength(this.form[field], this.loadedText[field], FIELD_LENGTH_LIMITS.expense[field]);
+  }
+
   /** Fills the form in from `value`, discarding anything typed or chosen before it. */
   private open(value: ExpenseFormValue): void {
     this.form = { ...value.payload };
+    this.loadedText = { description: this.form.description ?? '', notes: this.form.notes ?? '' };
     this.recordedMachineId = value.recordedMachineId;
     this.attachmentFileName = value.attachmentFileName;
     this.storedFields = this.serialise(this.form);

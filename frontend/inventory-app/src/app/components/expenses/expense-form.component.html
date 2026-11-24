@@ -40,6 +40,7 @@
             id="expense-description"
             class="min-h-11"
             name="description"
+            [maxlength]="maxLength('description')"
             [(ngModel)]="form.description"
             [attr.aria-invalid]="descriptionInvalid"
             [attr.aria-describedby]="descriptionInvalid ? 'expense-description-error' : null"
@@ -206,7 +207,7 @@
 
         <label class="field sm:col-span-2">
           <span class="field-label">Notes</span>
-          <input id="expense-notes" class="min-h-11" name="notes" [(ngModel)]="form.notes" />
+          <input id="expense-notes" class="min-h-11" name="notes" [maxlength]="maxLength('notes')" [(ngModel)]="form.notes" />
         </label>
       </div>
     </section>

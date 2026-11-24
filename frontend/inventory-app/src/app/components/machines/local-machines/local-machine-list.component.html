@@ -19,6 +19,7 @@
             id="newMachineName"
             name="newMachineName"
             [(ngModel)]="newName"
+            [maxlength]="nameMaxLength"
             placeholder="e.g. Lobby level 1"
             required />
         </div>
@@ -57,6 +58,7 @@
                         [id]="'machineName' + machine.id"
                         [name]="'machineName' + machine.id"
                         [(ngModel)]="editingName"
+                        [maxlength]="renameMaxLength"
                         required />
                     } @else {
                       {{ machine.name }}

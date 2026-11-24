@@ -2444,6 +2444,10 @@ Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px
 - **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
   (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
   your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Title and notes length** (issue #1286). A title may be up to 200 characters and the notes 2,000
+  (measured without the spaces around them); the fields stop there, and a longer value is refused with a
+  message naming the field and the limit, with nothing saved. A purchase saved before these limits with
+  longer text keeps it and can still be edited; only new over-long text is refused.
 - **Invoice number (optional).** The supplier's own receipt or invoice number, beside the supplier, date and
   title in **Purchase details**. Leave it empty if you have none — nothing about the purchase changes either
   way. What you type is stored without the spaces around it (" INV-123 " is saved as "INV-123"), up to 100
@@ -2795,6 +2799,12 @@ does not manage.
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Length limits** (issue #1286). A product's name may be up to 200 characters, its SKU and unit
+  label 100 and its description 2,000; a category's name 200 and its description 2,000 (measured
+  without the spaces around them). The form's fields stop at those lengths, and the API refuses a
+  longer value with `400` and a message naming the field and the limit, saving nothing. A product or
+  category saved before these limits with a longer value keeps it, and can still be edited and saved
+  with other fields changed; only a new over-long value is refused.
 - **Create a product from a catalogue suggestion, and have its supplier prices tracked from the
   start** (issue #1051). `POST /api/products` takes two optional extras: `selectedMasterProductId` —
   one of the shared catalogue products the lookup `GET /api/products/master-product-suggestions`
@@ -3316,6 +3326,10 @@ more.
   same dialog filled in with that supplier. One form serves both: Name, Contact name, Phone, Email,
   Website and Address, with **Create supplier** or **Save changes** as the primary action beside
   **Cancel**.
+- **Length limits** (issue #1286). Name and Contact name may be up to 200 characters, Phone 50, Email
+  254 and Address 500 (the website keeps its own 2048). The fields stop there; a longer value is refused
+  against that field with nothing saved, and a supplier saved before these limits with a longer value
+  can still be edited with other fields changed.
 - **On a desktop** it is a centred panel about 600px wide that never grows past the window — the
   fields scroll inside it and the action row stays visible. **On a phone** it is a full-screen form
   with the fields stacked, clear of the notch and the home indicator, and you can still pinch to
@@ -4514,6 +4528,9 @@ of the live Nayax fleet — so a business with no provider had no machines.
   fleet read. With no usable provider the live section is not shown at all, and the page is the local
   machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
   the page says so in place of that section instead of looking like a business with no machines.
+- **A machine name may be up to 200 characters** (issue #1286), measured without the spaces around
+  it. Add and Rename stop there, and the API refuses a longer name with `400` and a message naming the
+  limit. A machine saved before this limit with a longer name keeps it.
 - **Create a machine** with `POST /api/local-machines`, which answers the created machine with its
   new id. A machine needs a name and nothing else. Names are deliberately **not** unique within a
   business: two machines in one corridor may legitimately both be called "Level 3", and nothing

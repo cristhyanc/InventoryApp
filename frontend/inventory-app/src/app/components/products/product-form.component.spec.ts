@@ -2337,3 +2337,51 @@ describe('ProductFormComponent requiring an Initial Unit Cost with opening stock
     expect(component.error).toBeFalsy();
   });
 });
+
+describe('ProductFormComponent field length limits (issue #1286)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('gives each text input the server limit as its maxlength', async () => {
+    const { fixture, host } = await render();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[name="name"]')?.getAttribute('maxlength')).toBe('200');
+    expect(host.querySelector('[name="sku"]')?.getAttribute('maxlength')).toBe('100');
+    expect(host.querySelector('[name="unit"]')?.getAttribute('maxlength')).toBe('100');
+    expect(host.querySelector('[name="description"]')?.getAttribute('maxlength')).toBe('2000');
+  });
+
+  it('opens and saves a product whose stored description is already longer than the limit', async () => {
+    const legacyDescription = 'd'.repeat(2500);
+    const { fixture, host, component, update } = await render({
+      product: product({ description: legacyDescription })
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const description = host.querySelector<HTMLTextAreaElement>('[name="description"]')!;
+    // Not limited and not marked invalid while the stored value is unchanged.
+    expect(description.hasAttribute('maxlength')).toBe(false);
+    expect(description.classList).not.toContain('ng-invalid');
+
+    component.form.sku = 'SNK-002';
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ sku: 'SNK-002', description: legacyDescription }));
+  });
+
+  it('applies the limit again once the over-long stored value itself is changed', async () => {
+    const legacyDescription = 'd'.repeat(2500);
+    const { fixture, host } = await render({ product: product({ description: legacyDescription }) });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const description = host.querySelector<HTMLTextAreaElement>('[name="description"]')!;
+    description.value = legacyDescription.slice(1);
+    description.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    expect(description.getAttribute('maxlength')).toBe('2000');
+  });
+});

@@ -139,6 +139,7 @@
                   [class.bg-rr-canvas]="nameLocked"
                   [(ngModel)]="form.name"
                   name="name"
+                  [maxlength]="maxLength('name')"
                   [readOnly]="nameLocked"
                   [attr.aria-readonly]="nameLocked"
                   required
@@ -212,7 +213,7 @@
 
           <label class="field">
             <span class="field-label">SKU <span class="font-normal text-rr-caption">(optional)</span></span>
-            <input class="min-h-11" [(ngModel)]="form.sku" name="sku" placeholder="e.g. SNK-001" />
+            <input class="min-h-11" [(ngModel)]="form.sku" name="sku" [maxlength]="maxLength('sku')" placeholder="e.g. SNK-001" />
           </label>
 
           <!-- Required since issue #895, and empty on a new product: the operator chooses the
@@ -226,6 +227,7 @@
               [ngModel]="form.unit"
               (ngModelChange)="onUnitLabelInput($event)"
               name="unit"
+              [maxlength]="maxLength('unit')"
               required
               placeholder="e.g. 375 mL, 45 g, pouch, can"
               [attr.aria-invalid]="unitMissing"
@@ -239,7 +241,7 @@
 
           <label class="field sm:col-span-2">
             <span class="field-label">Description <span class="font-normal text-rr-caption">(optional)</span></span>
-            <textarea [(ngModel)]="form.description" name="description" rows="3"></textarea>
+            <textarea [(ngModel)]="form.description" name="description" rows="3" [maxlength]="maxLength('description')"></textarea>
           </label>
         </div>
       </section>

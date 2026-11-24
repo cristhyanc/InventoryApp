@@ -52,6 +52,11 @@ public sealed class CreateProduct
             ?? ProductCataloguePolicy.ValidateUnit(fields.Unit);
         if (catalogueError is not null) return CreateProductResult.Invalid(catalogueError);
 
+        // The free-text limits (issue #1286), after the blank rules so their answers are unchanged.
+        var lengthError = ProductFieldLengthPolicy.ValidateCreate(
+            new ProductText(fields.Name, fields.Sku, fields.Unit, fields.Description));
+        if (lengthError is not null) return CreateProductResult.Invalid(lengthError);
+
         var attempt = await _store.CreateAsync(fields, cancellationToken);
         return attempt.Outcome switch
         {

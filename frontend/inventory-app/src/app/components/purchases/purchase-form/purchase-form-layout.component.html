@@ -59,6 +59,7 @@
           [id]="fieldId('title')"
           [attr.name]="fieldId('title')" [ngModelOptions]="{ standalone: true }"
           required
+          [maxlength]="maxLength('title')"
           [ngModel]="form.title"
           (ngModelChange)="onTitleChange($event)"
           (blur)="titleTouched = true"
@@ -452,7 +453,7 @@
         @if (notesOpen) {
           <div [id]="fieldId('notesPanel')" class="border-t border-rr-line p-4">
             <label class="field-label sr-only" [for]="fieldId('notes')">Notes</label>
-            <textarea class="w-full" [id]="fieldId('notes')" [attr.name]="fieldId('notes')" [ngModelOptions]="{ standalone: true }" rows="3" [(ngModel)]="form.notes"></textarea>
+            <textarea class="w-full" [id]="fieldId('notes')" [attr.name]="fieldId('notes')" [ngModelOptions]="{ standalone: true }" rows="3" [maxlength]="maxLength('notes')" [(ngModel)]="form.notes"></textarea>
           </div>
         }
       </section>
