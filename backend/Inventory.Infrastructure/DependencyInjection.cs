@@ -17,6 +17,7 @@ using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
+using Inventory.Application.Maintenance;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
@@ -499,6 +500,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxSalesHistoryImportJobStore, EfNayaxSalesHistoryImportJobStore>();
         services.AddScoped<INayaxSalesHistoryImportJobQueue, EfNayaxSalesHistoryImportJobQueue>();
         services.AddScoped<IPendingInventoryCostRebuildStore, EfPendingInventoryCostRebuildStore>();
+        // The sales date-range index's planner statistics (issue #1287, the repository owner's
+        // decision of 24 November 2026). Scoped because it issues its three statements on whatever
+        // AppDbContext its scope holds - the startup scope for the initial collection, the history
+        // import's per-business scope for the refresh a finished import asks for - and because it
+        // holds nothing between calls. It reads and writes nothing tenant-owned either way: see
+        // SqliteSalesDateRangeStatistics.
+        services.AddScoped<ISalesDateRangeStatistics, SqliteSalesDateRangeStatistics>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence
         // adapter since issue #739. Scoped like every other adapter here: both
         // operations read and write one caller's resolved business through the request's own

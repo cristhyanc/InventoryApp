@@ -1,5 +1,7 @@
 using System.Data.Common;
 using Inventory.Application.Machines;
+using Inventory.Application.Maintenance;
+using Inventory.Domain.Maintenance;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
@@ -14,10 +16,12 @@ using Xunit.Abstractions;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// The sales date-range index of issue #1287 (audit #1226, finding DB-02), on a real SQLite
-/// <em>file</em> rather than an in-memory database, because what is being proved is relational: which
-/// index SQLite's own planner chooses for the SQL EF Core generates, and that applying the migration
-/// over a populated database keeps every business's rows.
+/// The sales date-range index of issue #1287 (audit #1226, finding DB-02) and the planner statistics
+/// the repository owner authorised for it on 24 November 2026, on a real SQLite <em>file</em> rather
+/// than an in-memory database, because what is being proved is relational: which index SQLite's own
+/// planner chooses for the SQL EF Core generates, and that applying the migration and collecting
+/// statistics over a populated database keeps every business's rows and every figure computed from
+/// them.
 ///
 /// <para>About fourteen queries in <c>Inventory.Infrastructure</c> - the dashboards, the money
 /// reports and reconciliation - select sales by a <c>MachineAuthorizationTime</c> range. Until this
@@ -30,30 +34,32 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// retyped here - so a change to those queries that changes which index they reach fails this test
 /// instead of passing unnoticed.</para>
 ///
-/// <para><strong>What they measured, and the limit it exposes.</strong> The index is searched for a
-/// sales date range that names its business. The money reports and dashboards do not name it: the
-/// central tenant filter is translated as <c>(@unrestricted OR "BusinessId" = @business)</c>, which
-/// constrains the index's leading column not at all - the same <c>OR</c> that made issue #1304 index
-/// <c>ProductId</c> on its own. SQLite can still reach the index through a <em>skip-scan</em>
-/// (<c>ANY(BusinessId)</c>), but only on a database that has statistics, and it chooses a full table
-/// scan without them. Nothing in this repository runs <c>ANALYZE</c>, so a deployed database has
-/// none. <see cref="The_report_and_dashboard_reads_reach_the_index_only_once_the_database_has_statistics"/>
-/// pins both halves of that; the pull request for issue #1287 carries it as the decision a human
-/// owns.</para>
+/// <para><strong>Why statistics are part of this at all.</strong> The money reports and dashboards do
+/// not name their business in SQL: the central tenant filter is translated as
+/// <c>(@unrestricted OR "BusinessId" = @business)</c>, which constrains the index's leading column not
+/// at all - the same <c>OR</c> that made issue #1304 index <c>ProductId</c> on its own. SQLite reaches
+/// the index for them by <em>skip-scan</em>, and it enables a skip-scan only for an index that carries
+/// planner statistics. So the index alone bought those reads nothing on a deployed database, which is
+/// what the owner's decision resolves: the application now collects them itself, through
+/// <see cref="SqliteSalesDateRangeStatistics"/>, bounded by
+/// <see cref="SalesDateRangeStatisticsPolicy"/>. <strong>No test here runs <c>ANALYZE</c>:</strong>
+/// every statistic in these cases is collected by the same code path startup and a finished sales
+/// history import use.</para>
 /// </summary>
 public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
 {
     private const string PreviousMigration = "AddNayaxSalesProductIdIndex";
     private const string IndexMigration = "AddNayaxSalesDateRangeIndex";
-    private const string IndexName = "IX_NayaxSales_BusinessId_MachineAuthorizationTime";
+    private const string IndexName = SqliteSalesDateRangeStatistics.IndexName;
 
     private const int BusinessAId = 1;
     private const int BusinessBId = 2;
 
     /// <summary>
-    /// Enough sales per business for <c>ANALYZE</c> to record a business as holding far more than the
-    /// eighteen rows SQLite wants before it will skip an index's leading column, and few enough to
-    /// seed and plan in well under a second.
+    /// Enough sales per business for collected statistics to record a business as holding far more
+    /// than the eighteen rows SQLite wants before it will skip an index's leading column, comfortably
+    /// over <see cref="SalesDateRangeStatisticsPolicy.MinimumSales"/>, and few enough to seed and
+    /// plan in well under a second.
     /// </summary>
     private const int SeededSalesPerBusiness = 4_000;
 
@@ -67,6 +73,9 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
     private readonly string _connectionString;
     private readonly List<CapturedStatement> _statements = [];
     private readonly ITestOutputHelper _output;
+
+    /// <summary>How many synthetic sales each business has been seeded, so growth continues from there.</summary>
+    private readonly Dictionary<int, int> _seeded = [];
 
     public NayaxSalesDateRangeIndexMigrationTests(ITestOutputHelper output)
     {
@@ -112,6 +121,7 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
     /// The index is the right shape for the read it was added for: a business's sales between two
     /// instants, with the business named, is a search of the index over exactly that business's slice
     /// of it - which is the query audit #1226 timed at 0-7 ms against 145-226 ms without the index.
+    /// This one needs no statistics at all, which is why it is asserted separately.
     /// </summary>
     [Fact]
     public async Task A_business_scoped_sales_date_range_searches_the_index()
@@ -142,50 +152,180 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
     }
 
     /// <summary>
-    /// The two date-range reads criterion 2 of issue #1287 names - the shared business-date selection
-    /// of issue #1250, here through the reconciliation report, and one other dashboard query, the
-    /// Dashboard summary card's period totals - against a database holding both businesses' sales.
+    /// <strong>Criterion 2 of issue #1287, through the real collection path.</strong> A populated
+    /// database with no statistics at all - the state every database this repository has ever created
+    /// is in - has them collected by <see cref="SqliteSalesDateRangeStatistics"/>, the one adapter
+    /// startup and a finished sales history import use, and the two date-range reads the criterion
+    /// names then search the index: the shared business-date selection of issue #1250, here through
+    /// the reconciliation report, and one other dashboard query, the Dashboard summary card's period
+    /// totals.
     ///
-    /// <para>Measured, not assumed, in both states a deployed database can be in:</para>
-    /// <list type="bullet">
-    /// <item><strong>Without statistics</strong>, which is every database this repository creates
-    /// because nothing here runs <c>ANALYZE</c>: both statements scan the sales table. The tenant
-    /// filter is an <c>OR</c> over a bare parameter, so nothing constrains the index's leading column,
-    /// and with no row statistics the planner prefers the scan.</item>
-    /// <item><strong>After <c>ANALYZE</c></strong>: the same statements search the index by
-    /// skip-scan - <c>ANY(BusinessId) AND MachineAuthorizationTime&gt;? AND
-    /// MachineAuthorizationTime&lt;?</c> - because the statistics say one business holds far more than
-    /// the eighteen rows a skipped leading column has to be worth.</item>
-    /// </list>
-    ///
-    /// <para>So the index is the right one and the reports can reach it; what they are missing is the
-    /// statistics, which is a decision about running and refreshing <c>ANALYZE</c> that issue #1287
-    /// does not make and this change deliberately does not take. Both halves are asserted so that
-    /// neither can change silently: if the first half starts searching the index, the gain has been
-    /// obtained and this test should become the plain assertion criterion 2 asks for.</para>
+    /// <para>Nothing in this test runs <c>ANALYZE</c>, and nothing changes a query, a tenant
+    /// predicate or an index: the only thing between the two sets of plans is the adapter's own call.
+    /// The plans before it are reported rather than asserted on, so that the previous plan being a
+    /// scan is evidence in the output rather than a requirement this test would defend.</para>
     /// </summary>
     [Fact]
-    public async Task The_report_and_dashboard_reads_reach_the_index_only_once_the_database_has_statistics()
+    public async Task The_report_and_dashboard_reads_search_the_index_once_the_application_collects_statistics()
     {
         await MigrateAsync();
         await SeedBusinessWithManySalesAsync(BusinessAId);
         await SeedBusinessWithManySalesAsync(BusinessBId);
 
-        await AssertSalesRangePlansAsync(statisticsCollected: false);
+        // The starting point the criterion asks for: a populated file with no statistics whatsoever.
+        Assert.False(await StatisticsTableExistsAsync());
+        Assert.Null(await RecordedStatisticsAsync());
 
-        // The one statement that changes which plan SQLite picks. It is run here, on the test's own
-        // database, and by nothing in the application.
-        await ExecuteAsync("ANALYZE;");
+        await ReportSalesRangePlansAsync("before the application collected statistics", assert: false);
 
-        await AssertSalesRangePlansAsync(statisticsCollected: true);
+        var collected = await CollectAsync();
+
+        Assert.Equal(SalesDateRangeStatisticsOutcome.Collected, collected.Outcome);
+        Assert.Null(collected.RecordedSales);
+        Assert.Equal(SeededSalesPerBusiness * 2L, collected.CurrentSales);
+        Assert.NotNull(await RecordedStatisticsAsync());
+        _output.WriteLine(
+            $"collected in {collected.Duration.TotalMilliseconds:F0} ms; "
+            + $"sqlite_stat1 for the index now says: {await RecordedStatisticsAsync()}");
+
+        await ReportSalesRangePlansAsync("after the application collected statistics", assert: true);
     }
 
     /// <summary>
-    /// Runs both adapters and asserts every statement they issue that reads the sales table by a
-    /// <c>MachineAuthorizationTime</c> range scans the table, or searches the index, according to
-    /// whether the database has statistics.
+    /// The bounded refresh policy, exercised as history grows (issue #1287's refresh criterion).
+    ///
+    /// <para>Three things are asserted, which together are the bound: a second call straight after a
+    /// collection collects nothing and takes no write lock; growing the table by less than
+    /// <see cref="SalesDateRangeStatisticsPolicy.GrowthFactor"/> still collects nothing; and growing
+    /// it past that factor collects again, recording the table as it now is. So the number of
+    /// collections over the life of a database is about <c>log₄(sales)</c> rather than one per
+    /// import, per request or per restart.</para>
     /// </summary>
-    private async Task AssertSalesRangePlansAsync(bool statisticsCollected)
+    [Fact]
+    public async Task The_refresh_collects_again_only_once_sales_history_has_grown_by_the_bounded_factor()
+    {
+        await MigrateAsync();
+        await SeedBusinessWithManySalesAsync(BusinessAId);
+        await SeedBusinessWithManySalesAsync(BusinessBId);
+
+        var first = await CollectAsync();
+        Assert.Equal(SalesDateRangeStatisticsOutcome.Collected, first.Outcome);
+
+        // Asked again with nothing changed: no statement that takes the write lock.
+        var again = await CollectAsync();
+        Assert.Equal(SalesDateRangeStatisticsOutcome.AlreadyCurrent, again.Outcome);
+        Assert.Equal(SeededSalesPerBusiness * 2L, again.RecordedSales);
+        Assert.Equal(TimeSpan.Zero, again.Duration);
+
+        // Ordinary growth - well short of the factor - still collects nothing.
+        await GrowBusinessSalesAsync(BusinessAId, SeededSalesPerBusiness);
+        var afterOrdinaryGrowth = await CollectAsync();
+        Assert.Equal(SalesDateRangeStatisticsOutcome.AlreadyCurrent, afterOrdinaryGrowth.Outcome);
+
+        // Past the factor - the shape a quarter-million-row history import has - collects again.
+        await GrowBusinessSalesAsync(BusinessAId, SeededSalesPerBusiness * 7);
+        var refreshed = await CollectAsync();
+        Assert.Equal(SalesDateRangeStatisticsOutcome.Collected, refreshed.Outcome);
+        Assert.Equal(SeededSalesPerBusiness * 2L, refreshed.RecordedSales);
+        Assert.Equal(SeededSalesPerBusiness * 10L, refreshed.CurrentSales);
+
+        // And what it recorded is the table as it now is, so the next decision starts from here.
+        var afterRefresh = await CollectAsync();
+        Assert.Equal(SalesDateRangeStatisticsOutcome.AlreadyCurrent, afterRefresh.Outcome);
+        Assert.Equal(SeededSalesPerBusiness * 10L, afterRefresh.RecordedSales);
+    }
+
+    /// <summary>
+    /// A brand-new database collects nothing and writes nothing: there is no sales history for
+    /// statistics to describe, so the policy's floor keeps the write lock untaken at every startup
+    /// until the business has actually traded.
+    /// </summary>
+    [Fact]
+    public async Task An_initial_database_with_no_sales_collects_no_statistics()
+    {
+        await MigrateAsync();
+
+        var result = await CollectAsync();
+
+        Assert.Equal(SalesDateRangeStatisticsOutcome.NotWorthCollecting, result.Outcome);
+        Assert.Equal(0L, result.CurrentSales);
+        Assert.Null(result.RecordedSales);
+        Assert.Equal(TimeSpan.Zero, result.Duration);
+
+        // Nothing was analysed, so SQLite never created its statistics table.
+        Assert.False(await StatisticsTableExistsAsync());
+    }
+
+    /// <summary>
+    /// Collecting statistics changes which plan SQLite picks and nothing else: both businesses keep
+    /// every row, and the money report's own figures for each of them are identical either side of a
+    /// collection (issue #1287's criterion that financial results are preserved).
+    ///
+    /// <para>Two businesses deliberately, and the second one's figures read as the second business -
+    /// what would show a changed plan reaching the wrong rows is one business's total picking up the
+    /// other's.</para>
+    /// </summary>
+    [Fact]
+    public async Task Collecting_statistics_preserves_every_businesss_rows_and_financial_figures()
+    {
+        await MigrateAsync();
+        await SeedBusinessWithManySalesAsync(BusinessAId);
+        await SeedBusinessWithManySalesAsync(BusinessBId);
+        await SeedTwoBusinessesExtraSalesAsync();
+
+        var before = await FinancialFiguresAsync();
+
+        Assert.Equal(SalesDateRangeStatisticsOutcome.Collected, (await CollectAsync()).Outcome);
+
+        var after = await FinancialFiguresAsync();
+
+        Assert.Equal(before, after);
+
+        // And the plain row counts, read outside every adapter.
+        Assert.Equal(
+            SeededSalesPerBusiness + 3L,
+            await ScalarAsync($"SELECT COUNT(*) FROM NayaxSales WHERE BusinessId = {BusinessAId}"));
+        Assert.Equal(
+            SeededSalesPerBusiness + 2L,
+            await ScalarAsync($"SELECT COUNT(*) FROM NayaxSales WHERE BusinessId = {BusinessBId}"));
+        Assert.Equal(
+            2L, await ScalarAsync("SELECT COUNT(*) FROM Businesses"));
+    }
+
+    /// <summary>
+    /// Each business's money-report figures and sales total, read through the real report provider in
+    /// that business's own scope - so a figure that moved between businesses shows up as a changed
+    /// value here.
+    /// </summary>
+    private async Task<List<string>> FinancialFiguresAsync()
+    {
+        var figures = new List<string>();
+
+        foreach (var businessId in new[] { BusinessAId, BusinessBId })
+        {
+            await using var db = TestAppDbContext.For(Options(), businessId);
+
+            var facts = await new EfReconciliationReportFactsProvider(
+                    db, TestFinancialUseCases.TrivialCalendar)
+                .GetFactsAsync(FirstBusinessDate, LastBusinessDate, null, CancellationToken.None);
+
+            figures.Add(
+                $"business {businessId}: vending={facts.TotalVendingSales} card={facts.CardSales} "
+                + $"cash={facts.CashSales} transactions={facts.TotalTransactionCount} "
+                + $"periods={facts.Periods.Count} "
+                + $"sales={await ScalarAsync($"SELECT COUNT(*) FROM NayaxSales WHERE BusinessId = {businessId}")} "
+                + $"total={await ScalarAsync($"SELECT TOTAL(SettlementValue) FROM NayaxSales WHERE BusinessId = {businessId}")}");
+        }
+
+        return figures;
+    }
+
+    /// <summary>
+    /// Runs both adapters, reports every statement they issue that reads the sales table by a
+    /// <c>MachineAuthorizationTime</c> range together with the plan SQLite chose for it, and - when
+    /// asked - asserts that plan searches the new index.
+    /// </summary>
+    private async Task ReportSalesRangePlansAsync(string state, bool assert)
     {
         await using (var reports = TestAppDbContext.For(Options(), BusinessAId))
         {
@@ -193,8 +333,8 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
             await new EfReconciliationReportFactsProvider(reports, TestFinancialUseCases.TrivialCalendar)
                 .GetFactsAsync(FirstBusinessDate, LastBusinessDate, null, CancellationToken.None);
 
-            await AssertSalesRangeStatementsAsync(
-                reports, "the issue #1250 business-date sales selection", statisticsCollected);
+            await ReportSalesRangeStatementsAsync(
+                reports, "the issue #1250 business-date sales selection", state, assert);
         }
 
         await using (var dashboard = TestAppDbContext.For(Options(), BusinessAId))
@@ -205,8 +345,8 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
                 Period(FirstBusinessDate, FirstBusinessDate.AddDays(14)),
                 CancellationToken.None);
 
-            await AssertSalesRangeStatementsAsync(
-                dashboard, "the dashboard summary card's period totals", statisticsCollected);
+            await ReportSalesRangeStatementsAsync(
+                dashboard, "the dashboard summary card's period totals", state, assert);
         }
     }
 
@@ -214,8 +354,8 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
     /// Each plan is reported before it is asserted on, because "the plan changed" is only useful with
     /// the plan in it.
     /// </summary>
-    private async Task AssertSalesRangeStatementsAsync(
-        AppDbContext db, string what, bool statisticsCollected)
+    private async Task ReportSalesRangeStatementsAsync(
+        AppDbContext db, string what, string state, bool assert)
     {
         var statements = _statements
             .Where(statement => statement.Sql.Contains("FROM \"NayaxSales\"", StringComparison.Ordinal)
@@ -227,32 +367,33 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
         foreach (var statement in statements)
         {
             var plan = await PlanAsync(statement, db);
-            var state = statisticsCollected ? "after ANALYZE" : "without statistics";
-            var reported = $"{what}, {state}:\n{statement.Sql}\nparameters: {statement.ParameterSummary}"
-                + $"\nplan:\n{string.Join('\n', plan)}";
 
             Report($"{what}, {state}", plan, statement);
 
-            var usesIndex = plan.Exists(line => line.Contains(IndexName, StringComparison.Ordinal));
-            if (statisticsCollected)
-            {
-                Assert.True(
-                    usesIndex,
-                    $"Expected a skip-scan of {IndexName} once the database has statistics: {reported}");
-            }
-            else
-            {
-                Assert.True(
-                    !usesIndex,
-                    $"{IndexName} is now reachable without statistics by {reported}\n\n"
-                        + "That is the wanted outcome, not a defect: make this the plain assertion "
-                        + "criterion 2 of issue #1287 asks for, and update docs/architecture.md "
-                        + "§ SQLite operating assumptions and scale strategy.");
-                Assert.True(
-                    plan.Exists(line => line.StartsWith("SCAN", StringComparison.Ordinal)),
-                    $"Expected the recorded table scan in {reported}");
-            }
+            if (!assert) continue;
+
+            var reported = $"{what}, {state}:\n{statement.Sql}\nparameters: {statement.ParameterSummary}"
+                + $"\nplan:\n{string.Join('\n', plan)}";
+
+            Assert.True(
+                plan.Exists(line => line.Contains(IndexName, StringComparison.Ordinal)),
+                $"Expected {IndexName} in the plan once the application has collected statistics: "
+                    + reported);
+            Assert.True(
+                plan.Exists(line => line.StartsWith("SEARCH", StringComparison.Ordinal)),
+                $"Expected a search of the index rather than a scan of the sales table: {reported}");
         }
+    }
+
+    /// <summary>
+    /// The real collection path - the one adapter startup and a finished sales history import use -
+    /// over its own context, as both of those callers have.
+    /// </summary>
+    private async Task<SalesDateRangeStatisticsResult> CollectAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(Options());
+
+        return await new SqliteSalesDateRangeStatistics(db).CollectIfStaleAsync(CancellationToken.None);
     }
 
     /// <summary>The plan, in the test output, so a run that fails here reports what SQLite chose.</summary>
@@ -277,30 +418,44 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
 
     /// <summary>
     /// One business's year of sales, written by SQLite itself from a recursive sequence. The plan test
-    /// needs a realistic row count rather than a handful of rows: <c>ANALYZE</c> records how many rows
-    /// a distinct <c>BusinessId</c> holds, and that number is what decides whether skipping the
-    /// leading column is worth it to the planner. Three machines and a spread of instants over a year
-    /// keep the index's key order realistic too.
+    /// needs a realistic row count rather than a handful of rows: the collected statistics record how
+    /// many rows a distinct <c>BusinessId</c> holds, and that number is what decides whether skipping
+    /// the leading column is worth it to the planner. Three machines and a spread of instants over a
+    /// year keep the index's key order realistic too.
     /// </summary>
-    private async Task SeedBusinessWithManySalesAsync(int businessId)
+    private async Task SeedBusinessWithManySalesAsync(int businessId) =>
+        await SeedSalesAsync(businessId, first: 0, count: SeededSalesPerBusiness, withBusinessRow: true);
+
+    /// <summary>More of the same business's history, which is what a refresh is decided from.</summary>
+    private async Task GrowBusinessSalesAsync(int businessId, int count) =>
+        await SeedSalesAsync(
+            businessId,
+            first: _seeded.TryGetValue(businessId, out var seeded) ? seeded : 0,
+            count,
+            withBusinessRow: false);
+
+    private async Task SeedSalesAsync(int businessId, int first, int count, bool withBusinessRow)
     {
-        await ExecuteAsync(
-            $"""
-            INSERT INTO Businesses (Id, Name, Status, CreatedAtUtc, SupplierPresetsCopiedAtUtc)
-            VALUES ({businessId}, 'Fictional Vending {businessId}', 1, '2026-01-01 00:00:00', NULL);
-            """);
+        if (withBusinessRow)
+        {
+            await ExecuteAsync(
+                $"""
+                INSERT INTO Businesses (Id, Name, Status, CreatedAtUtc, SupplierPresetsCopiedAtUtc)
+                VALUES ({businessId}, 'Fictional Vending {businessId}', 1, '2026-01-01 00:00:00', NULL);
+                """);
+        }
 
         await ExecuteAsync(
             $"""
             WITH RECURSIVE sequence(i) AS (
-                SELECT 0 UNION ALL SELECT i + 1 FROM sequence WHERE i < {SeededSalesPerBusiness - 1}
+                SELECT {first} UNION ALL SELECT i + 1 FROM sequence WHERE i < {first + count - 1}
             )
             INSERT INTO NayaxSales (
                 Id, BusinessId, TransactionID, MachineID, MachineAuthorizationTime,
                 SettlementValue, PaymentMethod, TransactionStatusId, CostingStatus, CostSource,
                 Provider, ProviderProductIdIsRaw)
             SELECT
-                {businessId} * 1000000 + i,
+                {businessId} * 100000000 + i,
                 {businessId},
                 500000 + i,
                 942488500 + (i % 3),
@@ -309,6 +464,8 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
                 3.0, 'Cash', 12, 0, 0, 1, 1
             FROM sequence;
             """);
+
+        _seeded[businessId] = first + count;
     }
 
     /// <summary>
@@ -323,6 +480,20 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
             INSERT INTO Businesses (Id, Name, Status, CreatedAtUtc, SupplierPresetsCopiedAtUtc)
             VALUES ({BusinessAId}, 'Fictional Vending A', 1, '2026-01-01 00:00:00', NULL),
                    ({BusinessBId}, 'Fictional Vending B', 1, '2026-01-01 00:00:00', NULL);
+            """);
+
+        await SeedTwoBusinessesExtraSalesAsync();
+    }
+
+    /// <summary>
+    /// The five hand-written sales the row-count and figure assertions name, with two businesses
+    /// sharing a <c>TransactionID</c> and one sale outside the reported window. They carry distinct
+    /// keys and transaction ids from the synthetic history above, so either seed can be used alone or
+    /// after it.
+    /// </summary>
+    private async Task SeedTwoBusinessesExtraSalesAsync() =>
+        await ExecuteAsync(
+            $"""
             INSERT INTO NayaxSales (
                 Id, BusinessId, TransactionID, MachineID, MachineAuthorizationTime,
                 SettlementValue, TransactionStatusId, CostingStatus, CostSource, Provider,
@@ -334,7 +505,6 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
                 (4, {BusinessBId}, 7001, 942488502, '2026-06-03 10:00:00', 2.5, 12, 0, 0, 1, 1, NULL),
                 (5, {BusinessBId}, 7004, 942488502, '2026-06-25 10:00:00', 2.5, 12, 0, 0, 1, 1, NULL);
             """);
-    }
 
     private static MachineDashboardPeriodUtc Period(DateTime startUtc, DateTime endUtc) =>
         new(startUtc, endUtc, startUtc.Date, endUtc.Date);
@@ -391,6 +561,21 @@ public sealed class NayaxSalesDateRangeIndexMigrationTests : IDisposable
     private async Task<string?> IndexSqlAsync() =>
         await ScalarAsync(
             $"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = '{IndexName}'") as string;
+
+    /// <summary>
+    /// Whether SQLite has a statistics table at all. It does not exist until something has been
+    /// analysed, which is what makes it the honest check for "this database has no statistics".
+    /// </summary>
+    private async Task<bool> StatisticsTableExistsAsync() =>
+        await ScalarAsync(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'")
+            is long count && count > 0;
+
+    /// <summary>The recorded statistics row for this index, read from outside the adapter.</summary>
+    private async Task<string?> RecordedStatisticsAsync() =>
+        (await StatisticsTableExistsAsync())
+            ? await ScalarAsync($"SELECT stat FROM sqlite_stat1 WHERE idx = '{IndexName}'") as string
+            : null;
 
     private async Task ExecuteAsync(string sql)
     {

@@ -1265,16 +1265,20 @@ public class AppDbContext : DbContext
         // slower with every year of trading. The index leads with BusinessId, like every other
         // tenant-owned index here, so one business's window is a contiguous range of it
         // (AGENTS.md § Tenant ownership and data isolation); at that size it cost 21.4% of the file
-        // and 0.67 s to build (NayaxSalesDateRangeIndexSizeBenchmark).
+        // and 0.80 s to build (NayaxSalesDateRangeIndexSizeBenchmark).
         //
-        // NayaxSalesDateRangeIndexMigrationTests pins what the planner actually does with it, which
-        // is not yet the whole gain: a date range that names its business searches this index, but
-        // the reports and dashboards do not name it - the business filter is translated as
+        // It needs collected planner statistics to be reached by the reports and dashboards, and
+        // this application collects them (issue #1287, the repository owner's decision of
+        // 24 November 2026). A date range that names its business searches this index outright, but
+        // those reads do not name it - the business filter is translated as
         // "(@unrestricted OR BusinessId = @business)", exactly the OR that made issue #1304 index
-        // ProductId on its own - so they reach it only by skip-scan, and only on a database that has
-        // run ANALYZE, which nothing here does. See docs/architecture.md § SQLite operating
-        // assumptions and scale strategy: collecting statistics, or making the tenant predicate a
-        // constant, is the open decision, and that test fails the moment either changes this.
+        // ProductId on its own - so they reach it by skip-scan, which SQLite enables only for an
+        // index that has statistics. SqliteSalesDateRangeStatistics runs ANALYZE over this one index,
+        // at startup and when a finished sales history import has grown the table, bounded by
+        // Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy.
+        // NayaxSalesDateRangeIndexMigrationTests pins what the planner actually does with it, over
+        // the real collection path and the real report and dashboard SQL. See
+        // docs/architecture.md § SQLite operating assumptions and scale strategy.
         modelBuilder.Entity<NayaxSales>()
             .HasIndex(s => new { s.BusinessId, s.MachineAuthorizationTime });
 

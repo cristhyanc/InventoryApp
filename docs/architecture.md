@@ -122,18 +122,65 @@ business had ever stored: 145–226 ms for a one-day or one-month total on a syn
 500,000 sales per business (audit #1226, finding DB-02). Migration
 `20261123120000_AddNayaxSalesDateRangeIndex` adds `IX_NayaxSales_BusinessId_MachineAuthorizationTime`
 (issue #1287), which leads with the business like every other tenant-owned index here and cost 21.4%
-of the file (131.9 MB → 160.2 MB) and 0.67 s to build at that size
-(`NayaxSalesDateRangeIndexSizeBenchmark`, the opt-in measurement). What guards it is
-`NayaxSalesDateRangeIndexMigrationTests`, which runs `EXPLAIN QUERY PLAN` on the SQL EF actually
-generates for the shared business-date sales selection (issue #1250) and for the Dashboard summary
-card, on a real database file: a date range that names its business searches the index, but those two
-reads do **not** name it — the tenant query filter is translated as
-`(@unrestricted OR "BusinessId" = @business)`, which constrains the index's leading column not at all,
-the same `OR` that made issue #1304 index `ProductId` on its own. SQLite still reaches the index for
-them by *skip-scan*, but only on a database that has statistics, and nothing here runs `ANALYZE`, so a
-deployed database has none and the planner keeps choosing the table scan. The test asserts both
-states, so whichever way that is resolved — collecting statistics, or making the tenant predicate a
-constant — shows up as a failing assertion rather than as silence.
+of the file (131.9 MB → 160.2 MB) and 0.80 s to build at that size
+(`NayaxSalesDateRangeIndexSizeBenchmark`, the opt-in measurement).
+
+The index alone was not enough, and this is the part worth understanding. A date range that *names*
+its business searches the index outright, but the reports and dashboards do not name it: the tenant
+query filter is translated as `(@unrestricted OR "BusinessId" = @business)`, which constrains the
+index's leading column not at all — the same `OR` that made issue #1304 index `ProductId` on its own.
+SQLite reaches the index for those reads by *skip-scan*, and it enables a skip-scan only for an index
+that carries planner statistics, so on a database that has never run `ANALYZE` the planner keeps
+choosing the full table scan. **The application therefore collects those statistics itself** (the
+repository owner's decision of 24 November 2026 on issue #1287), and the policy is deliberately small:
+
+- **What is collected.** `ANALYZE "IX_NayaxSales_BusinessId_MachineAuthorizationTime"` — that one
+  index and nothing else, which is the narrowest scope SQLite offers. One `sqlite_stat1` row is
+  written. `Inventory.Infrastructure.Persistence.SqliteSalesDateRangeStatistics` is the only thing
+  that issues it, behind the Application port `ISalesDateRangeStatistics`; its three statements are
+  raw SQL that names no business, no entity and no tenant column, and it is unreachable from a request
+  path.
+- **The two triggers.** API startup, immediately after the schema step that may just have applied the
+  index migration (`InventoryApi.Bootstrap.SalesDateRangeStatisticsStartup`); and a *finished*
+  background sales history import, which is the one path that can add 250,000 sales between two
+  restarts (`Inventory.Application.Imports.ProcessNayaxSalesHistoryImportJob`, after the job is
+  recorded Completed and outside every batch transaction). There is no timer, no cron entry, no new
+  scheduler and no request path that collects anything, and sales trickling in from the Nayax queue
+  reader deliberately trigger nothing.
+- **The bounds.** `Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy` decides from two
+  numbers — what the recorded statistics say the table holds, and what it holds now. It collects when
+  there are no statistics and the table holds at least 1,000 sales, or when the table has grown or
+  shrunk by a factor of four since the last collection; otherwise it collects nothing and takes no
+  write lock. So the number of collections over the life of a database is about `log₄(sales / 1,000)`
+  — nine of them between the floor and 250 million sales — and an ordinary restart pays one
+  `COUNT(*)`.
+- **An initial database collects nothing.** A brand-new deployment with no sales is below the floor,
+  at this startup and every later one, until the business has actually traded.
+- **Cancellation and failure.** A host that is stopping stops: cancellation propagates. A database
+  failure does not — a write lock held past the 30-second busy timeout is reported as `Unavailable`
+  and logged, never raised, because a slower query plan must not stop the API from starting or turn a
+  completed import into a failed one. The next trigger decides again from the state it finds.
+- **Write lock and storage.** Measured at the audit's size (1,000,000 sales): the initial collection
+  holds the write lock 0.10 s and adds one 4 KB page; a refresh holds it 0.11 s and adds nothing,
+  overwriting the row it already had; deciding the statistics are current takes no write lock at all.
+  Index creation, initial collection and refresh are measured and reported separately by
+  `NayaxSalesDateRangeIndexSizeBenchmark`.
+- **The one wider planner effect.** Loading an index's statistics also sets SQLite's row estimate for
+  the *table* that index is on, so every query over `NayaxSales` now costs its alternatives against a
+  true row count instead of SQLite's built-in guess. No other table is described at all, and the other
+  three `NayaxSales` indexes gain no statistics and therefore no skip-scan of their own.
+- **It cannot change a row or a figure.** `ANALYZE` reads index keys and writes aggregate counts, and
+  SQLite's results do not depend on which plan produced them. No query, report, dashboard, tenant
+  predicate, authorization rule or existing index changed for any of this.
+
+What guards all of it is `NayaxSalesDateRangeIndexMigrationTests`, on a real database file: it starts
+from a populated database with no statistics whatsoever, exercises the real collection path — no test
+runs `ANALYZE` — and then runs `EXPLAIN QUERY PLAN` on the SQL EF actually generates for the shared
+business-date sales selection (issue #1250) and for the Dashboard summary card, asserting that both
+search the index. Beside it, the bounded refresh is exercised as history grows, a brand-new database is
+asserted to collect nothing, and both businesses' rows and money-report figures are asserted identical
+either side of a collection. No operator-facing step or configuration setting is introduced: there is
+nothing for a human to run, which is why `README.md` and the operator documentation are unaffected.
 
 **Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
 alerting today (that is future work, not part of this change), but are the observable evidence
@@ -15065,6 +15112,19 @@ instead of files.
   those rows. An attempt that fails is queued again with a safe reason (the exception's *type* name,
   never its message, which can quote a statement's parameter values - and those are a business's
   sales); after `MaxAttempts` the job is `Failed`, keeps every batch it committed, and says so.
+- **A finished job asks for the sales date-range statistics to be refreshed** (issue #1287, the
+  repository owner's decision of 24 November 2026). This is the one path that can add 250,000 sales
+  between two restarts, so it is the second of that policy's two triggers — the other being startup —
+  and the only one inside a feature. The ask is made through the Application port
+  `ISalesDateRangeStatistics` *after* the job is recorded Completed and outside every batch
+  transaction; whether anything is collected is
+  `Inventory.Domain.Maintenance.SalesDateRangeStatisticsPolicy`'s decision, so most imports collect
+  nothing at all and the usual cost is one `COUNT(*)`. Nothing it answers can change the import: an
+  attempt that was requeued or stopped asks for nothing, and a refresh that could not be made —
+  including a write lock held past the busy timeout — leaves the job Completed with every row
+  imported and is reported on the attempt's result and in its log line. See [SQLite operating
+  assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) for the
+  policy, the bounds and the measured write-lock cost.
 - **The worker is the fifth hosted background service**, and is
   `ReimbursementImportJobRunner`'s shape exactly: `NayaxSalesHistoryImportJobRunner` takes the oldest
   unfinished job across every business, one at a time, each in a service scope resolved to that one
