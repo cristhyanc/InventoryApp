@@ -17,7 +17,7 @@ import { actors, expect, test } from '../fixtures/harness';
  * `avco-transition-checkbox-layout.e2e.ts`, which documents the old fail-open behaviour this issue
  * retires). This file is the replacement: the real `NotConfigured` answer, and the real locked
  * states it produces. One of the three pages does not decide from that answer at all - see the
- * comment on the Dashboard test, which records a predicted failure and the decision it needs.
+ * comment on the Dashboard test.
  *
  * **The observation window.** Every request is recorded on the *browser context*, installed before
  * the navigation that triggers the first one, and what a request can do is recorded in three
@@ -193,31 +193,19 @@ async function readNotConfigured(statusResponse: Promise<Response>): Promise<voi
 }
 
 /**
- * **This test is expected to fail on the current E2E host, for a reason outside issue #1276, and
- * its assertions are deliberately left stating what the issue asks for.**
- *
  * The Dashboard does not take its provider answer from the status read this issue fixed. It takes it
  * from its own summary: "Needs refill" is the one section computed from the live fleet, so a
  * withheld section is how `GET /api/dashboard/summary` states that there is no fleet to report on,
  * and `dashboard.component.ts` (`providerAvailabilityOf`) reads a *present* section as a usable
  * provider. In production that section is withheld for a business with no credentials, because
- * `CalculateReorderNeeds` reads the fleet through `INayaxLynxClient`, which is the
- * `CachingNayaxLynxClient` decorator, which resolves credentials through
- * `NayaxRequestCredentialProvider` - and that is what throws `NayaxNotConnectedException` for a
- * `NotConfigured` connection, giving `ReorderMode.StorageOnly` and the `NayaxNotConnected` reason.
+ * `CalculateReorderNeeds` reads the fleet through `INayaxLynxClient`, whose credential provider
+ * (`NayaxRequestCredentialProvider`) throws `NayaxNotConnectedException` for a `NotConfigured`
+ * connection, giving `ReorderMode.StorageOnly` and the `NayaxNotConnected` reason.
  *
- * In the E2E host `INayaxLynxClient` is `E2ETestNayaxLynxClient`, which answers an **empty fleet**
- * instead of refusing and resolves no credential at all (deliberately: the seeded businesses own no
- * machines, so every product's machine replenishment need is genuinely zero, and the existing
- * reorder journeys depend on that machine-aware answer). The summary is therefore machine-aware with
- * zeros, the provider reads as usable, and this page renders the two provider cards and the Site and
- * machine performance section that the assertions below say are absent.
- *
- * Making this page lock would mean giving the E2E host's fleet read the production credential gate,
- * which changes the state **every other** browser journey runs in. That is a human decision and is
- * outside both this issue's acceptance criteria and the repair request that produced this file; it
- * is reported in the pull request instead. The Machines page and the provider report below are
- * unaffected: both decide from the shared status answer this issue fixed, not from the summary.
+ * In the E2E host `INayaxLynxClient` is `E2ETestNayaxLynxClient`. It used to answer an empty fleet
+ * without asking for a credential, which made this page machine-aware with zeros and showed the
+ * provider panels. It now asks the same production credential provider first, so this business is
+ * refused exactly as production refuses it, and still no request can reach Nayax.
  */
 test('Dashboard shows the core inventory figures with its provider panels locked', async ({ pageAs }) => {
   const page = await pageAs(actors.businessAOwner);

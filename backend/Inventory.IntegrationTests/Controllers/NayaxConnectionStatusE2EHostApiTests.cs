@@ -30,6 +30,7 @@ namespace InventoryApi.Tests.Controllers;
 public sealed class NayaxConnectionStatusE2EHostApiTests : IClassFixture<NayaxConnectionStatusE2EHostApiTests.ApiFactory>
 {
     private const string StatusUri = "/api/settings/nayax-connection/status";
+    private const string DashboardSummaryUri = "/api/dashboard/summary";
 
     private readonly ApiFactory _factory;
 
@@ -46,6 +47,27 @@ public sealed class NayaxConnectionStatusE2EHostApiTests : IClassFixture<NayaxCo
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("NotConfigured", body.RootElement.GetProperty("status").GetString());
         Assert.False(body.RootElement.GetProperty("machineChecksPending").GetBoolean());
+    }
+
+    /// <summary>
+    /// The Dashboard takes its provider answer from its own summary, not from the status read: the
+    /// live-fleet "Needs refill" section is withheld with <c>NayaxNotConnected</c> when the fleet
+    /// read is refused. In this host that read is <c>E2ETestNayaxLynxClient</c>, which now asks the
+    /// production credential provider first, so a business with no stored connection gets the same
+    /// withheld section production gives it - not a machine-aware summary over an empty fleet.
+    /// </summary>
+    [Fact]
+    public async Task The_Dashboard_summary_withholds_the_live_fleet_section_as_not_connected()
+    {
+        var client = _factory.As(E2ETestActors.BusinessAOwner.Key);
+
+        var response = await client.GetAsync(DashboardSummaryUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var needsRefill = body.RootElement.GetProperty("needsRefill");
+        Assert.False(needsRefill.GetProperty("available").GetBoolean());
+        Assert.Equal("NayaxNotConnected", needsRefill.GetProperty("reason").GetString());
     }
 
     /// <summary>
