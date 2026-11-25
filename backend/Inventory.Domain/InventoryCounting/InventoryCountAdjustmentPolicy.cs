@@ -31,6 +31,13 @@ public readonly record struct InventoryCountAdjustmentPlan(InventoryCountMovemen
 /// </summary>
 public static class InventoryCountAdjustmentPolicy
 {
+    /// <summary>
+    /// What a caller is told when Take Inventory apply names a retired product (issue #1249, audit
+    /// #1222 finding INV-14). A retired product must not be counted by mistake.
+    /// </summary>
+    public static string RetiredProductMessage(string productName) =>
+        $"'{productName}' is retired and cannot be counted.";
+
     public static InventoryCountAdjustmentPlan Resolve(int currentStock, int countedStock)
     {
         if (countedStock < 0)

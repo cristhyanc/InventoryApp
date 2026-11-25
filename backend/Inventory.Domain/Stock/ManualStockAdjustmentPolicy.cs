@@ -45,6 +45,14 @@ public static class ManualStockAdjustmentPolicy
         "A Machine refill must name the machine it moves stock to or from: choose a machine.";
 
     /// <summary>
+    /// What a caller is told when a manual adjustment names a retired product (issue #1249, audit
+    /// #1222 finding INV-14). A retired product must not be adjusted by mistake; Sync Restock is
+    /// unaffected, because it records a movement directly rather than through this policy.
+    /// </summary>
+    public static string RetiredProductMessage(string productName) =>
+        $"'{productName}' is retired and cannot be adjusted.";
+
+    /// <summary>
     /// What a caller is told when a Correction does not remove stock. The exact sentence the policy
     /// has always thrown, now named so the matrix test and the API test state one message.
     /// </summary>

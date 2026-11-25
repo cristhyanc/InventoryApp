@@ -53,10 +53,12 @@ public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentS
         var product = await _db.Products
             .AsNoTracking()
             .Where(p => p.Id == productId)
-            .Select(p => new { p.Id, p.Name, p.QuantityInStock })
+            .Select(p => new { p.Id, p.Name, p.QuantityInStock, p.IsActive })
             .FirstOrDefaultAsync(cancellationToken);
 
-        return product is null ? null : new InventoryCountProduct(product.Id, product.Name, product.QuantityInStock);
+        return product is null
+            ? null
+            : new InventoryCountProduct(product.Id, product.Name, product.QuantityInStock, product.IsActive);
     }
 
     public async Task<decimal?> GetRestockUnitCostAsync(long productId, CancellationToken cancellationToken)

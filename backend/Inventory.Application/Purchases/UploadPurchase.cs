@@ -149,6 +149,20 @@ public sealed class UploadPurchase
         if (productIds.Count > 0 && !await _store.AllProductsExistAsync(productIds, cancellationToken))
             throw new InvalidOperationException("One or more purchase products do not exist.");
 
+        // A retired product must not be offered to purchase from (issue #1249): every item on a
+        // create is a new line, so naming one at all is refused, before a single byte of the
+        // document is written.
+        if (productIds.Count > 0)
+        {
+            var retiredProducts = await _store.FindRetiredProductsAsync(productIds, cancellationToken);
+            if (retiredProducts.Count > 0)
+            {
+                var firstRetired = retiredProducts.OrderBy(retired => retired.Key).First();
+                throw new InvalidOperationException(
+                    PurchaseRetiredProductPolicy.NewLineRefusalMessage(firstRetired.Value));
+            }
+        }
+
         // The same UTC instant the host clock used to supply directly, now through the port so the
         // default is deterministic and testable; the persisted value for a given instant is unchanged.
         var effectivePurchaseDate = fields.PurchaseDate ?? _clock.UtcNow;

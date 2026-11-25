@@ -39,6 +39,16 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
     public Task<bool> ProductExistsAsync(long productId, CancellationToken cancellationToken) =>
         _db.Products.AnyAsync(p => p.Id == productId, cancellationToken);
 
+    public async Task<ManualStockAdjustmentProductFacts?> FindProductFactsAsync(
+        long productId, CancellationToken cancellationToken)
+    {
+        var product = await _db.Products.AsNoTracking()
+            .Where(p => p.Id == productId)
+            .Select(p => new { p.Name, p.IsActive })
+            .FirstOrDefaultAsync(cancellationToken);
+        return product is null ? null : new ManualStockAdjustmentProductFacts(product.Name, product.IsActive);
+    }
+
     public async Task<IReadOnlyList<StockAdjustmentRecord>> ListHistoryAsync(long productId, CancellationToken cancellationToken)
     {
         var adjustments = await _db.StockAdjustments

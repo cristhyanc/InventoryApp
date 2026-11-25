@@ -17167,6 +17167,45 @@ reads of the catalogue, and every caller says which one it wants —
   `ListMachineProducts`, where a machine slot or a refill alert naming a retired product must still
   be able to describe it. Narrowing `None` would silently stop both describing those rows.
 
+**Every manual write that moves stock refuses a retired product, with the product named, in its
+own domain policy rather than only in a screen** (issue #1249, audit #1222 finding INV-14 — the
+Pick List was the only write that already checked `IsActive`, in `PickListRefillPolicy`):
+
+- **Purchase create**, and **purchase edit adding a new line**, are refused `400` by
+  `Inventory.Domain.Purchases.PurchaseRetiredProductPolicy.NewLineRefusalMessage` — applied in
+  `UploadPurchase.Handle` for a create (every item is a new line) and in
+  `EfPurchaseStore.UpdateAsync` for an edit's new lines, both reading the retired products among the
+  submission through `IPurchaseStore.FindRetiredProductsAsync`.
+- **Purchase edit on a line already naming a retired product** is not a new purchase of it, so it
+  stays allowed to remove the line, lower its quantity, or correct its cost — none of which adds to
+  what a retired product moved. Only **raising its quantity** is refused `400`, by
+  `PurchaseRetiredProductPolicy.QuantityIncreaseRefusalMessage`
+  (`PurchaseRetiredProductPolicy.IsExistingLineQuantityAllowed` is the comparison
+  `EfPurchaseStore.UpdateAsync` applies it with, over the stored quantity and the submitted one).
+- **Manual stock adjustment** is refused `400` by
+  `Inventory.Domain.Stock.ManualStockAdjustmentPolicy.RetiredProductMessage`, applied in
+  `AdjustStock.Handle` once `IStockAdjustmentStore.FindProductFactsAsync` has read the product's
+  name and active flag.
+- **Take Inventory apply** is refused `400` by
+  `Inventory.Domain.InventoryCounting.InventoryCountAdjustmentPolicy.RetiredProductMessage`, applied
+  in `ApplyInventoryCount.Handle` against the same authoritative `IsActive` its stock read already
+  carries.
+- **Sync Restock apply is unchanged.** `ApplyMachineStockSync.ApplyProductBatchAsync` reads the
+  product's storage quantity through `FindStorageProductAsync` rather than the active-only
+  `FindActiveStorageProductAsync` issue #1326 added for the replacement path, and
+  `EfMachineStockEventStore.ApplyProductRefillsAsync` records the movement with no `IsActive` read
+  at all: the machine really was refilled, whatever the product's catalogue status, so none of the
+  policies above apply to it.
+
+**Retiring a product with stock or value on hand is warned about before the confirmation is taken.** The Angular catalogue
+page's existing deactivation confirmation (`ProductListComponent.deactivationMessage`, issue #825)
+now names the product's stock on hand and its inventory value when either is above zero, so an
+operator cannot deactivate a product that still carries either by mistake without being told; a
+product with neither shows the confirmation unchanged. `inventoryValue` is absent from the read for
+a caller without `Dashboard.ViewFinancials` (issue #698), so that caller's warning only ever names
+the stock. The write itself, and what it decides, are unchanged - a retirement never removes stock
+or value, which stays explicitly out of scope.
+
 **The name/SKU search ignores ASCII letter case** (issue #827), on both `GET api/products` and
 `GET api/products/alerts/low-stock` — the two callers of `ProductCatalogFilter.Search` through the
 same `EfProductCatalogStore.Filtered`. It is matched with `EF.Functions.Like` rather than

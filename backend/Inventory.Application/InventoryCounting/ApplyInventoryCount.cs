@@ -42,6 +42,10 @@ public sealed class ApplyInventoryCount
         if (product is null)
             return null;
 
+        // A retired product must not be counted by mistake (issue #1249).
+        if (!product.IsActive)
+            throw new DomainValidationException(InventoryCountAdjustmentPolicy.RetiredProductMessage(product.ProductName));
+
         if (product.QuantityInStock != request.ExpectedCurrentStock)
         {
             throw new DomainConflictException(

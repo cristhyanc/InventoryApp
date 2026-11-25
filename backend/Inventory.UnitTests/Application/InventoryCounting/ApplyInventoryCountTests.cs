@@ -137,4 +137,29 @@ public class ApplyInventoryCountTests
         await Assert.ThrowsAsync<DomainValidationException>(() =>
             new ApplyInventoryCount(store.Object).Handle(1, new InventoryCountApplyRequestDto(-1, 5), CancellationToken.None));
     }
+
+    /// <summary>
+    /// A retired product must not be counted by mistake (issue #1249, audit #1222 finding INV-14),
+    /// naming the product rather than leaving a generic refusal, and refused before the staleness
+    /// check so a retired product never reaches a movement either way.
+    /// </summary>
+    [Fact]
+    public async Task Handle_RefusesARetiredProduct_NamingIt()
+    {
+        var store = new Mock<IInventoryCountAdjustmentStore>();
+        store.Setup(x => x.GetCurrentStockAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new InventoryCountProduct(1, "Coke", 17, IsActive: false));
+        store.Setup(x => x.BeginWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<IInventoryCountWriteTransaction>());
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            new ApplyInventoryCount(store.Object).Handle(1, new InventoryCountApplyRequestDto(22, 17), CancellationToken.None));
+
+        Assert.Equal(InventoryCountAdjustmentPolicy.RetiredProductMessage("Coke"), exception.Message);
+        store.Verify(
+            x => x.ApplyAsync(
+                It.IsAny<long>(), It.IsAny<InventoryCountMovementKind>(), It.IsAny<int>(), It.IsAny<decimal?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

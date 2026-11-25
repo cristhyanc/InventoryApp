@@ -63,7 +63,7 @@ public class StockControllerTests
     [Fact]
     public async Task Adjust_still_returns_bad_request_when_the_product_does_not_exist()
     {
-        var store = new FakeStockAdjustmentStore { ProductExists = false };
+        var store = new FakeStockAdjustmentStore { ProductFacts = null };
         var controller = CreateController(store);
 
         var result = await controller.Adjust(1, AdjustDto(), CancellationToken.None);

@@ -1809,6 +1809,53 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
     expect(dialogButton(host, 'Cancel')).toBeDefined();
   });
 
+  it('warns about the stock on hand when deactivating a product that still has some (issue #1249)', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'Widget', isActive: true, quantityInStock: 10, inventoryValue: null })
+    ]);
+
+    rowButton(host, 'Deactivate')!.click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('.confirm-modal')?.textContent).toContain('10 units in stock');
+  });
+
+  it('warns about the inventory value when deactivating a product that still has some (issue #1249)', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'Widget', isActive: true, quantityInStock: 0, inventoryValue: 42.5 })
+    ]);
+
+    rowButton(host, 'Deactivate')!.click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('.confirm-modal')?.textContent).toContain('$42.50 in inventory value');
+  });
+
+  it('shows neither warning when deactivating a product with no stock and no inventory value (issue #1249)', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'Widget', isActive: true, quantityInStock: 0, inventoryValue: 0 })
+    ]);
+
+    rowButton(host, 'Deactivate')!.click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('.confirm-modal')?.textContent).not.toContain('units in stock');
+    expect(host.querySelector('.confirm-modal')?.textContent).not.toContain('inventory value');
+  });
+
+  it('warns about both figures when deactivating a product that still has stock and inventory value (issue #1249)', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'Widget', isActive: true, quantityInStock: 3, inventoryValue: 12 })
+    ]);
+
+    rowButton(host, 'Deactivate')!.click();
+    fixture.detectChanges();
+
+    const text = host.querySelector('.confirm-modal')?.textContent;
+    expect(text).toContain('3 units in stock');
+    expect(text).toContain('$12.00 in inventory value');
+  });
+
   it('writes isActive: false through the existing update flow on confirm, and refreshes the list', async () => {
     const { fixture, host, update, getAll } = await render([
       product({

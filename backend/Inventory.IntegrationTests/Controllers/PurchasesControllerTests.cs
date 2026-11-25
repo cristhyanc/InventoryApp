@@ -242,6 +242,8 @@ public class PurchasesControllerTests
         store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        store.Setup(s => s.FindRetiredProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, string>());
         store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
                 It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(((long, string?, DateTime)?)null);
@@ -291,6 +293,8 @@ public class PurchasesControllerTests
         store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        store.Setup(s => s.FindRetiredProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, string>());
         store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
                 It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(((long, string?, DateTime)?)null);
@@ -544,6 +548,8 @@ public class PurchasesControllerTests
         store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        store.Setup(s => s.FindRetiredProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, string>());
         store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
                 It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(((long, string?, DateTime)?)null);

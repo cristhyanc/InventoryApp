@@ -13,6 +13,13 @@ public sealed class FakeStockAdjustmentStore : IStockAdjustmentStore
     private int _nextId = 1;
 
     public bool ProductExists { get; set; } = true;
+
+    /// <summary>
+    /// What <see cref="FindProductFactsAsync"/> answers (issue #1249); <see langword="null"/> means
+    /// the product does not exist. Defaults to an active product named "Product" so tests that do
+    /// not care about retirement need not set it.
+    /// </summary>
+    public ManualStockAdjustmentProductFacts? ProductFacts { get; set; } = new("Product", true);
     public IReadOnlyList<StockAdjustmentRecord> History { get; set; } = Array.Empty<StockAdjustmentRecord>();
     public StockHistoryResult QueryResult { get; set; } = new(Array.Empty<StockHistoryEntry>(), 0);
     public RestockCostFacts? RestockCostFacts { get; set; }
@@ -25,6 +32,9 @@ public sealed class FakeStockAdjustmentStore : IStockAdjustmentStore
     public StockHistoryFilter? LastQueryFilter { get; private set; }
 
     public Task<bool> ProductExistsAsync(long productId, CancellationToken cancellationToken) => Task.FromResult(ProductExists);
+
+    public Task<ManualStockAdjustmentProductFacts?> FindProductFactsAsync(long productId, CancellationToken cancellationToken) =>
+        Task.FromResult(ProductFacts);
 
     public Task<IReadOnlyList<StockAdjustmentRecord>> ListHistoryAsync(long productId, CancellationToken cancellationToken)
     {

@@ -102,6 +102,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return existingCount == productIds.Count;
     }
 
+    public async Task<IReadOnlyDictionary<long, string>> FindRetiredProductsAsync(
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken)
+    {
+        if (productIds.Count == 0) return new Dictionary<long, string>();
+        return await _db.Products.AsNoTracking()
+            .Where(product => productIds.Contains(product.Id) && !product.IsActive)
+            .ToDictionaryAsync(product => product.Id, product => product.Name, cancellationToken);
+    }
+
     public async Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)
     {
@@ -540,6 +549,13 @@ public sealed class EfPurchaseStore : IPurchaseStore
             if (!await AllProductsExistAsync(requestedProductIds, cancellationToken))
                 throw new InvalidOperationException("One or more purchase products do not exist.");
 
+            // A retired product must not be offered to purchase from (issue #1249), but a line
+            // already on this purchase is its history, not a new purchase of it: removing it,
+            // lowering its quantity, or correcting its cost stays allowed, and only naming it on a
+            // new line or raising its quantity is refused below, once each submitted line is known
+            // to be new or matched.
+            var retiredProducts = await FindRetiredProductsAsync(requestedProductIds, cancellationToken);
+
             await EnsureLegacyPurchaseMovementsArePreservedAsync(
                 originalItems, items, originalPurchaseDate, purchase.PurchaseDate, cancellationToken);
             await EnsureDateAfterBaselinesAsync(requestedProductIds, purchase.PurchaseDate, cancellationToken);
@@ -564,6 +580,13 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 if (lineMatch.StoredLineIds[index] is { } matchedId)
                 {
                     var item = existingById[matchedId];
+                    if (retiredProducts.TryGetValue(item.ProductId, out var retiredName)
+                        && !PurchaseRetiredProductPolicy.IsExistingLineQuantityAllowed(item.Quantity, requested.Quantity))
+                    {
+                        throw new InvalidOperationException(
+                            PurchaseRetiredProductPolicy.QuantityIncreaseRefusalMessage(retiredName));
+                    }
+
                     matchedItemIds.Add(matchedId);
                     movementByPurchaseItem.TryGetValue(item.Id, out var movement);
                     AddAffected(affected, item.ProductId, movement?.EffectiveAt ?? originalPurchaseDate);
@@ -588,6 +611,12 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 }
                 else
                 {
+                    if (retiredProducts.TryGetValue(requested.ProductId, out var retiredName))
+                    {
+                        throw new InvalidOperationException(
+                            PurchaseRetiredProductPolicy.NewLineRefusalMessage(retiredName));
+                    }
+
                     var item = new PurchaseItem
                     {
                         ReceiptId = purchase.Id,

@@ -22,6 +22,15 @@ public interface IPurchaseStore
     Task<bool> AllProductsExistAsync(IReadOnlyCollection<long> productIds, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The name of each retired product among <paramref name="productIds"/> that belongs to the
+    /// caller's business, keyed by its id (issue #1249). Empty when none of them is retired. This
+    /// is not a general product listing - naming a retired product in a purchase refusal is the
+    /// only reason to read it - so it answers only about the ids asked for.
+    /// </summary>
+    Task<IReadOnlyDictionary<long, string>> FindRetiredProductsAsync(
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken);
+
+    /// <summary>
     /// The first product among <paramref name="productIds"/> whose inventory-cost transition
     /// cutoff <paramref name="purchaseDate"/> does not come after, or <c>null</c> when none conflicts.
     /// The product's name comes back with it so the refusal can name the product (issue #833); it
