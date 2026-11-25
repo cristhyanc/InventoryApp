@@ -10,6 +10,13 @@ public interface IStockAdjustmentStore
 {
     Task<bool> ProductExistsAsync(long productId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The product's name and whether it is active, or <c>null</c> when it does not exist (or is
+    /// not owned by the caller's business) (issue #1249). A manual adjustment needs both: the name
+    /// to refuse a retired product by, the flag to decide whether to.
+    /// </summary>
+    Task<ManualStockAdjustmentProductFacts?> FindProductFactsAsync(long productId, CancellationToken cancellationToken);
+
     /// <summary>Every persisted movement for the product, most recent first. Empty when none exist.</summary>
     Task<IReadOnlyList<StockAdjustmentRecord>> ListHistoryAsync(long productId, CancellationToken cancellationToken);
 

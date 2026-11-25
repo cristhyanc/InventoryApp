@@ -132,6 +132,24 @@ public class UploadPurchaseTests
         Assert.Empty(documents.SavedFileNames);
     }
 
+    /// <summary>
+    /// A retired product must not be purchased (issue #1249, audit #1222 finding INV-14): every
+    /// item on a create is a new line, so naming one at all is refused, naming the product.
+    /// </summary>
+    [Fact]
+    public async Task A_retired_product_throws_before_any_file_save()
+    {
+        var store = new FakePurchaseStore { RetiredProducts = new Dictionary<long, string> { [1] = "Coke" } };
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(store, documents);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+
+        Assert.Equal(PurchaseRetiredProductPolicy.NewLineRefusalMessage("Coke"), exception.Message);
+        Assert.Empty(documents.SavedFileNames);
+    }
+
     [Fact]
     public async Task A_purchase_date_at_or_before_a_cost_transition_cutoff_throws_before_any_file_save()
     {

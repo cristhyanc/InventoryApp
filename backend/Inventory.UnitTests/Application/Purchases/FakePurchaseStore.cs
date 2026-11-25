@@ -23,6 +23,10 @@ public sealed class FakePurchaseStore : IPurchaseStore
 
     public bool SupplierExists { get; set; } = true;
     public bool AllProductsExist { get; set; } = true;
+
+    /// <summary>The retired products the next retirement check should answer with (issue #1249), keyed by id.</summary>
+    public IReadOnlyDictionary<long, string> RetiredProducts { get; set; } = new Dictionary<long, string>();
+
     public (long ProductId, string? ProductName, DateTime CutoffAt)? ConflictingBaseline { get; set; }
     public bool ThrowOnCreate { get; set; }
     public bool ThrowOnAttach { get; set; }
@@ -104,6 +108,10 @@ public sealed class FakePurchaseStore : IPurchaseStore
 
     public Task<bool> AllProductsExistAsync(IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
         Task.FromResult(AllProductsExist);
+
+    public Task<IReadOnlyDictionary<long, string>> FindRetiredProductsAsync(
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
+        Task.FromResult(RetiredProducts);
 
     public Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)

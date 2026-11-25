@@ -151,6 +151,10 @@ public sealed class PurchaseListAbortedRequestApiTests : IClassFixture<PurchaseL
         public Task<bool> AllProductsExistAsync(IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyDictionary<long, string>> FindRetiredProductsAsync(
+            IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
             IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

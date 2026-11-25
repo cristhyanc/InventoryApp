@@ -22,7 +22,7 @@ public class AdjustStockTests
     [Fact]
     public async Task An_unknown_product_returns_null_without_validating_or_applying()
     {
-        var store = new FakeStockAdjustmentStore { ProductExists = false };
+        var store = new FakeStockAdjustmentStore { ProductFacts = null };
         var useCase = new AdjustStock(store, Machines());
 
         var result = await useCase.Handle(1, Input(quantityChange: 0, reason: StockAdjustmentReason.Correction), CancellationToken.None);
@@ -108,5 +108,22 @@ public class AdjustStockTests
 
         Assert.NotNull(result);
         Assert.Same(input, store.LastAppliedInput);
+    }
+
+    /// <summary>
+    /// A retired product must not be adjusted by mistake (issue #1249, audit #1222 finding INV-14),
+    /// naming the product rather than leaving a generic refusal.
+    /// </summary>
+    [Fact]
+    public async Task A_retired_product_is_refused_before_applying()
+    {
+        var store = new FakeStockAdjustmentStore { ProductFacts = new("Coke", IsActive: false) };
+        var useCase = new AdjustStock(store, Machines());
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(
+            () => useCase.Handle(1, Input(quantityChange: -1, reason: StockAdjustmentReason.Correction), CancellationToken.None));
+
+        Assert.Equal(ManualStockAdjustmentPolicy.RetiredProductMessage("Coke"), exception.Message);
+        Assert.False(store.ApplyCalled);
     }
 }

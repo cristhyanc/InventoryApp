@@ -149,6 +149,8 @@ public sealed class UploadPurchase
         if (productIds.Count > 0 && !await _store.AllProductsExistAsync(productIds, cancellationToken))
             throw new InvalidOperationException("One or more purchase products do not exist.");
 
+        await EnsureNoProductIsRetiredAsync(productIds, cancellationToken);
+
         // The same UTC instant the host clock used to supply directly, now through the port so the
         // default is deterministic and testable; the persisted value for a given instant is unchanged.
         var effectivePurchaseDate = fields.PurchaseDate ?? _clock.UtcNow;
@@ -295,6 +297,30 @@ public sealed class UploadPurchase
         // falls back to the document's file name is not a submitted title - before anything is written.
         if (PurchaseFieldLengthPolicy.ValidateCreate(fields.Title, fields.Notes) is { } lengthError)
             throw new InvalidOperationException(lengthError);
+    }
+
+    /// <summary>
+    /// A retired product must not be offered to purchase from (issue #1249): every item on a create
+    /// is a new line, so naming one at all is refused. Called before the document's storage is
+    /// reserved, so an ordinary submission naming a retired product writes not a single byte.
+    ///
+    /// <para>This is the friendly early answer and deliberately not the guarantee. The authoritative
+    /// refusal is <see cref="IPurchaseStore.CreateAsync"/>'s, taken inside the write transaction,
+    /// because a product retired between this read and that write would otherwise be restocked,
+    /// costed and rebuilt by a purchase it may not appear on at all. Both apply the same Domain
+    /// rule.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// One of <paramref name="productIds"/> names a retired product, which the message names too.
+    /// </exception>
+    private async Task EnsureNoProductIsRetiredAsync(
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken)
+    {
+        if (productIds.Count == 0) return;
+
+        var retiredProducts = await _store.FindRetiredProductsAsync(productIds, cancellationToken);
+        if (PurchaseRetiredProductPolicy.NewLineRefusal(retiredProducts) is { } refusal)
+            throw new InvalidOperationException(refusal);
     }
 
     private static bool IsDocumentInvalid(PurchaseFileInput? file) =>

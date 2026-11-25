@@ -34,10 +34,16 @@ public sealed class AdjustStock
     public async Task<StockAdjustmentRecord?> Handle(
         long productId, ManualStockAdjustmentInput input, CancellationToken cancellationToken)
     {
-        if (!await _store.ProductExistsAsync(productId, cancellationToken)) return null;
+        var product = await _store.FindProductFactsAsync(productId, cancellationToken);
+        if (product is null) return null;
 
         ManualStockAdjustmentPolicy.Validate(
             input.Reason, input.QuantityChange, input.UnitCost, input.MachineId);
+
+        // A retired product must not be adjusted by mistake (issue #1249); Sync Restock never
+        // reaches this use case, so it is unaffected.
+        if (!product.IsActive)
+            throw new DomainValidationException(ManualStockAdjustmentPolicy.RetiredProductMessage(product.Name));
 
         // The foreign key refuses the same thing at the write, but a caller deserves the reason
         // rather than a constraint violation.

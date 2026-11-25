@@ -221,4 +221,132 @@ public sealed class EfPurchaseStoreTests : IDisposable
         Assert.NotNull(await verify.Receipts.FindAsync(purchaseId));
         Assert.NotEmpty(await verify.StockAdjustments.Where(x => x.ProductId == 1).ToListAsync());
     }
+
+    /// <summary>
+    /// Seeds a purchase with one line for a retired product, with the restock movement that line's
+    /// creation would have recorded (issue #1249, audit #1222 finding INV-14).
+    /// </summary>
+    private async Task<int> SeedPurchaseWithARetiredProductLineAsync(decimal quantity = 10)
+    {
+        int purchaseId;
+        await using var seed = TestAppDbContext.Unrestricted(_options);
+        seed.Products.Add(new Product { Id = 1, Name = "Coke", IsActive = false, QuantityInStock = 10, AverageUnitCost = 1m });
+        await seed.SaveChangesAsync();
+        var purchase = new Purchase
+        {
+            Title = "Restock",
+            FileName = "receipt.jpg",
+            StoredFileName = "stored.jpg",
+            ContentType = "image/jpeg",
+            FileSizeBytes = 3,
+            PurchaseDate = DateTime.UtcNow,
+            Items = { new PurchaseItem { ProductId = 1, Quantity = quantity, UnitCost = 1m } },
+        };
+        seed.Receipts.Add(purchase);
+        await seed.SaveChangesAsync();
+        seed.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            ReceiptItemId = purchase.Items.Single().Id,
+            QuantityChange = PurchaseStockMovementPolicy.ToStockQuantity(quantity),
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 1m,
+            TotalCost = quantity,
+            EffectiveAt = purchase.PurchaseDate,
+        });
+        await seed.SaveChangesAsync();
+        purchaseId = purchase.Id;
+        return purchaseId;
+    }
+
+    private static PurchaseFields UnchangedFields() => new("Restock", null, null, null, null, null, null);
+
+    [Fact]
+    public async Task UpdateAsync_refuses_increasing_an_existing_line_s_quantity_for_a_retired_product()
+    {
+        var purchaseId = await SeedPurchaseWithARetiredProductLineAsync(quantity: 10);
+
+        await using var db = TestAppDbContext.Unrestricted(_options);
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.UpdateAsync(
+            purchaseId, UnchangedFields(), [new PurchaseItemInput(1, 11m, 1m)], CancellationToken.None));
+
+        Assert.Equal(PurchaseRetiredProductPolicy.QuantityIncreaseRefusalMessage("Coke"), exception.Message);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_allows_reducing_an_existing_line_s_quantity_for_a_retired_product()
+    {
+        var purchaseId = await SeedPurchaseWithARetiredProductLineAsync(quantity: 10);
+
+        await using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+            var result = await store.UpdateAsync(
+                purchaseId, UnchangedFields(), [new PurchaseItemInput(1, 4m, 1m)], CancellationToken.None);
+            Assert.NotNull(result);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(_options);
+        var item = await verify.ReceiptItems.SingleAsync(i => i.ReceiptId == purchaseId);
+        Assert.Equal(4m, item.Quantity);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_allows_correcting_an_existing_line_s_cost_for_a_retired_product()
+    {
+        var purchaseId = await SeedPurchaseWithARetiredProductLineAsync(quantity: 10);
+
+        await using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+            // The same quantity, a different unit cost: not an increase, so it is allowed.
+            var result = await store.UpdateAsync(
+                purchaseId, UnchangedFields(), [new PurchaseItemInput(1, 10m, 2m)], CancellationToken.None);
+            Assert.NotNull(result);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(_options);
+        var item = await verify.ReceiptItems.SingleAsync(i => i.ReceiptId == purchaseId);
+        Assert.Equal(2m, item.UnitCost);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_allows_removing_an_existing_line_for_a_retired_product()
+    {
+        var purchaseId = await SeedPurchaseWithARetiredProductLineAsync(quantity: 10);
+
+        await using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+            var result = await store.UpdateAsync(purchaseId, UnchangedFields(), [], CancellationToken.None);
+            Assert.NotNull(result);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Empty(await verify.ReceiptItems.Where(i => i.ReceiptId == purchaseId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task UpdateAsync_refuses_a_new_line_naming_a_retired_product()
+    {
+        var purchaseId = await SeedPurchaseWithARetiredProductLineAsync(quantity: 10);
+        await using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.Products.Add(new Product { Id = 2, Name = "Chips", IsActive = false });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(_options);
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.UpdateAsync(
+            purchaseId,
+            UnchangedFields(),
+            [new PurchaseItemInput(1, 10m, 1m), new PurchaseItemInput(2, 1m, 1m)],
+            CancellationToken.None));
+
+        Assert.Equal(PurchaseRetiredProductPolicy.NewLineRefusalMessage("Chips"), exception.Message);
+    }
 }

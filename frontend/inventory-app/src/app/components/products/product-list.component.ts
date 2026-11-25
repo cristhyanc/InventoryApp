@@ -671,12 +671,36 @@ export class ProductListComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** What the confirmation says deactivation does, and what it leaves alone. */
+  /**
+   * What the confirmation says deactivation does, and what it leaves alone - plus, since issue
+   * #1249, a warning naming the stock on hand and the inventory value a retired product still
+   * carries, so an operator cannot deactivate one of either by mistake without being told.
+   */
   deactivationMessage(product: Product): string {
-    return (
+    const base =
       `Deactivate '${product.name}'? It will be hidden from the working catalogue and the reorder alerts, ` +
-      'keeps its history, stock and costs, and can be reactivated at any time.'
-    );
+      'keeps its history, stock and costs, and can be reactivated at any time.';
+    const warning = this.deactivationStockWarning(product);
+    return warning ? `${base} ${warning}` : base;
+  }
+
+  /**
+   * `null` while neither the stock on hand nor the inventory value is above zero - deactivating a
+   * product with nothing on hand needs no extra warning. `inventoryValue` is absent for a caller
+   * without `Dashboard.ViewFinancials` (issue #698), so the warning then only ever names the stock.
+   */
+  private deactivationStockWarning(product: Product): string | null {
+    const hasStock = product.quantityInStock > 0;
+    const hasValue = product.inventoryValue != null && product.inventoryValue > 0;
+    if (!hasStock && !hasValue) {
+      return null;
+    }
+
+    const figures = [
+      hasStock ? `${product.quantityInStock} units in stock` : null,
+      hasValue ? `${this.money(product.inventoryValue!)} in inventory value` : null
+    ].filter((figure): figure is string => figure !== null);
+    return `It still has ${figures.join(' and ')}.`;
   }
 
   /**

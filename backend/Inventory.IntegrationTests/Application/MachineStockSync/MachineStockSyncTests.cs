@@ -538,6 +538,34 @@ public class MachineStockSyncTests
         Assert.NotNull(evt.ProcessedAt);
     }
 
+    /// <summary>
+    /// Sync Restock applies a refill for a retired product exactly as it does for an active one
+    /// (issue #1249): the machine really was refilled, whatever the product's catalogue status, and
+    /// nothing about this apply path reads <c>IsActive</c> at all. This pins that behaviour against
+    /// the new refusals the other manual write paths gained in the same issue.
+    /// </summary>
+    [Fact]
+    public async Task A_refill_for_a_retired_product_still_applies()
+    {
+        using var db = CreateInMemoryDb(nameof(A_refill_for_a_retired_product_still_applies));
+        var product = SeedCostedProduct(db, ProductId, "25g Nobby's Beef Jerky Hot", 20, unitCost: 1.5m);
+        product.IsActive = false;
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 8")
+        ]);
+        var (sync, apply) = UseCases(db, nayax.Object);
+
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+        var result = await apply.Handle(Machine, [preview.Events[0].Id], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Results[0].Outcome);
+        var refreshed = await db.Products.FindAsync(ProductId);
+        Assert.Equal(12, refreshed!.QuantityInStock);
+        Assert.False(refreshed.IsActive);
+    }
+
     #endregion
 
     #region Insufficient storage
