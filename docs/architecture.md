@@ -12253,7 +12253,8 @@ one stored beside a key, so a create with no key never opens the upload a second
 **The claim is taken inside the write transaction, and that is the point.** `UploadPurchase` reads
 the key first, before storage is reserved and before a byte of the document is written, so an
 ordinary retry costs no storage - but that read is only the cheap half. `EfPurchaseStore.CreateAsync`
-opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) whenever a key is present and re-reads the key
+opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) - since issue #1249 for every create, not only
+a keyed one - and re-reads the key
 inside it, so two copies of one submission arriving together are serialised: the loser waits, reads
 the winner's committed purchase and is answered with it, having written nothing. The filtered
 per-business unique index on `(BusinessId, IdempotencyKey)` is the backstop under that claim, and
@@ -12472,11 +12473,13 @@ save leaves cannot be two answers. The only change to the query itself is that i
 order, which is closed and must receive nothing more. The Angular purchase form formats the projection and
 calculates nothing: it subtracts no receipt from any order.
 
-**Concurrency.** When - and only when - a completion decision rides along, `CreateAsync` opens
-`SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) instead of the deferred transaction a purchase save has
-always used, so SQLite's write lock is held *before* the authoritative read the decision is checked against
-rather than at the first write after it. The ordinary purchase *creation* is unchanged; a purchase edit and a
-purchase delete do take that lock, because what has to be serialised against a completion is the correction
+**Concurrency.** `CreateAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) rather than the
+deferred transaction a purchase save originally used, so SQLite's write lock is held *before* the
+authoritative read the decision is checked against rather than at the first write after it. A completion
+decision was the first reason for that lock, and the storage reservation (issue #968), the idempotency key
+(issue #1247) and the retired-product refusal (issue #1249) are the others; since #1249 every create takes
+it, because that refusal applies to every create. A purchase edit and a
+purchase delete take the same lock, because what has to be serialised against a completion is the correction
 guard below. A competing receipt, a
 cancellation, a completion or an edited order landing between the preview and the save changes the
 fingerprint and is refused with `SupplierOrderCompletionPolicy.StaleDecisionMessage`; an order that is no
@@ -17172,10 +17175,19 @@ own domain policy rather than only in a screen** (issue #1249, audit #1222 findi
 Pick List was the only write that already checked `IsActive`, in `PickListRefillPolicy`):
 
 - **Purchase create**, and **purchase edit adding a new line**, are refused `400` by
-  `Inventory.Domain.Purchases.PurchaseRetiredProductPolicy.NewLineRefusalMessage` — applied in
-  `UploadPurchase.Handle` for a create (every item is a new line) and in
-  `EfPurchaseStore.UpdateAsync` for an edit's new lines, both reading the retired products among the
-  submission through `IPurchaseStore.FindRetiredProductsAsync`.
+  `Inventory.Domain.Purchases.PurchaseRetiredProductPolicy` — `NewLineRefusal` over the retired
+  products among the submission, read through `IPurchaseStore.FindRetiredProductsAsync`. A create is
+  checked twice, and only the second check is the guarantee: `UploadPurchase.Handle` answers early,
+  so an ordinary submission naming a retired product is refused before a document byte is written,
+  and `EfPurchaseStore.CreateAsync` then refuses **inside its own write transaction**, which every
+  create now opens as `BEGIN IMMEDIATE` (issue #1249) rather than only the ones carrying a key, a
+  storage reservation or a supplier-order completion. Without that, a retirement committing between
+  the early read and the insert was followed by exactly the receipt, restock movements and cost
+  rebuild the rule forbids. The in-transaction refusal comes **after** the idempotency replay, so a
+  purchase already recorded under its key still replays with no new stock once its product has been
+  retired, and a refused create leaves no document or reservation behind — `UploadPurchase` removes
+  what it staged, as it does for any failed save. An edit's new lines are refused by
+  `EfPurchaseStore.UpdateAsync`, which has always held the write lock across its reads and its write.
 - **Purchase edit on a line already naming a retired product** is not a new purchase of it, so it
   stays allowed to remove the line, lower its quantity, or correct its cost — none of which adds to
   what a retired product moved. Only **raising its quantity** is refused `400`, by
@@ -17185,7 +17197,13 @@ Pick List was the only write that already checked `IsActive`, in `PickListRefill
 - **Manual stock adjustment** is refused `400` by
   `Inventory.Domain.Stock.ManualStockAdjustmentPolicy.RetiredProductMessage`, applied in
   `AdjustStock.Handle` once `IStockAdjustmentStore.FindProductFactsAsync` has read the product's
-  name and active flag.
+  name and active flag — and applied again, authoritatively, inside
+  `EfStockAdjustmentStore.ApplyAsync`'s `BEGIN IMMEDIATE` transaction, from the same tenant-scoped
+  read, before the movement, the quantity change or the cost rebuild is staged (issue #1249). The
+  use case's own read happens before that lock is taken, so it is the friendly early answer and not
+  the guarantee. The check deliberately does **not** live in the shared
+  `IRecordInventoryMovement`: Sync Restock records its movement through that use case and must stay
+  allowed for a retired product.
 - **Take Inventory apply** is refused `400` by
   `Inventory.Domain.InventoryCounting.InventoryCountAdjustmentPolicy.RetiredProductMessage`, applied
   in `ApplyInventoryCount.Handle` against the same authoritative `IsActive` its stock read already

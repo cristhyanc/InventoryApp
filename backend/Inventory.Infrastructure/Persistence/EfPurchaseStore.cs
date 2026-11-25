@@ -202,29 +202,24 @@ public sealed class EfPurchaseStore : IPurchaseStore
             UnitCost = x.UnitCost,
         }).ToList();
 
-        // BEGIN IMMEDIATE when a completion decision rides along (issue #974), the deferred
-        // transaction this write has always used otherwise. The decision's authoritative read, its
-        // fingerprint comparison and the status write have to be one operation against a competing
-        // receipt, and a deferred transaction takes SQLite's write lock only at the first write -
-        // which is after that read. An ordinary purchase save is unchanged.
+        // BEGIN IMMEDIATE, for every create (issue #1249). A completion decision needs it because
+        // the decision's authoritative read, its fingerprint comparison and the status write have to
+        // be one operation against a competing receipt (issue #974). A document's storage
+        // reservation needs it because an expired reservation is re-validated against the business's
+        // current usage inside this transaction, and that read has to be the one the write is
+        // decided on (issue #968). An idempotency key needs it because "has this key already saved a
+        // purchase?" is a check-then-write rule, and two copies of one submission would otherwise
+        // both read "nothing under this key" and both save a purchase, doubling the stock and the
+        // inventory value of every product on the receipt (issue #1247).
         //
-        // A document's storage reservation needs the same lock for the same reason (issue #968):
-        // an expired reservation is re-validated against the business's current usage inside this
-        // transaction, and that read has to be the one the write is decided on.
-        //
-        // An idempotency key needs it for the same reason again (issue #1247): "has this key
-        // already saved a purchase?" is a check-then-write rule, and a deferred transaction takes
-        // SQLite's write lock at the first write - after that read - so two copies of one
-        // submission would both read "nothing under this key" and both save a purchase, doubling
-        // the stock and the inventory value of every product on the receipt. With BEGIN IMMEDIATE
-        // the second caller waits, then reads the first one's committed purchase and replays it.
-        var needsWriteLock = supplierOrderCompletion is not null
-            || attachmentReservation is not null
-            || idempotency is not null;
-        await using var writeLock = needsWriteLock
-            ? await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken)
-            : null;
-        await using var transaction = needsWriteLock ? null : await BeginTransactionAsync();
+        // "Is any of these products retired?" is the same kind of rule, and it applies to every
+        // create - including the unkeyed one with no document and no completion, which used to open
+        // a deferred transaction. A deferred transaction takes SQLite's write lock at the first
+        // write, which is after the read the refusal rests on, so a retirement committed in between
+        // was followed by exactly the receipt, restock movement and cost rebuild a retired product
+        // may not have. With BEGIN IMMEDIATE the read, the comparison and the insert are one
+        // operation: the competing writer waits, and then one of them is refused.
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
 
         // First inside the lock: has this key already saved a purchase? A retry is answered with
         // the purchase that was saved, and a different request under a spent key is refused -
@@ -238,6 +233,12 @@ public sealed class EfPurchaseStore : IPurchaseStore
 
             return new PurchaseCreateOutcome(recorded.Purchase, Replayed: true);
         }
+
+        // Then, and deliberately after that replay: a purchase already recorded under this key still
+        // replays without new stock even once its product has been retired, because the retry is not
+        // a new purchase of a retired product. A create that is going to write, on the other hand,
+        // is refused here - before a row, a movement, a cost or a consumed reservation.
+        await EnsureNoSubmittedProductIsRetiredAsync(items, cancellationToken);
 
         // Read, and refused, before anything at all is written: a stale decision must leave the
         // purchase unsaved rather than roll a committed-looking one back.
@@ -299,10 +300,33 @@ public sealed class EfPurchaseStore : IPurchaseStore
             ? ToRecord(purchase)
             : await StoredRecordAsync(purchase, cancellationToken);
 
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-        if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return new PurchaseCreateOutcome(record, Replayed: false);
+    }
+
+    /// <summary>
+    /// The authoritative retired-product refusal for a create (issue #1249): every item on a create
+    /// is a new line, so a submission naming a retired product is refused outright, by name.
+    ///
+    /// <para>It reads the products inside the caller's write-locked transaction, which is what makes
+    /// it authoritative: the state it refuses on is the state the insert would commit against, so a
+    /// retirement that commits after <see cref="UploadPurchase"/>'s early check cannot be followed by
+    /// the receipt, the restock movements and the cost rebuild this purchase would write. The read is
+    /// this adapter's ordinary tenant-filtered one, and the rule - including which product the
+    /// message names - is <see cref="PurchaseRetiredProductPolicy"/>'s, the same one the create's
+    /// preflight and the edit's new-line refusal apply.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">One of the submitted lines names a retired product.</exception>
+    private async Task EnsureNoSubmittedProductIsRetiredAsync(
+        IReadOnlyList<PurchaseItemInput> items, CancellationToken cancellationToken)
+    {
+        var productIds = items.Select(item => item.ProductId).Distinct().ToList();
+        if (productIds.Count == 0) return;
+
+        var retiredProducts = await FindRetiredProductsAsync(productIds, cancellationToken);
+        if (PurchaseRetiredProductPolicy.NewLineRefusal(retiredProducts) is { } refusal)
+            throw new InvalidOperationException(refusal);
     }
 
     /// <summary>
@@ -873,11 +897,6 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 ?? throw new InvalidOperationException($"Product {productId} does not exist.");
             product.QuantityInStock = checked(product.QuantityInStock + change);
         }
-    }
-
-    private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginTransactionAsync()
-    {
-        return _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync() : null;
     }
 
     private static PurchaseItemCandidate ToCandidate(PurchaseItemInput item) => new(item.ProductId, item.Quantity, item.UnitCost);

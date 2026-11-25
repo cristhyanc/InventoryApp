@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Stock;
+using Inventory.Domain.Exceptions;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -135,11 +136,18 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
     /// physically negative - a costing data-quality failure for an adjustment that simply no longer
     /// fitted. Inside it the loser reads the quantity the winner left and is refused with the
     /// established <see cref="Inventory.Domain.Exceptions.InsufficientStockException"/>.
+    ///
+    /// <para>Since issue #1249 the product's retirement is re-read inside that same lock, for the
+    /// same reason: <see cref="Inventory.Application.Stock.AdjustStock"/>'s own check happens before
+    /// this transaction opens, so a retirement committed in between would otherwise be followed by
+    /// exactly the movement, quantity change and cost rebuild a retired product may not have.</para>
     /// </summary>
     public async Task<StockAdjustmentRecord> ApplyAsync(
         long productId, ManualStockAdjustmentInput input, CancellationToken cancellationToken)
     {
         await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
+        await EnsureProductIsNotRetiredAsync(productId, cancellationToken);
 
         var movement = await _recordMovement.RecordAsync(
             new InventoryMovement(
@@ -155,6 +163,35 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
         var adjustment = await _db.StockAdjustments.FindAsync([movement.Id], cancellationToken)
             ?? throw new InvalidOperationException($"Stock adjustment {movement.Id} was not saved.");
         return ToRecord(adjustment);
+    }
+
+    /// <summary>
+    /// The authoritative retired-product refusal for a manual adjustment (issue #1249), read inside
+    /// the caller's write-locked transaction and before anything is staged, so the product state it
+    /// refuses on is the state the movement would be committed against.
+    ///
+    /// <para>It reads through <see cref="FindProductFactsAsync"/>, so the read is tenant-scoped by
+    /// the <see cref="AppDbContext"/> query filters exactly as the use case's own is, and it applies
+    /// the adjustment's Domain rule
+    /// (<see cref="DomainStock.ManualStockAdjustmentPolicy.RetiredProductMessage"/>) rather than a
+    /// sentence of its own. It sits here rather than in the shared
+    /// <see cref="IRecordInventoryMovement"/> deliberately: Sync Restock records its movement through
+    /// that use case and must stay allowed for a retired product, because the machine really was
+    /// refilled.</para>
+    ///
+    /// <para>A product that no longer exists at all is left exactly as it was before this issue -
+    /// unnamed here, and refused by the foreign key - because inventing a not-found answer inside the
+    /// write would change a contract this issue does not touch.</para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">The product is retired.</exception>
+    private async Task EnsureProductIsNotRetiredAsync(long productId, CancellationToken cancellationToken)
+    {
+        var product = await FindProductFactsAsync(productId, cancellationToken);
+        if (product is not null && !product.IsActive)
+        {
+            throw new DomainValidationException(
+                DomainStock.ManualStockAdjustmentPolicy.RetiredProductMessage(product.Name));
+        }
     }
 
     private static StockAdjustmentRecord ToRecord(StockAdjustment adjustment) => new(

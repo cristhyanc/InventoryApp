@@ -21,6 +21,25 @@ public static class PurchaseRetiredProductPolicy
         $"'{productName}' is retired and cannot be purchased.";
 
     /// <summary>
+    /// The refusal a submission earns for the retired products found among the ids it named, or
+    /// <see langword="null"/> when none of them is retired.
+    ///
+    /// <para>It exists because a create is checked twice (issue #1249): once early, so an ordinary
+    /// submission is refused before a document byte is written, and once authoritatively inside the
+    /// write transaction, because a product retired between those two moments must not be purchased.
+    /// Which of several retired products the message names - the lowest id, so one submission always
+    /// produces one sentence - is decided here rather than in each of those two places.</para>
+    /// </summary>
+    public static string? NewLineRefusal(IReadOnlyDictionary<long, string> retiredProductsById)
+    {
+        ArgumentNullException.ThrowIfNull(retiredProductsById);
+
+        if (retiredProductsById.Count == 0) return null;
+
+        return NewLineRefusalMessage(retiredProductsById.OrderBy(retired => retired.Key).First().Value);
+    }
+
+    /// <summary>
     /// What a caller is told when an edit raises the quantity of an existing line that already
     /// names a retired product.
     /// </summary>
